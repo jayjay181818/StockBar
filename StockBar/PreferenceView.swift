@@ -27,6 +27,11 @@ struct PreferenceView: View {
     var body: some View {
         VStack {
             HStack {
+                Toggle("Color Coding", isOn: $userdata.showColorCoding)
+                    .padding(.bottom, 10)
+                Spacer()
+            }
+            HStack {
                 Spacer()
                 Text("Symbol")
                 Spacer()

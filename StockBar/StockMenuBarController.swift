@@ -12,7 +12,7 @@ import Cocoa
 class StockMenuBarController {
     init (data: DataModel) {
         self.data = data
-        self.statusBar = StockStatusBar()
+        self.statusBar = StockStatusBar(dataModel: data)
         self.prefPopover = PreferencePopover(data: data)
         constructMainItem()
         self.timer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(sendAllTradesToSubscriber),                                                                              userInfo: nil, repeats: true)
@@ -45,7 +45,7 @@ extension StockMenuBarController {
     private func updateSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
         statusBar.removeAllSymbolItems()
         for iter in (0..<realTimeTrades.count) {
-            statusBar.constructSymbolItem(from: realTimeTrades[iter])
+            statusBar.constructSymbolItem(from: realTimeTrades[iter], dataModel: data)
         }
     }
     // Trigger the quotes update for all symbols from URLSession.

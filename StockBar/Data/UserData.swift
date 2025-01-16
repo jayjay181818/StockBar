@@ -15,6 +15,7 @@ import Combine
 class DataModel : ObservableObject{
     let decoder = JSONDecoder()
     @Published var realTimeTrades : [RealTimeTrade]
+    @Published var showColorCoding: Bool = true
     init() {
         let data = UserDefaults.standard.object(forKey: "usertrades") as? Data ?? Data()
         self.realTimeTrades = ((try? decoder.decode([Trade].self, from: data)) ?? emptyTrades(size: 1))

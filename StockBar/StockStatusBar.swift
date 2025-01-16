@@ -9,7 +9,10 @@ import Combine
 import Cocoa
 
 class StockStatusBar: NSStatusBar {
-    override init() {
+    private let dataModel: DataModel
+    
+    init(dataModel: DataModel) {
+        self.dataModel = dataModel
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         mainStatusItem?.button?.title = "StockBar"
     }
@@ -23,8 +26,8 @@ class StockStatusBar: NSStatusBar {
     func removeAllSymbolItems() {
         symbolStatusItems.removeAll()
     }
-    func constructSymbolItem(from realTimeTrade : RealTimeTrade) {
-        symbolStatusItems.append(StockStatusItemController(realTimeTrade: realTimeTrade))
+    func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
+        symbolStatusItems.append(StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel))
     }
     func mainItem() -> NSStatusItem? {
         return mainStatusItem
@@ -34,7 +37,10 @@ class StockStatusBar: NSStatusBar {
 }
 
 class StockStatusItemController {
-    init(realTimeTrade : RealTimeTrade) {
+    private let dataModel: DataModel
+    
+    init(realTimeTrade: RealTimeTrade, dataModel: DataModel) {
+        self.dataModel = dataModel
         item.button?.title = realTimeTrade.trade.name
         item.button?.alternateTitle = realTimeTrade.trade.name
         // Set the toggle ButtonType to enable alternateTitle display
@@ -45,8 +51,25 @@ class StockStatusItemController {
                                                realTimeTrade.$realTimeInfo.share())
             .receive(on: DispatchQueue.main)
             .sink { [weak self] (trade, trading) in
-                self?.item.button?.title = trade.name + String(format: "%+.2f", dailyPNLNumber(trading, trade.position))
+                let pnl = dailyPNLNumber(trading, trade.position)
+                let title = trade.name + String(format: "%+.2f", pnl)
+                self?.item.button?.title = title
                 self?.item.button?.alternateTitle = trade.name
+                
+                // Apply color coding if enabled
+                if self?.dataModel.showColorCoding == true {
+                    let color = pnl >= 0 ? NSColor.systemGreen : NSColor.systemRed
+                    self?.item.button?.attributedTitle = NSAttributedString(
+                        string: title,
+                        attributes: [.foregroundColor: color]
+                    )
+                } else {
+                    self?.item.button?.attributedTitle = NSAttributedString(
+                        string: title,
+                        attributes: [.foregroundColor: NSColor.labelColor]
+                    )
+                }
+                
                 self?.item.menu = SymbolMenu(tradingInfo: trading, position: trade.position)
         }
     }
