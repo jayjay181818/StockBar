@@ -6,6 +6,7 @@
 
 import Foundation
 
+
 struct YahooFinanceQuote: Codable {
     let quoteResponse: QuoteResponse?
 }
@@ -24,13 +25,16 @@ struct Result: Codable {
     let regularMarketPrice: Double
     let regularMarketPreviousClose: Double
     func getPrice()->String {
-        return (currency ?? "Price") + " " + String(format: "%.2f", regularMarketPrice)
+        let converted = convertPrice(price: regularMarketPrice, currency: currency)
+        return "\(converted.currency) \(String(format: "%.2f", converted.price))"
     }
     func getChange()->String {
-        return String(format: "%+.2f",regularMarketPrice - regularMarketPreviousClose)
+        let converted = convertPrice(price: regularMarketPrice - regularMarketPreviousClose, currency: currency)
+        return String(format: "%+.2f", converted.price)
     }
     func getLongChange()->String {
-        return String(format: "%+.4f",regularMarketPrice - regularMarketPreviousClose)
+        let converted = convertPrice(price: regularMarketPrice - regularMarketPreviousClose, currency: currency)
+        return String(format: "%+.4f", converted.price)
     }
     func getChangePct()->String {
         return String(format: "%+.4f", 100*(regularMarketPrice - regularMarketPreviousClose)/regularMarketPreviousClose)+"%"

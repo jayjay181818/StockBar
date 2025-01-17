@@ -51,21 +51,22 @@ class StockStatusItemController {
                                                realTimeTrade.$realTimeInfo.share())
             .receive(on: DispatchQueue.main)
             .sink { [weak self] (trade, trading) in
-                let pnl = dailyPNLNumber(trading, trade.position)
+                let pnl = dailyPNLNumber(trading, trade.position) // Already converted to GBP
                 let title = trade.name + String(format: "%+.2f", pnl)
-                self?.item.button?.title = title
+                let fullTitle = trading.currency == "GBX" ? "\(title) (GBX→GBP)" : title
+                self?.item.button?.title = fullTitle
                 self?.item.button?.alternateTitle = trade.name
                 
                 // Apply color coding if enabled
                 if self?.dataModel.showColorCoding == true {
                     let color = pnl >= 0 ? NSColor.systemGreen : NSColor.systemRed
                     self?.item.button?.attributedTitle = NSAttributedString(
-                        string: title,
+                        string: fullTitle,
                         attributes: [.foregroundColor: color]
                     )
                 } else {
                     self?.item.button?.attributedTitle = NSAttributedString(
-                        string: title,
+                        string: fullTitle,
                         attributes: [.foregroundColor: NSColor.labelColor]
                     )
                 }
