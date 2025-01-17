@@ -6,24 +6,36 @@
 
 import Cocoa
 func dailyPNLNumber(_ tradingInfo: TradingInfo, _ position: Position)->Double {
-    return (tradingInfo.currentPrice - tradingInfo.prevClosePrice)*position.unitSize
+    // Convert the total PNL amount (difference * units)
+    let rawPNL = (tradingInfo.currentPrice - tradingInfo.prevClosePrice) * position.unitSize
+    return convertPrice(price: rawPNL, currency: tradingInfo.currency).price
 }
 func dailyPNL(_ tradingInfo: TradingInfo, _ position: Position)->String {
     let pnlString = String(format: "%+.2f", dailyPNLNumber(tradingInfo, position))
-    return "Daily PnL: " + (tradingInfo.currency ?? "") + " " + pnlString
+    let suffix = tradingInfo.currency == "GBX" ? " (converted from GBX)" : ""
+    return "Daily PnL: GBP " + pnlString + suffix
 }
 fileprivate func totalPNL(_ tradingInfo: TradingInfo, _ position: Position)->String {
-    let pnl = (tradingInfo.currentPrice - position.positionAvgCost)*position.unitSize
-    let pnlString = String(format: "%+.2f", pnl)
-    return "Total PnL: " + (tradingInfo.currency ?? "") + " " + pnlString
+    // Convert the total value (current price * units - avg cost * units)
+    let rawPNL = (tradingInfo.currentPrice * position.unitSize) - (Double(position.positionAvgCostString) ?? 0) * position.unitSize
+    let converted = convertPrice(price: rawPNL, currency: tradingInfo.currency)
+    let suffix = tradingInfo.currency == "GBX" ? " (converted from GBX)" : ""
+    let pnlString = String(format: "%+.2f", converted.price)
+    return "Total PnL: GBP " + pnlString + suffix
 }
 fileprivate func totalPositionCost(_ tradingInfo: TradingInfo, _ position: Position)->String {
-    return "Position Cost: " + (tradingInfo.currency ?? "") + " " + String(format: "%.2f", position.unitSize*position.positionAvgCost)
+    // Convert the total position cost (avg cost * units)
+    let rawCost = (Double(position.positionAvgCostString) ?? 0) * position.unitSize
+    let converted = convertPrice(price: rawCost, currency: tradingInfo.currency)
+    let suffix = tradingInfo.currency == "GBX" ? " (converted from GBX)" : ""
+    return "Position Cost: GBP " + String(format: "%.2f", converted.price) + suffix
 }
 fileprivate func currentPositionValue(_ tradingInfo: TradingInfo, _ position: Position)->String {
-    let positionValue = tradingInfo.currentPrice*position.unitSize
-    let positionString = String(format: "%.2f", positionValue)
-    return "Market Value: " + (tradingInfo.currency ?? "") + " " + positionString
+    // Convert the total market value (current price * units)
+    let rawValue = tradingInfo.currentPrice * position.unitSize
+    let converted = convertPrice(price: rawValue, currency: tradingInfo.currency)
+    let suffix = tradingInfo.currency == "GBX" ? " (converted from GBX)" : ""
+    return "Market Value: GBP " + String(format: "%.2f", converted.price) + suffix
 }
 
 final class SymbolMenu: NSMenu {
@@ -39,7 +51,9 @@ final class SymbolMenu: NSMenu {
         self.addItem(withTitle: dailyPNL(tradingInfo, position), action: nil, keyEquivalent: "")
         self.addItem(withTitle: totalPNL(tradingInfo, position), action: nil, keyEquivalent: "")
         self.addItem(withTitle: "Units: \(position.unitSize)", action: nil, keyEquivalent: "")
-        self.addItem(withTitle: "Avg Position Cost: \(tradingInfo.currency ?? "") \(position.positionAvgCost)", action: nil, keyEquivalent: "")
+        let converted = convertPrice(price: 0, currency: tradingInfo.currency) // Just to get currency conversion
+        let suffix = tradingInfo.currency == "GBX" ? " (converted from GBX)" : ""
+        self.addItem(withTitle: "Avg Position Cost: \(converted.currency) \(position.positionAvgCost)\(suffix)", action: nil, keyEquivalent: "")
         self.addItem(withTitle: totalPositionCost(tradingInfo, position), action: nil, keyEquivalent: "")
         self.addItem(withTitle: currentPositionValue(tradingInfo, position), action: nil, keyEquivalent: "")
     }

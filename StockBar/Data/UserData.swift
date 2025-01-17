@@ -12,16 +12,29 @@ import Combine
 // All the user input in preference goes here to modify Trade and then updates UserDeafults.
 // All the real time trading info fetched from URLSession
 // goes here to update the RealTimeTrading, then shows up on the NSStatusItem.
-class DataModel : ObservableObject{
+class DataModel : ObservableObject {
     let decoder = JSONDecoder()
+    let encoder = JSONEncoder()
     @Published var realTimeTrades : [RealTimeTrade]
     @Published var showColorCoding: Bool = true
+    private var cancellables = Set<AnyCancellable>()
+    
     init() {
         let data = UserDefaults.standard.object(forKey: "usertrades") as? Data ?? Data()
         self.realTimeTrades = ((try? decoder.decode([Trade].self, from: data)) ?? emptyTrades(size: 1))
             .map {
                 RealTimeTrade(trade: $0, realTimeInfo: TradingInfo())
             }
+        
+        // Save trades whenever they change
+        $realTimeTrades
+            .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
+            .sink { [weak self] trades in
+                guard let self = self else { return }
+                let tradesData = try? self.encoder.encode(trades.map { $0.trade })
+                UserDefaults.standard.set(tradesData, forKey: "usertrades")
+            }
+            .store(in: &cancellables)
     }
 }
 
@@ -76,13 +89,42 @@ class RealTimeTrade : ObservableObject, Identifiable {
                     }
                     else if let results = response.result {
                         if (!results.isEmpty) {
+                            let currency = results[0].currency
+                            let message = """
+                            ===== STOCK DATA DEBUG =====
+                            Yahoo Finance API Response:
+                            Symbol: \(results[0].symbol)
+                            Currency: \(currency ?? "nil")
+                            Raw Price: \(results[0].regularMarketPrice)
+                            ===========================
+                            """
+                            FileHandle.standardError.write(message.data(using: .utf8)!)
+                            
                             let newRealTimeInfo = TradingInfo(currentPrice: results[0].regularMarketPrice,
                                                               prevClosePrice: results[0].regularMarketPreviousClose,
-                                                              currency: results[0].currency,
+                                                              currency: currency,
                                                               regularMarketTime: results[0].regularMarketTime,
                                                               exchangeTimezoneName: results[0].exchangeTimezoneName,
                                                               shortName: results[0].shortName)
+                            
+                            let infoMessage = """
+                            TradingInfo after conversion:
+                            Currency: \(newRealTimeInfo.currency ?? "nil")
+                            Price: \(newRealTimeInfo.getPrice())
+                            ===========================
+                            """
+                            FileHandle.standardError.write(infoMessage.data(using: .utf8)!)
+                            
                             self?.realTimeInfo = newRealTimeInfo
+                            // Update position currency with the one from Yahoo Finance
+                            self?.trade.position.currency = currency
+                            
+                            let positionMessage = """
+                            Position after update:
+                            Currency: \(self?.trade.position.currency ?? "nil")
+                            ===========================
+                            """
+                            FileHandle.standardError.write(positionMessage.data(using: .utf8)!)
                         }
                     }
                 }
@@ -99,13 +141,34 @@ class RealTimeTrade : ObservableObject, Identifiable {
     
 }
 
+func logToFile(_ message: String) {
+    if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+        let logPath = documentsPath.appendingPathComponent("stockbar_debug.log")
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let logMessage = "\(timestamp): \(message)\n"
+        
+        if let data = logMessage.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath.path) {
+                if let fileHandle = try? FileHandle(forWritingTo: logPath) {
+                    fileHandle.seekToEndOfFile()
+                    fileHandle.write(data)
+                    try? fileHandle.close()
+                }
+            } else {
+                try? logMessage.write(to: logPath, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+}
+
 func emptyTrades(size : Int) -> [Trade]{
-    return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "")), count: size)
+    return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "", currency: nil)), count: size)
 }
 
 func emptyRealTimeTrade()->RealTimeTrade {
     return RealTimeTrade(trade: Trade(name: "",
                                       position: Position(unitSize: "1",
-                                                         positionAvgCost: "")),
+                                                         positionAvgCost: "",
+                                                         currency: nil)),
                          realTimeInfo: TradingInfo())
 }
