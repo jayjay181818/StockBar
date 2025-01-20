@@ -6,7 +6,6 @@
 
 import Foundation
 
-
 struct YahooFinanceQuote: Codable {
     let quoteResponse: QuoteResponse?
 }
@@ -24,22 +23,26 @@ struct Result: Codable {
     let exchangeTimezoneName: String
     let regularMarketPrice: Double
     let regularMarketPreviousClose: Double
-    func getPrice()->String {
-        let converted = convertPrice(price: regularMarketPrice, currency: currency)
-        return "\(converted.currency) \(String(format: "%.2f", converted.price))"
+    
+    func getPrice() -> String {
+        return formatPrice(price: regularMarketPrice, currency: currency)
     }
-    func getChange()->String {
-        let converted = convertPrice(price: regularMarketPrice - regularMarketPreviousClose, currency: currency)
-        return String(format: "%+.2f", converted.price)
+    
+    func getChange() -> String {
+        let change = regularMarketPrice - regularMarketPreviousClose
+        return String(format: "%+.2f", change)
     }
-    func getLongChange()->String {
-        let converted = convertPrice(price: regularMarketPrice - regularMarketPreviousClose, currency: currency)
-        return String(format: "%+.4f", converted.price)
+    
+    func getLongChange() -> String {
+        let change = regularMarketPrice - regularMarketPreviousClose
+        return String(format: "%+.4f", change)
     }
-    func getChangePct()->String {
-        return String(format: "%+.4f", 100*(regularMarketPrice - regularMarketPreviousClose)/regularMarketPreviousClose)+"%"
+    
+    func getChangePct() -> String {
+        return String(format: "%+.4f", 100*(regularMarketPrice - regularMarketPreviousClose)/regularMarketPreviousClose) + "%"
     }
-    func getTimeInfo()->String {
+    
+    func getTimeInfo() -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(regularMarketTime))
         let tradeTimeZone = TimeZone(identifier: exchangeTimezoneName)
         let dateFormatter = DateFormatter()
@@ -51,9 +54,8 @@ struct Result: Codable {
 
 struct Error: Codable {
     let errorDescription: String
-
+    
     enum CodingKeys: String, CodingKey {
         case errorDescription = "description"
     }
 }
-
