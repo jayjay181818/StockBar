@@ -31,6 +31,31 @@ struct PreferenceView: View {
                     .padding(.bottom, 10)
                 Spacer()
             }
+            
+            HStack {
+                Text("Preferred Currency:")
+                Picker("", selection: $userdata.preferredCurrency) {
+                    ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
+                        Text(currency).tag(currency)
+                    }
+                }
+                .frame(width: 100)
+                Spacer()
+            }
+            .padding(.bottom, 10)
+            
+            // Display total net gains
+            HStack {
+                Text("Total Net Gains:")
+                let gains = userdata.calculateNetGains()
+                let formattedAmount = String(format: "%+.2f", gains.amount)
+                Text("\(formattedAmount) \(gains.currency)")
+                    .foregroundColor(gains.amount >= 0 ? .green : .red)
+                Spacer()
+            }
+            .padding(.bottom, 10)
+            // Force view to update when trades change
+            .id(userdata.realTimeTrades.map { $0.realTimeInfo.currentPrice }.reduce(0, +))
             HStack {
                 Spacer()
                 Text("Symbol")
