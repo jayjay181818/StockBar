@@ -4,12 +4,10 @@
 //
 //  Created by Hongliang Fan on 2020-08-02.
 
-import SwiftUI
 import Combine
 import SwiftUI
-
-struct PreferenceRow : View {
-    @ObservedObject var realTimeTrade : RealTimeTrade
+struct PreferenceRow: View {
+    @ObservedObject var realTimeTrade: RealTimeTrade
     var body: some View {
         HStack {
             Spacer()
@@ -24,16 +22,16 @@ struct PreferenceRow : View {
 }
 
 struct PreferenceView: View {
-    @ObservedObject var userdata : DataModel
+    @ObservedObject var userdata: DataModel
     private let currencyConverter = CurrencyConverter()
-    
+
     private var formattedTimestamp: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter.string(from: Date())
     }
-    
+
     var body: some View {
         VStack {
             HStack {
@@ -41,7 +39,7 @@ struct PreferenceView: View {
                     .padding(.bottom, 10)
                 Spacer()
             }
-            
+
             HStack {
                 Text("Preferred Currency:")
                 Picker("", selection: $userdata.preferredCurrency) {
@@ -53,7 +51,7 @@ struct PreferenceView: View {
                 Spacer()
             }
             .padding(.bottom, 10)
-            
+
             HStack {
                 Text("Exchange Rates Updated:")
                 Text(formattedTimestamp)
@@ -64,7 +62,7 @@ struct PreferenceView: View {
                 }
             }
             .padding(.bottom, 10)
-            
+
             // Display total net gains
             HStack {
                 Text("Total Net Gains:")
@@ -88,30 +86,29 @@ struct PreferenceView: View {
                     let emptyTrade = emptyRealTimeTrade()
                     self.userdata.realTimeTrades.insert(emptyTrade, at: 0)
                     }
-                ){
+                ) {
                     Text("+")
                 }
             }
             ForEach(userdata.realTimeTrades) { item in
                 HStack {
                     Button(action: {
-                        if let index = self.userdata.realTimeTrades.map({$0.id}).firstIndex(of: item.id) {
+                        if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
                             self.userdata.realTimeTrades.remove(at: index)
                         }
-                    }){
+                    }) {
                         Text("-")
                     }
                     PreferenceRow(realTimeTrade: item)
                     Button(action: {
                         let emptyTrade = emptyRealTimeTrade()
-                        if let index = self.userdata.realTimeTrades.map({$0.id}).firstIndex(of: item.id) {
-                            self.userdata.realTimeTrades.insert(emptyTrade, at: index+1)
+                        if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
+                            self.userdata.realTimeTrades.insert(emptyTrade, at: index + 1)
                         }
-                    }){
+                    }) {
                         Text("+")
                     }
                 }
-                
             }
         }.padding()
     }

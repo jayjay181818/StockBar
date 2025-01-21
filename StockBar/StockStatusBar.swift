@@ -1,100 +1,35 @@
-//
-//  StockStatusBar.swift
-//  StockBar
-//
-//  Created by Hongliang Fan on 2020-06-20.
-
-import Foundation
-import Combine
 import Cocoa
+import Combine
+import Foundation
 
-class StockStatusBar: NSStatusBar {
+// MARK: - Models
+struct TradingData {
+    let currentPrice: Double
+    let previousPrice: Double
+    let currency: String
+    let avgCost: Double
+    let units: Double
+    let timeInfo: String
+}
+
+class StockStatusBar {
+    // MARK: - Properties
     private let dataModel: DataModel
-    private var cancellables = Set<AnyCancellable>()
     private var mainStatusItem: NSStatusItem?
     private var symbolStatusItems: [StockStatusItemController] = []
-    
+
+    // MARK: - Initialization
     init(dataModel: DataModel) {
         self.dataModel = dataModel
-        super.init()
-        
-        setupStatusItem()
-        setupSubscriptions()
-    }
-    
-    private func setupStatusItem() {
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         mainStatusItem?.button?.title = "StockBar"
     }
     
-    private func setupSubscriptions() {
-        // Subscribe to changes in realTimeTrades
-        dataModel.$realTimeTrades
-            .debounce(for: .seconds(0.1), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.updateMenu()
-            }
-            .store(in: &cancellables)
-        
-        // Subscribe to changes in showColorCoding
-        dataModel.$showColorCoding
-            .sink { [weak self] _ in
-                self?.updateMenu()
-            }
-            .store(in: &cancellables)
-        
-        // Set up a timer to update the menu periodically
-        Timer.publish(every: 1.0, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.updateMenu()
-            }
-            .store(in: &cancellables)
-    }
-    
-    private func updateMenu() {
-        guard let menu = mainStatusItem?.menu else { return }
-        if let firstItem = menu.items.first {
-            let gains = dataModel.calculateNetGains()
-            let formattedAmount = String(format: "%+.2f", gains.amount)
-            firstItem.title = "Net Gains: \(formattedAmount) \(gains.currency)"
-            
-            if dataModel.showColorCoding {
-                let color = gains.amount >= 0 ? NSColor.green : NSColor.systemRed
-                firstItem.attributedTitle = NSAttributedString(
-                    string: firstItem.title,
-                    attributes: [.foregroundColor: color]
-                )
-            } else {
-                firstItem.attributedTitle = nil
-            }
-        }
-    }
-    
+    // MARK: - Public Methods
     func constructMainItemMenu(items: [NSMenuItem]) {
         let menu = NSMenu()
-        
-        // Add net gains as first item
-        let gains = dataModel.calculateNetGains()
-        let gainsItem = NSMenuItem()
-        let formattedAmount = String(format: "%+.2f", gains.amount)
-        gainsItem.title = "Net Gains: \(formattedAmount) \(gains.currency)"
-        if dataModel.showColorCoding {
-            let color = gains.amount >= 0 ? NSColor.green : NSColor.systemRed
-            gainsItem.attributedTitle = NSAttributedString(
-                string: gainsItem.title,
-                attributes: [.foregroundColor: color]
-            )
-        }
-        menu.addItem(gainsItem)
-        menu.addItem(NSMenuItem.separator())
-        
-        // Add other menu items
-        for item in items {
-            menu.addItem(item)
-        }
+        items.forEach { menu.addItem($0) }
         mainStatusItem?.menu = menu
-        updateMenu() // Ensure the menu is updated immediately
     }
     
     func removeAllSymbolItems() {
@@ -102,52 +37,104 @@ class StockStatusBar: NSStatusBar {
     }
     
     func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
-        symbolStatusItems.append(StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel))
+        let controller = StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel)
+        symbolStatusItems.append(controller)
     }
     
     func mainItem() -> NSStatusItem? {
-        return mainStatusItem
+        mainStatusItem
     }
 }
 
 class StockStatusItemController {
+    // MARK: - Properties
     private let dataModel: DataModel
-    var item: NSStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let item: NSStatusItem
     var cancellable: AnyCancellable?
     
+    // MARK: - Initialization
     init(realTimeTrade: RealTimeTrade, dataModel: DataModel) {
         self.dataModel = dataModel
-        item.button?.title = realTimeTrade.trade.name
-        item.button?.alternateTitle = realTimeTrade.trade.name
-        // Set the toggle ButtonType to enable alternateTitle display
-        item.button?.setButtonType(NSButton.ButtonType.toggle)
-        // For a single trade, when any of the symbol, unit size, avg cost position, real time info changes,
-        // update the detail menu and the button title.
-        cancellable = Publishers.CombineLatest(realTimeTrade.sharedPassThroughTrade.merge(with: realTimeTrade.$trade.share()),
-                                             realTimeTrade.$realTimeInfo.share())
+        self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        setupInitialState(with: realTimeTrade)
+        setupDataBinding(for: realTimeTrade)
+    }
+    
+    // MARK: - Private Methods
+    private func setupInitialState(with trade: RealTimeTrade) {
+        item.button?.title = trade.trade.name
+        item.button?.alternateTitle = trade.trade.name
+        item.button?.setButtonType(.toggle)
+    }
+    
+    private func setupDataBinding(for realTimeTrade: RealTimeTrade) {
+        let tradePublisher = realTimeTrade.sharedPassThroughTrade.merge(
+            with: realTimeTrade.$trade.share()
+        )
+        
+        cancellable = Publishers.CombineLatest(tradePublisher, realTimeTrade.$realTimeInfo.share())
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] (trade, trading) in
-                let pnl = dailyPNLNumber(trading, trade.position) // Already converted to GBP
-                let title = trade.name + String(format: "%+.2f", pnl)
-                let fullTitle = trading.currency == "GBX" ? "\(title) (GBX→GBP)" : title
-                self?.item.button?.title = fullTitle
-                self?.item.button?.alternateTitle = trade.name
-                
-                // Apply color coding if enabled
-                if self?.dataModel.showColorCoding == true {
-                    let color = pnl >= 0 ? NSColor.systemGreen : NSColor.systemRed
-                    self?.item.button?.attributedTitle = NSAttributedString(
-                        string: fullTitle,
-                        attributes: [.foregroundColor: color]
-                    )
-                } else {
-                    self?.item.button?.attributedTitle = NSAttributedString(
-                        string: fullTitle,
-                        attributes: [.foregroundColor: NSColor.labelColor]
-                    )
-                }
-                
-                self?.item.menu = SymbolMenu(tradingInfo: trading, position: trade.position)
+            .sink { [weak self] trade, trading in
+                self?.updateDisplay(trade: trade, trading: trading)
             }
+    }
+    
+    private func updateDisplay(trade: Trade, trading: TradingInfo) {
+        let data = TradingData(
+            currentPrice: trading.currentPrice,
+            previousPrice: trading.prevClosePrice,
+            currency: trading.currency ?? "USD",
+            avgCost: Double(trade.position.positionAvgCostString) ?? 0,
+            units: trade.position.unitSize,
+            timeInfo: trading.getTimeInfo()
+        )
+        
+        updateTitle(trade: trade, data: data)
+        updateMenu(trade: trade, data: data)
+    }
+    
+    private func updateTitle(trade: Trade, data: TradingData) {
+        let pnl = (data.currentPrice - data.previousPrice) * data.units
+        let title = "\(trade.name) \(String(format: "%+.2f", pnl))"
+        item.button?.title = title
+        item.button?.alternateTitle = trade.name
+        
+        let color = dataModel.showColorCoding ?
+            (pnl >= 0 ? NSColor.systemGreen : NSColor.systemRed) :
+            NSColor.labelColor
+        
+        item.button?.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [.foregroundColor: color]
+        )
+    }
+    
+    private func updateMenu(trade: Trade, data: TradingData) {
+        let menu = NSMenu()
+        
+        // Calculate values
+        let dayGain = data.currentPrice - data.previousPrice
+        let dayGainPct = dayGain / data.previousPrice * 100
+        let marketValue = data.currentPrice * data.units
+        let positionCost = data.avgCost * data.units
+        
+        // Add menu items
+        let menuItems = [
+            ("Price", String(format: "%.2f \(data.currency)", data.currentPrice)),
+            ("Day Gain", String(format: "%+.2f (%+.2f%%)", dayGain, dayGainPct)),
+            ("Market Value", String(format: "%.2f \(data.currency)", marketValue)),
+            ("Position Cost", String(format: "%.2f \(data.currency)", positionCost)),
+            ("Total P&L", String(format: "%+.2f \(data.currency)", marketValue - positionCost)),
+            ("Day P&L", String(format: "%+.2f \(data.currency)", dayGain * data.units)),
+            ("Units", String(format: "%.0f", data.units)),
+            ("Avg Cost", String(format: "%.2f \(data.currency)", data.avgCost)),
+            ("Last Update", data.timeInfo)
+        ]
+        
+        menuItems.forEach { title, value in
+            menu.addItem(withTitle: "\(title): \(value)", action: nil, keyEquivalent: "")
+        }
+        
+        item.menu = menu
     }
 }

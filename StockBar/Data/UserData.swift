@@ -4,17 +4,17 @@
 //
 //  Created by Hongliang Fan on 2020-08-02.
 
-import Foundation
 import Combine
+import Foundation
 import SwiftUI
 
-class DataModel : ObservableObject {
+class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"]
     private let currencyConverter = CurrencyConverter()
-    
+
     let decoder = JSONDecoder()
     let encoder = JSONEncoder()
-    @Published var realTimeTrades : [RealTimeTrade]
+    @Published var realTimeTrades: [RealTimeTrade]
     @Published var showColorCoding: Bool = true
     @Published var preferredCurrency: String {
         didSet {
@@ -22,16 +22,16 @@ class DataModel : ObservableObject {
         }
     }
     private var cancellables = Set<AnyCancellable>()
-    
+
     init() {
         self.preferredCurrency = UserDefaults.standard.string(forKey: "preferredCurrency") ?? "USD"
-        
+
         let data = UserDefaults.standard.object(forKey: "usertrades") as? Data ?? Data()
         self.realTimeTrades = ((try? decoder.decode([Trade].self, from: data)) ?? emptyTrades(size: 1))
             .map {
                 RealTimeTrade(trade: $0, realTimeInfo: TradingInfo())
             }
-        
+
         $realTimeTrades
             .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
             .sink { [weak self] trades in
@@ -41,35 +41,35 @@ class DataModel : ObservableObject {
             }
             .store(in: &cancellables)
     }
-    
+
     // Calculate total net gains in preferred currency
     func calculateNetGains() -> (amount: Double, currency: String) {
         var totalGainsUSD = 0.0
-        
+
         let debugMessage = """
         ===== STARTING NET GAINS CALCULATION =====
         Preferred Currency: \(preferredCurrency)
         Exchange Rates:
         \(currencyConverter.exchangeRates.map { "\($0.key): \($0.value) USD" }.joined(separator: "\n"))
         ========================
-        
+
         """
         if let data = debugMessage.data(using: String.Encoding.utf8) {
             FileHandle.standardError.write(data)
         }
-        
+
         for trade in realTimeTrades {
             guard !trade.realTimeInfo.currentPrice.isNaN else { continue }
-            
+
             // Get raw values
             let rawPrice = trade.realTimeInfo.currentPrice
             let rawCost = Double(trade.trade.position.positionAvgCostString) ?? 0.0
             let units = trade.trade.position.unitSize
             let currency = trade.realTimeInfo.currency
-            
+
             // Calculate raw gains in original currency
             let rawGains = (rawPrice - rawCost) * units
-            
+
             // Convert to USD based on currency
             var gainsInUSD = rawGains
             if currency == "GBX" || currency == "GBp" {
@@ -79,43 +79,43 @@ class DataModel : ObservableObject {
             } else if let currency = currency {
                 gainsInUSD = currencyConverter.convert(amount: rawGains, from: currency, to: "USD")
             }
-            
+
             totalGainsUSD += gainsInUSD
-            
+
             let message = """
             ===== POSITION: \(trade.trade.name) =====
             Units: \(units)
             Currency: \(currency ?? "nil")
-            
+
             Raw Values:
             Current Price: \(rawPrice)
             Average Cost: \(rawCost)
             Raw Gains: \(rawGains)
-            
+
             USD Conversion:
-            Exchange Rate: \(currency == "GBX" || currency == "GBp" ? 
-                           "GBX->GBP: /100, GBP->USD: \(currencyConverter.exchangeRates["GBP"] ?? 1.0)" : 
+            Exchange Rate: \(currency == "GBX" || currency == "GBp" ?
+                           "GBX->GBP: /100, GBP->USD: \(currencyConverter.exchangeRates["GBP"] ?? 1.0)" :
                            "\(currency ?? "USD")->USD: \(currencyConverter.exchangeRates[currency ?? "USD"] ?? 1.0)")
             Gains in USD: \(gainsInUSD)
             Running Total USD: \(totalGainsUSD)
             ========================
-            
+
             """
             if let data = message.data(using: String.Encoding.utf8) {
                 FileHandle.standardError.write(data)
             }
         }
-        
+
         // Convert final total from USD to preferred currency
         var finalAmount = totalGainsUSD
-        
+
         if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
             let gbpAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: "GBP")
             finalAmount = gbpAmount * 100.0 // Convert GBP to pence
         } else {
             finalAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: preferredCurrency)
         }
-        
+
         let finalMessage = """
         ===== FINAL NET GAINS =====
         Total USD: \(totalGainsUSD)
@@ -123,32 +123,32 @@ class DataModel : ObservableObject {
         Rate USD->\(preferredCurrency): \(1.0 / (currencyConverter.exchangeRates[preferredCurrency] ?? 1.0))
         Total \(preferredCurrency): \(finalAmount)
         ========================
-        
+
         """
         if let data = finalMessage.data(using: String.Encoding.utf8) {
             FileHandle.standardError.write(data)
         }
-        
+
         return (finalAmount, preferredCurrency)
     }
 }
 
-class RealTimeTrade : ObservableObject, Identifiable {
+class RealTimeTrade: ObservableObject, Identifiable {
     let id = UUID()
     static let apiString = "https://query1.finance.yahoo.com/v6/finance/quote/?symbols="
     static let emptyQueryURL = URL(string: apiString)!
-    @Published var trade : Trade
-    private let passThroughTrade : PassthroughSubject<Trade, Never> = PassthroughSubject()
+    @Published var trade: Trade
+    private let passThroughTrade: PassthroughSubject<Trade, Never> = PassthroughSubject()
     var sharedPassThroughTrade: Publishers.Share<PassthroughSubject<Trade, Never>>
-    @Published var realTimeInfo : TradingInfo
-    
+    @Published var realTimeInfo: TradingInfo
+
     func sendTradeToPublisher() {
-        if (cancelled) {
+        if cancelled {
             initCancellable()
         }
         passThroughTrade.send(trade)
     }
-    
+
     func initCancellable() {
         self.cancelled = false
         self.cancellable = sharedPassThroughTrade
@@ -179,12 +179,11 @@ class RealTimeTrade : ObservableObject, Identifiable {
                         self?.realTimeInfo = TradingInfo()
                         return
                     }
-                    
+
                     if let _ = response.error {
                         self?.realTimeInfo = TradingInfo()
-                    }
-                    else if let results = response.result {
-                        if (!results.isEmpty) {
+                    } else if let results = response.result {
+                        if !results.isEmpty {
                             let currency = results[0].currency
                             let message = """
                             ===== STOCK DATA DEBUG =====
@@ -197,14 +196,14 @@ class RealTimeTrade : ObservableObject, Identifiable {
                             if let data = message.data(using: String.Encoding.utf8) {
                                 FileHandle.standardError.write(data)
                             }
-                            
+
                             let newRealTimeInfo = TradingInfo(currentPrice: results[0].regularMarketPrice,
                                                             prevClosePrice: results[0].regularMarketPreviousClose,
                                                             currency: currency,
                                                             regularMarketTime: results[0].regularMarketTime,
                                                             exchangeTimezoneName: results[0].exchangeTimezoneName,
                                                             shortName: results[0].shortName)
-                            
+
                             let infoMessage = """
                             TradingInfo after conversion:
                             Currency: \(newRealTimeInfo.currency ?? "nil")
@@ -214,10 +213,10 @@ class RealTimeTrade : ObservableObject, Identifiable {
                             if let data = infoMessage.data(using: String.Encoding.utf8) {
                                 FileHandle.standardError.write(data)
                             }
-                            
+
                             self?.realTimeInfo = newRealTimeInfo
                             self?.trade.position.currency = currency
-                            
+
                             let positionMessage = """
                             Position after update:
                             Currency: \(self?.trade.position.currency ?? "nil")
@@ -231,16 +230,16 @@ class RealTimeTrade : ObservableObject, Identifiable {
                 }
             )
     }
-    
+
     init(trade: Trade, realTimeInfo: TradingInfo) {
         self.trade = trade
         self.realTimeInfo = realTimeInfo
         self.sharedPassThroughTrade = self.passThroughTrade.share()
         initCancellable()
     }
-    
-    var cancellable : AnyCancellable? = nil
-    var cancelled : Bool = false
+
+    var cancellable: AnyCancellable?
+    var cancelled: Bool = false
 }
 
 func logToFile(_ message: String) {
@@ -248,7 +247,7 @@ func logToFile(_ message: String) {
         let logPath = documentsPath.appendingPathComponent("stockbar_debug.log")
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let logMessage = "\(timestamp): \(message)\n"
-        
+
         if let data = logMessage.data(using: String.Encoding.utf8) {
             if FileManager.default.fileExists(atPath: logPath.path) {
                 if let fileHandle = try? FileHandle(forWritingTo: logPath) {
@@ -263,11 +262,11 @@ func logToFile(_ message: String) {
     }
 }
 
-func emptyTrades(size : Int) -> [Trade]{
+func emptyTrades(size: Int) -> [Trade] {
     return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "", currency: nil)), count: size)
 }
 
-func emptyRealTimeTrade()->RealTimeTrade {
+func emptyRealTimeTrade() -> RealTimeTrade {
     return RealTimeTrade(trade: Trade(name: "",
                                     position: Position(unitSize: "1",
                                                      positionAvgCost: "",

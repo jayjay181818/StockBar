@@ -4,19 +4,19 @@
 //
 //  Created by Hongliang Fan on 2020-06-20.
 
-import Foundation
-import Combine
 import Cocoa
+import Combine
+import Foundation
 
 class StockStatusBar: NSStatusBar {
     private let dataModel: DataModel
-    
+
     init(dataModel: DataModel) {
         self.dataModel = dataModel
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         mainStatusItem?.button?.title = "StockBar"
     }
-    func constructMainItemMenu(items : [NSMenuItem]) {
+    func constructMainItemMenu(items: [NSMenuItem]) {
         let menu = NSMenu()
         for item in items {
             menu.addItem(item)
@@ -32,13 +32,13 @@ class StockStatusBar: NSStatusBar {
     func mainItem() -> NSStatusItem? {
         return mainStatusItem
     }
-    private var mainStatusItem : NSStatusItem?
-    private var symbolStatusItems : [StockStatusItemController] = []
+    private var mainStatusItem: NSStatusItem?
+    private var symbolStatusItems: [StockStatusItemController] = []
 }
 
 class StockStatusItemController {
     private let dataModel: DataModel
-    
+
     init(realTimeTrade: RealTimeTrade, dataModel: DataModel) {
         self.dataModel = dataModel
         item.button?.title = realTimeTrade.trade.name
@@ -52,19 +52,19 @@ class StockStatusItemController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] (trade, trading) in
                 guard let self = self else { return }
-                
+
                 // Use the centralized convertPrice function for all currency conversions
                 let currentPriceConverted = convertPrice(price: trading.currentPrice, currency: trading.currency)
                 let prevClosePriceConverted = convertPrice(price: trading.prevClosePrice, currency: trading.currency)
                 let avgPositionCostConverted = convertPrice(price: Double(trade.position.positionAvgCostString) ?? 0, currency: trading.currency)
-                
+
                 // Calculate PnL using converted values
                 let pnl = (currentPriceConverted.price - prevClosePriceConverted.price) * trade.position.unitSize
                 let title = trade.name + String(format: "%+.2f", pnl)
                 let fullTitle = (trading.currency == "GBX" || trading.currency == "GBp") ? "\(title) (→\(currentPriceConverted.currency))" : title
                 self.item.button?.title = fullTitle
                 self.item.button?.alternateTitle = trade.name
-                
+
                 // Apply color coding if enabled
                 if self.dataModel.showColorCoding {
                     let color = pnl >= 0 ? NSColor.systemGreen : NSColor.systemRed
@@ -78,7 +78,7 @@ class StockStatusItemController {
                         attributes: [.foregroundColor: NSColor.labelColor]
                     )
                 }
-                
+
                 // Calculate all values using converted prices
                 let dayGain = currentPriceConverted.price - prevClosePriceConverted.price
                 let dayGainPct = 100 * (dayGain / prevClosePriceConverted.price)
@@ -86,7 +86,7 @@ class StockStatusItemController {
                 let positionCost = avgPositionCostConverted.price * trade.position.unitSize
                 let totalPnL = marketValue - positionCost
                 let dayPnL = dayGain * trade.position.unitSize
-                
+
                 // Create StockData with converted values
                 let stockData = StockData(
                     symbol: trade.name,
@@ -101,7 +101,7 @@ class StockStatusItemController {
                     averagePositionCost: avgPositionCostConverted.price,
                     timestamp: trading.getTimeInfo()
                 )
-                
+
                 // Create menu with the converted values
                 let menu = SymbolMenu(symbol: trade.name)
                 menu.updateDisplay(with: stockData)
