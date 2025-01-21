@@ -6,19 +6,11 @@
 
 import Foundation
 import Combine
+import SwiftUI
 
 class DataModel : ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"]
-    
-    // Exchange rates to USD (as of January 2024)
-    private let exchangeRates: [String: Double] = [
-        "USD": 1.0,
-        "GBP": 1.27,    // 1 GBP = 1.27 USD
-        "EUR": 1.09,    // 1 EUR = 1.09 USD
-        "JPY": 0.0068,  // 1 JPY = 0.0068 USD
-        "CAD": 0.74,    // 1 CAD = 0.74 USD
-        "AUD": 0.66     // 1 AUD = 0.66 USD
-    ]
+    private let currencyConverter = CurrencyConverter()
     
     let decoder = JSONDecoder()
     let encoder = JSONEncoder()
@@ -58,11 +50,13 @@ class DataModel : ObservableObject {
         ===== STARTING NET GAINS CALCULATION =====
         Preferred Currency: \(preferredCurrency)
         Exchange Rates:
-        \(exchangeRates.map { "\($0.key): \($0.value) USD" }.joined(separator: "\n"))
+        \(currencyConverter.exchangeRates.map { "\($0.key): \($0.value) USD" }.joined(separator: "\n"))
         ========================
         
         """
-        FileHandle.standardError.write(debugMessage.data(using: .utf8)!)
+        if let data = debugMessage.data(using: String.Encoding.utf8) {
+            FileHandle.standardError.write(data)
+        }
         
         for trade in realTimeTrades {
             guard !trade.realTimeInfo.currentPrice.isNaN else { continue }
@@ -80,9 +74,10 @@ class DataModel : ObservableObject {
             var gainsInUSD = rawGains
             if currency == "GBX" || currency == "GBp" {
                 // Convert from pence to GBP first, then to USD
-                gainsInUSD = (rawGains / 100.0) * (exchangeRates["GBP"] ?? 1.0)
-            } else if let rate = exchangeRates[currency ?? "USD"] {
-                gainsInUSD = rawGains * rate
+                let gbpAmount = rawGains / 100.0
+                gainsInUSD = currencyConverter.convert(amount: gbpAmount, from: "GBP", to: "USD")
+            } else if let currency = currency {
+                gainsInUSD = currencyConverter.convert(amount: rawGains, from: currency, to: "USD")
             }
             
             totalGainsUSD += gainsInUSD
@@ -99,38 +94,40 @@ class DataModel : ObservableObject {
             
             USD Conversion:
             Exchange Rate: \(currency == "GBX" || currency == "GBp" ? 
-                           "GBX->GBP: /100, GBP->USD: \(exchangeRates["GBP"] ?? 1.0)" : 
-                           "\(currency ?? "USD")->USD: \(exchangeRates[currency ?? "USD"] ?? 1.0)")
+                           "GBX->GBP: /100, GBP->USD: \(currencyConverter.exchangeRates["GBP"] ?? 1.0)" : 
+                           "\(currency ?? "USD")->USD: \(currencyConverter.exchangeRates[currency ?? "USD"] ?? 1.0)")
             Gains in USD: \(gainsInUSD)
             Running Total USD: \(totalGainsUSD)
             ========================
             
             """
-            FileHandle.standardError.write(message.data(using: .utf8)!)
+            if let data = message.data(using: String.Encoding.utf8) {
+                FileHandle.standardError.write(data)
+            }
         }
         
         // Convert final total from USD to preferred currency
         var finalAmount = totalGainsUSD
         
         if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-            // Convert USD to GBP first
-            finalAmount /= exchangeRates["GBP"] ?? 1.0
-            // Then convert GBP to pence
-            finalAmount *= 100.0
-        } else if let rate = exchangeRates[preferredCurrency] {
-            finalAmount /= rate
+            let gbpAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: "GBP")
+            finalAmount = gbpAmount * 100.0 // Convert GBP to pence
+        } else {
+            finalAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: preferredCurrency)
         }
         
         let finalMessage = """
         ===== FINAL NET GAINS =====
         Total USD: \(totalGainsUSD)
         Final Conversion:
-        Rate USD->\(preferredCurrency): \(1.0 / (exchangeRates[preferredCurrency] ?? 1.0))
+        Rate USD->\(preferredCurrency): \(1.0 / (currencyConverter.exchangeRates[preferredCurrency] ?? 1.0))
         Total \(preferredCurrency): \(finalAmount)
         ========================
         
         """
-        FileHandle.standardError.write(finalMessage.data(using: .utf8)!)
+        if let data = finalMessage.data(using: String.Encoding.utf8) {
+            FileHandle.standardError.write(data)
+        }
         
         return (finalAmount, preferredCurrency)
     }
@@ -197,7 +194,9 @@ class RealTimeTrade : ObservableObject, Identifiable {
                             Raw Price: \(results[0].regularMarketPrice)
                             ===========================
                             """
-                            FileHandle.standardError.write(message.data(using: .utf8)!)
+                            if let data = message.data(using: String.Encoding.utf8) {
+                                FileHandle.standardError.write(data)
+                            }
                             
                             let newRealTimeInfo = TradingInfo(currentPrice: results[0].regularMarketPrice,
                                                             prevClosePrice: results[0].regularMarketPreviousClose,
@@ -212,7 +211,9 @@ class RealTimeTrade : ObservableObject, Identifiable {
                             Price: \(newRealTimeInfo.getPrice())
                             ===========================
                             """
-                            FileHandle.standardError.write(infoMessage.data(using: .utf8)!)
+                            if let data = infoMessage.data(using: String.Encoding.utf8) {
+                                FileHandle.standardError.write(data)
+                            }
                             
                             self?.realTimeInfo = newRealTimeInfo
                             self?.trade.position.currency = currency
@@ -222,7 +223,9 @@ class RealTimeTrade : ObservableObject, Identifiable {
                             Currency: \(self?.trade.position.currency ?? "nil")
                             ===========================
                             """
-                            FileHandle.standardError.write(positionMessage.data(using: .utf8)!)
+                            if let data = positionMessage.data(using: String.Encoding.utf8) {
+                                FileHandle.standardError.write(data)
+                            }
                         }
                     }
                 }
@@ -246,7 +249,7 @@ func logToFile(_ message: String) {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let logMessage = "\(timestamp): \(message)\n"
         
-        if let data = logMessage.data(using: .utf8) {
+        if let data = logMessage.data(using: String.Encoding.utf8) {
             if FileManager.default.fileExists(atPath: logPath.path) {
                 if let fileHandle = try? FileHandle(forWritingTo: logPath) {
                     fileHandle.seekToEndOfFile()

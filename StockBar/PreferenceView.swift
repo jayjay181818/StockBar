@@ -5,6 +5,8 @@
 //  Created by Hongliang Fan on 2020-08-02.
 
 import SwiftUI
+import Combine
+import SwiftUI
 
 struct PreferenceRow : View {
     @ObservedObject var realTimeTrade : RealTimeTrade
@@ -23,6 +25,14 @@ struct PreferenceRow : View {
 
 struct PreferenceView: View {
     @ObservedObject var userdata : DataModel
+    private let currencyConverter = CurrencyConverter()
+    
+    private var formattedTimestamp: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: Date())
+    }
     
     var body: some View {
         VStack {
@@ -41,6 +51,17 @@ struct PreferenceView: View {
                 }
                 .frame(width: 100)
                 Spacer()
+            }
+            .padding(.bottom, 10)
+            
+            HStack {
+                Text("Exchange Rates Updated:")
+                Text(formattedTimestamp)
+                Button(action: {
+                    currencyConverter.refreshRates()
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
             .padding(.bottom, 10)
             

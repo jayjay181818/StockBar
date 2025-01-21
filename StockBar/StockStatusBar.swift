@@ -60,7 +60,7 @@ class StockStatusBar: NSStatusBar {
             firstItem.title = "Net Gains: \(formattedAmount) \(gains.currency)"
             
             if dataModel.showColorCoding {
-                let color = gains.amount >= 0 ? NSColor.systemGreen : NSColor.systemRed
+                let color = gains.amount >= 0 ? NSColor.green : NSColor.systemRed
                 firstItem.attributedTitle = NSAttributedString(
                     string: firstItem.title,
                     attributes: [.foregroundColor: color]
@@ -80,7 +80,7 @@ class StockStatusBar: NSStatusBar {
         let formattedAmount = String(format: "%+.2f", gains.amount)
         gainsItem.title = "Net Gains: \(formattedAmount) \(gains.currency)"
         if dataModel.showColorCoding {
-            let color = gains.amount >= 0 ? NSColor.systemGreen : NSColor.systemRed
+            let color = gains.amount >= 0 ? NSColor.green : NSColor.systemRed
             gainsItem.attributedTitle = NSAttributedString(
                 string: gainsItem.title,
                 attributes: [.foregroundColor: color]
