@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		037574F42D3FAE2C00EBCE25 /* CurrencyConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 037574F32D3FAE2C00EBCE25 /* CurrencyConverter.swift */; };
 		1919BC0C249EAEF000D708F4 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1919BC0B249EAEF000D708F4 /* AppDelegate.swift */; };
 		1919BC10249EAEF100D708F4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1919BC0F249EAEF100D708F4 /* Assets.xcassets */; };
 		1919BC13249EAEF100D708F4 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 1919BC11249EAEF100D708F4 /* Main.storyboard */; };
@@ -22,6 +23,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		037574F32D3FAE2C00EBCE25 /* CurrencyConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrencyConverter.swift; sourceTree = "<group>"; };
 		1919BC08249EAEF000D708F4 /* StockBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StockBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1919BC0B249EAEF000D708F4 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		1919BC0F249EAEF100D708F4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -69,6 +71,7 @@
 		1919BC0A249EAEF000D708F4 /* StockBar */ = {
 			isa = PBXGroup;
 			children = (
+				037574F32D3FAE2C00EBCE25 /* CurrencyConverter.swift */,
 				1938789524D647B0009FA349 /* Data */,
 				1919BC0B249EAEF000D708F4 /* AppDelegate.swift */,
 				1919BC1D249EB09500D708F4 /* PreferencePopover.swift */,
@@ -173,6 +176,7 @@
 				1919BC22249EB09500D708F4 /* SymbolMenu.swift in Sources */,
 				1938789724D647C8009FA349 /* Trade.swift in Sources */,
 				1919BC0C249EAEF000D708F4 /* AppDelegate.swift in Sources */,
+				037574F42D3FAE2C00EBCE25 /* CurrencyConverter.swift in Sources */,
 				19E9000724D73BC600D4D818 /* UserData.swift in Sources */,
 				1919BC23249EB09500D708F4 /* PreferenceViewController.swift in Sources */,
 				19E9000924D776C400D4D818 /* PreferenceView.swift in Sources */,
@@ -326,7 +330,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = "0.1.2-alpha";
+				MARKETING_VERSION = "0.2.0";
 				PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.StockBar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -347,7 +351,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = "0.1.2-alpha";
+				MARKETING_VERSION = "0.2.0";
 				PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.StockBar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;

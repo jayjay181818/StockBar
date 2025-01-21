@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2.0] - 2025-01-21
+
+### Added
+- Real-time currency conversion using exchangerate-api.com
+- Support for all major currency pairs (USD, GBP, EUR, JPY, CAD, AUD)
+- Automatic hourly exchange rate updates
+- Manual refresh option for exchange rates
+
+### Changed
+- Simplified currency conversion architecture
+- Improved error handling and fallbacks
+- Enhanced state management in PreferenceView
+- Better separation of concerns between components
+
+### Technical Details
+- Implemented CurrencyConverter as ObservableObject
+- Added ExchangeRateResponse model for API integration
+- Updated DataModel to handle currency conversion internally
+- Improved error handling with proper fallbacks
+- Enhanced logging throughout conversion process
+
+### Developer Notes
+The currency conversion system has been completely redesigned to:
+- Use exchangerate-api.com for reliable real-time rates
+- Handle currency conversion through a clean, focused API
+- Provide proper error handling and fallbacks
+- Maintain clean separation between UI and business logic
+
 ## [1.1.0] - 2025-01-17
 
 ### Added
