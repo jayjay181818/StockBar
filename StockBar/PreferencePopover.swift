@@ -1,18 +1,16 @@
-//
-//  PreferencePopover.swift
-//  StockBar
-//
-//  Created by Hongliang Fan on 2020-06-20.
-
 import Cocoa
 import SwiftUI
 
 class PreferencePopover: NSPopover {
+    private let userdata: DataModel
+    
     init(data: DataModel) {
+        self.userdata = data
         super.init()
-        self.behavior = NSPopover.Behavior.transient
-        self.contentViewController = PreferenceHostingController(data: data)
-        self.contentSize = CGSize(width: 400, height: 400)
+        
+        let preferenceViewController = PreferenceViewController(userdata: userdata)
+        self.contentViewController = preferenceViewController
+        self.behavior = .transient
     }
     
     required init?(coder: NSCoder) {

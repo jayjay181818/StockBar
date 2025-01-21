@@ -1,15 +1,15 @@
-import Foundation
 import Combine
+import Foundation
 
 public final class CurrencyConverter: NSObject, ObservableObject {
     @available(*, deprecated, message: "Use shared instance through dependency injection")
     public static let shared = CurrencyConverter()
-    
+
     @Published public var exchangeRates: [String: Double] = [:]
     private var cancellables = Set<AnyCancellable>()
     private let baseCurrency = "USD"
     private let currencyPairs = ["GBPUSD=X", "EURUSD=X", "JPYUSD=X", "CADUSD=X", "AUDUSD=X"]
-    
+
     private init() {
         refreshRates()
         // Auto-refresh every hour
@@ -20,11 +20,11 @@ public final class CurrencyConverter: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
     }
-    
+
     func refreshRates() {
         let symbols = currencyPairs.joined(separator: ",")
         guard let url = URL(string: "https://query1.finance.yahoo.com/v6/finance/quote?symbols=\(symbols)") else { return }
-        
+
         URLSession.shared.dataTaskPublisher(for: url)
             .map(\.data)
             .decode(type: YahooFinanceResponse.self, decoder: JSONDecoder())
@@ -41,7 +41,7 @@ public final class CurrencyConverter: NSObject, ObservableObject {
             )
             .store(in: &cancellables)
     }
-    
+
     private func processResponse(_ response: YahooFinanceResponse) {
         var newRates = [String: Double]()
         for quote in response.quoteResponse.result {
@@ -51,7 +51,7 @@ public final class CurrencyConverter: NSObject, ObservableObject {
         }
         exchangeRates = newRates
     }
-    
+
     func convert(amount: Double, from: String, to: String) -> Double {
         let fromRate = exchangeRates[from] ?? 1.0
         let toRate = exchangeRates[to] ?? 1.0
@@ -59,13 +59,13 @@ public final class CurrencyConverter: NSObject, ObservableObject {
     }
 }
 
-fileprivate struct YahooFinanceResponse: Decodable {
+private struct YahooFinanceResponse: Decodable {
     let quoteResponse: QuoteResponse
-    
+
     struct QuoteResponse: Decodable {
         let result: [Quote]
     }
-    
+
     struct Quote: Decodable {
         let symbol: String
         let regularMarketPrice: Double

@@ -1,44 +1,106 @@
-<h1 align="center"> StockBar </h1>
+# StockBar
 
-<p align="center">
-    <img alt="mainDisplay" src=Screenshots/StockBar.png>
-</p>
+A macOS menu bar application for tracking stock prices and portfolio performance.
 
-## About
-A menu bar app that tracks changes of stock prices, currency exchange rates, and cryptocurrency prices every minute.
-The menu bar item displays the daily position changes if the unit size is provided in the settings. Otherwise, the per unit daily changes is displayed.
+## Features
 
-Click on the symbol name to show details such as the price, the change percentage, the last updated time stamp, and the position information. 
+- Real-time stock price monitoring
+- Portfolio tracking with gains/losses
+- Multi-currency support
+- Customizable refresh intervals
+- Clean menu bar interface
 
-Some symbol examples are listed below. Please refer to https://finance.yahoo.com/lookup/ for more.
+## Development Setup
 
-**Indices**:
-* **^GSPC** : S&P 500
-* **^N225** : Nikkei 225
+### Prerequisites
 
-**ETF**:
-* **IVE** : iShares S&P 500 Value ETF
+- Xcode 13.0 or later
+- macOS 11.0 or later
+- SwiftLint (optional but recommended)
 
-**Stock**:
-* **AAPL** : Apple Inc
-* **GOOG** : Alphabet Inc Class C
-* **NFLX** : Netflix Inc
-* **<span>9626.HK</span>** : Bilibili Inc
-* **<span>600519.SS</span>** : Kweichow Moutai Co., Ltd
+### Installation
 
-**Currency Exange**:
-* **USDJPY=X** : 1 US dollar equals to X Japanese yen
-* **USDCAD=X** : 1 US dollar equals to X Canadian dollar
-* **EURCNY=X** : 1 Euro equals to X Chinese yuan(RMB)
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/StockBar.git
+cd StockBar
+```
 
-**Cryptocurrencies**:
-* **BTC-USD** : 1 Bitcoin equals to X US dollar
-* **DOGE-USD** : 1 Dogecoin equals to X US dollar
+2. Install SwiftLint (optional):
+```bash
+brew install swiftlint
+```
 
-## Preference
-Provide the stock **symbols** to track in preference view. If unit sizes and average position costs are supplied, the open profit and loss will also be tracked. Click **StockBar** in the menu bar and select **Preference**. You may need to update the unit size and the average position cost after stock splits.
-![preference](Screenshots/Settings.png)
-## API
-* In use: [yahoo finance api](https://query1.finance.yahoo.com/v6/finance/quote/?symbols=AAPL,GOOG). [Reference](https://www.yahoofinanceapi.com).
-* Other apis:
-    1. [alphavantage](https://www.alphavantage.co). Free API key is available (By the time of writing, any string can be a valid free API key). However, the free API can only send five requests per minute. It only has end-of-day Nasdaq quotes.
+3. Open the project in Xcode:
+```bash
+open StockBar.xcodeproj
+```
+
+### Project Structure
+
+```
+StockBar/
+├── StockBar/
+│   ├── App/
+│   │   └── AppDelegate.swift
+│   ├── Data/
+│   │   ├── DataModel.swift
+│   │   ├── Trade.swift
+│   │   └── YahooFinanceDecoder.swift
+│   ├── Networking/
+│   │   └── NetworkService.swift
+│   ├── UI/
+│   │   ├── StockStatusBar.swift
+│   │   ├── PreferenceView.swift
+│   │   └── SymbolMenu.swift
+│   └── Utilities/
+│       ├── Logger.swift
+│       └── CurrencyConverter.swift
+├── StockBarTests/
+│   ├── DataModelTests.swift
+│   └── NetworkServiceTests.swift
+└── StockBarUITests/
+    └── StockBarUITests.swift
+```
+
+### Testing
+
+The project includes three types of tests:
+
+1. Unit Tests: Testing individual components
+```bash
+xcodebuild test -scheme StockBar -only-testing:StockBarTests
+```
+
+2. UI Tests: Testing user interface interactions
+```bash
+xcodebuild test -scheme StockBar -only-testing:StockBarUITests
+```
+
+3. Integration Tests: Testing component interactions
+```bash
+xcodebuild test -scheme StockBar
+```
+
+### Code Style
+
+This project uses SwiftLint to enforce consistent code style. The configuration can be found in `.swiftlint.yml`.
+
+### Logging
+
+The application uses a custom logging system that writes to both console (in debug) and file. Logs can be found at:
+```
+~/Library/Containers/com.yourdomain.StockBar/Data/Documents/stockbar.log
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

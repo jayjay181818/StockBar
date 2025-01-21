@@ -12,5 +12,4 @@ struct StockData {
     let units: Double
     let averagePositionCost: Double
     let timestamp: String
-    
 }
