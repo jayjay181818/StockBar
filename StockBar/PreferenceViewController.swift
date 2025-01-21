@@ -1,31 +1,22 @@
-//
-//  PreferenceViewController.swift
-//  StockBar
-//
-//  Created by Hongliang Fan on 2020-06-20.
-
 import Cocoa
-import Combine
 import SwiftUI
-class PreferenceHostingController : NSHostingController<PreferenceView> {
-    private let data : DataModel
-    init(data: DataModel) {
-        self.data = data
-        super.init(rootView: PreferenceView(userdata: data))
+
+class PreferenceViewController: NSViewController {
+    private let userdata: DataModel
+    
+    init(userdata: DataModel) {
+        self.userdata = userdata
+        super.init(nibName: nil, bundle: nil)
     }
     
-    @objc required dynamic init?(coder: NSCoder) {
+    required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    override func viewWillDisappear() {
-        super.viewWillDisappear()
-        saveNewPrefs()
-    }
-    func saveNewPrefs() {
-        let trades = data.realTimeTrades.map {
-            $0.trade
-        }
-        let encodedData : Data = try! JSONEncoder().encode(trades)
-        UserDefaults.standard.set( encodedData, forKey: "usertrades")
+    
+    override func loadView() {
+        let preferenceView = PreferenceView(userdata: userdata)
+        let hostingController = NSHostingController(rootView: preferenceView)
+        self.addChild(hostingController)
+        self.view = hostingController.view
     }
 }
