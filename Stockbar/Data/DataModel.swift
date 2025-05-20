@@ -16,8 +16,8 @@ class DataModel: ObservableObject {
     // ------------------------
 
     private let currencyConverter: CurrencyConverter // Keep as is
-    private let decoder = JSONDecoder()             // Keep as is
-    private let encoder = JSONEncoder()             // Keep as is
+    private let decoder = JSONDecoder()           // Keep as is
+    private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
@@ -218,6 +218,11 @@ extension RealTimeTrade {
             price = price / 100.0
             prevClose = prevClose / 100.0
             currency = "GBP"
+        }
+
+        // Fallback: if price is NaN use the previous close (seen with some US stocks)
+        if price.isNaN {
+            price = prevClose
         }
         self.realTimeInfo.currentPrice = price
         self.realTimeInfo.previousClose = prevClose
