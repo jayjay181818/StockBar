@@ -1,5 +1,5 @@
 // Stockbar/Stockbar/Networking/NetworkService.swift
-// --- COMPLETELY REPLACED FILE ---
+// --- FIXED FILE ---
 
 import Foundation
 // Removed OSLog import to avoid conflict with custom Logger
@@ -42,7 +42,7 @@ enum NetworkError: LocalizedError {
 
 // MARK: - Python Script Service
 class PythonNetworkService: NetworkService {
-    private let logger = Logger.shared
+    private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     // Default interpreter path; adjust if necessary
     private let pythonInterpreterPath = "/usr/bin/python3"
     private let scriptName = "get_stock_data.py"
@@ -99,6 +99,7 @@ class PythonNetworkService: NetworkService {
             }
 
             logger.info("Successfully fetched price=\(price), prevClose=\(prev) for \(symbol) via Python.")
+            // This now relies on StockFetchResult.swift for the struct definition
             return StockFetchResult(
                 currency: nil,
                 symbol: symbol,
@@ -152,115 +153,79 @@ class PythonNetworkService: NetworkService {
 
         guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
             logger.warning("Python script stdout for batch is empty.")
-            throw NetworkError.noData("Empty output from batch script")
+            if !symbols.isEmpty { // Only throw if symbols were expected
+                 throw NetworkError.noData("Empty output from batch script")
+            }
+            return [] // No symbols requested, or script output genuinely empty.
         }
 
         logger.debug("Python script batch stdout: \(output)")
 
         var results: [StockFetchResult] = []
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
+        let lines = output.split(separator: "\n")
 
-            let parts = trimmed.split(separator: ",")
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
+
+            let parts = trimmedLine.split(separator: ",")
+            
+            guard parts.count >= 2 else {
+                logger.warning("Invalid line structure in batch output (not enough parts): \(trimmedLine)")
+                continue
+            }
+            
+            let sym = String(parts[0])
 
             if parts.count == 2 && parts[1] == "FETCH_FAILED" {
-                logger.warning("Batch fetch failed for symbol \(parts[0]).")
+                logger.warning("Batch fetch explicitly failed for symbol \(sym).")
                 continue
             }
 
             guard parts.count == 3 else {
-                logger.warning("Invalid line in batch output: \(trimmed)")
+                logger.warning("Invalid line in batch output (expected 3 parts or FETCH_FAILED for \(sym)): \(trimmedLine)")
                 continue
             }
 
-            let symbol = String(parts[0])
             guard let price = Double(parts[1]), let prev = Double(parts[2]) else {
-                logger.warning("Could not parse numbers in batch line: \(trimmed)")
+                logger.warning("Could not parse numbers in batch line for \(sym): \(trimmedLine)")
                 continue
             }
 
+            // This now relies on StockFetchResult.swift for the struct definition
             let result = StockFetchResult(
                 currency: nil,
-                symbol: symbol,
-                shortName: symbol,
+                symbol: sym,
+                shortName: sym,
                 regularMarketTime: Int(Date().timeIntervalSince1970),
                 exchangeTimezoneName: nil,
                 regularMarketPrice: price,
                 regularMarketPreviousClose: prev
             )
-
             results.append(result)
         }
 
-        if results.isEmpty && !symbols.isEmpty { // Check if symbols were requested but none were parsed
+        if results.isEmpty && !symbols.isEmpty {
             logger.error("Batch fetch produced no parsable results for the requested symbols.")
             // Consider if this should throw only if all symbols failed,
-            // or if the input 'symbols' array was non-empty.
-            // For now, keeping the original logic but adjusted the condition slightly for clarity:
-            throw NetworkError.noData("No valid batch results")
+            // or if the input 'symbols' array was non-empty and we received fewer lines than expected.
+            // The current Python script aims to output a line for every symbol, even if "FETCH_FAILED".
+            // So if results is empty here, and symbols were requested, it's a genuine "no data" scenario.
+            throw NetworkError.noData("No valid batch results parsed")
+        }
+        
+        if results.count < symbols.count {
+            logger.warning("Batch fetch successfully parsed \(results.count) symbols, but \(symbols.count) were initially requested. Some may have failed (FETCH_FAILED) or were invalid and skipped.")
         }
 
-        logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
+        logger.info("Finished batch fetch. Successfully parsed \(results.count) of \(symbols.count) initially requested symbols (others may have been marked FETCH_FAILED by script and skipped here).")
         return results
     }
 }
 
-// Assuming Logger.shared is defined elsewhere, e.g.:
-// N.B. This Logger definition is usually in its own file or a central utilities file.
-// For the sake of this example, ensuring it's here if not defined elsewhere.
-// If you have a proper Logger setup, this specific extension might not be needed here.
-// For example purposes only:
-#if DEBUG // Or some other compilation flag if you have one for Logger structure
-private class Logger { // Dummy Logger for compilation if not present
-    static let shared = Logger()
-    private init() {}
-    func info(_ message: String) { print("INFO: \(message)") }
-    func debug(_ message: String) { print("DEBUG: \(message)") }
-    func warning(_ message: String) { print("WARN: \(message)") }
-    func error(_ message: String) { print("ERROR: \(message)") }
-}
-extension Logger { // Assuming Logger might be a struct or class elsewhere
-    #if !DEBUG // Avoid redefinition if dummy is used
-    private static var subsystem = Bundle.main.bundleIdentifier ?? "com.example.Stockbar" // Provide a default subsystem
-    static let shared = Logger(subsystem: subsystem, category: "NetworkService")
-    #endif
-}
-#else
-// Production Logger structure would be defined globally
-// For this example, ensure it compiles.
-// If your project's Logger is available globally, this mock is not needed.
-// This is a simplified placeholder.
-public class Logger {
-    let subsystem: String
-    let category: String
+// Removed placeholder StockFetchResult struct from here.
+// It should be defined in its own file (e.g., StockFetchResult.swift).
 
-    public init(subsystem: String, category: String) {
-        self.subsystem = subsystem
-        self.category = category
-    }
-
-    public func log(_ message: String) { // Generic log
-        print("[\(category)] \(message)")
-    }
-    public func info(_ message: String) { print("INFO: [\(category)] \(message)")}
-    public func debug(_ message: String) { print("DEBUG: [\(category)] \(message)")}
-    public func error(_ message: String) { print("ERROR: [\(category)] \(message)")}
-    public func warning(_ message: String) { print("WARNING: [\(category)] \(message)")}
-    
-    // Example of making `shared` available if needed by the snippet
-    public static let shared = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.example.app", category: "Default")
-}
-#endif
-
-
-// Assuming StockFetchResult is defined elsewhere, e.g.:
-struct StockFetchResult {
-    let currency: String?
-    let symbol: String
-    let shortName: String?
-    let regularMarketTime: Int? // Should match Date().timeIntervalSince1970 type, which is Double, but often stored as Int.
-    let exchangeTimezoneName: String?
-    let regularMarketPrice: Double? // Changed from Double to Double? to align with usage
-    let regularMarketPreviousClose: Double? // Changed from Double to Double?
-}
+// Removed placeholder Logger class and extension from here.
+// Your project should have a central Logger definition (e.g., Logger.swift)
+// that provides Logger.shared.
