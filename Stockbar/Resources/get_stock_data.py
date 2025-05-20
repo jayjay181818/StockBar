@@ -2,6 +2,7 @@
 import sys
 import warnings
 import os
+import math
 try:
     from urllib3.exceptions import NotOpenSSLWarning
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
@@ -45,7 +46,21 @@ def fetch_batch(symbols):
                 if len(close_series) > 1
                 else sym_data["Open"].iloc[-1]
             )
-            results[sym] = (float(current_price), float(prev_close))
+            # Use previous close if the most recent close is NaN (common for US stocks during trading hours)
+            try:
+                cp_float = float(current_price)
+            except Exception:
+                cp_float = float('nan')
+
+            try:
+                prev_float = float(prev_close)
+            except Exception:
+                prev_float = float('nan')
+
+            if math.isnan(cp_float):
+                cp_float = prev_float
+
+            results[sym] = (cp_float, prev_float)
 
         return results
     except Exception as e:
