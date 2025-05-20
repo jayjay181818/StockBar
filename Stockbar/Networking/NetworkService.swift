@@ -154,7 +154,7 @@ class PythonNetworkService: NetworkService {
         guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
             logger.warning("Python script stdout for batch is empty.")
             if !symbols.isEmpty { // Only throw if symbols were expected
-                 throw NetworkError.noData("Empty output from batch script")
+                throw NetworkError.noData("Empty output from batch script")
             }
             return [] // No symbols requested, or script output genuinely empty.
         }
