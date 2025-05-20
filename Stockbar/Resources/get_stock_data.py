@@ -1,13 +1,14 @@
 # ~/Scripts/get_stock_data.py (Example path)
-import yfinance as yf
 import sys
 import warnings
 import os
 try:
     from urllib3.exceptions import NotOpenSSLWarning
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
-except ImportError:
+except Exception:
     pass
+
+import yfinance as yf
 
 # Disable proxy environment variables which can interfere with yfinance
 for proxy_var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
@@ -23,6 +24,7 @@ def fetch_batch(symbols):
             group_by="ticker",
             threads=False,
             progress=False,
+            auto_adjust=False,
         )
 
         results = {}
