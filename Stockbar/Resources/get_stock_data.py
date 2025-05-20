@@ -39,7 +39,7 @@ def fetch_batch(symbols):
                 sym_data = None
 
             if sym_data is None or sym_data.empty:
-                results[sym] = None
+                results[sym] = None # Will be converted to FETCH_FAILED later
                 continue
 
             close_series = sym_data["Close"]
@@ -69,6 +69,8 @@ def fetch_batch(symbols):
                 results[sym] = None
             else:
                 results[sym] = (cp_float, prev_float)
+        
+        return results # Return results after processing all symbols
 
     except Exception as e:
         # If yf.download itself fails massively, print error and return None for all.
@@ -76,8 +78,6 @@ def fetch_batch(symbols):
         # This script's main loop will handle converting None to FETCH_FAILED.
         print(f"Error during yfinance download or processing: {e}", file=sys.stderr)
         return {sym: None for sym in symbols} # Mark all as None if major failure
-    
-    return results
 
 
 if __name__ == "__main__":
@@ -93,7 +93,8 @@ if __name__ == "__main__":
             batch_results = fetch_batch(symbols)
             for sym in symbols: # Iterate through original requested symbols to ensure all get a line
                 result = batch_results.get(sym)
-                if result and not (math.isnan(result[0]) or math.isnan(result[1])): # Check for NaN again before printing
+                # Check for None and ensure both parts of the tuple are not NaN before printing
+                if result and not (math.isnan(result[0]) or math.isnan(result[1])):
                     price, prev_close = result
                     print(f"{sym},{price},{prev_close}")
                 else:

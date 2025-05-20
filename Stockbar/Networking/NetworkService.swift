@@ -2,7 +2,7 @@
 // --- COMPLETELY REPLACED FILE ---
 
 import Foundation
-import OSLog // Use Apple's unified logging
+// Removed OSLog import to avoid conflict with custom Logger
 
 // Keep the original protocol for compatibility
 protocol NetworkService {
@@ -159,10 +159,10 @@ class PythonNetworkService: NetworkService {
 
         var results: [StockFetchResult] = []
         for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines) // <<< This is from the 'testing' branch logic
-            guard !trimmed.isEmpty else { continue } // <<< This is from the 'testing' branch logic
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
 
-            let parts = trimmed.split(separator: ",") // <<< Uses 'trimmed'
+            let parts = trimmed.split(separator: ",")
 
             if parts.count == 2 && parts[1] == "FETCH_FAILED" {
                 logger.warning("Batch fetch failed for symbol \(parts[0]).")
@@ -170,13 +170,13 @@ class PythonNetworkService: NetworkService {
             }
 
             guard parts.count == 3 else {
-                logger.warning("Invalid line in batch output: \(trimmed)") // <<< Uses 'trimmed'
+                logger.warning("Invalid line in batch output: \(trimmed)")
                 continue
             }
 
             let symbol = String(parts[0])
             guard let price = Double(parts[1]), let prev = Double(parts[2]) else {
-                logger.warning("Could not parse numbers in batch line: \(trimmed)") // <<< Uses 'trimmed'
+                logger.warning("Could not parse numbers in batch line: \(trimmed)")
                 continue
             }
 
@@ -193,11 +193,11 @@ class PythonNetworkService: NetworkService {
             results.append(result)
         }
 
-        if results.isEmpty {
-            logger.error("Batch fetch produced no parsable results.")
+        if results.isEmpty && !symbols.isEmpty { // Check if symbols were requested but none were parsed
+            logger.error("Batch fetch produced no parsable results for the requested symbols.")
             // Consider if this should throw only if all symbols failed,
             // or if the input 'symbols' array was non-empty.
-            // For now, keeping the original logic:
+            // For now, keeping the original logic but adjusted the condition slightly for clarity:
             throw NetworkError.noData("No valid batch results")
         }
 
@@ -207,18 +207,60 @@ class PythonNetworkService: NetworkService {
 }
 
 // Assuming Logger.shared is defined elsewhere, e.g.:
-extension Logger {
-    private static var subsystem = Bundle.main.bundleIdentifier!
-    static let shared = Logger(subsystem: subsystem, category: "NetworkService")
+// N.B. This Logger definition is usually in its own file or a central utilities file.
+// For the sake of this example, ensuring it's here if not defined elsewhere.
+// If you have a proper Logger setup, this specific extension might not be needed here.
+// For example purposes only:
+#if DEBUG // Or some other compilation flag if you have one for Logger structure
+private class Logger { // Dummy Logger for compilation if not present
+    static let shared = Logger()
+    private init() {}
+    func info(_ message: String) { print("INFO: \(message)") }
+    func debug(_ message: String) { print("DEBUG: \(message)") }
+    func warning(_ message: String) { print("WARN: \(message)") }
+    func error(_ message: String) { print("ERROR: \(message)") }
 }
+extension Logger { // Assuming Logger might be a struct or class elsewhere
+    #if !DEBUG // Avoid redefinition if dummy is used
+    private static var subsystem = Bundle.main.bundleIdentifier ?? "com.example.Stockbar" // Provide a default subsystem
+    static let shared = Logger(subsystem: subsystem, category: "NetworkService")
+    #endif
+}
+#else
+// Production Logger structure would be defined globally
+// For this example, ensure it compiles.
+// If your project's Logger is available globally, this mock is not needed.
+// This is a simplified placeholder.
+public class Logger {
+    let subsystem: String
+    let category: String
+
+    public init(subsystem: String, category: String) {
+        self.subsystem = subsystem
+        self.category = category
+    }
+
+    public func log(_ message: String) { // Generic log
+        print("[\(category)] \(message)")
+    }
+    public func info(_ message: String) { print("INFO: [\(category)] \(message)")}
+    public func debug(_ message: String) { print("DEBUG: [\(category)] \(message)")}
+    public func error(_ message: String) { print("ERROR: [\(category)] \(message)")}
+    public func warning(_ message: String) { print("WARNING: [\(category)] \(message)")}
+    
+    // Example of making `shared` available if needed by the snippet
+    public static let shared = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.example.app", category: "Default")
+}
+#endif
+
 
 // Assuming StockFetchResult is defined elsewhere, e.g.:
 struct StockFetchResult {
     let currency: String?
     let symbol: String
     let shortName: String?
-    let regularMarketTime: Int?
+    let regularMarketTime: Int? // Should match Date().timeIntervalSince1970 type, which is Double, but often stored as Int.
     let exchangeTimezoneName: String?
-    let regularMarketPrice: Double?
-    let regularMarketPreviousClose: Double?
+    let regularMarketPrice: Double? // Changed from Double to Double? to align with usage
+    let regularMarketPreviousClose: Double? // Changed from Double to Double?
 }
