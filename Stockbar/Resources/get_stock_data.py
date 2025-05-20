@@ -1,62 +1,69 @@
 # ~/Scripts/get_stock_data.py (Example path)
-import yfinance as yf
 import sys
 import warnings
 import os
 try:
     from urllib3.exceptions import NotOpenSSLWarning
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
-except ImportError:
+except Exception:
     pass
+
+import yfinance as yf
 
 # Disable proxy environment variables which can interfere with yfinance
 for proxy_var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
     os.environ.pop(proxy_var, None)
 
-def get_data(ticker_symbol):
-    """Fetches current price, previous close, currency, and timestamp for a ticker using yfinance."""
+def fetch_batch(symbols):
+    """Fetch closing and previous closing prices for a list of symbols."""
     try:
-        stock = yf.Ticker(ticker_symbol)
-        hist = stock.history(period="2d")
-        stock_info = stock.info
-        current_price = None
-        prev_close = None
-        currency = None
-        timestamp = None
+        ticker_str = " ".join(symbols)
+        data = yf.download(
+            ticker_str,
+            period="2d",
+            group_by="ticker",
+            threads=False,
+            progress=False,
+            auto_adjust=False,
+        )
 
-        if hist.empty or len(hist) < 1:
-            if stock_info and 'symbol' in stock_info:
-                current_price = stock_info.get('currentPrice', stock_info.get('regularMarketPrice'))
-                prev_close = stock_info.get('previousClose')
-                currency = stock_info.get('currency')
-                timestamp = stock_info.get('regularMarketTime')
-            else:
-                return None, None, None, None
-        else:
-            current_price = hist['Close'].iloc[-1]
-            prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else hist['Open'].iloc[-1]
-            currency = stock_info.get('currency')
-            timestamp = stock_info.get('regularMarketTime')
+        results = {}
+        for sym in symbols:
+            try:
+                sym_data = data[sym] if len(symbols) > 1 else data
+            except Exception:
+                sym_data = None
 
-        if current_price is not None and prev_close is not None and currency is not None and timestamp is not None:
-            return float(current_price), float(prev_close), str(currency), int(timestamp)
-        else:
-            return None, None, None, None
+            if sym_data is None or sym_data.empty:
+                results[sym] = None
+                continue
 
+            close_series = sym_data["Close"]
+            current_price = close_series.iloc[-1]
+            prev_close = (
+                close_series.iloc[-2]
+                if len(close_series) > 1
+                else sym_data["Open"].iloc[-1]
+            )
+            results[sym] = (float(current_price), float(prev_close))
+
+        return results
     except Exception as e:
-        print(f"Error fetching {ticker_symbol}: {e}", file=sys.stderr)
-        return None, None, None, None
+        print(f"Error fetching batch: {e}", file=sys.stderr)
+        return {sym: None for sym in symbols}
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        symbol = sys.argv[1]
-        price, prev_close, currency, timestamp = get_data(symbol)
-        if price is not None and prev_close is not None:
-            # Output: price,prev_close (only)
-            print(f"{price},{prev_close}")
-        else:
-            print("FETCH_FAILED")
+        symbols = sys.argv[1].split(",")
+        batch = fetch_batch(symbols)
+        for sym in symbols:
+            result = batch.get(sym)
+            if result:
+                price, prev_close = result
+                print(f"{sym},{price},{prev_close}")
+            else:
+                print(f"{sym},FETCH_FAILED")
     else:
-        print("Usage: python get_stock_data.py <SYMBOL>", file=sys.stderr)
-        print("FETCH_FAILED") # Indicate failure due to wrong usage
+        print("Usage: python get_stock_data.py <SYMBOL[,SYMBOL...]>", file=sys.stderr)
+
