@@ -2,11 +2,16 @@
 import yfinance as yf
 import sys
 import warnings
+import os
 try:
     from urllib3.exceptions import NotOpenSSLWarning
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 except ImportError:
     pass
+
+# Disable proxy environment variables which can interfere with yfinance
+for proxy_var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+    os.environ.pop(proxy_var, None)
 
 def get_data(ticker_symbol):
     """Fetches current price, previous close, currency, and timestamp for a ticker using yfinance."""
