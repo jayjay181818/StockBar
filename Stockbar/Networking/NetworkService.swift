@@ -117,27 +117,37 @@ class PythonNetworkService: NetworkService {
     }
 
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
-        logger.info("Starting batch fetch for \(symbols.count) symbols using Python script (sequentially).")
-        var results: [StockFetchResult] = []
-        var lastError: Error?
+        logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
 
-        for sym in symbols {
-            do {
-                let res = try await fetchQuote(for: sym)
-                results.append(res)
-            } catch {
-                logger.warning("Failed to fetch quote for symbol '\(sym)': \(error.localizedDescription)")
-                lastError = error
+        return try await withThrowingTaskGroup(of: StockFetchResult?.self) { group in
+            for sym in symbols {
+                group.addTask {
+                    do {
+                        return try await self.fetchQuote(for: sym)
+                    } catch {
+                        self.logger.warning("Failed to fetch quote for symbol '\(sym)': \(error.localizedDescription)")
+                        return nil
+                    }
+                }
             }
-            // Add a 30-second delay between requests to avoid rate limiting
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
-        }
 
-        if results.isEmpty, let err = lastError {
-            logger.error("Batch fetch failed for all symbols. Last error: \(err.localizedDescription)")
-            throw err
+            var results: [StockFetchResult] = []
+            var lastError: Error?
+            for try await res in group {
+                if let result = res {
+                    results.append(result)
+                } else {
+                    lastError = lastError ?? NetworkError.noData("No result for symbol")
+                }
+            }
+
+            if results.isEmpty, let err = lastError {
+                logger.error("Batch fetch failed for all symbols. Last error: \(err.localizedDescription)")
+                throw err
+            }
+
+            logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
+            return results
         }
-        logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
-        return results
     }
 }
