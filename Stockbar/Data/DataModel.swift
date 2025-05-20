@@ -219,6 +219,11 @@ extension RealTimeTrade {
             prevClose = prevClose / 100.0
             currency = "GBP"
         }
+
+        // Fallback: if price is NaN use the previous close (seen with some US stocks)
+        if price.isNaN {
+            price = prevClose
+        }
         self.realTimeInfo.currentPrice = price
         self.realTimeInfo.previousClose = prevClose
         self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L
