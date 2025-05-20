@@ -3,7 +3,7 @@
 
 import Combine
 import Foundation
-import OSLog // Use Apple's unified logging
+// Removed OSLog import to avoid name clashes with our custom Logger
 
 class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
@@ -16,8 +16,8 @@ class DataModel: ObservableObject {
     // ------------------------
 
     private let currencyConverter: CurrencyConverter // Keep as is
-    private let decoder = JSONDecoder()             // Keep as is
-    private let encoder = JSONEncoder()             // Keep as is
+    private let decoder = JSONDecoder()           // Keep as is
+    private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
@@ -85,7 +85,7 @@ class DataModel: ObservableObject {
              }
 
             // Update each trade with its corresponding result
-            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
+            let resultDict: [String: StockFetchResult] = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
             for idx in self.realTimeTrades.indices {
                 let symbol = self.realTimeTrades[idx].trade.name
                 if let res = resultDict[symbol] {
@@ -204,31 +204,43 @@ extension RealTimeTrade {
     /// Updates the trade with new data from the network service
     func updateWithResult(_ result: StockFetchResult) {
         // Fallback logic: treat as GBX if currency is GBX/GBp or symbol ends with .L
-        var price = result.regularMarketPrice
-        var prevClose = result.regularMarketPreviousClose
-        if price.isNaN {
+        var price = result.regularMarketPrice // Assumes StockFetchResult.swift defines this as non-optional
+        var prevClose = result.regularMarketPreviousClose // Assumes StockFetchResult.swift defines this as non-optional
+        
+        // Fallback: if initial price is NaN (e.g. from an error in script or unusual data), try previous close
+        if price.isNaN && !prevClose.isNaN { // Ensure prevClose itself is not NaN
             price = prevClose
+        } else if price.isNaN && prevClose.isNaN { // If both are NaN, log and potentially use a zero or placeholder
+            Logger.shared.warning("Both current price and previous close are NaN for \(result.symbol). Using 0.0 for price.")
+            price = 0.0 // Or some other defined placeholder behavior
+            // prevClose might also need a similar placeholder if used directly and can be NaN
         }
+
         var currency = result.currency
         let symbol = result.symbol
         var isGBX = false
         if let c = currency, c == "GBX" || c == "GBp" {
             isGBX = true
-        } else if symbol.uppercased().hasSuffix(".L") {
+        } else if symbol.uppercased().hasSuffix(".L") && currency == nil { // Only assume .L is GBX if currency isn't specified otherwise
             isGBX = true
         }
+        
+        var finalPrice = price
+        var finalPrevClose = prevClose
+
         if isGBX {
-            price = price / 100.0
-            prevClose = prevClose / 100.0
-            currency = "GBP"
+            finalPrice = price / 100.0
+            finalPrevClose = prevClose / 100.0
+            currency = "GBP" // Standardize to GBP
         }
-        self.realTimeInfo.currentPrice = price
-        self.realTimeInfo.previousClose = prevClose
-        self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L
-        self.realTimeInfo.lastUpdateTime = result.regularMarketTime // Using fetch time placeholder
+
+        self.realTimeInfo.currentPrice = finalPrice
+        self.realTimeInfo.previousClose = finalPrevClose // Use the (potentially adjusted) finalPrevClose
+        self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
+        self.realTimeInfo.lastUpdateTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970) // Fallback to current time if nil
         self.realTimeInfo.shortName = result.shortName ?? self.trade.name // Use symbol if name nil
 
-        let logger = Logger.shared
-        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(self.realTimeInfo.previousClose)")
+        let logger = Logger.shared // Already defined in DataModel, but ok for local scope too
+        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) Currency: \(self.realTimeInfo.currency ?? "N/A")")
     }
 }

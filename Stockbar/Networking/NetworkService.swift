@@ -1,8 +1,8 @@
 // Stockbar/Stockbar/Networking/NetworkService.swift
-// --- COMPLETELY REPLACED FILE ---
+// --- FIXED FILE ---
 
 import Foundation
-import OSLog // Use Apple's unified logging
+// Removed OSLog import to avoid conflict with custom Logger
 
 // Keep the original protocol for compatibility
 protocol NetworkService {
@@ -42,7 +42,7 @@ enum NetworkError: LocalizedError {
 
 // MARK: - Python Script Service
 class PythonNetworkService: NetworkService {
-    private let logger = Logger.shared
+    private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     // Default interpreter path; adjust if necessary
     private let pythonInterpreterPath = "/usr/bin/python3"
     private let scriptName = "get_stock_data.py"
@@ -99,6 +99,7 @@ class PythonNetworkService: NetworkService {
             }
 
             logger.info("Successfully fetched price=\(price), prevClose=\(prev) for \(symbol) via Python.")
+            // This now relies on StockFetchResult.swift for the struct definition
             return StockFetchResult(
                 currency: nil,
                 symbol: symbol,
@@ -152,48 +153,79 @@ class PythonNetworkService: NetworkService {
 
         guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
             logger.warning("Python script stdout for batch is empty.")
-            throw NetworkError.noData("Empty output from batch script")
+            if !symbols.isEmpty { // Only throw if symbols were expected
+                throw NetworkError.noData("Empty output from batch script")
+            }
+            return [] // No symbols requested, or script output genuinely empty.
         }
 
         logger.debug("Python script batch stdout: \(output)")
 
         var results: [StockFetchResult] = []
-        for line in output.split(separator: "\n") {
-            let parts = line.split(separator: ",")
+        let lines = output.split(separator: "\n")
+
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
+
+            let parts = trimmedLine.split(separator: ",")
+            
+            guard parts.count >= 2 else {
+                logger.warning("Invalid line structure in batch output (not enough parts): \(trimmedLine)")
+                continue
+            }
+            
+            let sym = String(parts[0])
+
             if parts.count == 2 && parts[1] == "FETCH_FAILED" {
-                logger.warning("Batch fetch explicitly failed for symbol \(parts[0])")
+                logger.warning("Batch fetch explicitly failed for symbol \(sym).")
                 continue
             }
+
             guard parts.count == 3 else {
-                logger.warning("Invalid line in batch output: \(line)")
+                logger.warning("Invalid line in batch output (expected 3 parts or FETCH_FAILED for \(sym)): \(trimmedLine)")
                 continue
             }
 
-            let symbol = String(parts[0])
             guard let price = Double(parts[1]), let prev = Double(parts[2]) else {
-                logger.warning("Could not parse numbers in batch line: \(line)")
+                logger.warning("Could not parse numbers in batch line for \(sym): \(trimmedLine)")
                 continue
             }
 
+            // This now relies on StockFetchResult.swift for the struct definition
             let result = StockFetchResult(
                 currency: nil,
-                symbol: symbol,
-                shortName: symbol,
+                symbol: sym,
+                shortName: sym,
                 regularMarketTime: Int(Date().timeIntervalSince1970),
                 exchangeTimezoneName: nil,
                 regularMarketPrice: price,
                 regularMarketPreviousClose: prev
             )
-
             results.append(result)
         }
 
-        if results.isEmpty {
-            logger.error("Batch fetch produced no parsable results.")
-            throw NetworkError.noData("No valid batch results")
+        if results.isEmpty && !symbols.isEmpty {
+            logger.error("Batch fetch produced no parsable results for the requested symbols.")
+            // Consider if this should throw only if all symbols failed,
+            // or if the input 'symbols' array was non-empty and we received fewer lines than expected.
+            // The current Python script aims to output a line for every symbol, even if "FETCH_FAILED".
+            // So if results is empty here, and symbols were requested, it's a genuine "no data" scenario.
+            throw NetworkError.noData("No valid batch results parsed")
+        }
+        
+        if results.count < symbols.count {
+            logger.warning("Batch fetch successfully parsed \(results.count) symbols, but \(symbols.count) were initially requested. Some may have failed (FETCH_FAILED) or were invalid and skipped.")
         }
 
-        logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
+        logger.info("Finished batch fetch. Successfully parsed \(results.count) of \(symbols.count) initially requested symbols (others may have been marked FETCH_FAILED by script and skipped here).")
         return results
     }
 }
+
+// Removed placeholder StockFetchResult struct from here.
+// It should be defined in its own file (e.g., StockFetchResult.swift).
+
+// Removed placeholder Logger class and extension from here.
+// Your project should have a central Logger definition (e.g., Logger.swift)
+// that provides Logger.shared.
