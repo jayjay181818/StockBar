@@ -119,35 +119,81 @@ class PythonNetworkService: NetworkService {
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
         logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
 
-        return try await withThrowingTaskGroup(of: StockFetchResult?.self) { group in
-            for sym in symbols {
-                group.addTask {
-                    do {
-                        return try await self.fetchQuote(for: sym)
-                    } catch {
-                        self.logger.warning("Failed to fetch quote for symbol '\(sym)': \(error.localizedDescription)")
-                        return nil
-                    }
-                }
-            }
+        guard !symbols.isEmpty else { return [] }
 
-            var results: [StockFetchResult] = []
-            var lastError: Error?
-            for try await res in group {
-                if let result = res {
-                    results.append(result)
-                } else {
-                    lastError = lastError ?? NetworkError.noData("No result for symbol")
-                }
-            }
-
-            if results.isEmpty, let err = lastError {
-                logger.error("Batch fetch failed for all symbols. Last error: \(err.localizedDescription)")
-                throw err
-            }
-
-            logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
-            return results
+        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
+            logger.error("Script '\(scriptName)' not found in bundle.")
+            throw NetworkError.scriptNotFound(scriptName)
         }
+
+        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
+            logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.arguments = [scriptPath, symbols.joined(separator: ",")]
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+        if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            logger.error("Python script stderr (batch): \(err)")
+        }
+
+        guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+            logger.warning("Python script stdout for batch is empty.")
+            throw NetworkError.noData("Empty output from batch script")
+        }
+
+        logger.debug("Python script batch stdout: \(output)")
+
+        var results: [StockFetchResult] = []
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: ",")
+            guard parts.count == 3 else {
+                logger.warning("Invalid line in batch output: \(line)")
+                continue
+            }
+
+            let symbol = String(parts[0])
+            guard var price = Double(parts[1]), let prev = Double(parts[2]) else {
+                logger.warning("Could not parse numbers in batch line: \(line)")
+                continue
+            }
+
+            if price.isNaN {
+                price = prev
+            }
+
+            let result = StockFetchResult(
+                currency: nil,
+                symbol: symbol,
+                shortName: symbol,
+                regularMarketTime: Int(Date().timeIntervalSince1970),
+                exchangeTimezoneName: nil,
+                regularMarketPrice: price,
+                regularMarketPreviousClose: prev
+            )
+
+            results.append(result)
+        }
+
+        if results.isEmpty {
+            logger.error("Batch fetch produced no parsable results.")
+            throw NetworkError.noData("No valid batch results")
+        }
+
+        logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
+        return results
     }
 }

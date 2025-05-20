@@ -85,14 +85,14 @@ class DataModel: ObservableObject {
              }
 
             // Update each trade with its corresponding result
-            for result in results {
-                // Find index on main thread to avoid race conditions if trades array changes
-                if let index = self.realTimeTrades.firstIndex(where: { $0.trade.name == result.symbol }) {
-                    // Ensure update happens on main thread
-                    self.realTimeTrades[index].updateWithResult(result)
-                    logger.debug("Updated trade \(result.symbol) from refresh result.")
+            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
+            for idx in self.realTimeTrades.indices {
+                let symbol = self.realTimeTrades[idx].trade.name
+                if let res = resultDict[symbol] {
+                    self.realTimeTrades[idx].updateWithResult(res)
+                    logger.debug("Updated trade \(symbol) from refresh result.")
                 } else {
-                    logger.warning("Received result for symbol \(result.symbol) but no matching trade found.")
+                    logger.warning("No result returned for symbol \(symbol).")
                 }
             }
             logger.info("Successfully refreshed \(results.count) trades of \(symbols.count) requested.")
@@ -218,6 +218,11 @@ extension RealTimeTrade {
             price = price / 100.0
             prevClose = prevClose / 100.0
             currency = "GBP"
+        }
+
+        // Fallback: if price is NaN use the previous close (seen with some US stocks)
+        if price.isNaN {
+            price = prevClose
         }
         self.realTimeInfo.currentPrice = price
         self.realTimeInfo.previousClose = prevClose
