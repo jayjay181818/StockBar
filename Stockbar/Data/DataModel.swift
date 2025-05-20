@@ -3,7 +3,7 @@
 
 import Combine
 import Foundation
-import OSLog // Use Apple's unified logging
+// Removed OSLog import to avoid name clashes with our custom Logger
 
 class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
@@ -16,8 +16,8 @@ class DataModel: ObservableObject {
     // ------------------------
 
     private let currencyConverter: CurrencyConverter // Keep as is
-    private let decoder = JSONDecoder()             // Keep as is
-    private let encoder = JSONEncoder()             // Keep as is
+    private let decoder = JSONDecoder()           // Keep as is
+    private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
@@ -85,7 +85,7 @@ class DataModel: ObservableObject {
              }
 
             // Update each trade with its corresponding result
-            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
+            let resultDict: [String: StockFetchResult] = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
             for idx in self.realTimeTrades.indices {
                 let symbol = self.realTimeTrades[idx].trade.name
                 if let res = resultDict[symbol] {
@@ -231,6 +231,6 @@ extension RealTimeTrade {
         self.realTimeInfo.shortName = result.shortName ?? self.trade.name // Use symbol if name nil
 
         let logger = Logger.shared
-        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(self.realTimeInfo.previousClose)")
+        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose))")
     }
 }
