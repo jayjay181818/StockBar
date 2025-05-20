@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>11</integer>
+	<key>logs</key>
+	<dict>
+		<key>A0E7C9E2-AC02-4BC9-AE82-2ADC7C5DF751</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>A0E7C9E2-AC02-4BC9-AE82-2ADC7C5DF751.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>E</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>8</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>Stockbar project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>Stockbar</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project Stockbar with scheme Stockbar and configuration Debug</string>
+			<key>timeStartedRecording</key>
+			<real>767113285.87673199</real>
+			<key>timeStoppedRecording</key>
+			<real>767113298.60800898</real>
+			<key>title</key>
+			<string>Building project Stockbar with scheme Stockbar and configuration Debug</string>
+			<key>uniqueIdentifier</key>
+			<string>A0E7C9E2-AC02-4BC9-AE82-2ADC7C5DF751</string>
+		</dict>
+		<key>B3CFB446-4444-49B3-BDC2-FCB8026EB25F</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>B3CFB446-4444-49B3-BDC2-FCB8026EB25F.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>S</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>Stockbar project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>Stockbar</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Cleaning project Stockbar with scheme Stockbar and configuration Debug</string>
+			<key>timeStartedRecording</key>
+			<real>767113282.78173602</real>
+			<key>timeStoppedRecording</key>
+			<real>767113285.87439001</real>
+			<key>title</key>
+			<string>Cleaning project Stockbar with scheme Stockbar and configuration Debug</string>
+			<key>uniqueIdentifier</key>
+			<string>B3CFB446-4444-49B3-BDC2-FCB8026EB25F</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
