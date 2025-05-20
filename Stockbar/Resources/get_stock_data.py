@@ -44,7 +44,6 @@ def fetch_batch(symbols):
                 if len(close_series) > 1
                 else sym_data["Open"].iloc[-1]
             )
-
             # Use previous close if the most recent close is NaN (common for US stocks during trading hours)
             try:
                 cp_float = float(current_price)

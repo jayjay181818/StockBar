@@ -159,20 +159,25 @@ class PythonNetworkService: NetworkService {
 
         var results: [StockFetchResult] = []
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: ",")
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let parts = trimmed.split(separator: ",")
+
+            if parts.count == 2 && parts[1] == "FETCH_FAILED" {
+                logger.warning("Batch fetch failed for symbol \(parts[0]).")
+                continue
+            }
+
             guard parts.count == 3 else {
-                logger.warning("Invalid line in batch output: \(line)")
+                logger.warning("Invalid line in batch output: \(trimmed)")
                 continue
             }
 
             let symbol = String(parts[0])
-            guard var price = Double(parts[1]), let prev = Double(parts[2]) else {
-                logger.warning("Could not parse numbers in batch line: \(line)")
+            guard let price = Double(parts[1]), let prev = Double(parts[2]) else {
+                logger.warning("Could not parse numbers in batch line: \(trimmed)")
                 continue
-            }
-
-            if price.isNaN {
-                price = prev
             }
 
             let result = StockFetchResult(
