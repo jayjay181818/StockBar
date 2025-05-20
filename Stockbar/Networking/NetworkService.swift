@@ -194,8 +194,8 @@ class PythonNetworkService: NetworkService {
         }
 
         if results.isEmpty {
-            logger.warning("Batch fetch produced no usable results.")
-            return []
+            logger.error("Batch fetch produced no parsable results.")
+            throw NetworkError.noData("No valid batch results")
         }
 
         logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
