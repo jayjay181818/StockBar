@@ -3,7 +3,7 @@
 
 import Combine
 import Foundation
-import OSLog // Use Apple's unified logging
+// Removed OSLog import to avoid name clashes with our custom Logger
 
 class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
@@ -85,14 +85,14 @@ class DataModel: ObservableObject {
              }
 
             // Update each trade with its corresponding result
-            for result in results {
-                // Find index on main thread to avoid race conditions if trades array changes
-                if let index = self.realTimeTrades.firstIndex(where: { $0.trade.name == result.symbol }) {
-                    // Ensure update happens on main thread
-                    self.realTimeTrades[index].updateWithResult(result)
-                    logger.debug("Updated trade \(result.symbol) from refresh result.")
+            let resultDict: [String: StockFetchResult] = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
+            for idx in self.realTimeTrades.indices {
+                let symbol = self.realTimeTrades[idx].trade.name
+                if let res = resultDict[symbol] {
+                    self.realTimeTrades[idx].updateWithResult(res)
+                    logger.debug("Updated trade \(symbol) from refresh result.")
                 } else {
-                    logger.warning("Received result for symbol \(result.symbol) but no matching trade found.")
+                    logger.warning("No result returned for symbol \(symbol).")
                 }
             }
             logger.info("Successfully refreshed \(results.count) trades of \(symbols.count) requested.")
@@ -226,6 +226,6 @@ extension RealTimeTrade {
         self.realTimeInfo.shortName = result.shortName ?? self.trade.name // Use symbol if name nil
 
         let logger = Logger.shared
-        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(self.realTimeInfo.previousClose)")
+        logger.debug("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose))")
     }
 }
