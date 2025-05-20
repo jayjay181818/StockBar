@@ -159,19 +159,24 @@ class PythonNetworkService: NetworkService {
 
         var results: [StockFetchResult] = []
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: ",")
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines) // <<< This is from the 'testing' branch logic
+            guard !trimmed.isEmpty else { continue } // <<< This is from the 'testing' branch logic
+
+            let parts = trimmed.split(separator: ",") // <<< Uses 'trimmed'
+
             if parts.count == 2 && parts[1] == "FETCH_FAILED" {
                 logger.warning("Batch fetch failed for symbol \(parts[0]).")
                 continue
             }
+
             guard parts.count == 3 else {
-                logger.warning("Invalid line in batch output: \(line)")
+                logger.warning("Invalid line in batch output: \(trimmed)") // <<< Uses 'trimmed'
                 continue
             }
 
             let symbol = String(parts[0])
             guard let price = Double(parts[1]), let prev = Double(parts[2]) else {
-                logger.warning("Could not parse numbers in batch line: \(line)")
+                logger.warning("Could not parse numbers in batch line: \(trimmed)") // <<< Uses 'trimmed'
                 continue
             }
 
@@ -190,10 +195,30 @@ class PythonNetworkService: NetworkService {
 
         if results.isEmpty {
             logger.error("Batch fetch produced no parsable results.")
+            // Consider if this should throw only if all symbols failed,
+            // or if the input 'symbols' array was non-empty.
+            // For now, keeping the original logic:
             throw NetworkError.noData("No valid batch results")
         }
 
         logger.info("Finished batch fetch. Successfully fetched \(results.count) of \(symbols.count) symbols.")
         return results
     }
+}
+
+// Assuming Logger.shared is defined elsewhere, e.g.:
+extension Logger {
+    private static var subsystem = Bundle.main.bundleIdentifier!
+    static let shared = Logger(subsystem: subsystem, category: "NetworkService")
+}
+
+// Assuming StockFetchResult is defined elsewhere, e.g.:
+struct StockFetchResult {
+    let currency: String?
+    let symbol: String
+    let shortName: String?
+    let regularMarketTime: Int?
+    let exchangeTimezoneName: String?
+    let regularMarketPrice: Double?
+    let regularMarketPreviousClose: Double?
 }
