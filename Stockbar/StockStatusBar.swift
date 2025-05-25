@@ -41,6 +41,10 @@ class StockStatusBar {
     }
     
     func removeAllSymbolItems() {
+        // Properly remove status items from the status bar
+        for controller in symbolStatusItems {
+            NSStatusBar.system.removeStatusItem(controller.item)
+        }
         symbolStatusItems.removeAll()
     }
     
@@ -54,13 +58,8 @@ class StockStatusBar {
     }
     
     private func updateMainStatusItem(with trades: [RealTimeTrade]) {
-        if let first = trades.first {
-            let price = first.realTimeInfo.currentPrice.isNaN ? "-" : String(format: "%.2f", first.realTimeInfo.currentPrice)
-            let symbol = first.trade.name
-            mainStatusItem?.button?.title = "\(symbol): \(price)"
-        } else {
-            mainStatusItem?.button?.title = "StockBar"
-        }
+        // Keep the main status item title as "StockBar" - don't show individual stock data
+        mainStatusItem?.button?.title = "StockBar"
     }
 }
 
@@ -95,11 +94,23 @@ class StockStatusItemController {
     }
     
     private func updateDisplay(trade: Trade, trading: TradingInfo) {
+        // Convert avgCost if needed - if the symbol ends with .L, the avgCost is likely in GBX
+        var avgCost = Double(trade.position.positionAvgCostString) ?? 0
+        let currency = trading.currency ?? "USD"
+        
+        // Debug logging
+        print("DEBUG: updateDisplay for \(trade.name) - currentPrice: \(trading.currentPrice), prevClosePrice: \(trading.prevClosePrice), currency: \(currency), isNaN: \(trading.currentPrice.isNaN)")
+        
+        // If this is a UK stock (.L) and currency is GBP, convert avgCost from GBX to GBP
+        if trade.name.uppercased().hasSuffix(".L") && currency == "GBP" && avgCost > 0 {
+            avgCost = avgCost / 100.0  // Convert GBX to GBP
+        }
+        
         let data = TradingData(
             currentPrice: trading.currentPrice,
             previousPrice: trading.prevClosePrice,
-            currency: trading.currency ?? "USD",
-            avgCost: Double(trade.position.positionAvgCostString) ?? 0,
+            currency: currency,
+            avgCost: avgCost,
             units: trade.position.unitSize,
             timeInfo: trading.getTimeInfo()
         )
@@ -109,15 +120,17 @@ class StockStatusItemController {
     }
     
     private func updateTitle(trade: Trade, data: TradingData) {
-        // Handle GBX/GBp conversion
-        let multiplier = (data.currency == "GBX" || data.currency == "GBp") ? 0.01 : 1.0
+        // No multiplier needed - prices and avgCost are already converted to the same currency
         let safeCurrent = data.currentPrice.isFinite ? data.currentPrice : 0
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
         let safeUnits = data.units.isFinite ? data.units : 0
         var pnl: Double? = nil
-        if safePrev != 0 && safeUnits != 0 {
-            pnl = (safeCurrent - safePrev) * safeUnits * multiplier
+        
+        // Only calculate PnL if we have valid price data
+        if !data.currentPrice.isNaN && !data.previousPrice.isNaN && safePrev != 0 && safeUnits != 0 {
+            pnl = (safeCurrent - safePrev) * safeUnits
         }
+        
         let title: String
         if let pnl = pnl, pnl.isFinite {
             title = "\(trade.name) \(String(format: "%+.2f", pnl))"
@@ -137,16 +150,16 @@ class StockStatusItemController {
     
     private func updateMenu(trade: Trade, data: TradingData) {
         let menu = NSMenu()
-        let multiplier = (data.currency == "GBX" || data.currency == "GBp") ? 0.01 : 1.0
+        // No multiplier needed - all values are already in the same currency
         let safeCurrent = data.currentPrice.isFinite ? data.currentPrice : 0
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
         let safeUnits = data.units.isFinite ? data.units : 0
         let safeAvgCost = data.avgCost.isFinite ? data.avgCost : 0
         // Calculate values safely
-        let dayGain = (safeCurrent - safePrev) * multiplier
-        let dayGainPct = (safePrev != 0) ? (dayGain / (safePrev * multiplier)) * 100 : Double.nan
-        let marketValue = safeCurrent * safeUnits * multiplier
-        let positionCost = safeAvgCost * safeUnits * multiplier
+        let dayGain = safeCurrent - safePrev
+        let dayGainPct = (safePrev != 0) ? (dayGain / safePrev) * 100 : Double.nan
+        let marketValue = safeCurrent * safeUnits
+        let positionCost = safeAvgCost * safeUnits
         let totalPL = marketValue - positionCost
         let dayPL = dayGain * safeUnits
         // Fallbacks for display
@@ -154,17 +167,21 @@ class StockStatusItemController {
             v.isFinite ? String(format: String("%." + String(decimals) + "f"), v) : "N/A"
         }
 
+        // For failed fetches, show currency but N/A for prices
+        let priceDisplay = data.currentPrice.isNaN ? "N/A" : fmt(safeCurrent)
+        let marketValueDisplay = data.currentPrice.isNaN ? "N/A" : fmt(marketValue)
+        
         let menuItems = [
-            ("Price", fmt(safeCurrent * multiplier) + " \(data.currency)"),
+            ("Price", priceDisplay + " \(data.currency)"),
             ("Day Gain", (dayGain.isFinite ? String(format: "%+.2f", dayGain) : "N/A") +
                 " (" + (dayGainPct.isFinite ? String(format: "%+.2f%%", dayGainPct) : "N/A") + ")"),
-            ("Market Value", fmt(marketValue) + " \(data.currency)"),
+            ("Market Value", marketValueDisplay + " \(data.currency)"),
             ("Position Cost", fmt(positionCost) + " \(data.currency)"),
             ("Total P&L", (totalPL.isFinite ? String(format: "%+.2f", totalPL) : "N/A") + " \(data.currency)"),
             ("Day P&L", (dayPL.isFinite ? String(format: "%+.2f", dayPL) : "N/A") + " \(data.currency)"),
             ("Units", fmt(safeUnits, decimals: 0)),
-            ("Avg Cost", fmt(safeAvgCost * multiplier)),
-            ("Last Update", (data.timeInfo == "1970-01-01 01:00 GMT+1" || data.timeInfo.contains("1970")) ? "–" : data.timeInfo)
+            ("Avg Cost", fmt(safeAvgCost) + " \(data.currency)"),
+            ("Last Update", (data.timeInfo.isEmpty || data.timeInfo.contains("1970") || data.timeInfo.contains("00:00")) ? "–" : data.timeInfo)
         ]
         menuItems.forEach { title, value in
             menu.addItem(withTitle: "\(title): \(value)", action: nil, keyEquivalent: "")

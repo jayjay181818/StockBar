@@ -3,10 +3,32 @@
 This file describes the technologies used, development setup, and technical constraints of the project.
 
 **Technologies used:**
-The project primarily uses Swift, AppKit, and Foundation. It also utilizes a Python script (`get_stock_data.py`) for fetching stock data.
+- **Swift**: Primary language for macOS application development
+- **AppKit**: Native macOS UI framework for menu bar integration
+- **Combine**: Reactive programming framework for data binding and UI updates
+- **Foundation**: Core framework for data handling and persistence
+- **Python 3**: Backend script for stock data fetching
+- **yfinance**: Python library for Yahoo Finance API access
+- **UserDefaults**: Persistent storage for user preferences and stock data
+- **JSON Encoding/Decoding**: Data serialization for persistent storage
 
 **Development setup:**
-Development is likely done using Xcode. The project structure follows standard macOS application conventions.
+- **Xcode**: Primary IDE for Swift development and project management
+- **Python Environment**: Requires Python 3 with yfinance library installed
+- **macOS Target**: Native macOS application with menu bar integration
+- **Project Structure**: Standard Xcode project with Swift Package Manager dependencies
 
 **Technical constraints:**
-A technical constraint is the reliance on an external Python script for data fetching. There is also a 30-second delay implemented between batch requests in the network service, likely to avoid rate limiting from the data source.
+- **API Rate Limiting**: Yahoo Finance API has rate limits requiring intelligent caching (15-minute intervals)
+- **Network Dependency**: Requires internet connection for stock data updates
+- **Python Dependency**: External Python script dependency for data fetching
+- **Currency Conversion**: Complex handling of GBX/GBP conversion for UK stocks
+- **Memory Management**: Careful handling of Combine subscriptions and status bar items
+- **Threading**: Network operations on background threads with UI updates on main thread
+
+**Architecture Patterns:**
+- **MVVM Pattern**: DataModel as ViewModel, SwiftUI views for preferences
+- **Observer Pattern**: Combine publishers for reactive data flow
+- **Repository Pattern**: NetworkService abstraction for data fetching
+- **Caching Strategy**: Time-based caching with failure retry logic
+- **Persistent Storage**: UserDefaults-based storage for configuration and last successful data

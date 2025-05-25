@@ -1,160 +1,173 @@
-# ~/Scripts/get_stock_data.py (Example path)
-import sys
-import warnings
-import os
-import math
-
-# Suppress urllib3 OpenSSL warnings before importing yfinance
-try:
-    from urllib3.exceptions import NotOpenSSLWarning
-    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
-except Exception:
-    pass
-
 import yfinance as yf
+import pandas as pd
+import time
+from datetime import datetime, timedelta
+import sys
+import os
+import json
 
-# Disable proxy environment variables which can interfere with yfinance
-for proxy_var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
-    os.environ.pop(proxy_var, None)
+# Use a cache file in the user's home directory
+CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
+CACHE_DURATION_SECONDS = 300  # 5 minutes
 
-def _fetch_single(sym: str):
-    """Fetch price for a single symbol as a fallback."""
+# Load cache from file
+if os.path.exists(CACHE_FILE):
+    with open(CACHE_FILE, 'r') as f:
+        try:
+            cache = json.load(f)
+        except Exception:
+            cache = {}
+else:
+    cache = {}
+
+def save_cache():
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(cache, f)
+
+def get_cached(symbol):
+    entry = cache.get(symbol)
+    if entry:
+        ts = entry.get('timestamp')
+        if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
+            return entry.get('result')
+    return None
+
+def set_cache(symbol, result):
+    cache[symbol] = {
+        'timestamp': time.time(),
+        'result': result
+    }
+    save_cache()
+
+def format_price(val):
+    if isinstance(val, pd.Series):
+        val = val.iloc[0]
+    return float(val)
+
+def get_previous_close(symbol):
+    """Get the previous day's close price using daily data"""
     try:
-        t = yf.Ticker(sym)
-        hist = t.history(period="2d", auto_adjust=False) # auto_adjust=False for raw data
-        
-        price_raw = None
-        prev_raw = None
-
-        if not hist.empty:
-            price_raw = hist["Close"].iloc[-1]
-            if len(hist["Close"]) > 1:
-                prev_raw = hist["Close"].iloc[-2]
-            elif "Open" in hist.columns and not hist["Open"].empty: # Fallback to Open if only one day's history
-                prev_raw = hist["Open"].iloc[-1]
-            else: # If truly only one 'Close' data point and no 'Open', use price_raw for prev_raw
-                prev_raw = price_raw 
-        
-        # If history was empty or didn't yield price_raw, try fast_info
-        if price_raw is None: 
-            info = t.fast_info
-            # yfinance fast_info often uses 'lastPrice' or 'regularMarketPreviousClose'
-            price_raw = info.get("lastPrice") or info.get("regularMarketPreviousClose")
-            # For previous close, prioritize actual, then fallback to price_raw if necessary
-            prev_raw = info.get("regularMarketPreviousClose") or price_raw 
-        
-        # Convert to float, handling None by converting to NaN
-        cp_float = float(price_raw) if price_raw is not None else float('nan')
-        prev_float = float(prev_raw) if prev_raw is not None else float('nan')
-
-        # Fallback logic for NaN values
-        if math.isnan(cp_float) and not math.isnan(prev_float): # If current is NaN, use previous if valid
-            cp_float = prev_float
-        elif math.isnan(prev_float) and not math.isnan(cp_float): # If previous is NaN, use current if valid
-            prev_float = cp_float
-
-        # If either is still NaN after fallbacks, this symbol fetch failed
-        if math.isnan(cp_float) or math.isnan(prev_float):
-            return None 
-            
-        return cp_float, prev_float
-    except Exception as exc:
-        print(f"Error in _fetch_single for {sym}: {exc}", file=sys.stderr)
-        return None
+        ticker = yf.Ticker(symbol)
+        # Get last 5 days of daily data to ensure we get previous close
+        daily_data = ticker.history(period='5d', interval='1d')
+        if daily_data is not None and len(daily_data) >= 2:
+            # Get the second-to-last day's close (previous close)
+            prev_close = format_price(daily_data['Close'].iloc[-2])
+            return prev_close
+    except Exception as e:
+        print(f"Failed to get previous close for {symbol}: {e}", file=sys.stderr)
+    return None
 
 def fetch_batch(symbols):
-    """Fetch closing and previous closing prices for a list of symbols, with fallback."""
-    results = {}
-    batch_data_payload = None
-    batch_download_attempted = False
-
-    if symbols: # Only attempt download if there are symbols
-        try:
-            ticker_str = " ".join(symbols)
-            batch_data_payload = yf.download(
-                ticker_str,
-                period="2d",
-                group_by="ticker", # Returns a Panel-like (MultiIndex DataFrame) or DataFrame
-                threads=False,
-                progress=False,
-                auto_adjust=False, # Crucial for raw data
-            )
-            batch_download_attempted = True
-        except Exception as e:
-            print(f"Initial yf.download for batch failed: {e}", file=sys.stderr)
-            # batch_download_attempted remains True, batch_data_payload might be None or error structure
-
-    for sym in symbols:
-        processed_this_symbol_from_batch = False
-        if batch_download_attempted and batch_data_payload is not None and not batch_data_payload.empty:
-            sym_specific_data_from_batch = None
+    # Try batch download
+    try:
+        print(f"Batch fetching {symbols} using yf.download...", file=sys.stderr)
+        data = yf.download(tickers=symbols, period='2d', interval='5m', progress=False, auto_adjust=True, timeout=10, group_by='ticker')
+        results = {}
+        for symbol in symbols:
             try:
-                if len(symbols) > 1:
-                    # For multiple symbols, data is a MultiIndex DataFrame. Access by [sym].
-                    if sym in batch_data_payload.columns.levels[0]: # Check if symbol is in the top level columns
-                        sym_specific_data_from_batch = batch_data_payload[sym]
-                else: # Single symbol, batch_data_payload is the DataFrame for that symbol
-                    sym_specific_data_from_batch = batch_data_payload
-                
-                if sym_specific_data_from_batch is not None and not sym_specific_data_from_batch.empty:
-                    # Use detailed processing for sym_specific_data_from_batch
-                    close_series = sym_specific_data_from_batch["Close"]
-                    if close_series.empty:
-                         raise ValueError("Close series is empty for batch data.")
+                # If only one symbol, data is not multi-indexed
+                symbol_data = data if len(symbols) == 1 else data[symbol]
+                if symbol_data is not None and not symbol_data.empty:
+                    latest_timestamp = symbol_data.index[-1]
+                    latest_day_data = symbol_data[symbol_data.index.date == latest_timestamp.date()]
+                    if not latest_day_data.empty:
+                        last_row = latest_day_data.iloc[-1]
+                        required_cols = ['Low', 'High', 'Close']
+                        if all(col in last_row for col in required_cols):
+                            actual_timestamp = latest_day_data.index[-1]
+                            timestamp_str = actual_timestamp.strftime('%Y-%m-%d %H:%M:%S%z')
+                            low_price = format_price(last_row['Low'])
+                            high_price = format_price(last_row['High'])
+                            close_price = format_price(last_row['Close'])
+                            
+                            # Get previous day's close price
+                            prev_close = get_previous_close(symbol)
+                            if prev_close is not None:
+                                results[symbol] = (timestamp_str, low_price, high_price, close_price, prev_close)
+                                continue
+                            else:
+                                print(f"Could not get previous close for {symbol}", file=sys.stderr)
+                        else:
+                            print(f"Missing columns for {symbol}: {last_row.index}", file=sys.stderr)
+            except Exception as e:
+                print(f"Batch fetch failed for {symbol}: {e}", file=sys.stderr)
+            results[symbol] = None
+        return results
+    except Exception as e:
+        print(f"Batch yf.download failed: {e}", file=sys.stderr)
+        return {symbol: None for symbol in symbols}
 
-                    current_price_raw = close_series.iloc[-1]
+def fetch_single(symbol):
+    # Fallback to single fetch logic
+    try:
+        ticker_obj = yf.Ticker(symbol)
+        hist = ticker_obj.history(period='2d', interval='5m', auto_adjust=True, timeout=10)
+        if hist is not None and not hist.empty:
+            latest_timestamp = hist.index[-1]
+            latest_day_data = hist[hist.index.date == latest_timestamp.date()]
+            if not latest_day_data.empty:
+                last_row = latest_day_data.iloc[-1]
+                required_cols = ['Low', 'High', 'Close']
+                if all(col in last_row for col in required_cols):
+                    actual_timestamp = latest_day_data.index[-1]
+                    timestamp_str = actual_timestamp.strftime('%Y-%m-%d %H:%M:%S%z')
+                    low_price = format_price(last_row['Low'])
+                    high_price = format_price(last_row['High'])
+                    close_price = format_price(last_row['Close'])
                     
-                    if len(close_series) > 1:
-                        prev_close_raw = close_series.iloc[-2]
-                    elif "Open" in sym_specific_data_from_batch.columns and not sym_specific_data_from_batch["Open"].empty:
-                        prev_close_raw = sym_specific_data_from_batch["Open"].iloc[-1]
+                    # Get previous day's close price
+                    prev_close = get_previous_close(symbol)
+                    if prev_close is not None:
+                        return (timestamp_str, low_price, high_price, close_price, prev_close)
                     else:
-                        prev_close_raw = current_price_raw # Fallback if only one close value and no open
+                        print(f"Could not get previous close for {symbol}", file=sys.stderr)
+                else:
+                    print(f"Missing columns for {symbol}: {last_row.index}", file=sys.stderr)
+    except Exception as e:
+        print(f"Fallback Ticker().history() for {symbol} failed: {e}", file=sys.stderr)
+    return None
 
-                    cp_float = float(current_price_raw) if current_price_raw is not None else float('nan')
-                    prev_float = float(prev_close_raw) if prev_close_raw is not None else float('nan')
-
-                    # NaN fallback logic
-                    if math.isnan(cp_float) and not math.isnan(prev_float): 
-                        cp_float = prev_float
-                    elif math.isnan(prev_float) and not math.isnan(cp_float): 
-                        prev_float = cp_float
-
-                    if not (math.isnan(cp_float) or math.isnan(prev_float)):
-                        results[sym] = (cp_float, prev_float)
-                        processed_this_symbol_from_batch = True
-                    # else: data from batch was NaN for this symbol, will trigger fallback
-            except Exception as batch_proc_err:
-                # print(f"Error processing batch data for {sym}: {batch_proc_err}, falling back.", file=sys.stderr) # Optional debug
-                pass # Error processing this symbol from batch, will fall through to _fetch_single
-
-        if not processed_this_symbol_from_batch:
-            # Fallback to single fetch if not processed from batch successfully
-            results[sym] = _fetch_single(sym)
-            
-    return results
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python get_stock_data.py <TICKER_SYMBOL> [<TICKER_SYMBOL> ...]", file=sys.stderr)
+        print("Error: No ticker symbol provided.")
+        print("FETCH_FAILED")
+        sys.exit(1)
+    symbols = [s.upper() for s in sys.argv[1:]]
+    results = {}
+    # Check cache first
+    symbols_to_fetch = []
+    for symbol in symbols:
+        cached = get_cached(symbol)
+        if cached:
+            results[symbol] = cached
+        else:
+            symbols_to_fetch.append(symbol)
+    # Batch fetch uncached
+    if symbols_to_fetch:
+        batch_results = fetch_batch(symbols_to_fetch)
+        for symbol, res in batch_results.items():
+            if res:
+                set_cache(symbol, res)
+                results[symbol] = res
+            else:
+                # Fallback to single fetch
+                single_res = fetch_single(symbol)
+                if single_res:
+                    set_cache(symbol, single_res)
+                    results[symbol] = single_res
+                else:
+                    results[symbol] = None
+    # Output results
+    for symbol in symbols:
+        res = results.get(symbol)
+        if res:
+            timestamp_str, low_price, high_price, close_price, prev_close = res
+            print(f"{symbol} @ {timestamp_str} | 5m Low: {low_price:.2f}, High: {high_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
+        else:
+            print(f"Error fetching {symbol}: No data received.")
+            print("FETCH_FAILED")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        symbols_arg = sys.argv[1]
-        # Ensure script handles empty symbol list gracefully
-        if not symbols_arg.strip():
-            print("Error: No symbols provided.", file=sys.stderr)
-        else:
-            # Clean up symbols: remove empty strings that might result from "MSFT,,AAPL"
-            symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
-            if not symbols:
-                 print("Error: No valid symbols provided after stripping.", file=sys.stderr)
-            else:
-                batch_results = fetch_batch(symbols)
-                for sym in symbols: # Iterate through original requested symbols
-                    result = batch_results.get(sym)
-                    # Check for None and ensure both parts of the tuple are valid numbers before printing
-                    if result and isinstance(result, tuple) and len(result) == 2 and \
-                       not (math.isnan(result[0]) or math.isnan(result[1])):
-                        price, prev_close = result
-                        print(f"{sym},{price},{prev_close}")
-                    else:
-                        print(f"{sym},FETCH_FAILED")
-    else:
-        print("Usage: python get_stock_data.py <SYMBOL[,SYMBOL...]>", file=sys.stderr)
+    main()
