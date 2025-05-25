@@ -52,7 +52,7 @@ struct Position: Codable, Equatable {
     }
 }
 
-struct TradingInfo {
+struct TradingInfo: Codable {
     var currentPrice: Double = .nan
     var previousClose: Double?
     var lastUpdateTime: Int?
@@ -82,8 +82,13 @@ struct TradingInfo {
     }
 
     func getTimeInfo() -> String {
+        // Handle case where regularMarketTime is 0 or invalid
+        guard regularMarketTime > 0 else {
+            return "–"
+        }
+        
         let date = Date(timeIntervalSince1970: TimeInterval(regularMarketTime))
-        let tradeTimeZone = TimeZone(identifier: exchangeTimezoneName)
+        let tradeTimeZone = TimeZone(identifier: exchangeTimezoneName) ?? TimeZone.current
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm zzz"
         dateFormatter.timeZone = tradeTimeZone
