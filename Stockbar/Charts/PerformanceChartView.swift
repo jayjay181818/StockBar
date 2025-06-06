@@ -89,6 +89,28 @@ struct PerformanceChartView: View {
         historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange)
     }
     
+    private var yAxisDomain: ClosedRange<Double> {
+        guard !chartData.isEmpty else { return 0...1 }
+        
+        let values = chartData.map { $0.value }
+        let minValue = values.min() ?? 0
+        let maxValue = values.max() ?? 1
+        
+        // Add 5% padding to top and bottom for better visualization
+        let range = maxValue - minValue
+        let padding = range * 0.05
+        
+        let paddedMin = minValue - padding
+        let paddedMax = maxValue + padding
+        
+        // Ensure we don't have a zero range
+        if paddedMin == paddedMax {
+            return (paddedMin - 0.5)...(paddedMax + 0.5)
+        }
+        
+        return paddedMin...paddedMax
+    }
+    
     private var chartView: some View {
         Group {
             if chartData.isEmpty {
@@ -127,12 +149,13 @@ struct PerformanceChartView: View {
                         }
                     }
                     .chartYAxis {
-                        AxisMarks { value in
+                        AxisMarks(values: .automatic(desiredCount: 8)) { value in
                             AxisGridLine()
                             AxisTick()
                             AxisValueLabel(format: valueFormat)
                         }
                     }
+                    .chartYScale(domain: yAxisDomain)
                     .chartBackground { chartProxy in
                         GeometryReader { geometry in
                             Rectangle()
