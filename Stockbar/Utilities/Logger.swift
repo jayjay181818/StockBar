@@ -99,4 +99,47 @@ public class Logger {
     public func critical(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
         log(.error, message, file: file, function: function, line: line)
     }
+    
+    /// Gets recent log entries from the log file
+    /// - Parameter maxLines: Maximum number of lines to return (default: 500)
+    /// - Returns: Array of log entry strings
+    public func getRecentLogs(maxLines: Int = 500) -> [String] {
+        guard let logFileURL = getLogFileURL(),
+              fileManager.fileExists(atPath: logFileURL.path) else {
+            return ["No log file found"]
+        }
+        
+        do {
+            let content = try String(contentsOf: logFileURL, encoding: .utf8)
+            let lines = content.components(separatedBy: .newlines)
+                .filter { !$0.isEmpty }
+            
+            // Return the last maxLines entries
+            if lines.count > maxLines {
+                return Array(lines.suffix(maxLines))
+            } else {
+                return lines
+            }
+        } catch {
+            return ["Error reading log file: \(error.localizedDescription)"]
+        }
+    }
+    
+    /// Clears the log file
+    public func clearLogs() {
+        guard let logFileURL = getLogFileURL() else { return }
+        
+        do {
+            if fileManager.fileExists(atPath: logFileURL.path) {
+                try fileManager.removeItem(at: logFileURL)
+            }
+        } catch {
+            log(.error, "Failed to clear logs: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Gets the log file path for display
+    public func getLogFilePath() -> String? {
+        return getLogFileURL()?.path
+    }
 }

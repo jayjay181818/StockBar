@@ -7,12 +7,12 @@ class StockMenuBarController {
     private var cancellables: AnyCancellable?
     private let statusBar: StockStatusBar
     private let data: DataModel
-    private var prefPopover: PreferencePopover
+    private var preferenceWindowController: PreferenceWindowController?
     private lazy var timer = Timer()
     private lazy var mainMenuItems = [
         NSMenuItem(title: "Refresh", action: #selector(refreshButtonClicked(_:)), keyEquivalent: ""),
         NSMenuItem.separator(),
-        NSMenuItem(title: "Preference", action: #selector(togglePopover), keyEquivalent: ""),
+        NSMenuItem(title: "Preferences", action: #selector(showPreferences), keyEquivalent: ","),
         NSMenuItem(title: "Exit", action: #selector(quitApp), keyEquivalent: "q")
     ]
     
@@ -20,7 +20,6 @@ class StockMenuBarController {
     init(data: DataModel) {
         self.data = data
         self.statusBar = StockStatusBar(dataModel: data)
-        self.prefPopover = PreferencePopover(data: data)
         constructMainItem()
         setupTimer()
         setupDataBinding()
@@ -64,15 +63,14 @@ class StockMenuBarController {
         NSApp.terminate(self)
     }
     
-    @objc func togglePopover(_ sender: Any?) {
-        showPopover(sender: sender)
-    }
-    
-    func showPopover(sender: Any?) {
-        if let button = self.statusBar.mainItem()?.button {
-            prefPopover.show(relativeTo: button.bounds, of: button, preferredEdge: NSRectEdge.minY)
-            NSApp.activate(ignoringOtherApps: true)
+    @objc private func showPreferences(_ sender: Any?) {
+        // Create window controller if it doesn't exist
+        if preferenceWindowController == nil {
+            preferenceWindowController = PreferenceWindowController(dataModel: data)
         }
+        
+        // Show the window
+        preferenceWindowController?.showWindow()
     }
     
     @objc private func refreshButtonClicked(_ sender: Any?) {

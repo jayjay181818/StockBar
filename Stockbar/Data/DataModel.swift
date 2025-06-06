@@ -19,6 +19,7 @@ class DataModel: ObservableObject {
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
+    private let historicalDataManager = HistoricalDataManager.shared
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
     @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
@@ -209,6 +210,8 @@ class DataModel: ObservableObject {
             // Save trading info if any successful updates occurred
             if anySuccessfulUpdate {
                 saveTradingInfo()
+                // Record historical data snapshot after successful updates
+                historicalDataManager.recordSnapshot(from: self)
             }
             
             logger.info("Successfully processed \(results.count) trades of \(finalSymbolsToRefresh.count) requested.")
@@ -297,6 +300,60 @@ class DataModel: ObservableObject {
         return (finalAmount, preferredCurrency)
     }
 
+    /// Calculates the total portfolio value (market value) in the preferred currency
+    func calculateNetValue() -> (amount: Double, currency: String) {
+        logger.debug("Calculating net value in \(preferredCurrency)")
+        var totalValueUSD = 0.0
+
+        for realTimeTradeItem in realTimeTrades {
+            // Ensure price is valid before calculation
+            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
+                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
+                logger.debug("Skipping net value calculation for \(realTimeTradeItem.trade.name) due to invalid price.")
+                continue
+            }
+
+            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
+            let units = realTimeTradeItem.trade.position.unitSize
+            let currency = realTimeTradeItem.realTimeInfo.currency
+            let symbol = realTimeTradeItem.trade.name
+            
+            // Calculate market value in the stock's currency
+            let marketValueInStockCurrency = currentPrice * units
+
+            // Convert to USD for aggregation
+            var marketValueInUSD = marketValueInStockCurrency
+            if let knownCurrency = currency {
+                if knownCurrency == "GBP" {
+                    marketValueInUSD = currencyConverter.convert(amount: marketValueInStockCurrency, from: "GBP", to: "USD")
+                } else if knownCurrency != "USD" {
+                    marketValueInUSD = currencyConverter.convert(amount: marketValueInStockCurrency, from: knownCurrency, to: "USD")
+                }
+                // If knownCurrency is USD, marketValueInUSD remains marketValueInStockCurrency
+            } else {
+                // Assume USD if currency is nil
+                logger.warning("Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for value calculation.")
+                // marketValueInUSD remains marketValueInStockCurrency
+            }
+
+            logger.debug("Value calculation for \(symbol): currentPrice=\(currentPrice), units=\(units), marketValueInUSD=\(marketValueInUSD)")
+            totalValueUSD += marketValueInUSD
+        }
+
+        // Convert final total to preferred currency
+        var finalAmount = totalValueUSD
+        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+            let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
+            finalAmount = gbpAmount * 100.0 // Convert GBP to GBX
+        } else if preferredCurrency != "USD" { // Only convert if not already USD
+            finalAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
+        }
+        // If preferredCurrency is USD, finalAmount remains totalValueUSD
+
+        logger.debug("Net value calculated: \(finalAmount) \(preferredCurrency)")
+        return (finalAmount, preferredCurrency)
+    }
+
     func startStaggeredRefresh() {
         refreshTimer?.invalidate()
         currentSymbolIndex = 0
@@ -348,6 +405,8 @@ class DataModel: ObservableObject {
                         
                         // Save trading info for successful individual updates
                         self.saveTradingInfo()
+                        // Record historical data snapshot after successful individual update
+                        self.historicalDataManager.recordSnapshot(from: self)
                     } else {
                         self.lastFailedFetch[symbol] = now
                         self.logger.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data")
@@ -398,7 +457,7 @@ extension RealTimeTrade {
     /// Returns true if the update was successful (non-NaN data), false if it failed and old data was retained
     func updateWithResult(_ result: StockFetchResult, retainOnFailure: Bool = true) -> Bool {
         // Fallback logic: treat as GBX if currency is GBX/GBp or symbol ends with .L
-        var price = result.regularMarketPrice // Assumes StockFetchResult.swift defines this as non-optional
+        let price = result.regularMarketPrice // Assumes StockFetchResult.swift defines this as non-optional
         let prevClose = result.regularMarketPreviousClose // Assumes StockFetchResult.swift defines this as non-optional
         
         // Check if this is a failed fetch (NaN values)
