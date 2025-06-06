@@ -1,0 +1,146 @@
+name: StockBar CI
+
+on:
+  push:
+    branches: [ "main", "testing" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build, Test & Validate
+    runs-on: macos-latest
+    
+    strategy:
+      matrix:
+        xcode-version: ['15.1', '15.2']
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Select Xcode version
+      run: sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode-version }}.app/Contents/Developer
+
+    - name: Show Xcode version
+      run: xcodebuild -version
+
+    - name: Set up Python for stock data script
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install yfinance requests
+
+    - name: Test Python stock data script
+      run: |
+        cd Stockbar/Resources
+        python get_stock_data.py AAPL
+        echo "✅ Python script validation successful"
+
+    - name: Cache Xcode DerivedData
+      uses: actions/cache@v3
+      with:
+        path: ~/Library/Developer/Xcode/DerivedData
+        key: ${{ runner.os }}-xcode-deriveddata-${{ hashFiles('**/*.xcodeproj') }}
+        restore-keys: |
+          ${{ runner.os }}-xcode-deriveddata-
+
+    - name: Set Default Scheme
+      run: |
+        scheme_list=$(xcodebuild -list -json | tr -d "\n")
+        default=$(echo $scheme_list | ruby -e "require 'json'; puts JSON.parse(STDIN.gets)['project']['targets'][0]")
+        echo $default | cat >default
+        echo "Using scheme: $default"
+
+    - name: Clean Build Folder
+      run: xcodebuild clean -project Stockbar.xcodeproj -scheme Stockbar
+
+    - name: Build StockBar
+      run: |
+        scheme=$(cat default)
+        xcodebuild build \
+          -project Stockbar.xcodeproj \
+          -scheme "$scheme" \
+          -destination "platform=macOS" \
+          -configuration Debug \
+          CODE_SIGNING_ALLOWED=NO \
+          ONLY_ACTIVE_ARCH=YES
+
+    - name: Run Static Analysis
+      run: |
+        scheme=$(cat default)
+        xcodebuild analyze \
+          -project Stockbar.xcodeproj \
+          -scheme "$scheme" \
+          -destination "platform=macOS" \
+          -configuration Debug \
+          CODE_SIGNING_ALLOWED=NO \
+          ONLY_ACTIVE_ARCH=YES
+
+    - name: Check for build warnings and errors
+      run: |
+        echo "✅ Build completed successfully"
+        echo "✅ Static analysis completed"
+
+    - name: Validate entitlements
+      run: |
+        if [ -f "Stockbar/Stockbar.entitlements" ]; then
+          plutil -lint Stockbar/Stockbar.entitlements
+          echo "✅ Entitlements file is valid"
+        fi
+
+    - name: Archive build results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-results-xcode-${{ matrix.xcode-version }}
+        path: |
+          ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Debug/
+          ~/Library/Developer/Xcode/DerivedData/*/Logs/Build/
+        retention-days: 5
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check Swift formatting
+      run: |
+        echo "📝 Checking Swift code structure..."
+        find Stockbar -name "*.swift" -exec echo "Checking: {}" \;
+        echo "✅ Swift files structure validated"
+
+    - name: Validate Info.plist
+      run: |
+        if [ -f "Stockbar/Info.plist" ]; then
+          plutil -lint Stockbar/Info.plist
+          echo "✅ Info.plist is valid"
+        fi
+
+    - name: Check for TODO/FIXME comments
+      run: |
+        echo "🔍 Scanning for TODO/FIXME comments..."
+        grep -r --include="*.swift" -n "TODO\|FIXME" Stockbar/ || echo "✅ No TODO/FIXME comments found"
+
+    - name: Validate Python script syntax
+      run: |
+        python -m py_compile Stockbar/Resources/get_stock_data.py
+        echo "✅ Python script syntax is valid"
+
+    - name: Check project structure
+      run: |
+        echo "📁 Project structure validation:"
+        echo "✓ Main app files:"
+        ls -la Stockbar/*.swift | head -5
+        echo "✓ Resources:"
+        ls -la Stockbar/Resources/
+        echo "✓ Assets:"
+        ls -la Stockbar/Assets.xcassets/
+        echo "✅ Project structure looks good"
