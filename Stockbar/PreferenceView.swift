@@ -47,6 +47,9 @@ struct PreferenceView: View {
             }
             .pickerStyle(SegmentedPickerStyle())
             .padding()
+            .onChange(of: selectedTab) { _, newTab in
+                adjustWindowForTab(newTab)
+            }
             
             // Tab content
             Group {
@@ -58,6 +61,38 @@ struct PreferenceView: View {
                 case .debug:
                     debugView
                 }
+            }
+        }
+    }
+    
+    private func adjustWindowForTab(_ tab: PreferenceTab) {
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.title == "Stockbar Preferences" }) else {
+                return
+            }
+            
+            let currentFrame = window.frame
+            let targetHeight: CGFloat
+            
+            switch tab {
+            case .portfolio:
+                targetHeight = 400 // Base height for portfolio view
+            case .charts:
+                targetHeight = 700 // Larger height for charts view
+            case .debug:
+                targetHeight = 600 // Medium height for debug view
+            }
+            
+            // Only resize if the target height is significantly different
+            if abs(currentFrame.height - targetHeight) > 50 {
+                let newFrame = NSRect(
+                    x: currentFrame.origin.x,
+                    y: currentFrame.origin.y - (targetHeight - currentFrame.height), // Adjust y to expand downward
+                    width: max(currentFrame.width, 600), // Ensure minimum width
+                    height: targetHeight
+                )
+                
+                window.setFrame(newFrame, display: true, animate: true)
             }
         }
     }
@@ -156,7 +191,11 @@ struct PreferenceView: View {
     }
     
     private var chartsView: some View {
-        PerformanceChartView(availableSymbols: availableSymbols)
+        PerformanceChartView(availableSymbols: availableSymbols, dataModel: userdata)
+            .onAppear {
+                // Ensure window is properly sized when charts first appear
+                adjustWindowForTab(.charts)
+            }
     }
     
     private var debugView: some View {
