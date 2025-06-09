@@ -385,16 +385,39 @@ class HistoricalDataManager: ObservableObject {
     }
     
     private func cleanupOldData() {
-        // Keep only the most recent data points with increased limit
-        if portfolioSnapshots.count > maxDataPoints {
-            portfolioSnapshots = Array(portfolioSnapshots.suffix(maxDataPoints))
+        let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
+        
+        // Use progressive cleanup based on total data size
+        let targetLimit: Int
+        if totalSnapshots > 40000 {
+            // Aggressive cleanup for very large datasets
+            targetLimit = 1500
+            logger.warning("📊 Aggressive cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))")
+        } else if totalSnapshots > 20000 {
+            // Moderate cleanup for large datasets
+            targetLimit = 2000
+            logger.info("📊 Moderate cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))")
+        } else {
+            // Standard cleanup
+            targetLimit = maxDataPoints
         }
         
-        // Clean up individual stock data with increased limit
+        // Keep only the most recent data points
+        if portfolioSnapshots.count > targetLimit {
+            portfolioSnapshots = Array(portfolioSnapshots.suffix(targetLimit))
+        }
+        
+        // Clean up individual stock data
         for symbol in priceSnapshots.keys {
-            if let snapshots = priceSnapshots[symbol], snapshots.count > maxDataPoints {
-                priceSnapshots[symbol] = Array(snapshots.suffix(maxDataPoints))
+            if let snapshots = priceSnapshots[symbol], snapshots.count > targetLimit {
+                priceSnapshots[symbol] = Array(snapshots.suffix(targetLimit))
+                logger.debug("📊 Trimmed \(symbol) from \(snapshots.count) to \(targetLimit) snapshots")
             }
+        }
+        
+        let newTotal = priceSnapshots.values.map { $0.count }.reduce(0, +)
+        if newTotal != totalSnapshots {
+            logger.info("📊 Data cleanup completed: \(totalSnapshots) → \(newTotal) snapshots")
         }
     }
     
@@ -500,6 +523,44 @@ class HistoricalDataManager: ObservableObject {
         // Save data every 30 minutes to avoid too frequent writes
         Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
             self?.saveHistoricalData()
+        }
+        
+        // Perform aggressive cleanup every 6 hours to maintain optimal performance
+        Timer.scheduledTimer(withTimeInterval: 21600, repeats: true) { [weak self] _ in
+            Task {
+                await self?.performPeriodicMaintenance()
+            }
+        }
+    }
+    
+    private func performPeriodicMaintenance() async {
+        let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
+        
+        if totalSnapshots > 30000 {
+            logger.info("📊 Performing periodic maintenance on \(totalSnapshots) snapshots")
+            
+            // Force more aggressive cleanup during maintenance
+            let originalMaxDataPoints = maxDataPoints
+            
+            // Temporarily reduce limits for maintenance cleanup
+            for symbol in priceSnapshots.keys {
+                if let snapshots = priceSnapshots[symbol], snapshots.count > 1800 {
+                    priceSnapshots[symbol] = Array(snapshots.suffix(1800))
+                }
+            }
+            
+            if portfolioSnapshots.count > 1800 {
+                portfolioSnapshots = Array(portfolioSnapshots.suffix(1800))
+            }
+            
+            let newTotal = priceSnapshots.values.map { $0.count }.reduce(0, +)
+            logger.info("📊 Maintenance cleanup: \(totalSnapshots) → \(newTotal) snapshots")
+            
+            // Clear cached calculations to force recalculation with clean data
+            cachedHistoricalPortfolioValues.removeAll()
+            lastPortfolioCalculationDate = Date.distantPast
+            
+            saveHistoricalData()
         }
     }
     
@@ -918,18 +979,29 @@ class HistoricalDataManager: ObservableObject {
     
     /// Calculates and caches historical portfolio values using historical price data (async)
     private func calculateAndCacheHistoricalPortfolioValues(using dataModel: DataModel) async {
-        // Check if we have too much data to process efficiently
         let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
-        if totalSnapshots > 5000 {
-            logger.warning("📊 Skipping historical portfolio calculation - too much data (\(totalSnapshots) snapshots)")
-            return
-        }
         
-        let startDate = Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date() // Limit to 6 months to prevent hanging
+        // Use progressive data sampling for large datasets instead of skipping entirely
+        let useSampling = totalSnapshots > 15000
+        let startDate: Date
+        
+        if totalSnapshots > 50000 {
+            // For very large datasets, limit to 3 months
+            startDate = Calendar.current.date(byAdding: .month, value: -3, to: Date()) ?? Date()
+            logger.warning("📊 Large dataset (\(totalSnapshots) snapshots) - using 3-month window with sampling")
+        } else if totalSnapshots > 25000 {
+            // For large datasets, limit to 6 months
+            startDate = Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date()
+            logger.info("📊 Medium dataset (\(totalSnapshots) snapshots) - using 6-month window")
+        } else {
+            // For reasonable datasets, use 1 year
+            startDate = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+            logger.debug("📊 Processing \(totalSnapshots) snapshots with 1-year window")
+        }
         
         logger.debug("📊 Starting background calculation of historical portfolio values")
         
-        let portfolioValues = await calculateHistoricalPortfolioValues(from: startDate, using: dataModel)
+        let portfolioValues = await calculateHistoricalPortfolioValues(from: startDate, using: dataModel, useSampling: useSampling)
         
         await MainActor.run {
             self.cachedHistoricalPortfolioValues = portfolioValues
@@ -939,9 +1011,8 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Calculates historical portfolio values using historical price data (sync, for background use)
-    private func calculateHistoricalPortfolioValues(from startDate: Date, using dataModel: DataModel) async -> [ChartDataPoint] {
-        // Limit historical calculation to avoid excessive computation
-        let actualStartDate = max(startDate, Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? startDate)
+    private func calculateHistoricalPortfolioValues(from startDate: Date, using dataModel: DataModel, useSampling: Bool = false) async -> [ChartDataPoint] {
+        let actualStartDate = startDate
         
         // Get all available historical dates across all symbols with chunked processing
         var allDates = Set<Date>()
@@ -973,8 +1044,20 @@ class HistoricalDataManager: ObservableObject {
         let currencyConverter = CurrencyConverter()
         let preferredCurrency = dataModel.preferredCurrency
         
-        // Sort dates chronologically and limit to reduce computation
-        let sortedDates = Array(allDates.sorted().suffix(500)) // Limit to last 500 dates
+        // Sort dates chronologically and apply sampling if needed
+        let sortedAllDates = allDates.sorted()
+        let sortedDates: [Date]
+        
+        if useSampling && sortedAllDates.count > 1000 {
+            // Sample every 3rd data point for large datasets to maintain performance
+            let step = max(1, sortedAllDates.count / 500) // Target ~500 data points
+            sortedDates = stride(from: 0, to: sortedAllDates.count, by: step).map { sortedAllDates[$0] }
+            logger.debug("📊 Sampling \(sortedDates.count) dates from \(sortedAllDates.count) total dates (step: \(step))")
+        } else {
+            // For smaller datasets, use all data but limit to reasonable amount
+            sortedDates = Array(sortedAllDates.suffix(800))
+            logger.debug("📊 Using \(sortedDates.count) dates from \(sortedAllDates.count) total dates")
+        }
         
         // Process in chunks to avoid hanging
         let chunkSize = 20
