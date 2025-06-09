@@ -25,19 +25,20 @@ func dailyPNL(_ tradingInfo: TradingInfo, _ position: Position) -> String {
     return "Daily PnL: GBP \(pnlString)\(suffix)"
 }
 
-private func totalPNL(_ tradingInfo: TradingInfo, _ position: Position) -> String {
-    // Calculate the total value (current price * units - avg cost * units)
-    let rawPNL = (tradingInfo.currentPrice * position.unitSize) -
-                 (Double(position.positionAvgCostString) ?? 0) * position.unitSize
+private func totalPNL(_ tradingInfo: TradingInfo, _ position: Position, _ symbol: String) -> String {
+    // Use normalized average cost (handles GBX to GBP conversion automatically)
+    let normalizedCost = position.getNormalizedAvgCost(for: symbol)
+    let rawPNL = (tradingInfo.currentPrice * position.unitSize) - (normalizedCost * position.unitSize)
     let pnl = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? rawPNL / 100.0 : rawPNL
     let suffix = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? " (GBX→GBP)" : ""
     let pnlString = String(format: "%+.2f", pnl)
     return "Total PnL: GBP \(pnlString)\(suffix)"
 }
 
-private func totalPositionCost(_ tradingInfo: TradingInfo, _ position: Position) -> String {
-    // Calculate the total position cost (avg cost * units)
-    let rawCost = (Double(position.positionAvgCostString) ?? 0) * position.unitSize
+private func totalPositionCost(_ tradingInfo: TradingInfo, _ position: Position, _ symbol: String) -> String {
+    // Use normalized average cost (handles GBX to GBP conversion automatically)
+    let normalizedCost = position.getNormalizedAvgCost(for: symbol)
+    let rawCost = normalizedCost * position.unitSize
     let cost = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? rawCost / 100.0 : rawCost
     let suffix = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? " (GBX→GBP)" : ""
     return "Position Cost: GBP \(String(format: "%.2f", cost))\(suffix)"
@@ -52,7 +53,7 @@ private func currentPositionValue(_ tradingInfo: TradingInfo, _ position: Positi
 }
 
 final class SymbolMenu: NSMenu {
-    init(tradingInfo: TradingInfo, position: Position) {
+    init(tradingInfo: TradingInfo, position: Position, symbol: String) {
         super.init(title: String())
         self.addItem(withTitle: tradingInfo.shortName, action: nil, keyEquivalent: "")
         self.addItem(NSMenuItem.separator())
@@ -62,17 +63,17 @@ final class SymbolMenu: NSMenu {
         self.addItem(withTitle: tradingInfo.getTimeInfo(), action: nil, keyEquivalent: "")
         self.addItem(NSMenuItem.separator())
         self.addItem(withTitle: dailyPNL(tradingInfo, position), action: nil, keyEquivalent: "")
-        self.addItem(withTitle: totalPNL(tradingInfo, position), action: nil, keyEquivalent: "")
+        self.addItem(withTitle: totalPNL(tradingInfo, position, symbol), action: nil, keyEquivalent: "")
         self.addItem(withTitle: "Units: \(position.unitSize)", action: nil, keyEquivalent: "")
 
-        // Format average position cost with proper currency conversion
-        let avgCost = position.positionAvgCost
-        let displayCost = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? avgCost / 100.0 : avgCost
+        // Use normalized average cost display
+        let normalizedCost = position.getNormalizedAvgCost(for: symbol)
+        let displayCost = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? normalizedCost / 100.0 : normalizedCost
         let suffix = (tradingInfo.currency == "GBX" || tradingInfo.currency == "GBp") ? " (GBX→GBP)" : ""
         self.addItem(withTitle: "Avg Position Cost: GBP \(String(format: "%.2f", displayCost))\(suffix)",
                     action: nil, keyEquivalent: "")
 
-        self.addItem(withTitle: totalPositionCost(tradingInfo, position), action: nil, keyEquivalent: "")
+        self.addItem(withTitle: totalPositionCost(tradingInfo, position, symbol), action: nil, keyEquivalent: "")
         self.addItem(withTitle: currentPositionValue(tradingInfo, position), action: nil, keyEquivalent: "")
     }
 

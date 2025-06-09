@@ -94,17 +94,9 @@ class StockStatusItemController {
     }
     
     private func updateDisplay(trade: Trade, trading: TradingInfo) {
-        // Convert avgCost if needed - if the symbol ends with .L, the avgCost is likely in GBX
-        var avgCost = Double(trade.position.positionAvgCostString) ?? 0
+        // Use normalized average cost (handles GBX to GBP conversion automatically)
+        let avgCost = trade.position.getNormalizedAvgCost(for: trade.name)
         let currency = trading.currency ?? "USD"
-        
-        // Debug logging
-        print("DEBUG: updateDisplay for \(trade.name) - currentPrice: \(trading.currentPrice), prevClosePrice: \(trading.prevClosePrice), currency: \(currency), isNaN: \(trading.currentPrice.isNaN)")
-        
-        // If this is a UK stock (.L) and currency is GBP, convert avgCost from GBX to GBP
-        if trade.name.uppercased().hasSuffix(".L") && currency == "GBP" && avgCost > 0 {
-            avgCost = avgCost / 100.0  // Convert GBX to GBP
-        }
         
         let data = TradingData(
             currentPrice: trading.currentPrice,

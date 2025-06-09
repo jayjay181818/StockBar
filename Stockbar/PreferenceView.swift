@@ -6,16 +6,98 @@
 
 import Combine
 import SwiftUI
+
+extension Notification.Name {
+    static let chartMetricsToggled = Notification.Name("chartMetricsToggled")
+    static let refreshIntervalChanged = Notification.Name("refreshIntervalChanged")
+}
+
 struct PreferenceRow: View {
     @ObservedObject var realTimeTrade: RealTimeTrade
+    @State private var showCurrencyPicker = false
+    
+    private var detectedCurrency: String {
+        if let costCurrency = realTimeTrade.trade.position.costCurrency {
+            return costCurrency
+        }
+        // Auto-detect based on symbol
+        return realTimeTrade.trade.name.uppercased().hasSuffix(".L") ? "GBX" : "USD"
+    }
+    
+    private var availableCurrencies: [String] {
+        if realTimeTrade.trade.name.uppercased().hasSuffix(".L") {
+            return ["GBX", "GBP"]
+        } else {
+            return ["USD", "GBP", "EUR"]
+        }
+    }
+    
     var body: some View {
         HStack {
             Spacer()
-            TextField( "symbol", text: self.$realTimeTrade.trade.name )
+            TextField("symbol", text: self.$realTimeTrade.trade.name)
+                .onChange(of: realTimeTrade.trade.name) { _, newValue in
+                    // Auto-detect currency when symbol changes
+                    if realTimeTrade.trade.position.costCurrency == nil {
+                        let newCurrency = newValue.uppercased().hasSuffix(".L") ? "GBX" : "USD"
+                        realTimeTrade.trade.position.costCurrency = newCurrency
+                    }
+                }
             Spacer()
-            TextField( "Units", text: self.$realTimeTrade.trade.position.unitSizeString )
+            TextField("Units", text: self.$realTimeTrade.trade.position.unitSizeString)
             Spacer()
-            TextField( "average position cost", text: self.$realTimeTrade.trade.position.positionAvgCostString )
+            HStack(spacing: 4) {
+                TextField("average position cost", text: self.$realTimeTrade.trade.position.positionAvgCostString)
+                
+                Button(action: {
+                    showCurrencyPicker.toggle()
+                }) {
+                    Text(detectedCurrency)
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(4)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                .help("Click to change currency unit")
+                .popover(isPresented: $showCurrencyPicker) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Cost Currency Unit")
+                            .font(.headline)
+                            .padding(.bottom, 4)
+                        
+                        ForEach(availableCurrencies, id: \.self) { currency in
+                            Button(action: {
+                                realTimeTrade.trade.position.costCurrency = currency
+                                showCurrencyPicker = false
+                            }) {
+                                HStack {
+                                    Text(currency)
+                                    if currency == detectedCurrency {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                            .buttonStyle(BorderlessButtonStyle())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                        }
+                        
+                        if realTimeTrade.trade.name.uppercased().hasSuffix(".L") {
+                            Text("UK stocks (.L) are typically quoted in GBX (pence)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .padding()
+                    .frame(width: 200)
+                }
+            }
             Spacer()
         }
     }
@@ -24,7 +106,19 @@ struct PreferenceRow: View {
 struct PreferenceView: View {
     @ObservedObject var userdata: DataModel
     private let currencyConverter = CurrencyConverter()
+    private let configManager = ConfigurationManager.shared
     @State private var selectedTab: PreferenceTab = .portfolio
+    @State private var apiKey: String = ""
+    @State private var showingAPIKeyAlert = false
+    @State private var apiKeyAlertMessage = ""
+    @State private var isAPIKeyVisible = false
+    @State private var isBackfillingData = false
+    @State private var backfillStatus = ""
+    
+    // Debug control state variables
+    @State private var currentRefreshInterval: TimeInterval = 900
+    @State private var currentCacheInterval: TimeInterval = 900
+    @State private var currentSnapshotInterval: TimeInterval = 30
 
     private var formattedTimestamp: String {
         let formatter = DateFormatter()
@@ -66,30 +160,53 @@ struct PreferenceView: View {
     }
     
     private func adjustWindowForTab(_ tab: PreferenceTab) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { // Small delay to let content render
             guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.title == "Stockbar Preferences" }) else {
                 return
             }
             
             let currentFrame = window.frame
-            let targetHeight: CGFloat
+            let baseHeight: CGFloat = 120 // Height for tab picker and padding
+            let contentHeight: CGFloat
             
             switch tab {
             case .portfolio:
-                targetHeight = 400 // Base height for portfolio view
+                // Calculate based on portfolio content
+                let tradingSymbolsHeight = max(120, CGFloat(self.userdata.realTimeTrades.count * 25 + 100))
+                let currencyPickerHeight: CGFloat = 80
+                let toggleHeight: CGFloat = 50
+                let apiKeySectionHeight: CGFloat = 200
+                let historicalDataSectionHeight: CGFloat = 150
+                contentHeight = tradingSymbolsHeight + currencyPickerHeight + toggleHeight + apiKeySectionHeight + historicalDataSectionHeight
+                
             case .charts:
-                targetHeight = 700 // Larger height for charts view
+                // Charts need significant height for the chart display + controls + metrics
+                let chartHeight: CGFloat = 280 // Chart display area
+                let pickerHeight: CGFloat = 60 // Chart type and time range pickers
+                let metricsHeight: CGFloat = 140 // Performance metrics (average size)
+                let returnAnalysisHeight: CGFloat = 180 // Return analysis section
+                contentHeight = chartHeight + pickerHeight + metricsHeight + returnAnalysisHeight
+                
             case .debug:
-                targetHeight = 600 // Medium height for debug view
+                // Debug logs need good height to be useful
+                let logDisplayHeight: CGFloat = 400 // Main log area
+                let controlsHeight: CGFloat = 80 // Controls and buttons
+                let statusHeight: CGFloat = 60 // Status and info
+                contentHeight = logDisplayHeight + controlsHeight + statusHeight
             }
             
-            // Only resize if the target height is significantly different
-            if abs(currentFrame.height - targetHeight) > 50 {
+            let targetHeight = baseHeight + contentHeight + 40 // Extra padding
+            let minHeight: CGFloat = 400
+            let maxHeight: CGFloat = 900
+            let finalHeight = max(minHeight, min(maxHeight, targetHeight))
+            
+            // Only resize if the target height is significantly different (but be more sensitive)
+            if abs(currentFrame.height - finalHeight) > 30 {
                 let newFrame = NSRect(
                     x: currentFrame.origin.x,
-                    y: currentFrame.origin.y - (targetHeight - currentFrame.height), // Adjust y to expand downward
-                    width: max(currentFrame.width, 600), // Ensure minimum width
-                    height: targetHeight
+                    y: currentFrame.origin.y - (finalHeight - currentFrame.height), // Expand downward
+                    width: max(currentFrame.width, 650), // Ensure minimum width for content
+                    height: finalHeight
                 )
                 
                 window.setFrame(newFrame, display: true, animate: true)
@@ -104,6 +221,13 @@ struct PreferenceView: View {
                     .padding(.bottom, 10)
                 Spacer()
             }
+            .onAppear {
+                adjustWindowForTab(.portfolio)
+            }
+            .onChange(of: userdata.realTimeTrades.count) { _, _ in
+                // Adjust window when number of trades changes
+                adjustWindowForTab(.portfolio)
+            }
 
             HStack {
                 Text("Preferred Currency:")
@@ -115,6 +239,168 @@ struct PreferenceView: View {
                 .frame(width: 100)
                 Spacer()
             }
+            .padding(.bottom, 10)
+            
+            // API Key management section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Financial Modeling Prep API Key:")
+                        .font(.headline)
+                    Spacer()
+                    Button("Get Free API Key") {
+                        NSWorkspace.shared.open(URL(string: "https://financialmodelingprep.com/")!)
+                    }
+                    .foregroundColor(.blue)
+                }
+                
+                HStack {
+                    Group {
+                        if isAPIKeyVisible {
+                            TextField("Enter your FMP API key", text: $apiKey)
+                        } else {
+                            SecureField("Enter your FMP API key", text: $apiKey)
+                        }
+                    }
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onAppear {
+                        apiKey = configManager.getFMPAPIKey() ?? ""
+                    }
+                    .help("Paste your FMP API key here. It will be stored securely in your Documents folder.")
+                    
+                    Button(action: {
+                        isAPIKeyVisible.toggle()
+                    }) {
+                        Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
+                    }
+                    .help(isAPIKeyVisible ? "Hide API key" : "Show API key")
+                    .buttonStyle(BorderlessButtonStyle())
+                    
+                    Button("Paste") {
+                        if let clipboardString = NSPasteboard.general.string(forType: .string) {
+                            apiKey = clipboardString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                    .help("Paste API key from clipboard")
+                    
+                    Button("Save") {
+                        saveAPIKey()
+                    }
+                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    
+                    Button("Test") {
+                        testAPIKey()
+                    }
+                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    
+                    Button("Clear") {
+                        clearAPIKey()
+                    }
+                    .foregroundColor(.red)
+                }
+                
+                // API key status
+                HStack {
+                    if let storedKey = configManager.getFMPAPIKey(), !storedKey.isEmpty {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("API key configured")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("API key required for historical data")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    Spacer()
+                    
+                    if configManager.configFileExists() {
+                        Button("Show Config File") {
+                            showConfigFile()
+                        }
+                        .font(.caption)
+                    }
+                }
+                
+                // Historical data backfill section
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Historical Data Backfill:")
+                            .font(.headline)
+                        Spacer()
+                        Button(isBackfillingData ? "Backfilling..." : "Check & Fill Missing Data") {
+                            manualBackfillHistoricalData()
+                        }
+                        .disabled(isBackfillingData || (configManager.getFMPAPIKey()?.isEmpty ?? true))
+                        .help("Checks for missing historical data and fetches only missing days")
+                        
+                        Button("Clear Bad Data") {
+                            clearBadHistoricalData()
+                        }
+                        .help("Clears corrupted historical data for UK stocks (RR.L, etc.)")
+                        
+                        Button("Clean Anomalous Data") {
+                            cleanAnomalousData()
+                        }
+                        .help("Removes anomalous price data points that may cause chart dips")
+                        
+                        Button("Clear All Historical Data") {
+                            clearAllHistoricalData()
+                        }
+                        .help("Clears all historical chart data to start fresh")
+                        
+                        Button("Fetch 5 Years Data") {
+                            fetch5YearsHistoricalDataPortfolio()
+                        }
+                        .disabled(isBackfillingData || (configManager.getFMPAPIKey()?.isEmpty ?? true))
+                        .foregroundColor(.blue)
+                        .help("Fetch 5 years of historical data in yearly chunks")
+                        
+                        Button("Calculate 5Y Portfolio Values") {
+                            calculate5YearPortfolioValues()
+                        }
+                        .disabled(isBackfillingData)
+                        .foregroundColor(.green)
+                        .help("Calculate 5 years of portfolio values for charts using existing price data")
+                    }
+                    
+                    if !backfillStatus.isEmpty {
+                        Text(backfillStatus)
+                            .font(.caption)
+                            .foregroundColor(backfillStatus.contains("Error") ? .red : .blue)
+                    }
+                    
+                    Text("Automatically checks for gaps and fetches up to 5 years of missing daily data")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Button("Show Current Data Status") {
+                        showCurrentDataStatus()
+                    }
+                    .font(.caption)
+                    .help("Shows how much historical data is currently stored for each symbol")
+                    
+                    Button("Optimize Data Storage") {
+                        optimizeDataStorage()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .help("Cleans up historical data to stay within storage limits")
+                    
+                    Button("Force Snapshot (Debug)") {
+                        userdata.historicalDataManager.forceSnapshot(from: userdata)
+                    }
+                    .font(.caption)
+                    .help("Forces a historical data snapshot for debugging")
+                }
+                .padding()
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(8)
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .cornerRadius(8)
             .padding(.bottom, 10)
 
             HStack {
@@ -157,7 +443,8 @@ struct PreferenceView: View {
                 Spacer()
                 Text("Units")
                 Spacer()
-                Text("Avg position cost")
+                Text("Avg position cost (currency)")
+                    .help("Click the currency button next to each cost to specify GBX, GBP, USD, etc.")
                 Button(action: {
                     let emptyTrade = emptyRealTimeTrade()
                     self.userdata.realTimeTrades.insert(emptyTrade, at: 0)
@@ -188,6 +475,11 @@ struct PreferenceView: View {
             }
         }
         .padding()
+        .alert("API Key", isPresented: $showingAPIKeyAlert) {
+            Button("OK") { }
+        } message: {
+            Text(apiKeyAlertMessage)
+        }
     }
     
     private var chartsView: some View {
@@ -196,10 +488,538 @@ struct PreferenceView: View {
                 // Ensure window is properly sized when charts first appear
                 adjustWindowForTab(.charts)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .chartMetricsToggled)) { _ in
+                // Re-adjust window size when chart metrics are toggled
+                adjustWindowForTab(.charts)
+            }
     }
     
     private var debugView: some View {
-        DebugLogView()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Refresh Frequency Controls
+                debugFrequencyControls
+                
+                Divider()
+                
+                // Debug Actions
+                debugActions
+                
+                Divider()
+                
+                // Debug Logs
+                Text("Debug Logs")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                DebugLogView()
+                    .frame(minHeight: 300)
+            }
+            .padding()
+        }
+        .onAppear {
+            adjustWindowForTab(.debug)
+            // Initialize state variables with current values
+            currentRefreshInterval = userdata.refreshInterval
+            currentCacheInterval = userdata.cacheInterval
+            currentSnapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
+        }
+    }
+    
+    private var debugFrequencyControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Refresh Frequency Controls")
+                .font(.headline)
+                .foregroundColor(.primary)
+            
+            // Refresh Interval
+            HStack {
+                Text("Main Refresh Interval (how often stock prices update):")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Spacer()
+                
+                Picker("", selection: $currentRefreshInterval) {
+                    ForEach(refreshIntervalOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .onChange(of: currentRefreshInterval) { _, newValue in
+                    setRefreshInterval(newValue)
+                }
+                .pickerStyle(MenuPickerStyle())
+                .frame(width: 100)
+            }
+            
+            // Cache Interval
+            HStack {
+                Text("Cache Duration (how long to keep data before re-fetching):")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Spacer()
+                
+                Picker("", selection: $currentCacheInterval) {
+                    ForEach(cacheIntervalOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .onChange(of: currentCacheInterval) { _, newValue in
+                    setCacheInterval(newValue)
+                }
+                .pickerStyle(MenuPickerStyle())
+                .frame(width: 100)
+            }
+            
+            // Snapshot Interval
+            HStack {
+                Text("Chart Data Collection Interval (how often to save data for charts):")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Spacer()
+                
+                Picker("", selection: $currentSnapshotInterval) {
+                    ForEach(snapshotIntervalOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .onChange(of: currentSnapshotInterval) { _, newValue in
+                    setSnapshotInterval(newValue)
+                }
+                .pickerStyle(MenuPickerStyle())
+                .frame(width: 100)
+            }
+        }
+    }
+    
+    private var debugActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Debug Actions")
+                .font(.headline)
+                .foregroundColor(.primary)
+            
+            VStack(spacing: 12) {
+                HStack(spacing: 16) {
+                    Button("Force Snapshot") {
+                        forceDataSnapshot()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Manually trigger a data snapshot for charts")
+                    
+                    Button("Clear Historical Data") {
+                        clearHistoricalData()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
+                    .help("Delete all historical price data and charts")
+                    
+                    Button("Reset to Defaults") {
+                        resetToDefaults()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Reset all frequency settings to default values")
+                    
+                    Spacer()
+                }
+                
+                HStack(spacing: 16) {
+                    Button("Fetch 5 Years Historical Data") {
+                        fetch5YearsHistoricalData()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.blue)
+                    .help("Fetch 5 years of historical data in yearly chunks (avoids hanging)")
+                    
+                    Button("Show Automatic Check Status") {
+                        showAutomaticCheckStatus()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Shows status of automatic historical data checking")
+                    
+                    Button("Calculate 5Y Portfolio Values") {
+                        calculate5YearPortfolioValuesDebug()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.green)
+                    .help("Calculate 5 years of portfolio values for charts using existing price data")
+                    
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Debug Interval Options
+    
+    private let refreshIntervalOptions: [(String, TimeInterval)] = [
+        ("30 seconds", 30),
+        ("1 minute", 60),
+        ("2 minutes", 120),
+        ("5 minutes", 300),
+        ("15 minutes (default)", 900),
+        ("30 minutes", 1800),
+        ("1 hour", 3600)
+    ]
+    
+    private let cacheIntervalOptions: [(String, TimeInterval)] = [
+        ("1 minute", 60),
+        ("5 minutes", 300),
+        ("15 minutes (default)", 900),
+        ("30 minutes", 1800),
+        ("1 hour", 3600)
+    ]
+    
+    private let snapshotIntervalOptions: [(String, TimeInterval)] = [
+        ("5 seconds", 5),
+        ("10 seconds", 10),
+        ("30 seconds (default)", 30),
+        ("1 minute", 60),
+        ("5 minutes", 300)
+    ]
+    
+    // MARK: - Debug Action Functions
+    
+    private func formatInterval(_ interval: TimeInterval) -> String {
+        let seconds = Int(interval)
+        if seconds >= 3600 {
+            return "\(seconds / 3600)h"
+        } else if seconds >= 60 {
+            return "\(seconds / 60)m"
+        } else {
+            return "\(seconds)s"
+        }
+    }
+    
+    private func setRefreshInterval(_ interval: TimeInterval) {
+        userdata.refreshInterval = interval
+        Logger.shared.info("🔧 Debug: Refresh interval changed to \(interval) seconds")
+        
+        // Notify the menu bar controller to restart its timer
+        NotificationCenter.default.post(name: .refreshIntervalChanged, object: interval)
+    }
+    
+    private func setCacheInterval(_ interval: TimeInterval) {
+        userdata.cacheInterval = interval
+        Logger.shared.info("🔧 Debug: Cache interval changed to \(interval) seconds")
+    }
+    
+    private func setSnapshotInterval(_ interval: TimeInterval) {
+        HistoricalDataManager.shared.setSnapshotInterval(interval)
+        Logger.shared.info("🔧 Debug: Snapshot interval changed to \(interval) seconds")
+    }
+    
+    private func forceDataSnapshot() {
+        HistoricalDataManager.shared.forceSnapshot(from: userdata)
+        Logger.shared.info("🔧 Debug: Forced data snapshot")
+    }
+    
+    private func clearHistoricalData() {
+        HistoricalDataManager.shared.clearAllData()
+        Logger.shared.info("🔧 Debug: Cleared all historical data")
+    }
+    
+    private func fetch5YearsHistoricalData() {
+        Task {
+            Logger.shared.info("🔧 Debug: Starting 5-year historical data fetch")
+            await userdata.triggerFullHistoricalBackfill()
+            Logger.shared.info("🔧 Debug: 5-year historical data fetch completed")
+        }
+    }
+    
+    private func resetToDefaults() {
+        userdata.refreshInterval = 900  // 15 minutes
+        userdata.cacheInterval = 900    // 15 minutes
+        HistoricalDataManager.shared.setSnapshotInterval(30)  // 30 seconds
+        
+        // Update state variables to reflect the reset
+        currentRefreshInterval = 900
+        currentCacheInterval = 900
+        currentSnapshotInterval = 30
+        
+        Logger.shared.info("🔧 Debug: Reset all intervals to defaults")
+        
+        // Notify the menu bar controller to restart its timer
+        NotificationCenter.default.post(name: .refreshIntervalChanged, object: TimeInterval(900))
+    }
+    
+    private func saveAPIKey() {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        
+        configManager.setFMPAPIKey(trimmedKey)
+        showAPIKeyAlert(title: "API Key Saved", message: "Your API key has been saved securely to your local Documents folder.")
+    }
+    
+    private func testAPIKey() {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        
+        // Save the key first so the network service can use it
+        configManager.setFMPAPIKey(trimmedKey)
+        
+        Task {
+            do {
+                // Test with a simple API call
+                let testResult = try await userdata.testAPIConnection()
+                DispatchQueue.main.async {
+                    if testResult {
+                        showAPIKeyAlert(title: "API Key Valid", message: "Your Financial Modeling Prep API key is working correctly!")
+                    } else {
+                        showAPIKeyAlert(title: "API Key Invalid", message: "The API key could not be validated. Please check your key and try again.")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    showAPIKeyAlert(title: "API Test Failed", message: "Failed to test API key: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func clearAPIKey() {
+        configManager.removeFMPAPIKey()
+        apiKey = ""
+        showAPIKeyAlert(title: "API Key Cleared", message: "Your API key has been removed from local storage.")
+    }
+    
+    private func showConfigFile() {
+        guard let configPath = configManager.getConfigFilePath() else { return }
+        NSWorkspace.shared.selectFile(configPath, inFileViewerRootedAtPath: "")
+    }
+    
+    private func showAPIKeyAlert(title: String, message: String) {
+        apiKeyAlertMessage = message
+        showingAPIKeyAlert = true
+    }
+    
+    private func showCurrentDataStatus() {
+        var statusMessage = "Current Historical Data Status:\n\n"
+        
+        let dataStatus = userdata.historicalDataManager.getComprehensiveDataStatus()
+        
+        if dataStatus.isEmpty {
+            statusMessage += "No historical data stored."
+        } else {
+            statusMessage += "Symbol | Data Points | Date Range\n"
+            statusMessage += "─────────────────────────────────────\n"
+            
+            for status in dataStatus {
+                statusMessage += "\(status.symbol): \(status.daily) points (\(status.oldestDate) to \(status.newestDate))\n"
+            }
+            
+            let totalPoints = dataStatus.reduce(0) { $0 + $1.daily }
+            
+            statusMessage += "\n📊 Total: \(totalPoints) data points across all symbols"
+            statusMessage += "\n\nData Storage: Up to 2500 points per symbol for 5+ years coverage"
+        }
+        
+        showAPIKeyAlert(title: "Historical Data Status", message: statusMessage)
+    }
+    
+    private func optimizeDataStorage() {
+        Task {
+            await MainActor.run {
+                backfillStatus = "🔧 Optimizing data storage..."
+            }
+            
+            userdata.historicalDataManager.optimizeAllDataStorage()
+            
+            await MainActor.run {
+                backfillStatus = "✅ Data storage optimization completed"
+            }
+        }
+    }
+    
+    private func manualBackfillHistoricalData() {
+        guard !isBackfillingData else { return }
+        guard let apiKey = configManager.getFMPAPIKey(), !apiKey.isEmpty else {
+            backfillStatus = "Error: API key required"
+            return
+        }
+        
+        isBackfillingData = true
+        backfillStatus = "Analyzing data gaps..."
+        
+        Task {
+            do {
+                // First check what symbols we have
+                let symbols = userdata.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
+                
+                if symbols.isEmpty {
+                    await MainActor.run {
+                        backfillStatus = "No symbols to backfill"
+                        isBackfillingData = false
+                    }
+                    return
+                }
+                
+                await MainActor.run {
+                    backfillStatus = "Checking \(symbols.count) symbols for missing data..."
+                }
+                
+                // Check each symbol for gaps - simplified logic for testing
+                var symbolsNeedingBackfill: [String] = []
+                let calendar = Calendar.current
+                let today = Date()
+                let oneYearAgo = calendar.date(byAdding: .year, value: -1, to: today) ?? today
+                
+                for symbol in symbols {
+                    let existingSnapshots = userdata.historicalDataManager.priceSnapshots[symbol] ?? []
+                    let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= oneYearAgo }
+                    
+                    // Count unique days with data in the past year
+                    let uniqueDays = Set(historicalSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
+                    
+                    // If we have less than 50 unique days of data in the past year, trigger backfill
+                    if uniqueDays.count < 50 {
+                        symbolsNeedingBackfill.append(symbol)
+                        print("DEBUG: \(symbol) has only \(uniqueDays.count) unique days of data, needs backfill")
+                    } else {
+                        print("DEBUG: \(symbol) has \(uniqueDays.count) unique days of data, sufficient")
+                    }
+                }
+                
+                await MainActor.run {
+                    if symbolsNeedingBackfill.isEmpty {
+                        backfillStatus = "✅ All symbols have sufficient historical data"
+                        isBackfillingData = false
+                    } else {
+                        backfillStatus = "Found \(symbolsNeedingBackfill.count) symbols needing backfill: \(symbolsNeedingBackfill.joined(separator: ", "))"
+                    }
+                }
+                
+                // Perform backfill if needed
+                if !symbolsNeedingBackfill.isEmpty {
+                    await userdata.checkAndBackfillHistoricalData()
+                    
+                    await MainActor.run {
+                        backfillStatus = "✅ Historical data backfill completed"
+                        isBackfillingData = false
+                    }
+                }
+                
+            } catch {
+                await MainActor.run {
+                    backfillStatus = "Error: \(error.localizedDescription)"
+                    isBackfillingData = false
+                }
+            }
+        }
+    }
+    
+    private func clearBadHistoricalData() {
+        // Clear corrupted data for known problematic UK stocks that had double conversion issues
+        let ukSymbolsWithBadData = ["RR.L", "TSCO.L", "BP.L", "LLOY.L", "VOD.L", "AZN.L", "SHEL.L", "GSK.L", "BT-A.L", "NG.L"]
+        
+        // Filter to only clear symbols that actually exist in our data
+        let symbolsToProcess = userdata.realTimeTrades.map { $0.trade.name }.filter { symbol in
+            ukSymbolsWithBadData.contains(symbol) || symbol.uppercased().hasSuffix(".L")
+        }
+        
+        if !symbolsToProcess.isEmpty {
+            userdata.clearHistoricalDataForSymbols(symbolsToProcess)
+            backfillStatus = "✅ Cleared corrupted data for \(symbolsToProcess.count) UK symbols: \(symbolsToProcess.joined(separator: ", "))"
+        } else {
+            backfillStatus = "No UK stocks found to clear"
+        }
+    }
+    
+    private func cleanAnomalousData() {
+        userdata.historicalDataManager.cleanAnomalousData()
+        backfillStatus = "✅ Cleaned anomalous data points from historical data"
+    }
+    
+    private func clearAllHistoricalData() {
+        userdata.historicalDataManager.clearAllData()
+        backfillStatus = "✅ Cleared all historical data - charts will rebuild from current values"
+    }
+    
+    private func fetch5YearsHistoricalDataPortfolio() {
+        guard !isBackfillingData else { return }
+        guard let apiKey = configManager.getFMPAPIKey(), !apiKey.isEmpty else {
+            backfillStatus = "Error: API key required"
+            return
+        }
+        
+        isBackfillingData = true
+        backfillStatus = "🚀 Starting 5-year chunked historical data fetch..."
+        
+        Task {
+            await userdata.triggerFullHistoricalBackfill()
+            
+            await MainActor.run {
+                backfillStatus = "✅ 5-year historical data fetch completed"
+                isBackfillingData = false
+            }
+        }
+    }
+    
+    private func showAutomaticCheckStatus() {
+        let status = userdata.getHistoricalDataStatus()
+        
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        
+        var statusMessage = "Automatic Historical Data Check Status:\n\n"
+        
+        if status.isRunningComprehensive {
+            statusMessage += "🔍 RUNNING: Comprehensive 5-year coverage analysis in progress\n\n"
+        } else {
+            statusMessage += "✅ IDLE: No comprehensive check running\n\n"
+        }
+        
+        if status.isRunningStandard {
+            statusMessage += "🔍 RUNNING: Standard 1-month gap check in progress\n\n"
+        } else {
+            statusMessage += "✅ IDLE: No standard check running\n\n"
+        }
+        
+        if status.lastComprehensiveCheck != Date.distantPast {
+            statusMessage += "Last comprehensive check: \(formatter.string(from: status.lastComprehensiveCheck))\n"
+        } else {
+            statusMessage += "Last comprehensive check: Never\n"
+        }
+        
+        if status.nextComprehensiveCheck > Date() {
+            statusMessage += "Next comprehensive check: \(formatter.string(from: status.nextComprehensiveCheck))\n\n"
+        } else {
+            statusMessage += "Next comprehensive check: Available now\n\n"
+        }
+        
+        statusMessage += "Automatic checks run in the background:\n"
+        statusMessage += "• 2% chance per successful refresh: Comprehensive 5-year analysis\n"
+        statusMessage += "• 8% chance per successful refresh: Standard 1-month gap check\n"
+        statusMessage += "• Minimum 6 hours between comprehensive checks\n"
+        statusMessage += "• All checks include staggered processing to prevent UI freezing"
+        
+        showAPIKeyAlert(title: "Automatic Check Status", message: statusMessage)
+    }
+    
+    private func calculate5YearPortfolioValues() {
+        guard !isBackfillingData else { return }
+        
+        isBackfillingData = true
+        backfillStatus = "📊 Calculating 5-year portfolio values in monthly chunks..."
+        
+        Task {
+            await userdata.calculate5YearPortfolioValues()
+            
+            await MainActor.run {
+                backfillStatus = "✅ 5-year portfolio value calculation completed"
+                isBackfillingData = false
+            }
+        }
+    }
+    
+    private func calculate5YearPortfolioValuesDebug() {
+        Task {
+            Logger.shared.info("🔧 Debug: Starting 5-year portfolio value calculation")
+            await userdata.calculate5YearPortfolioValues()
+            Logger.shared.info("🔧 Debug: 5-year portfolio value calculation completed")
+        }
     }
 }
 
@@ -214,7 +1034,7 @@ struct DebugLogView: View {
     @State private var isAutoRefresh = true
     @State private var maxLines = 500
     private let logger = Logger.shared
-    private let timer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 10.0, on: .main, in: .common).autoconnect()
     
     var body: some View {
         VStack(spacing: 12) {
@@ -263,7 +1083,7 @@ struct DebugLogView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(logEntries.enumerated()), id: \.offset) { index, entry in
+                        ForEach(Array(logEntries.reversed().enumerated()), id: \.offset) { index, entry in
                             HStack {
                                 Text(entry)
                                     .font(.system(.caption, design: .monospaced))
@@ -281,10 +1101,10 @@ struct DebugLogView: View {
                 .background(Color(NSColor.textBackgroundColor))
                 .border(Color(NSColor.separatorColor))
                 .onChange(of: logEntries.count) { _, _ in
-                    // Auto-scroll to bottom when new logs are added
+                    // Auto-scroll to top when new logs are added (newest logs are now at top)
                     if !logEntries.isEmpty {
                         withAnimation(.easeOut(duration: 0.3)) {
-                            proxy.scrollTo(logEntries.count - 1, anchor: .bottom)
+                            proxy.scrollTo(0, anchor: .top)
                         }
                     }
                 }

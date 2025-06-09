@@ -35,13 +35,20 @@ struct PerformanceChartView: View {
             
             // Comprehensive Return Analysis
             if !chartData.isEmpty && dataModel != nil {
-                returnAnalysisSection
+                switch selectedChartType {
+                case .portfolioValue, .portfolioGains:
+                    portfolioReturnAnalysisSection
+                case .individualStock(let symbol):
+                    stockReturnAnalysisSection(for: symbol)
+                }
             }
         }
         .padding()
         .frame(minWidth: 600, minHeight: 400)
         .onChange(of: showingMetrics) { _, newValue in
             adjustChartWindowSize(expanded: newValue)
+            // Notify PreferenceView to adjust window size
+            NotificationCenter.default.post(name: .chartMetricsToggled, object: nil)
         }
     }
     
@@ -93,7 +100,10 @@ struct PerformanceChartView: View {
     }
     
     private var chartData: [ChartDataPoint] {
-        historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange)
+        let data = historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange, dataModel: dataModel)
+        // Debug: Log the data we're getting
+        // Chart data refreshed: \(data.count) points for \(selectedChartType.title)
+        return data
     }
     
     private var yAxisDomain: ClosedRange<Double> {
@@ -160,7 +170,7 @@ struct PerformanceChartView: View {
                         AxisMarks(values: .automatic(desiredCount: 8)) { value in
                             AxisGridLine()
                             AxisTick()
-                            AxisValueLabel(format: valueFormat)
+                            AxisValueLabel(format: currencyValueFormat)
                         }
                     }
                     .chartYScale(domain: yAxisDomain)
@@ -234,7 +244,7 @@ struct PerformanceChartView: View {
     
     @ViewBuilder
     private var performanceMetricsView: some View {
-        if let metrics = historicalDataManager.getPerformanceMetrics(for: selectedTimeRange) {
+        if let metrics = getRelevantPerformanceMetrics() {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     VStack(alignment: .leading) {
@@ -284,7 +294,7 @@ struct PerformanceChartView: View {
         }
     }
     
-    private var returnAnalysisSection: some View {
+    private var portfolioReturnAnalysisSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Return Analysis")
                 .font(.headline)
@@ -402,45 +412,183 @@ struct PerformanceChartView: View {
         .cornerRadius(12)
     }
     
+    @ViewBuilder
+    private func stockReturnAnalysisSection(for symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Stock Analysis - \(symbol)")
+                .font(.headline)
+                .foregroundColor(.primary)
+            
+            if let stockTrade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
+                HStack(alignment: .top, spacing: 20) {
+                    // Left: Current Price
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Current Price")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        let currentPrice = stockTrade.realTimeInfo.currentPrice
+                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
+                        Text(formatCurrency(currentPrice, currency: currency))
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                        
+                        // Day change
+                        let dayChange = currentPrice - stockTrade.realTimeInfo.prevClosePrice
+                        let dayChangePercent = stockTrade.realTimeInfo.prevClosePrice > 0 ? 
+                            (dayChange / stockTrade.realTimeInfo.prevClosePrice) * 100 : 0
+                        
+                        if !dayChange.isNaN && !dayChangePercent.isNaN {
+                            Text("\(String(format: "%+.2f", dayChange)) (\(String(format: "%+.2f%%", dayChangePercent)))")
+                                .font(.caption)
+                                .foregroundColor(dayChange >= 0 ? .green : .red)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Center: Period Return for selected time range
+                    VStack(alignment: .center, spacing: 4) {
+                        Text("Period Return (\(selectedTimeRange.description))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        if let metrics = historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange) {
+                            Text(formatCurrency(metrics.totalReturn, currency: metrics.currency))
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
+                            
+                            Text(metrics.formattedTotalReturnPercent)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Calculating...")
+                                .font(.title2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Right: Your Position (if you own this stock)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Your Position")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        let currentPrice = stockTrade.realTimeInfo.currentPrice
+                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
+                        let units = stockTrade.trade.position.unitSize
+                        let avgCost = stockTrade.trade.position.getNormalizedAvgCost(for: symbol)
+                        let marketValue = currentPrice * units
+                        let positionGain = marketValue - (avgCost * units)
+                        
+                        Text("\(Int(units)) shares")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                        
+                        if !positionGain.isNaN {
+                            Text("\(String(format: "%+.2f", positionGain)) \(currency)")
+                                .font(.caption)
+                                .foregroundColor(positionGain >= 0 ? .green : .red)
+                        }
+                    }
+                }
+                
+                // Additional stock insights row
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Avg Cost")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        let avgCost = stockTrade.trade.position.getNormalizedAvgCost(for: symbol)
+                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
+                        Text(formatCurrency(avgCost, currency: currency))
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .center, spacing: 2) {
+                        Text("Market Value")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        let marketValue = stockTrade.realTimeInfo.currentPrice * stockTrade.trade.position.unitSize
+                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
+                        Text(formatCurrency(marketValue, currency: currency))
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    
+                    Spacer()
+                    
+                    if let metrics = historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange) {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("Volatility")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Text(metrics.formattedVolatility)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                    }
+                }
+            } else {
+                Text("Stock information not available")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
+        .cornerRadius(12)
+    }
+    
     private func calculateTotalPurchaseValue() -> (amount: Double, currency: String) {
         guard let model = dataModel else { return (0, "USD") }
         
+        let currencyConverter = CurrencyConverter()
         var totalCostUSD = 0.0
         
         for trade in model.realTimeTrades {
-            guard let rawCost = Double(trade.trade.position.positionAvgCostString), rawCost > 0 else { continue }
+            // Use normalized average cost (handles GBX to GBP conversion automatically)
+            let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            guard !adjustedCost.isNaN, adjustedCost > 0 else { 
+                continue 
+            }
             
             let units = trade.trade.position.unitSize
             let currency = trade.realTimeInfo.currency ?? "USD"
-            let symbol = trade.trade.name
-            
-            // Adjust cost for currency (handle UK stocks)
-            var adjustedCost = rawCost
-            if symbol.uppercased().hasSuffix(".L") && currency == "GBP" {
-                adjustedCost = rawCost / 100.0  // Convert GBX to GBP
-            }
             
             let totalPositionCost = adjustedCost * units
             
-            // Convert to USD for aggregation
+            // Convert to USD for aggregation using actual currency converter
             var costInUSD = totalPositionCost
             if currency == "GBP" {
-                // Use currency converter if available
-                costInUSD = totalPositionCost * 1.27 // Approximate rate, should use actual converter
+                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: "GBP", to: "USD")
             } else if currency != "USD" {
-                costInUSD = totalPositionCost * 1.0 // Fallback assumption
+                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: currency, to: "USD")
             }
             
             totalCostUSD += costInUSD
         }
         
-        // Convert to preferred currency
+        // Convert to preferred currency using actual currency converter
         let preferredCurrency = model.preferredCurrency
         var finalAmount = totalCostUSD
-        if preferredCurrency == "GBP" {
-            finalAmount = totalCostUSD / 1.27 // Approximate conversion
-        } else if preferredCurrency == "GBX" {
-            finalAmount = (totalCostUSD / 1.27) * 100
+        
+        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+            let gbpAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: "GBP")
+            finalAmount = gbpAmount * 100.0 // Convert GBP to GBX
+        } else if preferredCurrency != "USD" { // Only convert if not already USD
+            finalAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: preferredCurrency)
         }
         
         return (finalAmount, preferredCurrency)
@@ -466,73 +614,87 @@ struct PerformanceChartView: View {
     }
     
     private func formatCurrency(_ amount: Double, currency: String) -> String {
-        guard let model = dataModel else {
+        // For individual stock charts, don't apply currency conversion - just format with the native currency
+        switch selectedChartType {
+        case .individualStock(_):
+            // For individual stocks, always display in the stock's native currency without conversion
             let formatter = NumberFormatter()
             formatter.numberStyle = .currency
             formatter.currencyCode = currency == "GBX" ? "GBP" : currency
-            formatter.maximumFractionDigits = currency == "GBX" ? 0 : 2
+            formatter.minimumFractionDigits = 2
+            formatter.maximumFractionDigits = 2
             return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
-        }
-        
-        let preferredCurrency = model.preferredCurrency
-        let currencyConverter = CurrencyConverter()
-        
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.maximumFractionDigits = preferredCurrency == "GBX" ? 0 : 2
-        
-        // Determine what currency the amount is currently in (assume USD if not specified)
-        let sourceCurrency = currency.isEmpty ? "USD" : currency
-        
-        // Convert amount to preferred currency if needed
-        var convertedAmount: Double
-        if sourceCurrency == preferredCurrency || 
-           (sourceCurrency == "GBP" && preferredCurrency == "GBX") ||
-           (sourceCurrency == "GBX" && preferredCurrency == "GBP") {
-            // Handle GBX/GBP as same currency family
-            if sourceCurrency == "GBP" && preferredCurrency == "GBX" {
-                convertedAmount = amount * 100.0
-            } else if sourceCurrency == "GBX" && preferredCurrency == "GBP" {
-                convertedAmount = amount / 100.0
+            
+        case .portfolioValue, .portfolioGains:
+            // For portfolio charts, apply currency conversion as before
+            guard let model = dataModel else {
+                let formatter = NumberFormatter()
+                formatter.numberStyle = .currency
+                formatter.currencyCode = currency == "GBX" ? "GBP" : currency
+                formatter.maximumFractionDigits = currency == "GBX" ? 0 : 2
+                return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
+            }
+            
+            let preferredCurrency = model.preferredCurrency
+            let currencyConverter = CurrencyConverter()
+            
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .currency
+            formatter.maximumFractionDigits = preferredCurrency == "GBX" ? 0 : 2
+            
+            // Determine what currency the amount is currently in (assume USD if not specified)
+            let sourceCurrency = currency.isEmpty ? "USD" : currency
+            
+            // Convert amount to preferred currency if needed
+            var convertedAmount: Double
+            if sourceCurrency == preferredCurrency || 
+               (sourceCurrency == "GBP" && preferredCurrency == "GBX") ||
+               (sourceCurrency == "GBX" && preferredCurrency == "GBP") {
+                // Handle GBX/GBP as same currency family
+                if sourceCurrency == "GBP" && preferredCurrency == "GBX" {
+                    convertedAmount = amount * 100.0
+                } else if sourceCurrency == "GBX" && preferredCurrency == "GBP" {
+                    convertedAmount = amount / 100.0
+                } else {
+                    convertedAmount = amount
+                }
             } else {
-                convertedAmount = amount
+                convertedAmount = currencyConverter.convert(amount: amount, from: sourceCurrency, to: preferredCurrency == "GBX" ? "GBP" : preferredCurrency)
+                if preferredCurrency == "GBX" {
+                    convertedAmount = convertedAmount * 100.0
+                }
             }
-        } else {
-            convertedAmount = currencyConverter.convert(amount: amount, from: sourceCurrency, to: preferredCurrency == "GBX" ? "GBP" : preferredCurrency)
-            if preferredCurrency == "GBX" {
-                convertedAmount = convertedAmount * 100.0
+            
+            // Primary display currency
+            formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
+            let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
+            
+            // Secondary currency in brackets (opposite of preferred)
+            var secondaryString = ""
+            if preferredCurrency == "USD" {
+                // Show GBP in brackets
+                let gbpAmount = currencyConverter.convert(amount: convertedAmount, from: "USD", to: "GBP")
+                let gbpFormatter = NumberFormatter()
+                gbpFormatter.numberStyle = .currency
+                gbpFormatter.currencyCode = "GBP"
+                gbpFormatter.maximumFractionDigits = 2
+                secondaryString = gbpFormatter.string(from: NSNumber(value: gbpAmount)) ?? String(format: "%.2f GBP", gbpAmount)
+            } else if preferredCurrency == "GBP" || preferredCurrency == "GBX" {
+                // Show USD in brackets
+                let baseAmount = preferredCurrency == "GBX" ? convertedAmount / 100.0 : convertedAmount
+                let usdAmount = currencyConverter.convert(amount: baseAmount, from: "GBP", to: "USD")
+                let usdFormatter = NumberFormatter()
+                usdFormatter.numberStyle = .currency
+                usdFormatter.currencyCode = "USD"
+                usdFormatter.maximumFractionDigits = 2
+                secondaryString = usdFormatter.string(from: NSNumber(value: usdAmount)) ?? String(format: "%.2f USD", usdAmount)
             }
-        }
-        
-        // Primary display currency
-        formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
-        let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
-        
-        // Secondary currency in brackets (opposite of preferred)
-        var secondaryString = ""
-        if preferredCurrency == "USD" {
-            // Show GBP in brackets
-            let gbpAmount = currencyConverter.convert(amount: convertedAmount, from: "USD", to: "GBP")
-            let gbpFormatter = NumberFormatter()
-            gbpFormatter.numberStyle = .currency
-            gbpFormatter.currencyCode = "GBP"
-            gbpFormatter.maximumFractionDigits = 2
-            secondaryString = gbpFormatter.string(from: NSNumber(value: gbpAmount)) ?? String(format: "%.2f GBP", gbpAmount)
-        } else if preferredCurrency == "GBP" || preferredCurrency == "GBX" {
-            // Show USD in brackets
-            let baseAmount = preferredCurrency == "GBX" ? convertedAmount / 100.0 : convertedAmount
-            let usdAmount = currencyConverter.convert(amount: baseAmount, from: "GBP", to: "USD")
-            let usdFormatter = NumberFormatter()
-            usdFormatter.numberStyle = .currency
-            usdFormatter.currencyCode = "USD"
-            usdFormatter.maximumFractionDigits = 2
-            secondaryString = usdFormatter.string(from: NSNumber(value: usdAmount)) ?? String(format: "%.2f USD", usdAmount)
-        }
-        
-        if !secondaryString.isEmpty {
-            return "\(primaryString) (\(secondaryString))"
-        } else {
-            return primaryString
+            
+            if !secondaryString.isEmpty {
+                return "\(primaryString) (\(secondaryString))"
+            } else {
+                return primaryString
+            }
         }
     }
     
@@ -566,6 +728,52 @@ struct PerformanceChartView: View {
         .number.precision(.fractionLength(2))
     }
     
+    private var currencyValueFormat: FloatingPointFormatStyle<Double>.Currency {
+        // For individual stock charts, use the stock's native currency
+        // For portfolio charts, use the preferred currency
+        let currency: String
+        switch selectedChartType {
+        case .individualStock(let symbol):
+            // Find the stock's native currency
+            if let trade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
+                currency = trade.realTimeInfo.currency ?? "USD"
+            } else {
+                currency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+            }
+        case .portfolioValue, .portfolioGains:
+            currency = dataModel?.preferredCurrency ?? "USD"
+        }
+        
+        let currencyCode = currency == "GBX" ? "GBP" : currency
+        // Always show 2 decimal places for better precision, especially for lower value stocks
+        return FloatingPointFormatStyle<Double>.Currency(code: currencyCode).precision(.fractionLength(2))
+    }
+    
+    // MARK: - Helper Functions
+    
+    /// Gets the appropriate performance metrics based on the selected chart type
+    private func getRelevantPerformanceMetrics() -> PerformanceMetrics? {
+        switch selectedChartType {
+        case .portfolioValue, .portfolioGains:
+            return historicalDataManager.getPerformanceMetrics(for: selectedTimeRange)
+        case .individualStock(let symbol):
+            return historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange)
+        }
+    }
+    
+    private func getDisplayCurrency() -> String {
+        switch selectedChartType {
+        case .individualStock(let symbol):
+            if let trade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
+                return trade.realTimeInfo.currency ?? "USD"
+            } else {
+                return symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+            }
+        case .portfolioValue, .portfolioGains:
+            return dataModel?.preferredCurrency ?? "USD"
+        }
+    }
+    
     // MARK: - Hover Functions
     
     private func hoverTooltip(for dataPoint: ChartDataPoint) -> some View {
@@ -592,7 +800,9 @@ struct PerformanceChartView: View {
                 Text("Value")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text(String(format: "%.2f", dataPoint.value))
+                
+                // Use the same currency logic as the chart axis
+                Text(formatCurrency(dataPoint.value, currency: getDisplayCurrency()))
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundColor(chartColor)
