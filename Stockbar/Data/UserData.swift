@@ -8,6 +8,39 @@ import Combine
 import Foundation
 import SwiftUI
 
+// MARK: - UserData and UserSettings
+
+struct UserData: Codable {
+    var positions: [Position]
+    var settings: UserSettings
+    var stocks: [StockInfo] = [] // For compatibility with existing code
+    
+    init(positions: [Position] = [], settings: UserSettings = UserSettings()) {
+        self.positions = positions
+        self.settings = settings
+        self.stocks = []
+    }
+}
+
+struct UserSettings: Codable {
+    var preferredCurrency: String = "USD"
+    var showColorCoding: Bool = true
+    var refreshInterval: TimeInterval = 60.0
+    
+    init() {}
+}
+
+struct StockInfo: Codable {
+    var symbol: String
+    var currency: String?
+    
+    init(symbol: String, currency: String? = nil) {
+        self.symbol = symbol
+        self.currency = currency
+    }
+}
+
+// MARK: - Existing Code
 
 class RealTimeTrade: ObservableObject, Identifiable {
     let id = UUID()
@@ -41,13 +74,14 @@ func logToFile(_ message: String) {
 }
 
 func emptyTrades(size: Int) -> [Trade] {
-    return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "", currency: nil)), count: size)
+    return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "", currency: nil, costCurrency: nil)), count: size)
 }
 
 func emptyRealTimeTrade() -> RealTimeTrade {
     return RealTimeTrade(trade: Trade(name: "",
                                     position: Position(unitSize: "1",
                                                      positionAvgCost: "",
-                                                     currency: nil)),
+                                                     currency: nil,
+                                                     costCurrency: nil)),
                         realTimeInfo: TradingInfo())
 }

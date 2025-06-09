@@ -43,12 +43,44 @@ struct Position: Codable, Equatable {
     }
     private var _unitSize: String
     var currency: String?
+    var costCurrency: String? // The currency unit the user entered the cost in (GBX, GBP, USD, etc.)
 
-    init(unitSize: String, positionAvgCost: String, currency: String? = nil) {
+    init(unitSize: String, positionAvgCost: String, currency: String? = nil, costCurrency: String? = nil) {
         self._unitSize = "1"
         self.positionAvgCostString = positionAvgCost
         self.unitSizeString = unitSize
         self.currency = currency
+        self.costCurrency = costCurrency
+    }
+    
+    /// Returns the average cost normalized to GBP for UK stocks, or the original value for other stocks
+    func getNormalizedAvgCost(for symbol: String) -> Double {
+        let rawCost = positionAvgCost
+        guard !rawCost.isNaN, rawCost > 0 else { return rawCost }
+        
+        // Auto-detect currency unit if not set
+        let detectedCostCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
+        
+        // Convert GBX to GBP for UK stocks if needed
+        if symbol.uppercased().hasSuffix(".L") && detectedCostCurrency == "GBX" {
+            return rawCost / 100.0
+        }
+        
+        return rawCost
+    }
+    
+    /// Auto-detects the likely currency unit based on the symbol
+    private func autoDetectCostCurrency(for symbol: String) -> String {
+        if symbol.uppercased().hasSuffix(".L") {
+            return "GBX" // UK stocks are typically quoted in pence
+        }
+        return "USD" // Default to USD for other stocks
+    }
+    
+    /// Returns a user-friendly display of the cost with currency unit
+    func getDisplayCost(for symbol: String) -> String {
+        let detectedCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
+        return "\(positionAvgCostString) \(detectedCurrency)"
     }
 }
 

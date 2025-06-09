@@ -23,6 +23,7 @@ class StockMenuBarController {
         constructMainItem()
         setupTimer()
         setupDataBinding()
+        setupNotifications()
     }
     
     // MARK: - Private Methods
@@ -57,6 +58,7 @@ class StockMenuBarController {
         }
     }
     
+    
     // MARK: - Actions
     
     @objc private func quitApp() {
@@ -76,4 +78,32 @@ class StockMenuBarController {
     @objc private func refreshButtonClicked(_ sender: Any?) {
         Task { await data.refreshAllTrades() }
     }
+    
+    private func setupNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(refreshIntervalChanged(_:)),
+            name: .refreshIntervalChanged,
+            object: nil
+        )
+    }
+    
+    @objc private func refreshIntervalChanged(_ notification: Notification) {
+        guard let newInterval = notification.object as? TimeInterval else { return }
+        
+        // Restart timer with new interval
+        timer.invalidate()
+        self.timer = Timer.scheduledTimer(withTimeInterval: newInterval, repeats: true) { [weak self] _ in
+            Task {
+                await self?.data.refreshAllTrades()
+            }
+        }
+        
+        Logger.shared.info("🔧 MenuBar: Restarted timer with \(newInterval) second interval")
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
 }

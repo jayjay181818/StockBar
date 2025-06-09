@@ -79,14 +79,16 @@ enum ChartTimeRange: String, CaseIterable {
     func startDate(from endDate: Date = Date()) -> Date {
         switch self {
         case .all:
-            return Date.distantPast
+            // Use a reasonable past date instead of distantPast to ensure all historical data is included
+            // Go back 10 years which should cover any reasonable historical data
+            return endDate.addingTimeInterval(-10 * 365 * 24 * 60 * 60)
         default:
             return endDate.addingTimeInterval(-timeInterval)
         }
     }
 }
 
-struct ChartDataPoint: Identifiable {
+struct ChartDataPoint: Identifiable, Codable {
     let id = UUID()
     let date: Date
     let value: Double
