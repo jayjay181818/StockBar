@@ -22,6 +22,7 @@ public class Logger {
     public static let shared = Logger()
     private let fileManager = FileManager.default
     private let dateFormatter: DateFormatter
+    private var logCounter = 0
     
     private init() {
         dateFormatter = DateFormatter()
@@ -70,6 +71,9 @@ public class Logger {
             } else {
                 try? messageWithNewline.write(to: logFileURL, atomically: true, encoding: .utf8)
             }
+            
+            // Check if log file needs compacting after writing
+            compactLogFileIfNeeded()
         }
     }
     
@@ -141,5 +145,35 @@ public class Logger {
     /// Gets the log file path for display
     public func getLogFilePath() -> String? {
         return getLogFileURL()?.path
+    }
+    
+    /// Compacts the log file if it exceeds 10,000 lines
+    private func compactLogFileIfNeeded() {
+        guard let logFileURL = getLogFileURL(),
+              fileManager.fileExists(atPath: logFileURL.path) else { return }
+        
+        // Only check every 100 log entries to avoid performance impact
+        logCounter += 1
+        guard logCounter % 100 == 0 else { return }
+        
+        do {
+            let content = try String(contentsOf: logFileURL, encoding: .utf8)
+            let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+            
+            if lines.count > 10000 {
+                // Keep the most recent 5,000 lines (half the limit)
+                let compactedLines = Array(lines.suffix(5000))
+                let compactedContent = compactedLines.joined(separator: "\n") + "\n"
+                
+                // Add a log entry about the compaction
+                let timestamp = dateFormatter.string(from: Date())
+                let compactionMessage = "\(timestamp) ℹ️ [INFO] [Logger.swift] compactLogFileIfNeeded: Log file compacted from \(lines.count) to \(compactedLines.count) lines\n"
+                let finalContent = compactionMessage + compactedContent
+                
+                try finalContent.write(to: logFileURL, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            // If compaction fails, continue silently to avoid infinite logging loops
+        }
     }
 }
