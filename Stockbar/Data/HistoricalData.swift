@@ -101,6 +101,76 @@ struct ChartDataPoint: Identifiable, Codable {
     }
 }
 
+// MARK: - Enhanced Portfolio Snapshot Structures
+
+struct HistoricalPortfolioSnapshot: Codable, Identifiable {
+    let id = UUID()
+    let date: Date
+    let totalValue: Double
+    let totalGains: Double
+    let totalCost: Double // Initial investment amount
+    let currency: String
+    let portfolioComposition: [String: PositionSnapshot] // Track individual positions
+    
+    init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: [String: PositionSnapshot]) {
+        self.date = date
+        self.totalValue = totalValue
+        self.totalGains = totalGains
+        self.totalCost = totalCost
+        self.currency = currency
+        self.portfolioComposition = portfolioComposition
+    }
+}
+
+struct PositionSnapshot: Codable {
+    let symbol: String
+    let units: Double
+    let priceAtDate: Double
+    let valueAtDate: Double
+    let currency: String
+    
+    init(symbol: String, units: Double, priceAtDate: Double, valueAtDate: Double, currency: String) {
+        self.symbol = symbol
+        self.units = units
+        self.priceAtDate = priceAtDate
+        self.valueAtDate = valueAtDate
+        self.currency = currency
+    }
+}
+
+// MARK: - Portfolio Composition Tracking
+
+struct PortfolioComposition: Codable, Hashable {
+    let positions: [PortfolioPosition]
+    let compositionHash: String
+    
+    init(positions: [PortfolioPosition]) {
+        self.positions = positions
+        self.compositionHash = Self.generateHash(from: positions)
+    }
+    
+    private static func generateHash(from positions: [PortfolioPosition]) -> String {
+        let combined = positions.sorted { $0.symbol < $1.symbol }
+            .map { "\($0.symbol):\($0.units):\($0.avgCost)" }
+            .joined(separator: "|")
+        return String(combined.hashValue)
+    }
+}
+
+struct PortfolioPosition: Codable, Hashable {
+    let symbol: String
+    let units: Double
+    let avgCost: Double
+    let currency: String
+    
+    init(symbol: String, units: Double, avgCost: Double, currency: String) {
+        self.symbol = symbol
+        self.units = units
+        self.avgCost = avgCost
+        self.currency = currency
+    }
+}
+
 enum ChartType {
     case portfolioValue
     case portfolioGains

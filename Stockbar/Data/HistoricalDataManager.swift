@@ -28,15 +28,34 @@ class HistoricalDataManager: ObservableObject {
     @Published var portfolioSnapshots: [PortfolioSnapshot] = []
     @Published var priceSnapshots: [String: [PriceSnapshot]] = [:]
     
-    // Cache for calculated historical portfolio values
+    // MARK: - Enhanced Portfolio Storage
+    
+    // New persistent portfolio snapshots storage
+    @Published var historicalPortfolioSnapshots: [HistoricalPortfolioSnapshot] = []
+    private var currentPortfolioComposition: PortfolioComposition?
+    private var lastRetroactiveCalculationDate: Date = Date.distantPast
+    
+    // Cache for calculated historical portfolio values (legacy - being phased out)
     public private(set) var cachedHistoricalPortfolioValues: [ChartDataPoint] = []
     private var lastPortfolioCalculationDate: Date = Date.distantPast
     private let portfolioCalculationCacheInterval: TimeInterval = 1800 // 30 minutes cache (increased from 5 minutes)
     
     // MARK: - Data Storage Configuration
     
+    // Storage keys for persistent data
+    private enum StorageKeys {
+        static let portfolioSnapshots = "portfolioSnapshots"
+        static let priceSnapshots = "priceSnapshots"
+        static let historicalPortfolioSnapshots = "historicalPortfolioSnapshots"
+        static let currentPortfolioComposition = "currentPortfolioComposition"
+        static let lastRetroactiveCalculationDate = "lastRetroactiveCalculationDate"
+        static let cachedHistoricalPortfolioValues = "cachedHistoricalPortfolioValues"
+        static let lastPortfolioCalculationDate = "lastPortfolioCalculationDate"
+    }
+    
     // Increased limits to handle 5+ years of daily data
     private let maxDataPoints = 2500 // Increased from 1000 to accommodate 5+ years
+    private let maxPortfolioSnapshots = 2000 // Limit for portfolio snapshots
     
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
@@ -123,128 +142,113 @@ class HistoricalDataManager: ObservableObject {
     }
     
     func getChartData(for type: ChartType, timeRange: ChartTimeRange, dataModel: DataModel? = nil) -> [ChartDataPoint] {
-        let startDate = timeRange.startDate(from: Date())
-        
         switch type {
         case .portfolioValue:
-            // Check if we have cached historical portfolio data that's still valid
+            // NEW: Use stored portfolio snapshots if available
+            if !historicalPortfolioSnapshots.isEmpty {
+                let data = getStoredPortfolioValues(for: timeRange)
+                logger.debug("📊 Portfolio value chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)")
+                
+                // If we have good coverage, return stored data
+                if data.count > 10 || timeRange == .day || timeRange == .week {
+                    return data
+                }
+            }
+            
+            // Trigger background calculation if needed and we have a DataModel
+            if let dataModel = dataModel {
+                let timeSinceLastRetroactive = Date().timeIntervalSince(lastRetroactiveCalculationDate)
+                
+                // Trigger retroactive calculation if it's been a while or we have no stored data
+                if timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
+                    logger.info("📊 Portfolio value chart: Triggering background retroactive calculation")
+                    Task.detached(priority: .background) {
+                        await self.calculateRetroactivePortfolioHistory(using: dataModel)
+                    }
+                }
+                
+                // Return stored data if available while background calculation runs
+                if !historicalPortfolioSnapshots.isEmpty {
+                    return getStoredPortfolioValues(for: timeRange)
+                }
+            }
+            
+            // LEGACY FALLBACK: Use old calculation method if no stored data
+            let startDate = timeRange.startDate(from: Date())
             let now = Date()
             let timeSinceLastCalculation = now.timeIntervalSince(lastPortfolioCalculationDate)
             
             if !cachedHistoricalPortfolioValues.isEmpty && timeSinceLastCalculation < portfolioCalculationCacheInterval {
-                // Use cached data, filtered by time range
                 let filteredData = cachedHistoricalPortfolioValues
                     .filter { $0.date >= startDate }
                     .sorted { $0.date < $1.date }
-                logger.debug("📊 Portfolio value chart data: \(filteredData.count) cached historical points for range \(timeRange.rawValue)")
+                logger.debug("📊 Portfolio value chart data: \(filteredData.count) legacy cached points for range \(timeRange.rawValue)")
                 return filteredData
             }
             
-            // If we have a DataModel, trigger comprehensive calculation if needed
-            if let dataModel = dataModel {
-                // Check if we have insufficient data for the requested time range
-                let filteredExistingData = cachedHistoricalPortfolioValues
-                    .filter { $0.date >= startDate }
-                    .sorted { $0.date < $1.date }
-                
-                // Only trigger comprehensive calculation if we have very little data AND sufficient time has passed
-                let shouldTriggerComprehensive = ((timeRange == .all && filteredExistingData.count < 50) ||
-                                                (timeRange == .year && filteredExistingData.count < 25)) &&
-                                                timeSinceLastCalculation > portfolioCalculationCacheInterval * 4
-                
-                if shouldTriggerComprehensive {
-                    logger.info("📊 Portfolio value chart: Insufficient data (\(filteredExistingData.count) points for \(timeRange.rawValue)), triggering comprehensive 5-year calculation")
-                    Task.detached(priority: .background) {
-                        await self.calculate5YearHistoricalPortfolioValues(using: dataModel)
-                    }
-                } else if timeSinceLastCalculation > portfolioCalculationCacheInterval * 2 {
-                    // Fallback to old calculation for recent data updates
-                    Task.detached(priority: .background) {
-                        await self.calculateAndCacheHistoricalPortfolioValues(using: dataModel)
-                    }
-                }
-                
-                // Return current cache if available, filtered by time range
-                if !cachedHistoricalPortfolioValues.isEmpty {
-                    let filteredData = cachedHistoricalPortfolioValues
-                        .filter { $0.date >= startDate }
-                        .sorted { $0.date < $1.date }
-                    logger.debug("📊 Portfolio value chart data: \(filteredData.count) existing cached points for range \(timeRange.rawValue)")
-                    return filteredData
-                }
-            }
-            
-            // Fallback to real-time snapshots if no historical data or no DataModel
+            // Final fallback to real-time snapshots
             let data = portfolioSnapshots
                 .filter { $0.timestamp >= startDate }
                 .map { ChartDataPoint(date: $0.timestamp, value: $0.totalValue) }
                 .sorted { $0.date < $1.date }
-            // Only log very occasionally to reduce spam
-            if data.isEmpty {
-                logger.debug("📊 Portfolio value chart data: \(data.count) real-time points for range \(timeRange.rawValue)")
-            }
+            logger.debug("📊 Portfolio value chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)")
             return data
             
         case .portfolioGains:
-            // Check if we have cached historical portfolio data that can be used for gains calculation
+            // NEW: Use stored portfolio gains if available
+            if !historicalPortfolioSnapshots.isEmpty {
+                let data = getStoredPortfolioGains(for: timeRange)
+                logger.debug("📊 Portfolio gains chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)")
+                
+                // If we have good coverage, return stored data
+                if data.count > 10 || timeRange == .day || timeRange == .week {
+                    return data
+                }
+            }
+            
+            // Trigger background calculation if needed and we have a DataModel
+            if let dataModel = dataModel {
+                let timeSinceLastRetroactive = Date().timeIntervalSince(lastRetroactiveCalculationDate)
+                
+                // Trigger retroactive calculation if it's been a while or we have no stored data
+                if timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
+                    logger.info("📊 Portfolio gains chart: Triggering background retroactive calculation")
+                    Task.detached(priority: .background) {
+                        await self.calculateRetroactivePortfolioHistory(using: dataModel)
+                    }
+                }
+                
+                // Return stored data if available while background calculation runs
+                if !historicalPortfolioSnapshots.isEmpty {
+                    return getStoredPortfolioGains(for: timeRange)
+                }
+            }
+            
+            // LEGACY FALLBACK: Use old calculation method if no stored data
+            let startDate = timeRange.startDate(from: Date())
             let now = Date()
             let timeSinceLastCalculation = now.timeIntervalSince(lastPortfolioCalculationDate)
             
             if !cachedHistoricalPortfolioValues.isEmpty && timeSinceLastCalculation < portfolioCalculationCacheInterval {
-                // Calculate gains from cached historical portfolio values
                 let filteredPortfolioValues = cachedHistoricalPortfolioValues
                     .filter { $0.date >= startDate }
                     .sorted { $0.date < $1.date }
                 
                 let gainsData = calculateHistoricalGains(from: filteredPortfolioValues, dataModel: dataModel)
-                logger.debug("📊 Portfolio gains chart data: \(gainsData.count) cached historical points for range \(timeRange.rawValue)")
+                logger.debug("📊 Portfolio gains chart data: \(gainsData.count) legacy cached points for range \(timeRange.rawValue)")
                 return gainsData
             }
             
-            // If we have a DataModel, trigger comprehensive calculation if needed
-            if let dataModel = dataModel {
-                // Check if we have insufficient data for the requested time range
-                let filteredExistingValues = cachedHistoricalPortfolioValues
-                    .filter { $0.date >= startDate }
-                    .sorted { $0.date < $1.date }
-                
-                // Only trigger comprehensive calculation if we have very little data AND sufficient time has passed
-                let shouldTriggerComprehensive = ((timeRange == .all && filteredExistingValues.count < 50) ||
-                                                (timeRange == .year && filteredExistingValues.count < 25)) &&
-                                                timeSinceLastCalculation > portfolioCalculationCacheInterval * 4
-                
-                if shouldTriggerComprehensive {
-                    logger.info("📊 Portfolio gains chart: Insufficient data (\(filteredExistingValues.count) points for \(timeRange.rawValue)), triggering comprehensive 5-year calculation")
-                    Task.detached(priority: .background) {
-                        await self.calculate5YearHistoricalPortfolioValues(using: dataModel)
-                    }
-                } else if timeSinceLastCalculation > portfolioCalculationCacheInterval * 2 {
-                    // Fallback to old calculation for recent data updates
-                    Task.detached(priority: .background) {
-                        await self.calculateAndCacheHistoricalPortfolioValues(using: dataModel)
-                    }
-                }
-                
-                // Return gains calculated from current cache if available
-                if !cachedHistoricalPortfolioValues.isEmpty {
-                    let filteredPortfolioValues = cachedHistoricalPortfolioValues
-                        .filter { $0.date >= startDate }
-                        .sorted { $0.date < $1.date }
-                    
-                    let gainsData = calculateHistoricalGains(from: filteredPortfolioValues, dataModel: dataModel)
-                    logger.debug("📊 Portfolio gains chart data: \(gainsData.count) existing cached points for range \(timeRange.rawValue)")
-                    return gainsData
-                }
-            }
-            
-            // Fallback to real-time snapshots if no historical data or no DataModel
+            // Final fallback to real-time snapshots
             let data = portfolioSnapshots
                 .filter { $0.timestamp >= startDate }
                 .map { ChartDataPoint(date: $0.timestamp, value: $0.totalGains) }
                 .sorted { $0.date < $1.date }
+            logger.debug("📊 Portfolio gains chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)")
             return data
             
         case .individualStock(let symbol):
+            let startDate = timeRange.startDate(from: Date())
             return getOptimalStockData(for: symbol, timeRange: timeRange, startDate: startDate)
         }
     }
@@ -449,18 +453,18 @@ class HistoricalDataManager: ObservableObject {
     }
     
     private func loadHistoricalData() {
-        // Load portfolio snapshots
-        if let data = UserDefaults.standard.object(forKey: "portfolioSnapshots") as? Data {
+        // Load legacy portfolio snapshots
+        if let data = UserDefaults.standard.object(forKey: StorageKeys.portfolioSnapshots) as? Data {
             do {
                 portfolioSnapshots = try decoder.decode([PortfolioSnapshot].self, from: data)
-                logger.info("Loaded \(portfolioSnapshots.count) portfolio snapshots")
+                logger.info("Loaded \(portfolioSnapshots.count) legacy portfolio snapshots")
             } catch {
-                logger.error("Failed to load portfolio snapshots: \(error.localizedDescription)")
+                logger.error("Failed to load legacy portfolio snapshots: \(error.localizedDescription)")
             }
         }
         
         // Load price snapshots (daily data)
-        if let data = UserDefaults.standard.object(forKey: "priceSnapshots") as? Data {
+        if let data = UserDefaults.standard.object(forKey: StorageKeys.priceSnapshots) as? Data {
             do {
                 priceSnapshots = try decoder.decode([String: [PriceSnapshot]].self, from: data)
                 let totalSnapshots = priceSnapshots.values.reduce(0) { $0 + $1.count }
@@ -470,8 +474,35 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        // Load cached historical portfolio values to avoid recalculation
-        if let data = UserDefaults.standard.object(forKey: "cachedHistoricalPortfolioValues") as? Data {
+        // Load new historical portfolio snapshots
+        if let data = UserDefaults.standard.object(forKey: StorageKeys.historicalPortfolioSnapshots) as? Data {
+            do {
+                historicalPortfolioSnapshots = try decoder.decode([HistoricalPortfolioSnapshot].self, from: data)
+                logger.info("Loaded \(historicalPortfolioSnapshots.count) historical portfolio snapshots")
+            } catch {
+                logger.error("Failed to load historical portfolio snapshots: \(error.localizedDescription)")
+                historicalPortfolioSnapshots = []
+            }
+        }
+        
+        // Load current portfolio composition
+        if let data = UserDefaults.standard.object(forKey: StorageKeys.currentPortfolioComposition) as? Data {
+            do {
+                currentPortfolioComposition = try decoder.decode(PortfolioComposition.self, from: data)
+                logger.info("Loaded current portfolio composition")
+            } catch {
+                logger.error("Failed to load portfolio composition: \(error.localizedDescription)")
+            }
+        }
+        
+        // Load last retroactive calculation date
+        if let date = UserDefaults.standard.object(forKey: StorageKeys.lastRetroactiveCalculationDate) as? Date {
+            lastRetroactiveCalculationDate = date
+            logger.info("Loaded last retroactive calculation date: \(DateFormatter.debug.string(from: date))")
+        }
+        
+        // Load cached historical portfolio values to avoid recalculation (legacy)
+        if let data = UserDefaults.standard.object(forKey: StorageKeys.cachedHistoricalPortfolioValues) as? Data {
             do {
                 cachedHistoricalPortfolioValues = try decoder.decode([ChartDataPoint].self, from: data)
                 logger.info("Loaded \(cachedHistoricalPortfolioValues.count) cached portfolio values - avoiding recalculation")
@@ -481,8 +512,8 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        // Load last portfolio calculation date
-        if let date = UserDefaults.standard.object(forKey: "lastPortfolioCalculationDate") as? Date {
+        // Load last portfolio calculation date (legacy)
+        if let date = UserDefaults.standard.object(forKey: StorageKeys.lastPortfolioCalculationDate) as? Date {
             lastPortfolioCalculationDate = date
             logger.info("Loaded last portfolio calculation date: \(DateFormatter.debug.string(from: date))")
         }
@@ -493,6 +524,9 @@ class HistoricalDataManager: ObservableObject {
         // Capture current state for background processing
         let currentPortfolioSnapshots = portfolioSnapshots
         let currentPriceSnapshots = priceSnapshots
+        let currentHistoricalPortfolioSnapshots = historicalPortfolioSnapshots
+        let currentPortfolioComposition = currentPortfolioComposition
+        let currentRetroactiveCalculationDate = lastRetroactiveCalculationDate
         let currentCachedPortfolioValues = cachedHistoricalPortfolioValues
         let currentCalculationDate = lastPortfolioCalculationDate
         
@@ -502,17 +536,24 @@ class HistoricalDataManager: ObservableObject {
                 // Encode all data in background
                 let portfolioData = try encoder.encode(currentPortfolioSnapshots)
                 let priceData = try encoder.encode(currentPriceSnapshots)
+                let historicalPortfolioData = try encoder.encode(currentHistoricalPortfolioSnapshots)
+                let compositionData = try currentPortfolioComposition.map { try encoder.encode($0) }
                 let cachedPortfolioData = try encoder.encode(currentCachedPortfolioValues)
                 
                 // Update UserDefaults on main actor
                 await MainActor.run {
-                    UserDefaults.standard.set(portfolioData, forKey: "portfolioSnapshots")
-                    UserDefaults.standard.set(priceData, forKey: "priceSnapshots")
-                    UserDefaults.standard.set(cachedPortfolioData, forKey: "cachedHistoricalPortfolioValues")
-                    UserDefaults.standard.set(currentCalculationDate, forKey: "lastPortfolioCalculationDate")
+                    UserDefaults.standard.set(portfolioData, forKey: StorageKeys.portfolioSnapshots)
+                    UserDefaults.standard.set(priceData, forKey: StorageKeys.priceSnapshots)
+                    UserDefaults.standard.set(historicalPortfolioData, forKey: StorageKeys.historicalPortfolioSnapshots)
+                    if let compositionData = compositionData {
+                        UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
+                    }
+                    UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
+                    UserDefaults.standard.set(cachedPortfolioData, forKey: StorageKeys.cachedHistoricalPortfolioValues)
+                    UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
                 }
                 
-                logger.debug("Saved historical data (including cached portfolio values)")
+                logger.debug("Saved historical data (including enhanced portfolio snapshots)")
             } catch {
                 logger.error("Failed to save historical data: \(error.localizedDescription)")
             }
@@ -567,13 +608,21 @@ class HistoricalDataManager: ObservableObject {
     func clearAllData() {
         portfolioSnapshots.removeAll()
         priceSnapshots.removeAll()
+        historicalPortfolioSnapshots.removeAll()
+        currentPortfolioComposition = nil
         cachedHistoricalPortfolioValues.removeAll()
         lastPortfolioCalculationDate = Date.distantPast
-        UserDefaults.standard.removeObject(forKey: "portfolioSnapshots")
-        UserDefaults.standard.removeObject(forKey: "priceSnapshots")
-        UserDefaults.standard.removeObject(forKey: "cachedHistoricalPortfolioValues")
-        UserDefaults.standard.removeObject(forKey: "lastPortfolioCalculationDate")
-        logger.info("Cleared all historical data and portfolio cache (all data tiers)")
+        lastRetroactiveCalculationDate = Date.distantPast
+        
+        UserDefaults.standard.removeObject(forKey: StorageKeys.portfolioSnapshots)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.priceSnapshots)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.historicalPortfolioSnapshots)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.lastRetroactiveCalculationDate)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
+        
+        logger.info("Cleared all historical data including enhanced portfolio snapshots")
     }
     
     func clearInconsistentData() {
@@ -1269,6 +1318,311 @@ class HistoricalDataManager: ObservableObject {
         }
         
         return status
+    }
+    
+    // MARK: - Enhanced Retroactive Portfolio Calculation
+    
+    /// Main method to trigger retroactive portfolio calculation
+    func calculateRetroactivePortfolioHistory(using dataModel: DataModel) async {
+        logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation")
+        
+        // Create current portfolio composition for tracking changes
+        let newComposition = createPortfolioComposition(from: dataModel)
+        
+        // Check if portfolio composition has changed
+        let needsFullRecalculation = hasPortfolioCompositionChanged(newComposition)
+        
+        if needsFullRecalculation {
+            logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
+            await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
+        } else {
+            logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update")
+            await performIncrementalPortfolioUpdate(using: dataModel)
+        }
+        
+        // Update composition tracking
+        await MainActor.run {
+            self.currentPortfolioComposition = newComposition
+            self.lastRetroactiveCalculationDate = Date()
+        }
+        
+        // Save updated data
+        saveHistoricalData()
+        
+        logger.info("🔄 RETROACTIVE: Portfolio history calculation completed")
+    }
+    
+    /// Creates portfolio composition from current DataModel
+    private func createPortfolioComposition(from dataModel: DataModel) -> PortfolioComposition {
+        let positions = dataModel.realTimeTrades.map { trade in
+            PortfolioPosition(
+                symbol: trade.trade.name,
+                units: trade.trade.position.unitSize,
+                avgCost: trade.trade.position.getNormalizedAvgCost(for: trade.trade.name),
+                currency: trade.realTimeInfo.currency ?? "USD"
+            )
+        }
+        return PortfolioComposition(positions: positions)
+    }
+    
+    /// Checks if portfolio composition has changed
+    private func hasPortfolioCompositionChanged(_ newComposition: PortfolioComposition) -> Bool {
+        guard let currentComposition = currentPortfolioComposition else {
+            return true // First time calculation
+        }
+        return currentComposition.compositionHash != newComposition.compositionHash
+    }
+    
+    /// Performs full portfolio recalculation for entire history
+    private func performFullPortfolioRecalculation(using dataModel: DataModel, composition: PortfolioComposition) async {
+        logger.info("🔄 FULL RECALC: Starting full portfolio history recalculation")
+        
+        // Clear existing portfolio snapshots
+        await MainActor.run {
+            self.historicalPortfolioSnapshots.removeAll()
+        }
+        
+        // Find the earliest available historical data
+        let earliestDate = findEarliestHistoricalData()
+        let endDate = Date()
+        
+        logger.info("🔄 FULL RECALC: Calculating from \(DateFormatter.debug.string(from: earliestDate)) to \(DateFormatter.debug.string(from: endDate))")
+        
+        // Calculate portfolio values for the entire historical period
+        let snapshots = await calculatePortfolioSnapshotsForPeriod(
+            from: earliestDate,
+            to: endDate,
+            using: dataModel,
+            composition: composition
+        )
+        
+        await MainActor.run {
+            self.historicalPortfolioSnapshots = snapshots.sorted { $0.date < $1.date }
+        }
+        
+        logger.info("🔄 FULL RECALC: Generated \(snapshots.count) portfolio snapshots")
+    }
+    
+    /// Performs incremental portfolio update for new dates only
+    private func performIncrementalPortfolioUpdate(using dataModel: DataModel) async {
+        let lastCalculatedDate = getLastPortfolioSnapshotDate()
+        let endDate = Date()
+        
+        // Only calculate if there's a meaningful gap (more than 1 day)
+        guard endDate.timeIntervalSince(lastCalculatedDate) > 86400 else {
+            logger.debug("🔄 INCREMENTAL: No significant time gap, skipping update")
+            return
+        }
+        
+        logger.info("🔄 INCREMENTAL: Updating from \(DateFormatter.debug.string(from: lastCalculatedDate)) to \(DateFormatter.debug.string(from: endDate))")
+        
+        let newSnapshots = await calculatePortfolioSnapshotsForPeriod(
+            from: lastCalculatedDate,
+            to: endDate,
+            using: dataModel,
+            composition: currentPortfolioComposition!
+        )
+        
+        await MainActor.run {
+            self.historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
+            self.historicalPortfolioSnapshots.sort { $0.date < $1.date }
+            
+            // Clean up if we exceed the limit
+            if self.historicalPortfolioSnapshots.count > maxPortfolioSnapshots {
+                self.historicalPortfolioSnapshots = Array(self.historicalPortfolioSnapshots.suffix(maxPortfolioSnapshots))
+            }
+        }
+        
+        logger.info("🔄 INCREMENTAL: Added \(newSnapshots.count) new portfolio snapshots")
+    }
+    
+    /// Calculates portfolio snapshots for a specific date range
+    private func calculatePortfolioSnapshotsForPeriod(
+        from startDate: Date,
+        to endDate: Date,
+        using dataModel: DataModel,
+        composition: PortfolioComposition
+    ) async -> [HistoricalPortfolioSnapshot] {
+        
+        let calendar = Calendar.current
+        let currencyConverter = CurrencyConverter()
+        let preferredCurrency = dataModel.preferredCurrency
+        
+        // Get all unique dates where we have historical data
+        var allDates = Set<Date>()
+        for (_, snapshots) in priceSnapshots {
+            for snapshot in snapshots {
+                if snapshot.timestamp >= startDate && snapshot.timestamp <= endDate {
+                    let dayStart = calendar.startOfDay(for: snapshot.timestamp)
+                    allDates.insert(dayStart)
+                }
+            }
+        }
+        
+        guard !allDates.isEmpty else {
+            logger.warning("🔄 CALC PERIOD: No historical data available for period")
+            return []
+        }
+        
+        var portfolioSnapshots: [HistoricalPortfolioSnapshot] = []
+        let sortedDates = Array(allDates.sorted())
+        
+        logger.debug("🔄 CALC PERIOD: Processing \(sortedDates.count) unique dates")
+        
+        // Calculate total investment cost (what was originally paid)
+        let totalInvestmentCost = calculateTotalInvestmentCost(composition: composition, currencyConverter: currencyConverter, preferredCurrency: preferredCurrency)
+        
+        for (index, date) in sortedDates.enumerated() {
+            // Yield control periodically
+            if index % 20 == 0 {
+                await Task.yield()
+            }
+            
+            var totalValueUSD = 0.0
+            var positionSnapshots: [String: PositionSnapshot] = [:]
+            var validPositions = 0
+            
+            // Calculate value for each position on this date
+            for position in composition.positions {
+                guard let symbolSnapshots = priceSnapshots[position.symbol],
+                      let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
+                    continue
+                }
+                
+                let price = historicalSnapshot.price
+                guard !price.isNaN && price > 0 else { continue }
+                
+                let valueAtDate = price * position.units
+                
+                // Convert to USD for aggregation
+                var valueInUSD = valueAtDate
+                if position.currency == "GBP" {
+                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: "GBP", to: "USD")
+                } else if position.currency != "USD" {
+                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: position.currency, to: "USD")
+                }
+                
+                totalValueUSD += valueInUSD
+                validPositions += 1
+                
+                // Store position snapshot
+                positionSnapshots[position.symbol] = PositionSnapshot(
+                    symbol: position.symbol,
+                    units: position.units,
+                    priceAtDate: price,
+                    valueAtDate: valueAtDate,
+                    currency: position.currency
+                )
+            }
+            
+            // Only create portfolio snapshot if we have data for at least 50% of positions
+            guard validPositions >= max(1, composition.positions.count / 2) else {
+                continue
+            }
+            
+            // Convert to preferred currency
+            var finalValue = totalValueUSD
+            if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+                let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
+                finalValue = gbpAmount * 100.0
+            } else if preferredCurrency != "USD" {
+                finalValue = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
+            }
+            
+            let totalGains = finalValue - totalInvestmentCost
+            
+            let portfolioSnapshot = HistoricalPortfolioSnapshot(
+                date: date,
+                totalValue: finalValue,
+                totalGains: totalGains,
+                totalCost: totalInvestmentCost,
+                currency: preferredCurrency,
+                portfolioComposition: positionSnapshots
+            )
+            
+            portfolioSnapshots.append(portfolioSnapshot)
+        }
+        
+        logger.debug("🔄 CALC PERIOD: Generated \(portfolioSnapshots.count) snapshots from \(sortedDates.count) dates")
+        return portfolioSnapshots
+    }
+    
+    /// Calculates total investment cost for a portfolio composition
+    private func calculateTotalInvestmentCost(composition: PortfolioComposition, currencyConverter: CurrencyConverter, preferredCurrency: String) -> Double {
+        var totalCostUSD = 0.0
+        
+        for position in composition.positions {
+            let totalPositionCost = position.avgCost * position.units
+            
+            // Convert to USD for aggregation
+            var costInUSD = totalPositionCost
+            if position.currency == "GBP" {
+                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: "GBP", to: "USD")
+            } else if position.currency != "USD" {
+                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: position.currency, to: "USD")
+            }
+            
+            totalCostUSD += costInUSD
+        }
+        
+        // Convert to preferred currency
+        var finalCost = totalCostUSD
+        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+            let gbpAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: "GBP")
+            finalCost = gbpAmount * 100.0
+        } else if preferredCurrency != "USD" {
+            finalCost = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: preferredCurrency)
+        }
+        
+        return finalCost
+    }
+    
+    /// Finds the earliest available historical data across all symbols
+    private func findEarliestHistoricalData() -> Date {
+        var earliestDate = Date()
+        
+        for (_, snapshots) in priceSnapshots {
+            if let earliest = snapshots.min(by: { $0.timestamp < $1.timestamp })?.timestamp {
+                if earliest < earliestDate {
+                    earliestDate = earliest
+                }
+            }
+        }
+        
+        // Don't go back more than 5 years
+        let fiveYearsAgo = Calendar.current.date(byAdding: .year, value: -5, to: Date()) ?? Date()
+        return max(earliestDate, fiveYearsAgo)
+    }
+    
+    /// Gets the date of the last portfolio snapshot
+    private func getLastPortfolioSnapshotDate() -> Date {
+        return historicalPortfolioSnapshots.last?.date ?? findEarliestHistoricalData()
+    }
+    
+    /// Gets stored portfolio values for chart display
+    func getStoredPortfolioValues(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
+        let startDate = timeRange.startDate()
+        
+        let filteredSnapshots = historicalPortfolioSnapshots
+            .filter { $0.date >= startDate }
+            .sorted { $0.date < $1.date }
+        
+        return filteredSnapshots.map { snapshot in
+            ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
+        }
+    }
+    
+    /// Gets stored portfolio gains for chart display
+    func getStoredPortfolioGains(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
+        let startDate = timeRange.startDate()
+        
+        let filteredSnapshots = historicalPortfolioSnapshots
+            .filter { $0.date >= startDate }
+            .sorted { $0.date < $1.date }
+        
+        return filteredSnapshots.map { snapshot in
+            ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
+        }
     }
 
 }

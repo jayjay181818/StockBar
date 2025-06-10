@@ -112,28 +112,51 @@ def fetch_real_time_quote_yfinance(symbol):
         daily_hist = ticker.history(period="2d", interval="1d", auto_adjust=False)
         if daily_hist.empty:
             return None
-        previous_close = float(daily_hist.iloc[-1]['Close'])
+        
+        # Get previous day's close (second-to-last entry if we have 2+ days, otherwise use the only available close)
+        if len(daily_hist) >= 2:
+            previous_close = float(daily_hist.iloc[-2]['Close'])  # Previous day's close
+        else:
+            previous_close = float(daily_hist.iloc[-1]['Close'])  # Fallback to only available close
 
         current_price = None
 
         # 2. Try to get the latest price using fast_info (often most reliable)
         try:
             current_price = float(ticker.fast_info['last_price'])
+            print(f"yfinance fast_info for {symbol}: {current_price}", file=sys.stderr)
         except Exception as e:
             print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
 
-        # 3. If fast_info failed, try intraday history
+        # 3. If fast_info failed, try intraday history with pre/post market data
         if current_price is None:
+            print(f"Trying intraday history with prepost=True for {symbol}", file=sys.stderr)
             intraday_hist = ticker.history(period="2d", interval="5m", prepost=True, auto_adjust=False)
             if not intraday_hist.empty:
                 current_price = float(intraday_hist.iloc[-1]['Close'])
+                print(f"yfinance intraday latest price for {symbol}: {current_price}", file=sys.stderr)
         
-        # 4. Final fallback: If all else fails, use the latest daily close (previous close).
+        # 4. Try to get pre-market or after-hours data specifically
+        if current_price is None or current_price == previous_close:
+            try:
+                print(f"Trying to get pre/post market data for {symbol}", file=sys.stderr)
+                # Try to get ticker info which might have pre-market data
+                info = ticker.info
+                if 'preMarketPrice' in info and info['preMarketPrice'] is not None:
+                    current_price = float(info['preMarketPrice'])
+                    print(f"yfinance preMarketPrice for {symbol}: {current_price}", file=sys.stderr)
+                elif 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
+                    current_price = float(info['regularMarketPrice'])
+                    print(f"yfinance regularMarketPrice for {symbol}: {current_price}", file=sys.stderr)
+            except Exception as e:
+                print(f"yfinance info fetch failed for {symbol}: {e}", file=sys.stderr)
+        
+        # 5. Final fallback: If all else fails, use the latest daily close (previous close).
         if current_price is None:
             print(f"All yfinance real-time methods failed for {symbol}. Using previous close as current price.", file=sys.stderr)
             current_price = previous_close
 
-        # 5. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
+        # 6. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
         # This conversion should apply to both current_price and previous_close.
         if symbol.upper().endswith('.L'):
             current_price /= 100.0
