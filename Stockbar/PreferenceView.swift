@@ -10,6 +10,8 @@ import SwiftUI
 extension Notification.Name {
     static let chartMetricsToggled = Notification.Name("chartMetricsToggled")
     static let refreshIntervalChanged = Notification.Name("refreshIntervalChanged")
+    static let contentSizeChanged = Notification.Name("contentSizeChanged")
+    static let forceWindowResize = Notification.Name("forceWindowResize")
 }
 
 struct PreferenceRow: View {
@@ -33,9 +35,10 @@ struct PreferenceRow: View {
     }
     
     var body: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: 8) {
+            // Symbol field - flexible width
             TextField("symbol", text: self.$realTimeTrade.trade.name)
+                .frame(minWidth: 60, idealWidth: 80, maxWidth: 120)
                 .onChange(of: realTimeTrade.trade.name) { _, newValue in
                     // Auto-detect currency when symbol changes
                     if realTimeTrade.trade.position.costCurrency == nil {
@@ -43,11 +46,15 @@ struct PreferenceRow: View {
                         realTimeTrade.trade.position.costCurrency = newCurrency
                     }
                 }
-            Spacer()
+            
+            // Units field - moderate width
             TextField("Units", text: self.$realTimeTrade.trade.position.unitSizeString)
-            Spacer()
+                .frame(minWidth: 50, idealWidth: 70, maxWidth: 100)
+            
+            // Cost and currency field - expandable
             HStack(spacing: 4) {
                 TextField("average position cost", text: self.$realTimeTrade.trade.position.positionAvgCostString)
+                    .frame(minWidth: 80, idealWidth: 120)
                 
                 Button(action: {
                     showCurrencyPicker.toggle()
@@ -98,8 +105,8 @@ struct PreferenceRow: View {
                     .frame(width: 200)
                 }
             }
-            Spacer()
         }
+        .frame(minWidth: 400, idealWidth: 500) // Ensure adequate width for the row
     }
 }
 
@@ -133,85 +140,210 @@ struct PreferenceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab picker
-            Picker("Preference Tab", selection: $selectedTab) {
-                Text("Portfolio").tag(PreferenceTab.portfolio)
-                Text("Charts").tag(PreferenceTab.charts)
-                Text("Debug").tag(PreferenceTab.debug)
-            }
-            .pickerStyle(SegmentedPickerStyle())
-            .padding()
-            .onChange(of: selectedTab) { _, newTab in
-                adjustWindowForTab(newTab)
-            }
-            
-            // Tab content
-            Group {
-                switch selectedTab {
-                case .portfolio:
-                    portfolioView
-                case .charts:
-                    chartsView
-                case .debug:
-                    debugView
+            // CRITICAL: Fixed navigation area that should never be cut off
+            VStack(spacing: 0) {
+                // Tab picker - always visible
+                Picker("Preference Tab", selection: $selectedTab) {
+                    Text("Portfolio").tag(PreferenceTab.portfolio)
+                    Text("Charts").tag(PreferenceTab.charts)
+                    Text("Debug").tag(PreferenceTab.debug)
                 }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .onChange(of: selectedTab) { _, newTab in
+                    adjustWindowForTab(newTab, forceResize: true)
+                }
+                
+                // Separator line for visual clarity
+                Divider()
+                    .padding(.horizontal)
+            }
+            .background(Color(NSColor.windowBackgroundColor))
+            .frame(minHeight: 60, maxHeight: 60) // Fixed height for navigation
+            
+            // Scrollable tab content area
+            ScrollView {
+                Group {
+                    switch selectedTab {
+                    case .portfolio:
+                        portfolioView
+                    case .charts:
+                        chartsView
+                    case .debug:
+                        debugView
+                    }
+                }
+            }
+            .frame(minHeight: 300) // Ensure minimum content area
+        }
+        .frame(minWidth: 650, idealWidth: 800, maxWidth: 1400, minHeight: 400) // More flexible width handling
+        .onReceive(NotificationCenter.default.publisher(for: .forceWindowResize)) { _ in
+            // Handle forced window resize requests from child views
+            adjustWindowForTab(selectedTab, forceResize: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .contentSizeChanged)) { notification in
+            // Handle content size changes, including horizontal scaling needs
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Check if this is a width-related change
+                let forceResize = notification.object as? Bool ?? false
+                adjustWindowForTab(selectedTab, forceResize: forceResize)
             }
         }
     }
     
-    private func adjustWindowForTab(_ tab: PreferenceTab) {
+    private func adjustWindowForTab(_ tab: PreferenceTab, forceResize: Bool = false) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { // Small delay to let content render
-            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.title == "Stockbar Preferences" }) else {
-                return
-            }
-            
-            let currentFrame = window.frame
-            let baseHeight: CGFloat = 120 // Height for tab picker and padding
-            let contentHeight: CGFloat
-            
-            switch tab {
-            case .portfolio:
-                // Calculate based on portfolio content
-                let tradingSymbolsHeight = max(120, CGFloat(self.userdata.realTimeTrades.count * 25 + 100))
-                let currencyPickerHeight: CGFloat = 80
-                let toggleHeight: CGFloat = 50
-                let apiKeySectionHeight: CGFloat = 200
-                let historicalDataSectionHeight: CGFloat = 150
-                contentHeight = tradingSymbolsHeight + currencyPickerHeight + toggleHeight + apiKeySectionHeight + historicalDataSectionHeight
-                
-            case .charts:
-                // Charts need significant height for the chart display + controls + metrics
-                let chartHeight: CGFloat = 280 // Chart display area
-                let pickerHeight: CGFloat = 60 // Chart type and time range pickers
-                let metricsHeight: CGFloat = 140 // Performance metrics (average size)
-                let returnAnalysisHeight: CGFloat = 180 // Return analysis section
-                contentHeight = chartHeight + pickerHeight + metricsHeight + returnAnalysisHeight
-                
-            case .debug:
-                // Debug logs need good height to be useful
-                let logDisplayHeight: CGFloat = 400 // Main log area
-                let controlsHeight: CGFloat = 80 // Controls and buttons
-                let statusHeight: CGFloat = 60 // Status and info
-                contentHeight = logDisplayHeight + controlsHeight + statusHeight
-            }
-            
-            let targetHeight = baseHeight + contentHeight + 40 // Extra padding
-            let minHeight: CGFloat = 400
-            let maxHeight: CGFloat = 900
-            let finalHeight = max(minHeight, min(maxHeight, targetHeight))
-            
-            // Only resize if the target height is significantly different (but be more sensitive)
-            if abs(currentFrame.height - finalHeight) > 30 {
-                let newFrame = NSRect(
-                    x: currentFrame.origin.x,
-                    y: currentFrame.origin.y - (finalHeight - currentFrame.height), // Expand downward
-                    width: max(currentFrame.width, 650), // Ensure minimum width for content
-                    height: finalHeight
-                )
-                
-                window.setFrame(newFrame, display: true, animate: true)
-            }
+            self.performWindowResize(for: tab, forceResize: forceResize)
         }
+    }
+    
+    private func performWindowResize(for tab: PreferenceTab, forceResize: Bool = false) {
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.title == "Stockbar Preferences" }) else {
+            return
+        }
+        
+        let currentFrame = window.frame
+        let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? currentFrame
+        
+        // Calculate content dimensions more intelligently
+        let (targetWidth, targetHeight) = calculateOptimalDimensions(for: tab)
+        
+        // Check if window has been manually maximized or significantly enlarged by user
+        let isLikelyMaximized = currentFrame.height > screenFrame.height * 0.8 || 
+                               currentFrame.width > screenFrame.width * 0.8
+        
+        // Ensure we don't exceed screen bounds
+        let maxAvailableHeight = screenFrame.height * 0.9
+        let maxAvailableWidth = screenFrame.width * 0.8
+        
+        // Smart resizing logic that handles both horizontal and vertical scaling
+        let finalHeight: CGFloat
+        let finalWidth: CGFloat
+        
+        // Check if content requires more width than current window
+        let needsMoreWidth = targetWidth > currentFrame.width + 30 // 30px threshold
+        let needsMoreHeight = targetHeight > currentFrame.height + 30 // 30px threshold
+        
+        if isLikelyMaximized && !forceResize {
+            // Preserve user's manual sizing, but grow if content absolutely requires it
+            let minRequiredHeight: CGFloat = 350 // Minimum for navigation + some content
+            let minRequiredWidth: CGFloat = 650  // Minimum for content readability
+            
+            // Only grow the window if content truly needs more space
+            finalHeight = needsMoreHeight ? min(targetHeight, maxAvailableHeight) : max(currentFrame.height, minRequiredHeight)
+            finalWidth = needsMoreWidth ? min(targetWidth, maxAvailableWidth) : max(currentFrame.width, minRequiredWidth)
+        } else {
+            // Normal auto-resize behavior for both dimensions
+            finalHeight = min(targetHeight, maxAvailableHeight)
+            finalWidth = min(targetWidth, maxAvailableWidth)
+        }
+        
+        // Be more sensitive to size changes for better responsiveness
+        let heightDifference = abs(currentFrame.height - finalHeight)
+        let widthDifference = abs(currentFrame.width - finalWidth)
+        
+        // More responsive resize logic that handles horizontal scaling better
+        let shouldResizeHeight = forceResize || heightDifference > 20
+        let shouldResizeWidth = forceResize || widthDifference > 30
+        
+        // For maximized windows, only resize if growing or forced
+        let shouldResize = if isLikelyMaximized && !forceResize {
+            (shouldResizeHeight && finalHeight > currentFrame.height) ||
+            (shouldResizeWidth && finalWidth > currentFrame.width)
+        } else {
+            // For normal windows, resize more freely
+            shouldResizeHeight || shouldResizeWidth
+        }
+        
+        if shouldResize {
+            // Calculate new origin to keep window centered or prevent off-screen movement
+            let newX = max(screenFrame.minX, min(currentFrame.origin.x, screenFrame.maxX - finalWidth))
+            var newY = currentFrame.origin.y - (finalHeight - currentFrame.height) // Expand downward
+            
+            // Ensure window doesn't go off screen
+            if newY < screenFrame.minY {
+                newY = screenFrame.minY
+            } else if newY + finalHeight > screenFrame.maxY {
+                newY = screenFrame.maxY - finalHeight
+            }
+            
+            let newFrame = NSRect(
+                x: newX,
+                y: newY,
+                width: finalWidth,
+                height: finalHeight
+            )
+            
+            window.setFrame(newFrame, display: true, animate: true)
+        }
+    }
+    
+    private func calculateOptimalDimensions(for tab: PreferenceTab) -> (width: CGFloat, height: CGFloat) {
+        // CRITICAL: Always ensure navigation is visible
+        let navigationHeight: CGFloat = 60   // Tab picker area
+        let windowChromeHeight: CGFloat = 40  // Window title bar and padding
+        let safetyPadding: CGFloat = 20       // Extra safety margin
+        let baseRequiredHeight = navigationHeight + windowChromeHeight + safetyPadding
+        
+        let minWidth: CGFloat = 650
+        let maxWidth: CGFloat = 1200  // Increased maximum width
+        
+        var contentHeight: CGFloat
+        var contentWidth: CGFloat = minWidth
+        
+        switch tab {
+        case .portfolio:
+            // Portfolio content calculations
+            let tradesCount = max(1, userdata.realTimeTrades.count)
+            let tradingSymbolsHeight = CGFloat(tradesCount * 30 + 80) // Row height + headers
+            let toggleHeight: CGFloat = 40
+            let currencyPickerHeight: CGFloat = 50
+            let netGainsHeight: CGFloat = 60
+            let apiKeySectionHeight: CGFloat = 220 // API key section is fairly large
+            let historicalDataSectionHeight: CGFloat = 160 // Historical data controls
+            let exchangeRatesHeight: CGFloat = 40
+            
+            contentHeight = tradingSymbolsHeight + toggleHeight + currencyPickerHeight + 
+                           netGainsHeight + apiKeySectionHeight + historicalDataSectionHeight + exchangeRatesHeight
+            
+            // Portfolio needs more width for the trade entry fields - be more generous
+            let basePortfolioWidth: CGFloat = 800
+            let extraWidthForTrades = CGFloat(max(0, tradesCount - 3) * 20) // Extra width for more trades
+            contentWidth = max(minWidth, min(maxWidth, basePortfolioWidth + extraWidthForTrades))
+            
+        case .charts:
+            // Charts need substantial space for proper display
+            let chartDisplayHeight: CGFloat = 280 // Main chart area
+            let pickerControlsHeight: CGFloat = 80 // Chart type and time range pickers
+            let progressIndicatorHeight: CGFloat = 60 // Progress/error indicators when visible
+            let metricsHeight: CGFloat = 140 // Performance metrics (expanded state)
+            let returnAnalysisHeight: CGFloat = 180 // Return analysis section
+            let exportFiltersHeight: CGFloat = 100 // Export and filter sections
+            
+            contentHeight = chartDisplayHeight + pickerControlsHeight + progressIndicatorHeight + 
+                           metricsHeight + returnAnalysisHeight + exportFiltersHeight
+            
+            // Charts need significant width for proper display - more generous
+            contentWidth = max(minWidth, min(maxWidth, 1000))
+            
+        case .debug:
+            // Debug needs good dimensions for log readability
+            let debugControlsHeight: CGFloat = 120 // Frequency controls
+            let debugActionsHeight: CGFloat = 100 // Debug action buttons
+            let logDisplayHeight: CGFloat = 350 // Main log display area
+            
+            contentHeight = debugControlsHeight + debugActionsHeight + logDisplayHeight
+            
+            // Debug logs benefit from much wider display for readability
+            contentWidth = max(minWidth, min(maxWidth, 950))
+        }
+        
+        let totalHeight = baseRequiredHeight + contentHeight
+        let minHeight: CGFloat = 400  // Absolute minimum
+        let maxHeight: CGFloat = 900  // Reasonable maximum for auto-sizing
+        
+        return (width: contentWidth, height: max(minHeight, min(maxHeight, totalHeight)))
     }
     
     private var portfolioView: some View {
@@ -226,7 +358,9 @@ struct PreferenceView: View {
             }
             .onChange(of: userdata.realTimeTrades.count) { _, _ in
                 // Adjust window when number of trades changes
-                adjustWindowForTab(.portfolio)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    adjustWindowForTab(.portfolio, forceResize: true)
+                }
             }
 
             HStack {
@@ -369,6 +503,10 @@ struct PreferenceView: View {
                         Text(backfillStatus)
                             .font(.caption)
                             .foregroundColor(backfillStatus.contains("Error") ? .red : .blue)
+                            .onAppear {
+                                // Status text appearance may change layout
+                                NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+                            }
                     }
                     
                     Text("Automatically checks for gaps and fetches up to 5 years of missing daily data")
@@ -486,39 +624,53 @@ struct PreferenceView: View {
         PerformanceChartView(availableSymbols: availableSymbols, dataModel: userdata)
             .onAppear {
                 // Ensure window is properly sized when charts first appear
-                adjustWindowForTab(.charts)
+                adjustWindowForTab(.charts, forceResize: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .chartMetricsToggled)) { _ in
                 // Re-adjust window size when chart metrics are toggled
-                adjustWindowForTab(.charts)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    adjustWindowForTab(.charts, forceResize: true)
+                }
             }
     }
     
     private var debugView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Refresh Frequency Controls
+        VStack(alignment: .leading, spacing: 12) {
+            // Compact controls section - not in ScrollView to stay visible
+            VStack(alignment: .leading, spacing: 12) {
+                // Refresh Frequency Controls (condensed)
                 debugFrequencyControls
                 
                 Divider()
                 
-                // Debug Actions
+                // Debug Actions (condensed)
                 debugActions
-                
-                Divider()
-                
-                // Debug Logs
-                Text("Debug Logs")
-                    .font(.headline)
-                    .foregroundColor(.primary)
+            }
+            .padding(.horizontal)
+            .padding(.top)
+            
+            Divider()
+            
+            // Debug Logs in their own scroll area
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Debug Logs")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Text("(Scrollable)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
                 
                 DebugLogView()
-                    .frame(minHeight: 300)
+                    .frame(minHeight: 200, maxHeight: 500) // Constrained but flexible
+                    .clipped()
             }
-            .padding()
         }
         .onAppear {
-            adjustWindowForTab(.debug)
+            adjustWindowForTab(.debug, forceResize: true)
             // Initialize state variables with current values
             currentRefreshInterval = userdata.refreshInterval
             currentCacheInterval = userdata.cacheInterval
