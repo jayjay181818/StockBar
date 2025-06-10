@@ -127,17 +127,15 @@ class DataModel: ObservableObject {
         // Clear inconsistent historical data (one-time fix for calculation method changes)
         historicalDataManager.clearInconsistentData()
         
-        // Disabled automatic startup historical data checks to prevent app hanging
-        // These can be manually triggered via Debug menu if needed
-        // Task {
-        //     // Wait 30 seconds after app startup to avoid interfering with initial data loading
-        //     try? await Task.sleep(nanoseconds: 30_000_000_000)
-        //     await checkAndBackfill5YearHistoricalData()
-        //     
-        //     // After historical price data check, also check if we need to calculate portfolio values
-        //     try? await Task.sleep(nanoseconds: 10_000_000_000) // Wait another 10 seconds
-        //     await checkAndCalculatePortfolioValues()
-        // }
+        // NEW: Start enhanced portfolio calculation in background after app startup
+        Task {
+            // Wait 60 seconds after app startup to avoid interfering with initial data loading
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            
+            // Check if we need to calculate retroactive portfolio history
+            logger.info("🔄 STARTUP: Checking if retroactive portfolio calculation is needed")
+            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+        }
     }
 
      // Helper function for default trades if needed
@@ -703,6 +701,15 @@ class DataModel: ObservableObject {
         logger.info("Cleared bad historical data for \(symbols.count) symbols")
     }
     
+    /// Manually triggers retroactive portfolio calculation
+    public func triggerRetroactivePortfolioCalculation() {
+        Task {
+            logger.info("🔄 MANUAL: Starting retroactive portfolio calculation")
+            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+            logger.info("🔄 MANUAL: Retroactive portfolio calculation completed")
+        }
+    }
+    
     /// Refreshes all stock data from the network using the configured networkService
     @objc func refreshAllTrades() async {
         logger.info("Starting refresh for all trades using PythonNetworkService")
@@ -806,25 +813,25 @@ class DataModel: ObservableObject {
                 // Record historical data snapshot after successful updates
                 historicalDataManager.recordSnapshot(from: self)
                 
-                // Check for historical data gaps very infrequently to avoid performance impact
-                if results.count > 0 {
-                    let randomCheck = Int.random(in: 1...1000)
-                    
-                    if randomCheck == 1 {
-                        // 0.1% chance: Run comprehensive 5-year check (very rare)
-                        Task {
-                            logger.info("🔍 PERIODIC: Triggering comprehensive 5-year coverage analysis")
-                            await checkAndBackfill5YearHistoricalData()
-                        }
-                    } else if randomCheck <= 5 {
-                        // 0.4% chance: Run standard 1-month check (infrequent, lighter)
+                // NEW: Trigger enhanced portfolio calculation periodically
+                let randomCheck = Int.random(in: 1...100)
+                
+                if randomCheck == 1 {
+                    // 1% chance: Trigger retroactive portfolio calculation
+                    Task {
+                        logger.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
+                        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+                    }
+                } else if randomCheck <= 5 {
+                    // 4% chance: Check for historical data gaps (reduced frequency)
+                    if results.count > 0 {
                         Task {
                             logger.info("🔍 PERIODIC: Triggering standard 1-month gap check")
                             await checkAndBackfillHistoricalData()
                         }
                     }
-                    // 99.5% of the time: No historical check to avoid constant background processing
                 }
+                // 95% of the time: No heavy background processing
             }
             
             logger.info("Successfully processed \(results.count) trades of \(finalSymbolsToRefresh.count) requested.")
