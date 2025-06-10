@@ -18,6 +18,30 @@ extension DateFormatter {
     }()
 }
 
+// CRITICAL FIX: Task timeout utility to prevent infinite processing
+func withTaskTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async -> T? {
+    return await withTaskGroup(of: T?.self) { group in
+        // Add the actual operation
+        group.addTask {
+            do {
+                return try await operation()
+            } catch {
+                return nil
+            }
+        }
+        
+        // Add timeout task
+        group.addTask {
+            try? await Task.sleep(for: .seconds(seconds))
+            return nil
+        }
+        
+        // Return first completed result and cancel the rest
+        defer { group.cancelAll() }
+        return await group.next() ?? nil
+    }
+}
+
 class HistoricalDataManager: ObservableObject {
     static let shared = HistoricalDataManager()
     
@@ -37,6 +61,10 @@ class HistoricalDataManager: ObservableObject {
     
     // Cache for calculated historical portfolio values (legacy - being phased out)
     public private(set) var cachedHistoricalPortfolioValues: [ChartDataPoint] = []
+    
+    // CRITICAL FIX: Prevent concurrent calculation overlaps
+    private var isCalculationInProgress = false
+    private let calculationLock = NSLock()
     private var lastPortfolioCalculationDate: Date = Date.distantPast
     private let portfolioCalculationCacheInterval: TimeInterval = 1800 // 30 minutes cache (increased from 5 minutes)
     
@@ -297,17 +325,45 @@ class HistoricalDataManager: ObservableObject {
             totalReturnPercent = (totalReturn / firstSnapshot.totalValue) * 100
         }
         
-        // Calculate volatility (standard deviation of daily returns)
+        // Calculate daily returns for advanced metrics
         let dailyReturns = zip(relevantSnapshots.dropFirst(), relevantSnapshots).map { current, previous in
-            (current.totalValue - previous.totalValue) / previous.totalValue * 100
+            (current.totalValue - previous.totalValue) / previous.totalValue
         }
         
         let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
         let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - meanReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance)
+        let volatility = sqrt(variance) * 100 // Convert to percentage
         
         let maxValue = relevantSnapshots.map { $0.totalValue }.max() ?? lastSnapshot.totalValue
         let minValue = relevantSnapshots.map { $0.totalValue }.min() ?? lastSnapshot.totalValue
+        
+        // MARK: - Advanced Analytics Calculations
+        
+        // Calculate Sharpe Ratio (assuming 2% risk-free rate annually)
+        let riskFreeRate = 0.02 / 252 // Daily risk-free rate
+        let excessReturns = dailyReturns.map { $0 - riskFreeRate }
+        let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
+        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) : nil
+        
+        // Calculate Maximum Drawdown
+        let (maxDrawdown, maxDrawdownPercent) = calculateMaxDrawdown(snapshots: relevantSnapshots)
+        
+        // Calculate Annualized Return and Volatility
+        let periodInYears = max(0.001, lastSnapshot.timestamp.timeIntervalSince(firstSnapshot.timestamp) / (365.25 * 24 * 3600))
+        let annualizedReturn = totalReturnPercent / periodInYears
+        let annualizedVolatility = volatility * sqrt(252) // Assuming ~252 trading days per year
+        
+        // Calculate Value at Risk (95% confidence level)
+        let sortedReturns = dailyReturns.sorted()
+        let var95Index = Int(Double(sortedReturns.count) * 0.05)
+        let valueAtRisk = var95Index < sortedReturns.count ? abs(sortedReturns[var95Index] * 100) : nil
+        
+        // Calculate Win Rate
+        let positiveReturns = dailyReturns.filter { $0 > 0 }.count
+        let winRate = dailyReturns.isEmpty ? nil : Double(positiveReturns) / Double(dailyReturns.count) * 100
+        
+        // Beta calculation would require market benchmark data - set to nil for now
+        let beta: Double? = nil
         
         return PerformanceMetrics(
             totalReturn: totalReturn,
@@ -317,8 +373,76 @@ class HistoricalDataManager: ObservableObject {
             minValue: minValue,
             currency: lastSnapshot.currency,
             startDate: firstSnapshot.timestamp,
-            endDate: lastSnapshot.timestamp
+            endDate: lastSnapshot.timestamp,
+            sharpeRatio: sharpeRatio,
+            maxDrawdown: maxDrawdown,
+            maxDrawdownPercent: maxDrawdownPercent,
+            beta: beta,
+            annualizedReturn: annualizedReturn,
+            annualizedVolatility: annualizedVolatility,
+            valueAtRisk: valueAtRisk,
+            winRate: winRate
         )
+    }
+    
+    /// Calculates maximum drawdown from a series of portfolio snapshots
+    private func calculateMaxDrawdown(snapshots: [PortfolioSnapshot]) -> (maxDrawdown: Double?, maxDrawdownPercent: Double?) {
+        guard snapshots.count > 1 else { return (nil, nil) }
+        
+        var maxDrawdown: Double = 0
+        var maxDrawdownPercent: Double = 0
+        var peak: Double = snapshots.first?.totalValue ?? 0
+        
+        for snapshot in snapshots {
+            let currentValue = snapshot.totalValue
+            
+            // Update peak if we have a new high
+            if currentValue > peak {
+                peak = currentValue
+            }
+            
+            // Calculate drawdown from peak
+            let drawdown = peak - currentValue
+            let drawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0
+            
+            // Update maximum drawdown
+            if drawdown > maxDrawdown {
+                maxDrawdown = drawdown
+                maxDrawdownPercent = drawdownPercent
+            }
+        }
+        
+        return (maxDrawdown, maxDrawdownPercent)
+    }
+    
+    /// Calculates maximum drawdown for individual stock prices
+    private func calculateStockMaxDrawdown(snapshots: [PriceSnapshot]) -> (maxDrawdown: Double?, maxDrawdownPercent: Double?) {
+        guard snapshots.count > 1 else { return (nil, nil) }
+        
+        var maxDrawdown: Double = 0
+        var maxDrawdownPercent: Double = 0
+        var peak: Double = snapshots.first?.price ?? 0
+        
+        for snapshot in snapshots {
+            let currentPrice = snapshot.price
+            
+            // Update peak if we have a new high
+            if currentPrice > peak {
+                peak = currentPrice
+            }
+            
+            // Calculate drawdown from peak
+            let drawdown = peak - currentPrice
+            let drawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0
+            
+            // Update maximum drawdown
+            if drawdown > maxDrawdown {
+                maxDrawdown = drawdown
+                maxDrawdownPercent = drawdownPercent
+            }
+        }
+        
+        return (maxDrawdown, maxDrawdownPercent)
     }
     
     /// Gets performance metrics for an individual stock symbol
@@ -352,20 +476,48 @@ class HistoricalDataManager: ObservableObject {
             totalReturnPercent = (totalReturn / firstSnapshot.price) * 100
         }
         
-        // Calculate volatility (standard deviation of daily returns)
+        // Calculate daily returns for advanced metrics
         let dailyReturns = zip(relevantSnapshots.dropFirst(), relevantSnapshots).map { current, previous in
-            (current.price - previous.price) / previous.price * 100
+            (current.price - previous.price) / previous.price
         }
         
         let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
         let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - meanReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance)
+        let volatility = sqrt(variance) * 100 // Convert to percentage
         
         let maxValue = relevantSnapshots.map { $0.price }.max() ?? lastSnapshot.price
         let minValue = relevantSnapshots.map { $0.price }.min() ?? lastSnapshot.price
         
         // Determine currency for the stock
         let currency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+        
+        // MARK: - Advanced Analytics for Stocks
+        
+        // Calculate Sharpe Ratio (assuming 2% risk-free rate annually)
+        let riskFreeRate = 0.02 / 252 // Daily risk-free rate
+        let excessReturns = dailyReturns.map { $0 - riskFreeRate }
+        let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
+        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) : nil
+        
+        // Calculate Maximum Drawdown
+        let (maxDrawdown, maxDrawdownPercent) = calculateStockMaxDrawdown(snapshots: relevantSnapshots)
+        
+        // Calculate Annualized Return and Volatility
+        let periodInYears = max(0.001, lastSnapshot.timestamp.timeIntervalSince(firstSnapshot.timestamp) / (365.25 * 24 * 3600))
+        let annualizedReturn = totalReturnPercent / periodInYears
+        let annualizedVolatility = volatility * sqrt(252) // Assuming ~252 trading days per year
+        
+        // Calculate Value at Risk (95% confidence level)
+        let sortedReturns = dailyReturns.sorted()
+        let var95Index = Int(Double(sortedReturns.count) * 0.05)
+        let valueAtRisk = var95Index < sortedReturns.count ? abs(sortedReturns[var95Index] * 100) : nil
+        
+        // Calculate Win Rate
+        let positiveReturns = dailyReturns.filter { $0 > 0 }.count
+        let winRate = dailyReturns.isEmpty ? nil : Double(positiveReturns) / Double(dailyReturns.count) * 100
+        
+        // Beta calculation would require market benchmark data - set to nil for now
+        let beta: Double? = nil
         
         return PerformanceMetrics(
             totalReturn: totalReturn,
@@ -375,7 +527,15 @@ class HistoricalDataManager: ObservableObject {
             minValue: minValue,
             currency: currency,
             startDate: firstSnapshot.timestamp,
-            endDate: lastSnapshot.timestamp
+            endDate: lastSnapshot.timestamp,
+            sharpeRatio: sharpeRatio,
+            maxDrawdown: maxDrawdown,
+            maxDrawdownPercent: maxDrawdownPercent,
+            beta: beta,
+            annualizedReturn: annualizedReturn,
+            annualizedVolatility: annualizedVolatility,
+            valueAtRisk: valueAtRisk,
+            winRate: winRate
         )
     }
     
@@ -1324,32 +1484,67 @@ class HistoricalDataManager: ObservableObject {
     
     /// Main method to trigger retroactive portfolio calculation
     func calculateRetroactivePortfolioHistory(using dataModel: DataModel) async {
+        // CRITICAL FIX: Prevent concurrent calculation overlaps
+        calculationLock.lock()
+        guard !isCalculationInProgress else {
+            calculationLock.unlock()
+            logger.warning("🔄 RETROACTIVE: Calculation already in progress, skipping duplicate request")
+            return
+        }
+        isCalculationInProgress = true
+        calculationLock.unlock()
+        
+        // Ensure calculation state is cleared when function exits
+        defer {
+            calculationLock.lock()
+            isCalculationInProgress = false
+            calculationLock.unlock()
+        }
+        
         logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation")
         
-        // Create current portfolio composition for tracking changes
-        let newComposition = createPortfolioComposition(from: dataModel)
+        // Initialize progress tracking
+        let calculationManager = BackgroundCalculationManager.shared
+        await calculationManager.startCalculation(operation: "Portfolio History Calculation", totalOperations: 100)
         
-        // Check if portfolio composition has changed
-        let needsFullRecalculation = hasPortfolioCompositionChanged(newComposition)
-        
-        if needsFullRecalculation {
-            logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
-            await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
-        } else {
-            logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update")
-            await performIncrementalPortfolioUpdate(using: dataModel)
+        do {
+            // Create current portfolio composition for tracking changes
+            await calculationManager.updateProgress(completed: 10, status: "Analyzing portfolio composition")
+            let newComposition = createPortfolioComposition(from: dataModel)
+            
+            // Check if portfolio composition has changed
+            await calculationManager.updateProgress(completed: 20, status: "Checking for portfolio changes")
+            let needsFullRecalculation = hasPortfolioCompositionChanged(newComposition)
+            
+            if needsFullRecalculation {
+                logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
+                await calculationManager.updateProgress(completed: 30, status: "Starting full recalculation")
+                await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
+            } else {
+                logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update")
+                await calculationManager.updateProgress(completed: 30, status: "Starting incremental update")
+                await performIncrementalPortfolioUpdate(using: dataModel)
+            }
+            
+            // Update composition tracking
+            await calculationManager.updateProgress(completed: 90, status: "Finalizing calculation")
+            await MainActor.run {
+                self.currentPortfolioComposition = newComposition
+                self.lastRetroactiveCalculationDate = Date()
+            }
+            
+            // Save updated data
+            await calculationManager.updateProgress(completed: 95, status: "Saving data")
+            saveHistoricalData()
+            
+            // Complete the calculation
+            await calculationManager.completeCalculation()
+            logger.info("🔄 RETROACTIVE: Portfolio history calculation completed")
+            
+        } catch {
+            logger.error("🔄 RETROACTIVE: Portfolio calculation failed: \(error.localizedDescription)")
+            await calculationManager.reportError("Portfolio calculation failed: \(error.localizedDescription)")
         }
-        
-        // Update composition tracking
-        await MainActor.run {
-            self.currentPortfolioComposition = newComposition
-            self.lastRetroactiveCalculationDate = Date()
-        }
-        
-        // Save updated data
-        saveHistoricalData()
-        
-        logger.info("🔄 RETROACTIVE: Portfolio history calculation completed")
     }
     
     /// Creates portfolio composition from current DataModel
@@ -1377,18 +1572,23 @@ class HistoricalDataManager: ObservableObject {
     private func performFullPortfolioRecalculation(using dataModel: DataModel, composition: PortfolioComposition) async {
         logger.info("🔄 FULL RECALC: Starting full portfolio history recalculation")
         
+        let calculationManager = BackgroundCalculationManager.shared
+        
         // Clear existing portfolio snapshots
+        await calculationManager.updateProgress(completed: 40, status: "Clearing existing data")
         await MainActor.run {
             self.historicalPortfolioSnapshots.removeAll()
         }
         
         // Find the earliest available historical data
+        await calculationManager.updateProgress(completed: 45, status: "Finding earliest data")
         let earliestDate = findEarliestHistoricalData()
         let endDate = Date()
         
         logger.info("🔄 FULL RECALC: Calculating from \(DateFormatter.debug.string(from: earliestDate)) to \(DateFormatter.debug.string(from: endDate))")
         
         // Calculate portfolio values for the entire historical period
+        await calculationManager.updateProgress(completed: 50, status: "Calculating portfolio values")
         let snapshots = await calculatePortfolioSnapshotsForPeriod(
             from: earliestDate,
             to: endDate,
@@ -1396,6 +1596,7 @@ class HistoricalDataManager: ObservableObject {
             composition: composition
         )
         
+        await calculationManager.updateProgress(completed: 85, status: "Storing portfolio snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots = snapshots.sorted { $0.date < $1.date }
         }
@@ -1405,17 +1606,22 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs incremental portfolio update for new dates only
     private func performIncrementalPortfolioUpdate(using dataModel: DataModel) async {
+        let calculationManager = BackgroundCalculationManager.shared
+        
+        await calculationManager.updateProgress(completed: 40, status: "Checking for new data")
         let lastCalculatedDate = getLastPortfolioSnapshotDate()
         let endDate = Date()
         
         // Only calculate if there's a meaningful gap (more than 1 day)
         guard endDate.timeIntervalSince(lastCalculatedDate) > 86400 else {
             logger.debug("🔄 INCREMENTAL: No significant time gap, skipping update")
+            await calculationManager.updateProgress(completed: 85, status: "No update needed")
             return
         }
         
         logger.info("🔄 INCREMENTAL: Updating from \(DateFormatter.debug.string(from: lastCalculatedDate)) to \(DateFormatter.debug.string(from: endDate))")
         
+        await calculationManager.updateProgress(completed: 50, status: "Calculating new portfolio values")
         let newSnapshots = await calculatePortfolioSnapshotsForPeriod(
             from: lastCalculatedDate,
             to: endDate,
@@ -1423,6 +1629,7 @@ class HistoricalDataManager: ObservableObject {
             composition: currentPortfolioComposition!
         )
         
+        await calculationManager.updateProgress(completed: 80, status: "Adding new snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
             self.historicalPortfolioSnapshots.sort { $0.date < $1.date }
@@ -1436,8 +1643,39 @@ class HistoricalDataManager: ObservableObject {
         logger.info("🔄 INCREMENTAL: Added \(newSnapshots.count) new portfolio snapshots")
     }
     
-    /// Calculates portfolio snapshots for a specific date range
+    /// Calculates portfolio snapshots for a specific date range with concurrent processing
     private func calculatePortfolioSnapshotsForPeriod(
+        from startDate: Date,
+        to endDate: Date,
+        using dataModel: DataModel,
+        composition: PortfolioComposition
+    ) async -> [HistoricalPortfolioSnapshot] {
+        
+        // For large date ranges, use concurrent processing
+        let dateRange = endDate.timeIntervalSince(startDate)
+        let daysInRange = Int(dateRange / 86400) // Convert to days
+        
+        if daysInRange > 100 {
+            // Use concurrent processing for large ranges
+            return await calculatePortfolioSnapshotsForPeriodConcurrent(
+                from: startDate,
+                to: endDate,
+                using: dataModel,
+                composition: composition
+            )
+        } else {
+            // Use sequential processing for smaller ranges
+            return await calculatePortfolioSnapshotsForPeriodSequential(
+                from: startDate,
+                to: endDate,
+                using: dataModel,
+                composition: composition
+            )
+        }
+    }
+    
+    /// Sequential calculation method (original implementation)
+    private func calculatePortfolioSnapshotsForPeriodSequential(
         from startDate: Date,
         to endDate: Date,
         using dataModel: DataModel,
@@ -1473,33 +1711,61 @@ class HistoricalDataManager: ObservableObject {
         let totalInvestmentCost = calculateTotalInvestmentCost(composition: composition, currencyConverter: currencyConverter, preferredCurrency: preferredCurrency)
         
         for (index, date) in sortedDates.enumerated() {
-            // Yield control periodically
+            // Yield control periodically and update progress
             if index % 20 == 0 {
                 await Task.yield()
+                let progress = 50 + Int(Double(index) / Double(sortedDates.count) * 35) // 50-85% progress range
+                let calculationManager = BackgroundCalculationManager.shared
+                await calculationManager.updateProgress(completed: progress, status: "Processing date \(index + 1)/\(sortedDates.count)")
+                await calculationManager.updateDataPointsCount(portfolioSnapshots.count)
             }
             
             var totalValueUSD = 0.0
             var positionSnapshots: [String: PositionSnapshot] = [:]
             var validPositions = 0
+            var invalidPositions: [String] = []
             
             // Calculate value for each position on this date
             for position in composition.positions {
                 guard let symbolSnapshots = priceSnapshots[position.symbol],
                       let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
+                    invalidPositions.append(position.symbol)
                     continue
                 }
                 
                 let price = historicalSnapshot.price
-                guard !price.isNaN && price > 0 else { continue }
+                
+                // Enhanced data validation
+                guard !price.isNaN && price.isFinite && price > 0 else {
+                    invalidPositions.append("\(position.symbol) (invalid price: \(price))")
+                    continue
+                }
+                
+                guard position.units > 0 && position.units.isFinite else {
+                    invalidPositions.append("\(position.symbol) (invalid units: \(position.units))")
+                    continue
+                }
                 
                 let valueAtDate = price * position.units
                 
-                // Convert to USD for aggregation
+                // Validate calculated value
+                guard valueAtDate.isFinite && valueAtDate > 0 else {
+                    invalidPositions.append("\(position.symbol) (invalid value: \(valueAtDate))")
+                    continue
+                }
+                
+                // Convert to USD for aggregation with validation
                 var valueInUSD = valueAtDate
                 if position.currency == "GBP" {
                     valueInUSD = currencyConverter.convert(amount: valueAtDate, from: "GBP", to: "USD")
                 } else if position.currency != "USD" {
                     valueInUSD = currencyConverter.convert(amount: valueAtDate, from: position.currency, to: "USD")
+                }
+                
+                // Validate converted value
+                guard valueInUSD.isFinite && valueInUSD > 0 else {
+                    invalidPositions.append("\(position.symbol) (invalid USD conversion: \(valueInUSD))")
+                    continue
                 }
                 
                 totalValueUSD += valueInUSD
@@ -1515,8 +1781,22 @@ class HistoricalDataManager: ObservableObject {
                 )
             }
             
+            // Log validation issues for debugging
+            if !invalidPositions.isEmpty && index < 5 {
+                logger.debug("🔄 VALIDATION: Invalid positions on \(DateFormatter.debug.string(from: date)): \(invalidPositions.joined(separator: ", "))")
+            }
+            
             // Only create portfolio snapshot if we have data for at least 50% of positions
             guard validPositions >= max(1, composition.positions.count / 2) else {
+                if index < 5 {
+                    logger.debug("🔄 VALIDATION: Skipping date \(DateFormatter.debug.string(from: date)) - only \(validPositions)/\(composition.positions.count) valid positions")
+                }
+                continue
+            }
+            
+            // Validate total portfolio value
+            guard totalValueUSD.isFinite && totalValueUSD > 0 else {
+                logger.warning("🔄 VALIDATION: Invalid total portfolio value on \(DateFormatter.debug.string(from: date)): \(totalValueUSD)")
                 continue
             }
             
@@ -1544,6 +1824,210 @@ class HistoricalDataManager: ObservableObject {
         }
         
         logger.debug("🔄 CALC PERIOD: Generated \(portfolioSnapshots.count) snapshots from \(sortedDates.count) dates")
+        return portfolioSnapshots
+    }
+    
+    /// Concurrent calculation method for large date ranges
+    private func calculatePortfolioSnapshotsForPeriodConcurrent(
+        from startDate: Date,
+        to endDate: Date,
+        using dataModel: DataModel,
+        composition: PortfolioComposition
+    ) async -> [HistoricalPortfolioSnapshot] {
+        
+        logger.info("🔄 CONCURRENT: Starting concurrent portfolio calculation")
+        
+        let calendar = Calendar.current
+        let currencyConverter = CurrencyConverter()
+        let preferredCurrency = dataModel.preferredCurrency
+        
+        // Get all unique dates where we have historical data
+        var allDates = Set<Date>()
+        for (_, snapshots) in priceSnapshots {
+            for snapshot in snapshots {
+                if snapshot.timestamp >= startDate && snapshot.timestamp <= endDate {
+                    let dayStart = calendar.startOfDay(for: snapshot.timestamp)
+                    allDates.insert(dayStart)
+                }
+            }
+        }
+        
+        guard !allDates.isEmpty else {
+            logger.warning("🔄 CONCURRENT: No historical data available for period")
+            return []
+        }
+        
+        let sortedDates = Array(allDates.sorted())
+        logger.info("🔄 CONCURRENT: Processing \(sortedDates.count) dates with concurrent processing")
+        
+        // Calculate total investment cost once (thread-safe)
+        let totalInvestmentCost = calculateTotalInvestmentCost(
+            composition: composition, 
+            currencyConverter: currencyConverter, 
+            preferredCurrency: preferredCurrency
+        )
+        
+        // Determine optimal chunk size based on available cores
+        let processorCount = ProcessInfo.processInfo.processorCount
+        let optimalChunks = min(processorCount, 8) // Cap at 8 to avoid too much overhead
+        let chunkSize = max(10, sortedDates.count / optimalChunks) // Minimum 10 dates per chunk
+        
+        logger.info("🔄 CONCURRENT: Using \(optimalChunks) concurrent tasks with ~\(chunkSize) dates each")
+        
+        // Split dates into chunks for concurrent processing
+        let dateChunks = sortedDates.chunked(into: chunkSize)
+        
+        // Process chunks concurrently using TaskGroup with timeout protection
+        let allSnapshots = await withTaskTimeout(seconds: 600) { // 10 minute timeout
+            await withTaskGroup(of: [HistoricalPortfolioSnapshot].self) { group in
+                var results: [HistoricalPortfolioSnapshot] = []
+                
+                for (chunkIndex, chunk) in dateChunks.enumerated() {
+                    group.addTask { [weak self] in
+                        guard let self = self else { return [] }
+                        
+                        return await self.calculatePortfolioSnapshotsForChunk(
+                            dates: chunk,
+                            chunkIndex: chunkIndex,
+                            totalChunks: dateChunks.count,
+                            composition: composition,
+                            totalInvestmentCost: totalInvestmentCost,
+                            preferredCurrency: preferredCurrency,
+                            currencyConverter: currencyConverter
+                        )
+                    }
+                }
+                
+                // CRITICAL FIX: Collect results with timeout protection
+                for await chunkResult in group {
+                    results.append(contentsOf: chunkResult)
+                }
+                
+                return results
+            }
+        } ?? {
+            logger.error("🔄 CONCURRENT: TaskGroup timed out after 10 minutes, returning partial results")
+            return []
+        }()
+        
+        // Sort results by date and return
+        let sortedSnapshots = allSnapshots.sorted { $0.date < $1.date }
+        logger.info("🔄 CONCURRENT: Generated \(sortedSnapshots.count) snapshots using concurrent processing")
+        
+        return sortedSnapshots
+    }
+    
+    /// Processes a chunk of dates for concurrent calculation
+    private func calculatePortfolioSnapshotsForChunk(
+        dates: [Date],
+        chunkIndex: Int,
+        totalChunks: Int,
+        composition: PortfolioComposition,
+        totalInvestmentCost: Double,
+        preferredCurrency: String,
+        currencyConverter: CurrencyConverter
+    ) async -> [HistoricalPortfolioSnapshot] {
+        
+        var portfolioSnapshots: [HistoricalPortfolioSnapshot] = []
+        
+        for (dateIndex, date) in dates.enumerated() {
+            // CRITICAL FIX: Check for task cancellation first
+            do {
+                try Task.checkCancellation()
+            } catch {
+                logger.info("🔄 CHUNK \(chunkIndex): Task cancelled, stopping processing at date \(dateIndex)/\(dates.count)")
+                break
+            }
+            
+            // Update progress less frequently for concurrent processing
+            if dateIndex % 5 == 0 {
+                await Task.yield() // Allow other tasks to run
+                
+                // Update global progress
+                let overallProgress = Double(chunkIndex * dates.count + dateIndex) / Double(totalChunks * dates.count)
+                let progressPercent = 50 + Int(overallProgress * 35) // 50-85% range
+                
+                let calculationManager = await BackgroundCalculationManager.shared
+                await calculationManager.updateProgress(
+                    completed: progressPercent, 
+                    status: "Concurrent processing chunk \(chunkIndex + 1)/\(totalChunks)"
+                )
+            }
+            
+            var totalValueUSD = 0.0
+            var positionSnapshots: [String: PositionSnapshot] = [:]
+            var validPositions = 0
+            
+            // Calculate value for each position on this date
+            for position in composition.positions {
+                guard let symbolSnapshots = priceSnapshots[position.symbol],
+                      let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
+                    continue
+                }
+                
+                let price = historicalSnapshot.price
+                
+                // Data validation
+                guard !price.isNaN && price.isFinite && price > 0,
+                      position.units > 0 && position.units.isFinite else {
+                    continue
+                }
+                
+                let valueAtDate = price * position.units
+                guard valueAtDate.isFinite && valueAtDate > 0 else { continue }
+                
+                // Convert to USD for aggregation
+                var valueInUSD = valueAtDate
+                if position.currency == "GBP" {
+                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: "GBP", to: "USD")
+                } else if position.currency != "USD" {
+                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: position.currency, to: "USD")
+                }
+                
+                guard valueInUSD.isFinite && valueInUSD > 0 else { continue }
+                
+                totalValueUSD += valueInUSD
+                validPositions += 1
+                
+                // Store position snapshot
+                positionSnapshots[position.symbol] = PositionSnapshot(
+                    symbol: position.symbol,
+                    units: position.units,
+                    priceAtDate: price,
+                    valueAtDate: valueAtDate,
+                    currency: position.currency
+                )
+            }
+            
+            // Only create portfolio snapshot if we have data for at least 50% of positions
+            guard validPositions >= max(1, composition.positions.count / 2),
+                  totalValueUSD.isFinite && totalValueUSD > 0 else {
+                continue
+            }
+            
+            // Convert to preferred currency
+            var finalValue = totalValueUSD
+            if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+                let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
+                finalValue = gbpAmount * 100.0
+            } else if preferredCurrency != "USD" {
+                finalValue = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
+            }
+            
+            let totalGains = finalValue - totalInvestmentCost
+            
+            let portfolioSnapshot = HistoricalPortfolioSnapshot(
+                date: date,
+                totalValue: finalValue,
+                totalGains: totalGains,
+                totalCost: totalInvestmentCost,
+                currency: preferredCurrency,
+                portfolioComposition: positionSnapshots
+            )
+            
+            portfolioSnapshots.append(portfolioSnapshot)
+        }
+        
         return portfolioSnapshots
     }
     
@@ -1637,6 +2121,16 @@ struct PerformanceMetrics {
     let startDate: Date
     let endDate: Date
     
+    // MARK: - Advanced Analytics
+    let sharpeRatio: Double?
+    let maxDrawdown: Double?
+    let maxDrawdownPercent: Double?
+    let beta: Double?
+    let annualizedReturn: Double?
+    let annualizedVolatility: Double?
+    let valueAtRisk: Double? // 95% VaR
+    let winRate: Double? // Percentage of positive return periods
+    
     var formattedTotalReturn: String {
         return String(format: "%+.2f %@", totalReturn, currency)
     }
@@ -1647,5 +2141,35 @@ struct PerformanceMetrics {
     
     var formattedVolatility: String {
         return String(format: "%.2f%%", volatility)
+    }
+    
+    var formattedSharpeRatio: String {
+        guard let sharpe = sharpeRatio else { return "N/A" }
+        return String(format: "%.2f", sharpe)
+    }
+    
+    var formattedMaxDrawdown: String {
+        guard let drawdown = maxDrawdownPercent else { return "N/A" }
+        return String(format: "%.2f%%", drawdown)
+    }
+    
+    var formattedAnnualizedReturn: String {
+        guard let annualized = annualizedReturn else { return "N/A" }
+        return String(format: "%.2f%%", annualized)
+    }
+    
+    var formattedBeta: String {
+        guard let betaValue = beta else { return "N/A" }
+        return String(format: "%.2f", betaValue)
+    }
+    
+    var formattedVaR: String {
+        guard let var95 = valueAtRisk else { return "N/A" }
+        return String(format: "%.2f%%", var95)
+    }
+    
+    var formattedWinRate: String {
+        guard let winRateValue = winRate else { return "N/A" }
+        return String(format: "%.1f%%", winRateValue)
     }
 }

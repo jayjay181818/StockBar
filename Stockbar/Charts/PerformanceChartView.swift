@@ -4,13 +4,24 @@ import AppKit
 
 struct PerformanceChartView: View {
     @ObservedObject private var historicalDataManager = HistoricalDataManager.shared
+    @ObservedObject private var calculationManager = BackgroundCalculationManager.shared
     @State private var selectedTimeRange: ChartTimeRange = .month
     @State private var selectedChartType: ChartType = .portfolioValue
     @State private var showingMetrics = true
     @State private var hoveredDataPoint: ChartDataPoint?
+    @State private var showingExportOptions = false
+    @State private var selectedDataPoints: Set<UUID> = []
+    @State private var chartScale: Double = 1.0
+    @State private var chartOffset: CGSize = .zero
+    @State private var showingDataFilters = false
+    @State private var valueThreshold: Double = 0.0
+    @State private var dateFilterEnabled = false
+    @State private var customStartDate = Date().addingTimeInterval(-30 * 24 * 60 * 60) // 30 days ago
+    @State private var customEndDate = Date()
     
     let availableSymbols: [String]
     let dataModel: DataModel?
+    private let exportManager = ExportManager.shared
     
     init(availableSymbols: [String] = [], dataModel: DataModel? = nil) {
         self.availableSymbols = availableSymbols
@@ -25,12 +36,32 @@ struct PerformanceChartView: View {
             // Time Range Picker
             timeRangePicker
             
+            // Progress Indicator
+            if calculationManager.isCalculating {
+                calculationProgressView
+            }
+            
+            // Error Display
+            if let error = calculationManager.lastError {
+                errorView(error)
+            }
+            
             // Chart
             chartView
             
             // Performance Metrics Toggle
             if !chartData.isEmpty {
                 metricsSection
+            }
+            
+            // Data Filters
+            if !chartData.isEmpty {
+                dataFiltersSection
+            }
+            
+            // Export Options
+            if !chartData.isEmpty {
+                exportSection
             }
             
             // Comprehensive Return Analysis
@@ -44,37 +75,34 @@ struct PerformanceChartView: View {
             }
         }
         .padding()
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 600, minHeight: 450)
         .onChange(of: showingMetrics) { _, newValue in
             adjustChartWindowSize(expanded: newValue)
             // Notify PreferenceView to adjust window size
-            NotificationCenter.default.post(name: .chartMetricsToggled, object: nil)
+            NotificationCenter.default.post(name: .chartMetricsToggled, object: newValue)
+        }
+        .onChange(of: selectedDataPoints) { _, _ in
+            // Update analytics when selection changes - SwiftUI will automatically update
+            // Notify if significant content changes affect layout
+            if selectedDataPoints.count > 0 {
+                NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+            }
+        }
+        .onAppear {
+            // Initialize chart interactions
+            setupKeyboardShortcuts()
+            // Ensure proper window sizing on first load
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                NotificationCenter.default.post(name: .forceWindowResize, object: nil)
+            }
         }
     }
     
     private func adjustChartWindowSize(expanded: Bool) {
-        // Only make minor adjustments for metrics expansion, don't override tab-based resizing
-        DispatchQueue.main.async {
-            if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.title == "Stockbar Preferences" }) {
-                let currentFrame = window.frame
-                let metricsHeight: CGFloat = 120 // Approximate height of the metrics section
-                
-                let newHeight = expanded ? 
-                    currentFrame.height + metricsHeight : 
-                    currentFrame.height - metricsHeight
-                
-                // Ensure we don't go below minimum height for charts (should be around 700)
-                let finalHeight = max(newHeight, 650)
-                
-                let newFrame = NSRect(
-                    x: currentFrame.origin.x,
-                    y: currentFrame.origin.y - (finalHeight - currentFrame.height), // Adjust y to expand downward
-                    width: currentFrame.width,
-                    height: finalHeight
-                )
-                
-                window.setFrame(newFrame, display: true, animate: true)
-            }
+        // Notify the parent PreferenceView to handle window resizing
+        // This ensures consistent sizing logic and avoids conflicts
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: .forceWindowResize, object: nil)
         }
     }
     
@@ -88,6 +116,97 @@ struct PerformanceChartView: View {
             }
         }
         .pickerStyle(SegmentedPickerStyle())
+    }
+    
+    // MARK: - Progress Indicator Views
+    
+    private var calculationProgressView: some View {
+        VStack(spacing: 8) {
+            HStack {
+                ProgressView(value: calculationManager.calculationProgress)
+                    .progressViewStyle(LinearProgressViewStyle())
+                    .frame(height: 6)
+                    .cornerRadius(3)
+                
+                Text(calculationManager.formattedProgress)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 50, alignment: .trailing)
+            }
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(calculationManager.calculationStatus)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                    
+                    if !calculationManager.memoryUsage.isEmpty {
+                        Text("Memory: \(calculationManager.memoryUsage)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    if !calculationManager.formattedTimeRemaining.isEmpty {
+                        Text(calculationManager.formattedTimeRemaining)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    if calculationManager.dataPointsCount > 0 {
+                        Text("\(calculationManager.dataPointsCount) points")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Button("Cancel") {
+                    calculationManager.cancelCalculation()
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.red)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    private func errorView(_ error: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            
+            Text(error)
+                .font(.caption)
+                .foregroundColor(.primary)
+            
+            Spacer()
+            
+            Button("Dismiss") {
+                calculationManager.reportError("") // Clear error
+            }
+            .buttonStyle(PlainButtonStyle())
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+        )
     }
     
     private var timeRangePicker: some View {
@@ -106,10 +225,28 @@ struct PerformanceChartView: View {
         return data
     }
     
-    private var yAxisDomain: ClosedRange<Double> {
-        guard !chartData.isEmpty else { return 0...1 }
+    private var filteredChartData: [ChartDataPoint] {
+        var filtered = chartData
         
-        let values = chartData.map { $0.value }
+        // Apply value threshold filter
+        if valueThreshold > 0 {
+            filtered = filtered.filter { abs($0.value) >= valueThreshold }
+        }
+        
+        // Apply custom date range filter
+        if dateFilterEnabled {
+            filtered = filtered.filter { dataPoint in
+                dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+            }
+        }
+        
+        return filtered
+    }
+    
+    private var yAxisDomain: ClosedRange<Double> {
+        guard !filteredChartData.isEmpty else { return 0...1 }
+        
+        let values = filteredChartData.map { $0.value }
         let minValue = values.min() ?? 0
         let maxValue = values.max() ?? 1
         
@@ -130,10 +267,10 @@ struct PerformanceChartView: View {
     
     private var chartView: some View {
         Group {
-            if chartData.isEmpty {
+            if filteredChartData.isEmpty {
                 emptyChartView
             } else {
-                Chart(chartData) { dataPoint in
+                Chart(filteredChartData) { dataPoint in
                         LineMark(
                             x: .value("Date", dataPoint.date),
                             y: .value("Value", dataPoint.value)
@@ -158,6 +295,17 @@ struct PerformanceChartView: View {
                             .foregroundStyle(chartColor)
                             .symbolSize(50)
                         }
+                        
+                        // Add selection indicators
+                        if selectedDataPoints.contains(dataPoint.id) {
+                            PointMark(
+                                x: .value("Date", dataPoint.date),
+                                y: .value("Value", dataPoint.value)
+                            )
+                            .foregroundStyle(.orange)
+                            .symbolSize(30)
+                            .symbol(.circle)
+                        }
                     }
                     .chartXAxis {
                         AxisMarks(values: .automatic(desiredCount: 6)) { value in
@@ -180,17 +328,23 @@ struct PerformanceChartView: View {
                                 .fill(Color.clear)
                                 .contentShape(Rectangle())
                                 .background(
-                                    HoverTrackingView { location in
-                                        if let location = location {
-                                            updateHoveredDataPoint(at: location, in: geometry, chartProxy: chartProxy)
-                                        } else {
-                                            hoveredDataPoint = nil
-                                        }
-                                    }
+                                    EnhancedChartInteractionView(
+                                        chartData: chartData,
+                                        selectedDataPoints: $selectedDataPoints,
+                                        hoveredDataPoint: $hoveredDataPoint,
+                                        chartScale: $chartScale,
+                                        chartOffset: $chartOffset,
+                                        geometry: geometry,
+                                        chartProxy: chartProxy,
+                                        selectedTimeRange: selectedTimeRange
+                                    )
                                 )
                         }
                     }
-                    .frame(height: 250)
+                    .frame(height: max(200, 250 * chartScale))
+                    .scaleEffect(chartScale)
+                    .offset(chartOffset)
+                    .clipped()
                     .overlay(
                         // Hover tooltip as overlay - doesn't affect layout
                         Group {
@@ -242,11 +396,33 @@ struct PerformanceChartView: View {
         }
     }
     
+    private var exportSection: some View {
+        VStack {
+            Button(action: { showingExportOptions.toggle() }) {
+                HStack {
+                    Text("Export Options")
+                    Spacer()
+                    Image(systemName: showingExportOptions ? "chevron.up" : "chevron.down")
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            if showingExportOptions {
+                exportOptionsView
+                    .onAppear {
+                        // Request window resize when export options expand
+                        NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+                    }
+            }
+        }
+    }
+    
     @ViewBuilder
     private var performanceMetricsView: some View {
         if let metrics = getRelevantPerformanceMetrics() {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            VStack(alignment: .leading, spacing: 12) {
+                // Basic Metrics Row
+                HStack(spacing: 0) {
                     VStack(alignment: .leading) {
                         Text("Total Return")
                             .font(.caption)
@@ -255,29 +431,94 @@ struct PerformanceChartView: View {
                             .font(.headline)
                             .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    Spacer()
-                    
-                    VStack(alignment: .trailing) {
+                    VStack(spacing: 2) {
                         Text("Return %")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
                         Text(metrics.formattedTotalReturnPercent)
                             .font(.headline)
                             .foregroundColor(metrics.totalReturnPercent >= 0 ? .green : .red)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
                     }
-                }
-                
-                HStack {
-                    VStack(alignment: .leading) {
+                    .frame(maxWidth: .infinity)
+                    
+                    VStack(alignment: .trailing) {
                         Text("Volatility")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Text(metrics.formattedVolatility)
                             .font(.subheadline)
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                
+                // Advanced Analytics Row 1
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading) {
+                        Text("Sharpe Ratio")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(metrics.formattedSharpeRatio)
+                            .font(.subheadline)
+                            .foregroundColor(getSharpeRatioColor(metrics.sharpeRatio))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    Spacer()
+                    VStack(spacing: 2) {
+                        Text("Max Drawdown")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
+                        Text(metrics.formattedMaxDrawdown)
+                            .font(.subheadline)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    VStack(alignment: .trailing) {
+                        Text("Win Rate")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(metrics.formattedWinRate)
+                            .font(.subheadline)
+                            .foregroundColor(getWinRateColor(metrics.winRate))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                
+                // Advanced Analytics Row 2
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading) {
+                        Text("Ann. Return")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(metrics.formattedAnnualizedReturn)
+                            .font(.subheadline)
+                            .foregroundColor(getAnnualizedReturnColor(metrics.annualizedReturn))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    VStack(spacing: 2) {
+                        Text("VaR (95%)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
+                        Text(metrics.formattedVaR)
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                            .frame(maxWidth: .infinity)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
                     
                     VStack(alignment: .trailing) {
                         Text("Range")
@@ -286,6 +527,7 @@ struct PerformanceChartView: View {
                         Text("\(String(format: "%.2f", metrics.minValue)) - \(String(format: "%.2f", metrics.maxValue))")
                             .font(.subheadline)
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             .padding()
@@ -761,6 +1003,321 @@ struct PerformanceChartView: View {
         }
     }
     
+    /// Gets color for Sharpe ratio display
+    private func getSharpeRatioColor(_ sharpeRatio: Double?) -> Color {
+        guard let ratio = sharpeRatio else { return .secondary }
+        if ratio > 1.0 {
+            return .green
+        } else if ratio > 0.5 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+    
+    /// Gets color for win rate display
+    private func getWinRateColor(_ winRate: Double?) -> Color {
+        guard let rate = winRate else { return .secondary }
+        if rate >= 60.0 {
+            return .green
+        } else if rate >= 45.0 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+    
+    /// Gets color for annualized return display
+    private func getAnnualizedReturnColor(_ annualizedReturn: Double?) -> Color {
+        guard let returnValue = annualizedReturn else { return .secondary }
+        if returnValue > 10.0 {
+            return .green
+        } else if returnValue > 0.0 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+    
+    /// Gets change information for a data point relative to the previous point
+    private func getChangeInfo(for dataPoint: ChartDataPoint) -> (absoluteChange: Double, percentChange: Double)? {
+        guard let currentIndex = filteredChartData.firstIndex(where: { $0.id == dataPoint.id }),
+              currentIndex > 0 else { return nil }
+        
+        let previousPoint = filteredChartData[currentIndex - 1]
+        let absoluteChange = dataPoint.value - previousPoint.value
+        let percentChange = previousPoint.value != 0 ? (absoluteChange / previousPoint.value) * 100 : 0
+        
+        return (absoluteChange, percentChange)
+    }
+    
+    /// Gets position information for a data point within the dataset
+    private func getPositionInfo(for dataPoint: ChartDataPoint) -> (rank: Int, total: Int, percentile: Double)? {
+        let sortedByValue = filteredChartData.sorted { $0.value > $1.value }
+        guard let rank = sortedByValue.firstIndex(where: { $0.id == dataPoint.id }) else { return nil }
+        
+        let total = sortedByValue.count
+        let percentile = total > 1 ? (1.0 - Double(rank) / Double(total - 1)) * 100 : 100
+        
+        return (rank + 1, total, percentile)
+    }
+    
+    /// Sets up keyboard shortcuts for chart interactions
+    private func setupKeyboardShortcuts() {
+        // This would be implemented with key event handling in a full implementation
+        // For now, the shortcuts are handled in the EnhancedChartView
+    }
+    
+    @ViewBuilder
+    private var dataFiltersSection: some View {
+        VStack {
+            Button(action: { showingDataFilters.toggle() }) {
+                HStack {
+                    Text("Data Filters")
+                    Spacer()
+                    Image(systemName: showingDataFilters ? "chevron.up" : "chevron.down")
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            if showingDataFilters {
+                dataFiltersView
+                    .onAppear {
+                        // Request window resize when data filters expand
+                        NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+                    }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var dataFiltersView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Value threshold filter
+            HStack {
+                Text("Value Threshold:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                TextField("0.0", value: $valueThreshold, format: .number)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(width: 80)
+                
+                Button("Apply") {
+                    // Filter will be applied automatically through computed property
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.blue)
+            }
+            
+            // Date range filter
+            HStack {
+                Toggle("Custom Date Range", isOn: $dateFilterEnabled)
+                    .font(.caption)
+                
+                if dateFilterEnabled {
+                    DatePicker("From", selection: $customStartDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(CompactDatePickerStyle())
+                    
+                    Text("to")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    DatePicker("To", selection: $customEndDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(CompactDatePickerStyle())
+                }
+            }
+            
+            // Selection tools
+            HStack {
+                Button("Select All") {
+                    selectedDataPoints = Set(filteredChartData.map { $0.id })
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.blue)
+                
+                Button("Clear Selection") {
+                    selectedDataPoints.removeAll()
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.red)
+                
+                if !selectedDataPoints.isEmpty {
+                    Text("\(selectedDataPoints.count) selected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            
+            // Chart zoom controls
+            HStack {
+                Text("Zoom:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Button("-") {
+                    chartScale = max(0.5, chartScale - 0.1)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.blue)
+                
+                Text(String(format: "%.0f%%", chartScale * 100))
+                    .font(.caption)
+                    .frame(width: 40)
+                
+                Button("+") {
+                    chartScale = min(3.0, chartScale + 0.1)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.blue)
+                
+                Button("Reset") {
+                    chartScale = 1.0
+                    chartOffset = .zero
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.caption)
+                .foregroundColor(.orange)
+                
+                Spacer()
+            }
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+    
+    @ViewBuilder
+    private var exportOptionsView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Export Chart Data")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            HStack(spacing: 16) {
+                // CSV Export Button
+                Button(action: exportToCSV) {
+                    HStack {
+                        Image(systemName: "doc.text")
+                        Text("Export CSV")
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(6)
+                .foregroundColor(.blue)
+                
+                // PDF Export Button
+                Button(action: exportToPDF) {
+                    HStack {
+                        Image(systemName: "doc.richtext")
+                        Text("Export PDF")
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+                .cornerRadius(6)
+                .foregroundColor(.green)
+                
+                Spacer()
+            }
+            
+            // Additional export options for portfolio data
+            if case .portfolioValue = selectedChartType, !historicalDataManager.historicalPortfolioSnapshots.isEmpty {
+                HStack {
+                    Button(action: exportDetailedPortfolioCSV) {
+                        HStack {
+                            Image(systemName: "tablecells")
+                            Text("Detailed Portfolio CSV")
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(6)
+                    .foregroundColor(.orange)
+                    
+                    Spacer()
+                }
+            }
+            
+            // Export selected data only
+            if !selectedDataPoints.isEmpty {
+                HStack {
+                    Text("Export \(selectedDataPoints.count) selected points only")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+    
+    // MARK: - Export Actions
+    
+    private func exportToCSV() {
+        let metrics = getRelevantPerformanceMetrics()
+        let dataToExport = selectedDataPoints.isEmpty ? filteredChartData : 
+            filteredChartData.filter { selectedDataPoints.contains($0.id) }
+        
+        exportManager.exportToCSV(
+            chartData: dataToExport,
+            chartType: selectedChartType,
+            timeRange: selectedTimeRange,
+            metrics: metrics
+        )
+    }
+    
+    private func exportToPDF() {
+        let metrics = getRelevantPerformanceMetrics()
+        let chartImage = captureChartAsImage()
+        let dataToExport = selectedDataPoints.isEmpty ? filteredChartData : 
+            filteredChartData.filter { selectedDataPoints.contains($0.id) }
+        
+        exportManager.exportToPDF(
+            chartData: dataToExport,
+            chartType: selectedChartType,
+            timeRange: selectedTimeRange,
+            metrics: metrics,
+            chartImage: chartImage
+        )
+    }
+    
+    private func exportDetailedPortfolioCSV() {
+        let startDate = selectedTimeRange.startDate()
+        let filteredSnapshots = historicalDataManager.historicalPortfolioSnapshots
+            .filter { $0.date >= startDate }
+            .sorted { $0.date < $1.date }
+        
+        exportManager.exportPortfolioSnapshotsToCSV(
+            snapshots: filteredSnapshots,
+            timeRange: selectedTimeRange
+        )
+    }
+    
+    private func captureChartAsImage() -> NSImage? {
+        // For now, return nil - in a full implementation, we would capture the chart view
+        // This would require rendering the chart to an image context
+        return nil
+    }
+    
     private func getDisplayCurrency() -> String {
         switch selectedChartType {
         case .individualStock(let symbol):
@@ -815,60 +1372,113 @@ struct PerformanceChartView: View {
         .shadow(radius: 2)
     }
     
-    private func updateHoveredDataPoint(at location: CGPoint, in geometry: GeometryProxy, chartProxy: ChartProxy) {
-        // Convert the location to a date value
-        guard let date: Date = chartProxy.value(atX: location.x) else { return }
-        
-        // Find the closest data point to the hovered date
-        let closestDataPoint = chartData.min { dataPoint1, dataPoint2 in
-            abs(dataPoint1.date.timeIntervalSince(date)) < abs(dataPoint2.date.timeIntervalSince(date))
-        }
-        
-        // Only update if the closest point is within a reasonable distance
-        if let closest = closestDataPoint {
-            let timeDifference = abs(closest.date.timeIntervalSince(date))
-            // Allow some tolerance based on the time range (more tolerance for longer ranges)
-            let tolerance: TimeInterval = {
-                switch selectedTimeRange {
-                case .day: return 3600 // 1 hour
-                case .week: return 21600 // 6 hours
-                case .month: return 86400 // 1 day
-                case .threeMonths: return 259200 // 3 days
-                case .sixMonths: return 604800 // 1 week
-                case .year, .all: return 1209600 // 2 weeks
-                }
-            }()
-            
-            if timeDifference <= tolerance {
-                hoveredDataPoint = closest
-            } else {
-                hoveredDataPoint = nil
-            }
-        }
-    }
 }
 
-// MARK: - Hover Tracking View
+// MARK: - Enhanced Chart Interaction View
 
-struct HoverTrackingView: NSViewRepresentable {
-    let onLocationChanged: (CGPoint?) -> Void
+struct EnhancedChartInteractionView: NSViewRepresentable {
+    let chartData: [ChartDataPoint]
+    @Binding var selectedDataPoints: Set<UUID>
+    @Binding var hoveredDataPoint: ChartDataPoint?
+    @Binding var chartScale: Double
+    @Binding var chartOffset: CGSize
+    let geometry: GeometryProxy
+    let chartProxy: ChartProxy
+    let selectedTimeRange: ChartTimeRange
     
     func makeNSView(context: Context) -> NSView {
-        let view = HoverView()
-        view.onLocationChanged = onLocationChanged
+        let view = EnhancedChartView()
+        view.setup(
+            chartData: chartData,
+            selectedDataPoints: selectedDataPoints,
+            hoveredDataPoint: hoveredDataPoint,
+            chartScale: chartScale,
+            chartOffset: chartOffset,
+            geometry: geometry,
+            chartProxy: chartProxy,
+            selectedTimeRange: selectedTimeRange
+        )
+        view.onSelectionChanged = { newSelection in
+            selectedDataPoints = newSelection
+        }
+        view.onHoverChanged = { newHover in
+            hoveredDataPoint = newHover
+        }
+        view.onScaleChanged = { newScale in
+            chartScale = newScale
+        }
+        view.onOffsetChanged = { newOffset in
+            chartOffset = newOffset
+        }
         return view
     }
     
     func updateNSView(_ nsView: NSView, context: Context) {
-        if let hoverView = nsView as? HoverView {
-            hoverView.onLocationChanged = onLocationChanged
+        if let chartView = nsView as? EnhancedChartView {
+            chartView.updateData(
+                chartData: chartData,
+                selectedDataPoints: selectedDataPoints,
+                hoveredDataPoint: hoveredDataPoint,
+                chartScale: chartScale,
+                chartOffset: chartOffset
+            )
         }
     }
 }
 
-class HoverView: NSView {
-    var onLocationChanged: ((CGPoint?) -> Void)?
+class EnhancedChartView: NSView {
+    var onSelectionChanged: ((Set<UUID>) -> Void)?
+    var onHoverChanged: ((ChartDataPoint?) -> Void)?
+    var onScaleChanged: ((Double) -> Void)?
+    var onOffsetChanged: ((CGSize) -> Void)?
+    
     private var trackingArea: NSTrackingArea?
+    private var chartData: [ChartDataPoint] = []
+    private var selectedDataPoints: Set<UUID> = []
+    private var hoveredDataPoint: ChartDataPoint?
+    private var chartScale: Double = 1.0
+    private var chartOffset: CGSize = .zero
+    private var geometry: GeometryProxy?
+    private var chartProxy: ChartProxy?
+    private var selectedTimeRange: ChartTimeRange = .month
+    
+    private var isSelecting = false
+    private var selectionStartPoint: CGPoint = .zero
+    private var selectionEndPoint: CGPoint = .zero
+    
+    func setup(
+        chartData: [ChartDataPoint],
+        selectedDataPoints: Set<UUID>,
+        hoveredDataPoint: ChartDataPoint?,
+        chartScale: Double,
+        chartOffset: CGSize,
+        geometry: GeometryProxy,
+        chartProxy: ChartProxy,
+        selectedTimeRange: ChartTimeRange
+    ) {
+        self.chartData = chartData
+        self.selectedDataPoints = selectedDataPoints
+        self.hoveredDataPoint = hoveredDataPoint
+        self.chartScale = chartScale
+        self.chartOffset = chartOffset
+        self.geometry = geometry
+        self.chartProxy = chartProxy
+        self.selectedTimeRange = selectedTimeRange
+    }
+    
+    func updateData(
+        chartData: [ChartDataPoint],
+        selectedDataPoints: Set<UUID>,
+        hoveredDataPoint: ChartDataPoint?,
+        chartScale: Double,
+        chartOffset: CGSize
+    ) {
+        self.chartData = chartData
+        self.selectedDataPoints = selectedDataPoints
+        self.hoveredDataPoint = hoveredDataPoint
+        self.chartScale = chartScale
+        self.chartOffset = chartOffset
+    }
     
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -896,21 +1506,201 @@ class HoverView: NSView {
     }
     
     override func mouseMoved(with event: NSEvent) {
+        guard let geometry = geometry, let chartProxy = chartProxy else { return }
+        
         let location = convert(event.locationInWindow, from: nil)
-        onLocationChanged?(location)
+        updateHoveredDataPoint(at: location, in: geometry, chartProxy: chartProxy)
     }
     
     override func mouseEntered(with event: NSEvent) {
+        guard let geometry = geometry, let chartProxy = chartProxy else { return }
+        
         let location = convert(event.locationInWindow, from: nil)
-        onLocationChanged?(location)
+        updateHoveredDataPoint(at: location, in: geometry, chartProxy: chartProxy)
     }
     
     override func mouseExited(with event: NSEvent) {
-        onLocationChanged?(nil)
+        onHoverChanged?(nil)
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        
+        if event.modifierFlags.contains(.command) {
+            // Multi-selection mode
+            if let clickedPoint = findDataPointAt(location: location) {
+                var newSelection = selectedDataPoints
+                if newSelection.contains(clickedPoint.id) {
+                    newSelection.remove(clickedPoint.id)
+                } else {
+                    newSelection.insert(clickedPoint.id)
+                }
+                onSelectionChanged?(newSelection)
+            }
+        } else if event.modifierFlags.contains(.shift) {
+            // Range selection mode
+            if let clickedPoint = findDataPointAt(location: location),
+               let lastSelected = chartData.first(where: { selectedDataPoints.contains($0.id) }) {
+                let rangeSelection = selectDataPointsInRange(from: lastSelected, to: clickedPoint)
+                onSelectionChanged?(rangeSelection)
+            }
+        } else {
+            // Start selection rectangle
+            isSelecting = true
+            selectionStartPoint = location
+            selectionEndPoint = location
+        }
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        
+        if isSelecting {
+            selectionEndPoint = location
+            needsDisplay = true
+            
+            // Select points within rectangle
+            let selectionRect = CGRect(
+                x: min(selectionStartPoint.x, selectionEndPoint.x),
+                y: min(selectionStartPoint.y, selectionEndPoint.y),
+                width: abs(selectionEndPoint.x - selectionStartPoint.x),
+                height: abs(selectionEndPoint.y - selectionStartPoint.y)
+            )
+            
+            let pointsInRect = findDataPointsInRect(selectionRect)
+            onSelectionChanged?(Set(pointsInRect.map { $0.id }))
+        } else {
+            // Pan the chart
+            let deltaX = location.x - selectionStartPoint.x
+            let deltaY = location.y - selectionStartPoint.y
+            let newOffset = CGSize(
+                width: chartOffset.width + deltaX,
+                height: chartOffset.height + deltaY
+            )
+            onOffsetChanged?(newOffset)
+            selectionStartPoint = location
+        }
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        isSelecting = false
+        needsDisplay = true
+    }
+    
+    override func scrollWheel(with event: NSEvent) {
+        // Zoom with scroll wheel
+        let zoomFactor = 1.0 + (event.deltaY * 0.01)
+        let newScale = max(0.5, min(3.0, chartScale * zoomFactor))
+        onScaleChanged?(newScale)
+    }
+    
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 53: // Escape key
+            onSelectionChanged?(Set())
+        case 0: // A key
+            if event.modifierFlags.contains(.command) {
+                onSelectionChanged?(Set(chartData.map { $0.id }))
+            }
+        default:
+            super.keyDown(with: event)
+        }
+    }
+    
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        
+        if isSelecting {
+            let selectionRect = CGRect(
+                x: min(selectionStartPoint.x, selectionEndPoint.x),
+                y: min(selectionStartPoint.y, selectionEndPoint.y),
+                width: abs(selectionEndPoint.x - selectionStartPoint.x),
+                height: abs(selectionEndPoint.y - selectionStartPoint.y)
+            )
+            
+            NSColor.blue.withAlphaComponent(0.2).setFill()
+            NSBezierPath(rect: selectionRect).fill()
+            
+            NSColor.blue.withAlphaComponent(0.8).setStroke()
+            NSBezierPath(rect: selectionRect).stroke()
+        }
+    }
+    
+    override var acceptsFirstResponder: Bool {
+        return true
     }
     
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         return true
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func updateHoveredDataPoint(at location: CGPoint, in geometry: GeometryProxy, chartProxy: ChartProxy) {
+        guard let date: Date = chartProxy.value(atX: location.x) else { return }
+        
+        let closestDataPoint = chartData.min { dataPoint1, dataPoint2 in
+            abs(dataPoint1.date.timeIntervalSince(date)) < abs(dataPoint2.date.timeIntervalSince(date))
+        }
+        
+        if let closest = closestDataPoint {
+            let timeDifference = abs(closest.date.timeIntervalSince(date))
+            let tolerance: TimeInterval = {
+                switch selectedTimeRange {
+                case .day: return 3600
+                case .week: return 21600
+                case .month: return 86400
+                case .threeMonths: return 259200
+                case .sixMonths: return 604800
+                case .year, .all: return 1209600
+                }
+            }()
+            
+            if timeDifference <= tolerance {
+                onHoverChanged?(closest)
+            } else {
+                onHoverChanged?(nil)
+            }
+        }
+    }
+    
+    private func findDataPointAt(location: CGPoint) -> ChartDataPoint? {
+        guard let _ = geometry, let chartProxy = chartProxy else { return nil }
+        guard let date: Date = chartProxy.value(atX: location.x) else { return nil }
+        
+        return chartData.min { dataPoint1, dataPoint2 in
+            abs(dataPoint1.date.timeIntervalSince(date)) < abs(dataPoint2.date.timeIntervalSince(date))
+        }
+    }
+    
+    private func findDataPointsInRect(_ rect: CGRect) -> [ChartDataPoint] {
+        guard let _ = geometry, let chartProxy = chartProxy else { return [] }
+        
+        return chartData.filter { dataPoint in
+            guard let x: CGFloat = chartProxy.position(forX: dataPoint.date),
+                  let y: CGFloat = chartProxy.position(forY: dataPoint.value) else {
+                return false
+            }
+            return rect.contains(CGPoint(x: x, y: y))
+        }
+    }
+    
+    private func selectDataPointsInRange(from start: ChartDataPoint, to end: ChartDataPoint) -> Set<UUID> {
+        let sortedData = chartData.sorted { $0.date < $1.date }
+        guard let startIndex = sortedData.firstIndex(where: { $0.id == start.id }),
+              let endIndex = sortedData.firstIndex(where: { $0.id == end.id }) else {
+            return selectedDataPoints
+        }
+        
+        let range = min(startIndex, endIndex)...max(startIndex, endIndex)
+        let rangePoints = Array(sortedData[range])
+        
+        var newSelection = selectedDataPoints
+        for point in rangePoints {
+            newSelection.insert(point.id)
+        }
+        
+        return newSelection
     }
 }
 
