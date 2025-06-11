@@ -106,7 +106,7 @@ struct PreferenceRow: View {
                 }
             }
         }
-        .frame(minWidth: 400, idealWidth: 500) // Ensure adequate width for the row
+        .frame(maxWidth: .infinity, alignment: .leading) // Fill available width efficiently
     }
 }
 
@@ -149,18 +149,18 @@ struct PreferenceView: View {
                     Text("Debug").tag(PreferenceTab.debug)
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .onChange(of: selectedTab) { _, newTab in
                     adjustWindowForTab(newTab, forceResize: true)
                 }
                 
                 // Separator line for visual clarity
                 Divider()
-                    .padding(.horizontal)
+                    .padding(.horizontal, 12)
             }
             .background(Color(NSColor.windowBackgroundColor))
-            .frame(minHeight: 60, maxHeight: 60) // Fixed height for navigation
+            .frame(minHeight: 50, maxHeight: 50) // Fixed height for navigation
             
             // Scrollable tab content area
             ScrollView {
@@ -177,7 +177,7 @@ struct PreferenceView: View {
             }
             .frame(minHeight: 300) // Ensure minimum content area
         }
-        .frame(minWidth: 650, idealWidth: 800, maxWidth: 1400, minHeight: 400) // More flexible width handling
+        .frame(minWidth: 600, idealWidth: 750, maxWidth: 1200, minHeight: 380) // Tighter, more efficient sizing
         .onReceive(NotificationCenter.default.publisher(for: .forceWindowResize)) { _ in
             // Handle forced window resize requests from child views
             adjustWindowForTab(selectedTab, forceResize: true)
@@ -243,9 +243,9 @@ struct PreferenceView: View {
         let heightDifference = abs(currentFrame.height - finalHeight)
         let widthDifference = abs(currentFrame.width - finalWidth)
         
-        // More responsive resize logic that handles horizontal scaling better
-        let shouldResizeHeight = forceResize || heightDifference > 20
-        let shouldResizeWidth = forceResize || widthDifference > 30
+        // More responsive resize logic - especially sensitive for debug tab
+        let shouldResizeHeight = forceResize || heightDifference > 15
+        let shouldResizeWidth = forceResize || widthDifference > 20
         
         // For maximized windows, only resize if growing or forced
         let shouldResize = if isLikelyMaximized && !forceResize {
@@ -281,13 +281,13 @@ struct PreferenceView: View {
     
     private func calculateOptimalDimensions(for tab: PreferenceTab) -> (width: CGFloat, height: CGFloat) {
         // CRITICAL: Always ensure navigation is visible
-        let navigationHeight: CGFloat = 60   // Tab picker area
-        let windowChromeHeight: CGFloat = 40  // Window title bar and padding
-        let safetyPadding: CGFloat = 20       // Extra safety margin
+        let navigationHeight: CGFloat = 50   // Tab picker area (reduced)
+        let windowChromeHeight: CGFloat = 30  // Window title bar and padding (reduced)
+        let safetyPadding: CGFloat = 10       // Extra safety margin (reduced)
         let baseRequiredHeight = navigationHeight + windowChromeHeight + safetyPadding
         
-        let minWidth: CGFloat = 650
-        let maxWidth: CGFloat = 1200  // Increased maximum width
+        let minWidth: CGFloat = 600
+        let maxWidth: CGFloat = 1000  // More conservative maximum width
         
         var contentHeight: CGFloat
         var contentWidth: CGFloat = minWidth
@@ -307,9 +307,9 @@ struct PreferenceView: View {
             contentHeight = tradingSymbolsHeight + toggleHeight + currencyPickerHeight + 
                            netGainsHeight + apiKeySectionHeight + historicalDataSectionHeight + exchangeRatesHeight
             
-            // Portfolio needs more width for the trade entry fields - be more generous
-            let basePortfolioWidth: CGFloat = 800
-            let extraWidthForTrades = CGFloat(max(0, tradesCount - 3) * 20) // Extra width for more trades
+            // Portfolio width optimized for trade entry fields
+            let basePortfolioWidth: CGFloat = 700
+            let extraWidthForTrades = CGFloat(max(0, tradesCount - 2) * 15) // Modest extra width for more trades
             contentWidth = max(minWidth, min(maxWidth, basePortfolioWidth + extraWidthForTrades))
             
         case .charts:
@@ -324,19 +324,20 @@ struct PreferenceView: View {
             contentHeight = chartDisplayHeight + pickerControlsHeight + progressIndicatorHeight + 
                            metricsHeight + returnAnalysisHeight + exportFiltersHeight
             
-            // Charts need significant width for proper display - more generous
-            contentWidth = max(minWidth, min(maxWidth, 1000))
+            // Charts width optimized for display
+            contentWidth = max(minWidth, min(maxWidth, 850))
             
         case .debug:
-            // Debug needs good dimensions for log readability
-            let debugControlsHeight: CGFloat = 120 // Frequency controls
-            let debugActionsHeight: CGFloat = 100 // Debug action buttons
-            let logDisplayHeight: CGFloat = 350 // Main log display area
+            // Debug with compact layout - updated calculations
+            let debugControlsHeight: CGFloat = 90  // Frequency controls (compact)
+            let debugActionsHeight: CGFloat = 70   // Debug action buttons (compact)
+            let logDisplayHeight: CGFloat = 250    // Main log display area (compact)
+            let spacing: CGFloat = 24              // Spacing between sections
             
-            contentHeight = debugControlsHeight + debugActionsHeight + logDisplayHeight
+            contentHeight = debugControlsHeight + debugActionsHeight + logDisplayHeight + spacing
             
-            // Debug logs benefit from much wider display for readability
-            contentWidth = max(minWidth, min(maxWidth, 950))
+            // Debug width should be snug for the content
+            contentWidth = max(minWidth, min(maxWidth, 750))
         }
         
         let totalHeight = baseRequiredHeight + contentHeight
@@ -347,10 +348,9 @@ struct PreferenceView: View {
     }
     
     private var portfolioView: some View {
-        VStack {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Toggle("Color Coding", isOn: $userdata.showColorCoding)
-                    .padding(.bottom, 10)
                 Spacer()
             }
             .onAppear {
@@ -373,7 +373,6 @@ struct PreferenceView: View {
                 .frame(width: 100)
                 Spacer()
             }
-            .padding(.bottom, 10)
             
             // API Key management section
             VStack(alignment: .leading, spacing: 8) {
@@ -612,7 +611,8 @@ struct PreferenceView: View {
                 }
             }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .alert("API Key", isPresented: $showingAPIKeyAlert) {
             Button("OK") { }
         } message: {
@@ -636,41 +636,28 @@ struct PreferenceView: View {
     
     private var debugView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Compact controls section - not in ScrollView to stay visible
-            VStack(alignment: .leading, spacing: 12) {
-                // Refresh Frequency Controls (condensed)
-                debugFrequencyControls
-                
-                Divider()
-                
-                // Debug Actions (condensed)
-                debugActions
-            }
-            .padding(.horizontal)
-            .padding(.top)
+            // Refresh Frequency Controls
+            debugFrequencyControls
             
             Divider()
+                .padding(.horizontal, 16)
             
-            // Debug Logs in their own scroll area
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Debug Logs")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    Spacer()
-                    Text("(Scrollable)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal)
-                
-                DebugLogView()
-                    .frame(minHeight: 200, maxHeight: 500) // Constrained but flexible
-                    .clipped()
-            }
+            // Debug Actions
+            debugActions
+            
+            Divider()
+                .padding(.horizontal, 16)
+            
+            // Debug Logs section - remove from container since DebugLogView handles its own layout
+            DebugLogView()
+                .frame(minHeight: 200, maxHeight: 500)
+                .clipped()
         }
         .onAppear {
-            adjustWindowForTab(.debug, forceResize: true)
+            // Force resize with delay to ensure content is rendered
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                adjustWindowForTab(.debug, forceResize: true)
+            }
             // Initialize state variables with current values
             currentRefreshInterval = userdata.refreshInterval
             currentCacheInterval = userdata.cacheInterval
@@ -679,69 +666,78 @@ struct PreferenceView: View {
     }
     
     private var debugFrequencyControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Refresh Frequency Controls")
                 .font(.headline)
                 .foregroundColor(.primary)
             
             // Refresh Interval
-            HStack {
-                Text("Main Refresh Interval (how often stock prices update):")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Main Refresh Interval:")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
-                Spacer()
-                
-                Picker("", selection: $currentRefreshInterval) {
-                    ForEach(refreshIntervalOptions, id: \.1) { option in
-                        Text(option.0).tag(option.1)
+                HStack {
+                    Picker("", selection: $currentRefreshInterval) {
+                        ForEach(refreshIntervalOptions, id: \.1) { option in
+                            Text(option.0).tag(option.1)
+                        }
                     }
+                    .onChange(of: currentRefreshInterval) { _, newValue in
+                        setRefreshInterval(newValue)
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 150)
+                    
+                    Text("(how often stock prices update)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .onChange(of: currentRefreshInterval) { _, newValue in
-                    setRefreshInterval(newValue)
-                }
-                .pickerStyle(MenuPickerStyle())
-                .frame(width: 100)
             }
             
             // Cache Interval
-            HStack {
-                Text("Cache Duration (how long to keep data before re-fetching):")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Cache Duration:")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
-                Spacer()
-                
-                Picker("", selection: $currentCacheInterval) {
-                    ForEach(cacheIntervalOptions, id: \.1) { option in
-                        Text(option.0).tag(option.1)
+                HStack {
+                    Picker("", selection: $currentCacheInterval) {
+                        ForEach(cacheIntervalOptions, id: \.1) { option in
+                            Text(option.0).tag(option.1)
+                        }
                     }
+                    .onChange(of: currentCacheInterval) { _, newValue in
+                        setCacheInterval(newValue)
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 150)
+                    
+                    Text("(how long to keep data before re-fetching)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .onChange(of: currentCacheInterval) { _, newValue in
-                    setCacheInterval(newValue)
-                }
-                .pickerStyle(MenuPickerStyle())
-                .frame(width: 100)
             }
             
             // Snapshot Interval
-            HStack {
-                Text("Chart Data Collection Interval (how often to save data for charts):")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Chart Data Collection Interval:")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
-                Spacer()
-                
-                Picker("", selection: $currentSnapshotInterval) {
-                    ForEach(snapshotIntervalOptions, id: \.1) { option in
-                        Text(option.0).tag(option.1)
+                HStack {
+                    Picker("", selection: $currentSnapshotInterval) {
+                        ForEach(snapshotIntervalOptions, id: \.1) { option in
+                            Text(option.0).tag(option.1)
+                        }
                     }
+                    .onChange(of: currentSnapshotInterval) { _, newValue in
+                        setSnapshotInterval(newValue)
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 150)
+                    
+                    Text("(how often to save data for charts)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .onChange(of: currentSnapshotInterval) { _, newValue in
-                    setSnapshotInterval(newValue)
-                }
-                .pickerStyle(MenuPickerStyle())
-                .frame(width: 100)
             }
         }
     }
@@ -752,8 +748,8 @@ struct PreferenceView: View {
                 .font(.headline)
                 .foregroundColor(.primary)
             
-            VStack(spacing: 12) {
-                HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
                     Button("Force Snapshot") {
                         forceDataSnapshot()
                     }
@@ -772,11 +768,9 @@ struct PreferenceView: View {
                     }
                     .buttonStyle(.bordered)
                     .help("Reset all frequency settings to default values")
-                    
-                    Spacer()
                 }
                 
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     Button("Fetch 5 Years Historical Data") {
                         fetch5YearsHistoricalData()
                     }
@@ -789,15 +783,15 @@ struct PreferenceView: View {
                     }
                     .buttonStyle(.bordered)
                     .help("Shows status of automatic historical data checking")
-                    
+                }
+                
+                HStack(spacing: 12) {
                     Button("Calculate 5Y Portfolio Values") {
                         calculate5YearPortfolioValuesDebug()
                     }
                     .buttonStyle(.bordered)
                     .foregroundColor(.green)
                     .help("Calculate 5 years of portfolio values for charts using existing price data")
-                    
-                    Spacer()
                 }
             }
         }
@@ -1189,34 +1183,38 @@ struct DebugLogView: View {
     private let timer = Timer.publish(every: 10.0, on: .main, in: .common).autoconnect()
     
     var body: some View {
-        VStack(spacing: 12) {
-            // Header with controls
-            HStack {
-                Text("Debug Logs")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
+            // Header with controls - compact layout
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Debug Logs")
+                        .font(.headline)
+                    Text("(Scrollable)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 
-                Spacer()
-                
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     Toggle("Auto Refresh", isOn: $isAutoRefresh)
                         .toggleStyle(SwitchToggleStyle())
                     
                     Stepper("Max Lines: \(maxLines)", value: $maxLines, in: 100...2000, step: 100)
-                        .frame(width: 150)
+                        .frame(width: 140)
                     
                     Button("Refresh") {
                         refreshLogs()
                     }
+                    .buttonStyle(.bordered)
                     
                     Button("Clear Logs") {
                         clearLogs()
                     }
+                    .buttonStyle(.bordered)
                     .foregroundColor(.red)
                 }
             }
-            .padding(.horizontal)
             
-            // Log file path info
+            // Log file path info - compact
             if let logPath = logger.getLogFilePath() {
                 HStack {
                     Text("Log File:")
@@ -1226,27 +1224,25 @@ struct DebugLogView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .textSelection(.enabled)
-                    Spacer()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .padding(.horizontal)
             }
             
-            // Log display
+            // Log display - full width
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
+                    LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(logEntries.reversed().enumerated()), id: \.offset) { index, entry in
-                            HStack {
-                                Text(entry)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(colorForLogEntry(entry))
-                                    .textSelection(.enabled)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 1)
-                            .background(index % 2 == 0 ? Color.clear : Color(NSColor.controlBackgroundColor).opacity(0.3))
-                            .id(index)
+                            Text(entry)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(colorForLogEntry(entry))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(index % 2 == 0 ? Color.clear : Color(NSColor.controlBackgroundColor).opacity(0.3))
+                                .id(index)
                         }
                     }
                 }
@@ -1262,7 +1258,8 @@ struct DebugLogView: View {
                 }
             }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .onAppear {
             refreshLogs()
         }
