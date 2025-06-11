@@ -5,12 +5,9 @@ class PreferenceWindowController: NSWindowController {
     private var dataModel: DataModel!
     
     convenience init(dataModel: DataModel) {
-        // Create the window with better initial dimensions
-        let initialWidth: CGFloat = 750
-        let initialHeight: CGFloat = 550
-        
+        // Create the window with minimal initial dimensions - let SwiftUI content determine size
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: initialWidth, height: initialHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -52,11 +49,12 @@ class PreferenceWindowController: NSWindowController {
         // Set the content view
         window.contentView = hostingView
         
-        // Set sizing constraints to ensure usability while allowing dynamic resizing
-        window.minSize = NSSize(width: 650, height: 450)
-        window.maxSize = NSSize(width: 1400, height: 1000) // Increased max width for horizontal scaling
+        // Set sizing constraints to ensure usability while maintaining compact layout
+        window.minSize = NSSize(width: 600, height: 420)
+        window.maxSize = NSSize(width: 1200, height: 900)
         
-        // Enable automatic window sizing based on content
+        // Allow SwiftUI content to determine the window size naturally
+        // This removes the fixed sizing constraint that was preventing automatic resizing
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         
         // Configure the hosting view for proper content sizing
@@ -68,6 +66,9 @@ class PreferenceWindowController: NSWindowController {
                 hostingView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
             ])
         }
+        
+        // Let the SwiftUI view determine the initial size
+        window.setContentSize(hostingView.fittingSize)
     }
     
     func showWindow() {
