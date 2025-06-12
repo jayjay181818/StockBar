@@ -96,7 +96,7 @@ class PythonNetworkService: NetworkService {
                 throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol): \(outputLines.first ?? "")")
             }
             
-            // Try to parse the single line success output
+            // Try to parse the single line success output (legacy format)
             // Example: "AAPL @ 2023-10-27 15:55:00-04:00 | 5m Low: 167.01, High: 167.09, Close: 167.02, PrevClose: 165.50"
             let regex = try! NSRegularExpression(pattern: "Close: (\\d+\\.\\d+), PrevClose: (\\d+\\.\\d+)")
             if let match = regex.firstMatch(in: output, options: [], range: NSRange(location: 0, length: output.utf16.count)) {
@@ -116,7 +116,8 @@ class PythonNetworkService: NetworkService {
                             regularMarketTime: Int(Date().timeIntervalSince1970),
                             exchangeTimezoneName: timezone,
                             regularMarketPrice: closePrice,
-                            regularMarketPreviousClose: prevClosePrice
+                            regularMarketPreviousClose: prevClosePrice,
+                            displayPrice: closePrice  // For legacy method, display price = regular price
                         )
                     }
                 }
@@ -132,6 +133,148 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }
+    
+    /// Enhanced fetch quote with pre/post market data support
+    func fetchEnhancedQuote(for symbol: String) async throws -> StockFetchResult {
+        logger.debug("Attempting to fetch enhanced quote for \(symbol) using Python script.")
+
+        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
+            logger.error("Script '\(scriptName)' not found in bundle.")
+            throw NetworkError.scriptNotFound(scriptName)
+        }
+
+        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
+            logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        // Use multiple symbols to trigger JSON output format
+        process.arguments = [scriptPath, symbol, symbol] // Duplicate symbol to trigger batch mode
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                logger.error("Python script stderr for enhanced \(symbol): \(err)")
+            }
+
+            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+                logger.warning("Python script stdout for enhanced \(symbol) is empty.")
+                throw NetworkError.noData("Empty output from script for \(symbol)")
+            }
+            logger.debug("Python script stdout for enhanced \(symbol): \(output)")
+
+            // Check for FETCH_FAILED
+            if output.contains("FETCH_FAILED") {
+                logger.warning("Script explicitly reported FETCH_FAILED for enhanced \(symbol).")
+                throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol)")
+            }
+            
+            // Parse JSON array response
+            guard let jsonData = output.data(using: .utf8) else {
+                throw NetworkError.invalidResponse("Could not convert output to data")
+            }
+            
+            do {
+                let quotesArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] ?? []
+                
+                // Find our symbol in the results (should be the first one)
+                guard let quoteData = quotesArray.first(where: { quote in
+                    (quote["symbol"] as? String) == symbol
+                }) else {
+                    throw NetworkError.noData("Symbol \(symbol) not found in enhanced response")
+                }
+                
+                return try parseEnhancedQuoteData(quoteData, symbol: symbol)
+                
+            } catch {
+                logger.error("Failed to parse JSON from enhanced script output: \(error.localizedDescription)")
+                throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
+            }
+            
+        } catch let netErr as NetworkError {
+            throw netErr
+        } catch {
+            logger.error("Failed to run Python script for enhanced \(symbol): \(error.localizedDescription)")
+            throw NetworkError.scriptExecutionError(error.localizedDescription)
+        }
+    }
+    
+    private func parseEnhancedQuoteData(_ data: [String: Any], symbol: String) throws -> StockFetchResult {
+        guard let displayPrice = data["price"] as? Double,
+              let previousClose = data["previousClose"] as? Double,
+              let timestamp = data["timestamp"] as? TimeInterval else {
+            throw NetworkError.invalidResponse("Missing required fields in enhanced quote data")
+        }
+        
+        // If regularMarketPrice is not available (e.g., FMP fallback), use displayPrice
+        let regularMarketPrice = data["regularMarketPrice"] as? Double ?? displayPrice
+        
+        let preMarketPrice = data["preMarketPrice"] as? Double
+        let postMarketPrice = data["postMarketPrice"] as? Double
+        let marketStateString = data["marketState"] as? String
+        
+        // Parse market state
+        let marketState: MarketState?
+        if let stateString = marketStateString {
+            marketState = MarketState(rawValue: stateString)
+        } else {
+            marketState = nil
+        }
+        
+        // Calculate pre/post market changes if we have the data
+        var preMarketChange: Double?
+        var preMarketChangePercent: Double?
+        var postMarketChange: Double?
+        var postMarketChangePercent: Double?
+        
+        if let prePrice = preMarketPrice {
+            preMarketChange = prePrice - previousClose
+            preMarketChangePercent = previousClose > 0 ? (preMarketChange! / previousClose) * 100 : 0
+        }
+        
+        if let postPrice = postMarketPrice {
+            postMarketChange = postPrice - previousClose
+            postMarketChangePercent = previousClose > 0 ? (postMarketChange! / previousClose) * 100 : 0
+        }
+        
+        // Detect currency and timezone
+        let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+        let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
+        
+        logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil")")
+        
+        return StockFetchResult(
+            currency: detectedCurrency,
+            symbol: symbol,
+            shortName: symbol,
+            regularMarketTime: Int(timestamp),
+            exchangeTimezoneName: timezone,
+            regularMarketPrice: regularMarketPrice,
+            regularMarketPreviousClose: previousClose,
+            displayPrice: displayPrice,
+            preMarketPrice: preMarketPrice,
+            preMarketChange: preMarketChange,
+            preMarketChangePercent: preMarketChangePercent,
+            preMarketTime: preMarketPrice != nil ? Int(timestamp) : nil,
+            postMarketPrice: postMarketPrice,
+            postMarketChange: postMarketChange,
+            postMarketChangePercent: postMarketChangePercent,
+            postMarketTime: postMarketPrice != nil ? Int(timestamp) : nil,
+            marketState: marketState
+        )
+    }
 
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
         logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
@@ -143,7 +286,7 @@ class PythonNetworkService: NetworkService {
 
         for symbol in symbols {
             do {
-                let result = try await fetchQuote(for: symbol)
+                let result = try await fetchEnhancedQuote(for: symbol)
                 results.append(result)
             } catch {
                 logger.error("Failed to fetch quote for \(symbol) in batch: \(error.localizedDescription)")
@@ -156,7 +299,17 @@ class PythonNetworkService: NetworkService {
                     regularMarketTime: Int(Date().timeIntervalSince1970),
                     exchangeTimezoneName: timezone,
                     regularMarketPrice: Double.nan,
-                    regularMarketPreviousClose: Double.nan
+                    regularMarketPreviousClose: Double.nan,
+                    displayPrice: Double.nan,
+                    preMarketPrice: nil,
+                    preMarketChange: nil,
+                    preMarketChangePercent: nil,
+                    preMarketTime: nil,
+                    postMarketPrice: nil,
+                    postMarketChange: nil,
+                    postMarketChangePercent: nil,
+                    postMarketTime: nil,
+                    marketState: nil
                 )
                 results.append(placeholderResult)
                 errors.append(error) // Example: collecting errors
