@@ -281,9 +281,9 @@ struct PreferenceView: View {
     
     private func calculateOptimalDimensions(for tab: PreferenceTab) -> (width: CGFloat, height: CGFloat) {
         // CRITICAL: Always ensure navigation is visible
-        let navigationHeight: CGFloat = 50   // Tab picker area (reduced)
-        let windowChromeHeight: CGFloat = 30  // Window title bar and padding (reduced)
-        let safetyPadding: CGFloat = 10       // Extra safety margin (reduced)
+        let navigationHeight: CGFloat = 70   // Tab picker area (increased for proper spacing)
+        let windowChromeHeight: CGFloat = 40  // Window title bar and padding (increased)
+        let safetyPadding: CGFloat = 20       // Extra safety margin (increased)
         let baseRequiredHeight = navigationHeight + windowChromeHeight + safetyPadding
         
         let minWidth: CGFloat = 600
@@ -328,11 +328,11 @@ struct PreferenceView: View {
             contentWidth = max(minWidth, min(maxWidth, 850))
             
         case .debug:
-            // Debug with compact layout - updated calculations
-            let debugControlsHeight: CGFloat = 90  // Frequency controls (compact)
-            let debugActionsHeight: CGFloat = 70   // Debug action buttons (compact)
-            let logDisplayHeight: CGFloat = 250    // Main log display area (compact)
-            let spacing: CGFloat = 24              // Spacing between sections
+            // Debug with generous section heights to ensure all content is visible
+            let debugControlsHeight: CGFloat = 240  // Frequency controls (3 picker sections with labels, text, and spacing)
+            let debugActionsHeight: CGFloat = 140   // Debug action buttons (3 rows of buttons with spacing)
+            let logDisplayHeight: CGFloat = 380     // Main log display area (generous for better visibility)
+            let spacing: CGFloat = 60               // Generous spacing for dividers and section margins
             
             contentHeight = debugControlsHeight + debugActionsHeight + logDisplayHeight + spacing
             
@@ -351,6 +351,12 @@ struct PreferenceView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Toggle("Color Coding", isOn: $userdata.showColorCoding)
+                Spacer()
+            }
+            
+            HStack {
+                Toggle("Market Indicators", isOn: $userdata.showMarketIndicators)
+                    .help("Show emoji indicators for pre-market 🔆, after-hours 🌙, and closed markets 🔒")
                 Spacer()
             }
             .onAppear {

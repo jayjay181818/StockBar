@@ -221,7 +221,15 @@ struct PerformanceChartView: View {
     private var chartData: [ChartDataPoint] {
         let data = historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange, dataModel: dataModel)
         // Debug: Log the data we're getting
-        // Chart data refreshed: \(data.count) points for \(selectedChartType.title)
+        print("📊 Chart data for \(selectedChartType.title) (\(selectedTimeRange.rawValue)): \(data.count) points")
+        if data.isEmpty {
+            print("📊 No chart data available for \(selectedChartType.title) with \(selectedTimeRange.rawValue) time range")
+            let startDate = selectedTimeRange.startDate(from: Date())
+            print("📊 Time range: \(startDate) to \(Date())")
+        } else {
+            let dateRange = data.isEmpty ? "N/A" : "\(data.first?.date ?? Date()) to \(data.last?.date ?? Date())"
+            print("📊 Date range: \(dateRange)")
+        }
         return data
     }
     
