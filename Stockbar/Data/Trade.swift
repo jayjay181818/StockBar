@@ -93,6 +93,17 @@ struct TradingInfo: Codable {
     var regularMarketTime: Int = 0
     var exchangeTimezoneName: String = ""
     var shortName: String = ""
+    
+    // Pre-market and post-market data
+    var preMarketPrice: Double?
+    var preMarketChange: Double?
+    var preMarketChangePercent: Double?
+    var preMarketTime: Int?
+    var postMarketPrice: Double?
+    var postMarketChange: Double?
+    var postMarketChangePercent: Double?
+    var postMarketTime: Int?
+    var marketState: String? // PRE, REGULAR, POST, CLOSED
 
     func getPrice() -> String {
         return formatPrice(price: currentPrice, currency: currency)
@@ -125,5 +136,82 @@ struct TradingInfo: Codable {
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm zzz"
         dateFormatter.timeZone = tradeTimeZone
         return dateFormatter.string(from: date)
+    }
+    
+    // MARK: - Pre/Post Market Helper Functions
+    
+    func hasPreMarketData() -> Bool {
+        return preMarketPrice != nil && !(preMarketPrice?.isNaN ?? true)
+    }
+    
+    func hasPostMarketData() -> Bool {
+        return postMarketPrice != nil && !(postMarketPrice?.isNaN ?? true)
+    }
+    
+    func getPreMarketPrice() -> String {
+        guard let price = preMarketPrice, !price.isNaN else { return "–" }
+        return formatPrice(price: price, currency: currency)
+    }
+    
+    func getPostMarketPrice() -> String {
+        guard let price = postMarketPrice, !price.isNaN else { return "–" }
+        return formatPrice(price: price, currency: currency)
+    }
+    
+    func getPreMarketChange() -> String {
+        guard let change = preMarketChange, !change.isNaN else { return "–" }
+        return String(format: "%+.2f", change)
+    }
+    
+    func getPostMarketChange() -> String {
+        guard let change = postMarketChange, !change.isNaN else { return "–" }
+        return String(format: "%+.2f", change)
+    }
+    
+    func getPreMarketChangePercent() -> String {
+        guard let percent = preMarketChangePercent, !percent.isNaN else { return "–" }
+        return String(format: "%+.2f%%", percent)
+    }
+    
+    func getPostMarketChangePercent() -> String {
+        guard let percent = postMarketChangePercent, !percent.isNaN else { return "–" }
+        return String(format: "%+.2f%%", percent)
+    }
+    
+    func getMarketStateIndicator() -> String {
+        switch marketState {
+        case "PRE": return "PRE"
+        case "POST": return "AH"
+        case "CLOSED": return "CLOSED"
+        default: return ""
+        }
+    }
+    
+    func getMarketStateEmoji() -> String {
+        switch marketState {
+        case "PRE": return "🔆"      // Bright sun for pre-market
+        case "POST": return "🌙"     // Moon for after-hours
+        case "CLOSED": return "🔒"   // Lock for closed
+        default: return ""
+        }
+    }
+    
+    func getCurrentDisplayPrice() -> Double {
+        // Return the most relevant price based on market state
+        switch marketState {
+        case "PRE":
+            return preMarketPrice ?? currentPrice
+        case "POST":
+            return postMarketPrice ?? currentPrice
+        default:
+            return currentPrice
+        }
+    }
+    
+    func getCurrentDisplayPriceString() -> String {
+        let price = getCurrentDisplayPrice()
+        let indicator = getMarketStateIndicator()
+        let priceStr = formatPrice(price: price, currency: currency)
+        return indicator.isEmpty ? priceStr : "\(priceStr) \(indicator)"
     }
 }

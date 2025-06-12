@@ -45,6 +45,11 @@ class DataModel: ObservableObject {
             UserDefaults.standard.set(preferredCurrency, forKey: "preferredCurrency")
         }
     }
+    @Published var showMarketIndicators: Bool = UserDefaults.standard.bool(forKey: "showMarketIndicators") {
+        didSet {
+            UserDefaults.standard.set(showMarketIndicators, forKey: "showMarketIndicators")
+        }
+    }
 
     private let logger = Logger.shared
 
@@ -993,6 +998,12 @@ class DataModel: ObservableObject {
             print("🔄 [DataModel] No trades to refresh")
             return 
         }
+        
+        // Ensure currentSymbolIndex is within bounds
+        if currentSymbolIndex >= realTimeTrades.count {
+            currentSymbolIndex = 0
+        }
+        
         let symbol = realTimeTrades[currentSymbolIndex].trade.name
         
         print("🔄 [DataModel] Refreshing symbol: \(symbol) (index \(currentSymbolIndex)/\(realTimeTrades.count))")
@@ -1029,7 +1040,14 @@ class DataModel: ObservableObject {
         
         Task {
             do {
-                let result = try await self.networkService.fetchQuote(for: symbol)
+                // Use enhanced quote fetching for individual symbol refreshes to get pre/post market data
+                let result: StockFetchResult
+                if let pythonService = self.networkService as? PythonNetworkService {
+                    result = try await pythonService.fetchEnhancedQuote(for: symbol)
+                } else {
+                    result = try await self.networkService.fetchQuote(for: symbol)
+                }
+                
                 if let index = self.realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
                     let wasSuccessful = self.realTimeTrades[index].updateWithResult(result, retainOnFailure: true)
                     
@@ -1183,15 +1201,16 @@ extension RealTimeTrade {
     /// Updates the trade with new data from the network service
     /// Returns true if the update was successful (non-NaN data), false if it failed and old data was retained
     func updateWithResult(_ result: StockFetchResult, retainOnFailure: Bool = true) -> Bool {
-        // Fallback logic: treat as GBX if currency is GBX/GBp or symbol ends with .L
-        let price = result.regularMarketPrice // Assumes StockFetchResult.swift defines this as non-optional
-        let prevClose = result.regularMarketPreviousClose // Assumes StockFetchResult.swift defines this as non-optional
+        // Use separate prices for different purposes
+        let regularPrice = result.regularMarketPrice  // For day calculations
+        let displayPrice = result.displayPrice        // For market value and display
+        let prevClose = result.regularMarketPreviousClose
         
         // Check if this is a failed fetch (NaN values)
-        let isFetchFailure = price.isNaN || prevClose.isNaN
+        let isFetchFailure = regularPrice.isNaN || prevClose.isNaN
         
         if isFetchFailure {
-            Logger.shared.warning("Fetch failed for \(result.symbol) - price: \(price), prevClose: \(prevClose)")
+            Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)")
             
             if retainOnFailure {
                 // Don't update the price data, but we can update the timestamp to show when we last tried
@@ -1209,7 +1228,8 @@ extension RealTimeTrade {
         
         // IMPORTANT: Our Python script already converts pence to pounds for .L stocks
         // So we should NOT do any additional conversion here
-        var finalPrice = price
+        var finalRegularPrice = regularPrice
+        var finalDisplayPrice = displayPrice
         var finalPrevClose = prevClose
         
         // Set default currency if not specified
@@ -1223,10 +1243,21 @@ extension RealTimeTrade {
 
         // Only update price data if fetch was successful or retainOnFailure is false
         if !isFetchFailure || !retainOnFailure {
-            self.realTimeInfo.currentPrice = finalPrice
+            self.realTimeInfo.currentPrice = finalRegularPrice  // Use regular market price for day calculations
             self.realTimeInfo.previousClose = finalPrevClose // Use the (potentially adjusted) finalPrevClose
             self.realTimeInfo.prevClosePrice = finalPrevClose // Also set the field that StockStatusBar reads
             self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
+            
+            // Update pre/post market data
+            self.realTimeInfo.preMarketPrice = result.preMarketPrice
+            self.realTimeInfo.preMarketChange = result.preMarketChange
+            self.realTimeInfo.preMarketChangePercent = result.preMarketChangePercent
+            self.realTimeInfo.preMarketTime = result.preMarketTime
+            self.realTimeInfo.postMarketPrice = result.postMarketPrice
+            self.realTimeInfo.postMarketChange = result.postMarketChange
+            self.realTimeInfo.postMarketChangePercent = result.postMarketChangePercent
+            self.realTimeInfo.postMarketTime = result.postMarketTime
+            self.realTimeInfo.marketState = result.marketState?.rawValue
         }
         
         // Always update metadata (but not the last update time if we're retaining old data)
@@ -1243,7 +1274,7 @@ extension RealTimeTrade {
         if isFetchFailure && retainOnFailure {
             logger.info("Retained old data for \(self.trade.name): Price \(self.realTimeInfo.currentPrice) Currency: \(self.realTimeInfo.currency ?? "N/A") (fetch failed)")
         } else {
-            logger.info("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) prevClosePrice: \(self.realTimeInfo.prevClosePrice) Currency: \(self.realTimeInfo.currency ?? "N/A") originalPrice: \(price) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")")
+            logger.info("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) prevClosePrice: \(self.realTimeInfo.prevClosePrice) Currency: \(self.realTimeInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")")
         }
         
         return !isFetchFailure // Return true if successful, false if failed

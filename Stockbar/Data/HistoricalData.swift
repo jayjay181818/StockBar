@@ -187,3 +187,91 @@ enum ChartType {
         }
     }
 }
+
+// MARK: - Portfolio Analytics
+
+struct PortfolioAnalytics: Codable {
+    let timeRange: String
+    let calculatedAt: Date
+    
+    // Performance Metrics
+    let totalReturn: Double          // Absolute return amount
+    let totalReturnPercent: Double   // Return percentage
+    let annualizedReturn: Double     // Annualized return percentage
+    
+    // Risk Metrics
+    let volatility: Double           // Standard deviation of daily returns
+    let sharpeRatio: Double          // Risk-adjusted return
+    let maxDrawdown: Double          // Maximum peak-to-trough decline
+    let maxDrawdownPercent: Double   // Maximum decline percentage
+    
+    // Value Statistics
+    let minValue: Double             // Minimum portfolio value in period
+    let maxValue: Double             // Maximum portfolio value in period
+    let averageValue: Double         // Average portfolio value
+    let finalValue: Double           // Current/final portfolio value
+    let initialValue: Double         // Starting portfolio value
+    
+    // Trading Performance
+    let winningDays: Int             // Days with positive returns
+    let losingDays: Int              // Days with negative returns
+    let totalDays: Int               // Total days analyzed
+    let winRate: Double              // Percentage of winning days
+    
+    // Additional Metrics
+    let currency: String             // Portfolio currency
+    let bestDay: Double              // Best single day return
+    let worstDay: Double             // Worst single day return
+    let consecutiveWins: Int         // Longest winning streak
+    let consecutiveLosses: Int       // Longest losing streak
+    
+    init(
+        timeRange: String,
+        calculatedAt: Date = Date(),
+        totalReturn: Double,
+        totalReturnPercent: Double,
+        annualizedReturn: Double,
+        volatility: Double,
+        sharpeRatio: Double,
+        maxDrawdown: Double,
+        maxDrawdownPercent: Double,
+        minValue: Double,
+        maxValue: Double,
+        averageValue: Double,
+        finalValue: Double,
+        initialValue: Double,
+        winningDays: Int,
+        losingDays: Int,
+        totalDays: Int,
+        winRate: Double,
+        currency: String,
+        bestDay: Double,
+        worstDay: Double,
+        consecutiveWins: Int,
+        consecutiveLosses: Int
+    ) {
+        self.timeRange = timeRange
+        self.calculatedAt = calculatedAt
+        self.totalReturn = totalReturn
+        self.totalReturnPercent = totalReturnPercent
+        self.annualizedReturn = annualizedReturn
+        self.volatility = volatility
+        self.sharpeRatio = sharpeRatio
+        self.maxDrawdown = maxDrawdown
+        self.maxDrawdownPercent = maxDrawdownPercent
+        self.minValue = minValue
+        self.maxValue = maxValue
+        self.averageValue = averageValue
+        self.finalValue = finalValue
+        self.initialValue = initialValue
+        self.winningDays = winningDays
+        self.losingDays = losingDays
+        self.totalDays = totalDays
+        self.winRate = winRate
+        self.currency = currency
+        self.bestDay = bestDay
+        self.worstDay = worstDay
+        self.consecutiveWins = consecutiveWins
+        self.consecutiveLosses = consecutiveLosses
+    }
+}

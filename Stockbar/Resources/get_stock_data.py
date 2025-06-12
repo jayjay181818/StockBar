@@ -109,65 +109,217 @@ def fetch_real_time_quote_yfinance(symbol):
         ticker = yf.Ticker(symbol)
         
         # 1. Get daily history to find a reliable previous day's close.
-        daily_hist = ticker.history(period="2d", interval="1d", auto_adjust=False)
+        # Fetch more days to ensure we get complete trading day data
+        daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
         if daily_hist.empty:
             return None
         
-        # Get previous day's close (second-to-last entry if we have 2+ days, otherwise use the only available close)
-        if len(daily_hist) >= 2:
-            previous_close = float(daily_hist.iloc[-2]['Close'])  # Previous day's close
+        # Get the most recent COMPLETE trading day's close as previous close
+        # During pre-market: the last complete day is yesterday (what we want for day P&L)
+        # During market hours: we still want yesterday's close for day P&L calculation
+        # The key insight: we always want the most recent complete trading day's close
+        
+        # Sort by date to ensure we get the most recent complete day
+        daily_hist = daily_hist.sort_index()
+        
+        # Remove today's data if it's incomplete (during market hours)
+        # We want the last complete trading day's close
+        today = datetime.now().date()
+        
+        # Filter to only include dates before today, ensuring we get complete trading days
+        complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
+        
+        if not complete_days.empty:
+            # Use the most recent complete trading day's close
+            previous_close = float(complete_days.iloc[-1]['Close'])
+            print(f"Using previous close from {complete_days.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
         else:
-            previous_close = float(daily_hist.iloc[-1]['Close'])  # Fallback to only available close
+            # Fallback: use the most recent available close (this handles edge cases)
+            previous_close = float(daily_hist.iloc[-1]['Close'])
+            print(f"Fallback: using most recent close from {daily_hist.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
 
         current_price = None
-
-        # 2. Try to get the latest price using fast_info (often most reliable)
+        regular_market_price = None  # Keep track of actual regular market price
+        pre_market_price = None
+        post_market_price = None
+        market_state = "REGULAR"
+        
+        # 2. Get comprehensive ticker info for pre/post market data
         try:
-            current_price = float(ticker.fast_info['last_price'])
-            print(f"yfinance fast_info for {symbol}: {current_price}", file=sys.stderr)
+            info = ticker.info
+            print(f"yfinance info keys for {symbol}: {list(info.keys())[:10]}...", file=sys.stderr)
+            
+            # Extract pre-market data
+            if 'preMarketPrice' in info and info['preMarketPrice'] is not None:
+                pre_market_price = float(info['preMarketPrice'])
+                print(f"yfinance preMarketPrice for {symbol}: {pre_market_price}", file=sys.stderr)
+            
+            # Extract post-market data
+            if 'postMarketPrice' in info and info['postMarketPrice'] is not None:
+                post_market_price = float(info['postMarketPrice'])
+                print(f"yfinance postMarketPrice for {symbol}: {post_market_price}", file=sys.stderr)
+            
+            # Get regular market price
+            if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
+                regular_market_price = float(info['regularMarketPrice'])
+                current_price = regular_market_price  # Start with regular market price
+                print(f"yfinance regularMarketPrice for {symbol}: {regular_market_price}", file=sys.stderr)
+                
         except Exception as e:
-            print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
+            print(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.", file=sys.stderr)
 
-        # 3. If fast_info failed, try intraday history with pre/post market data
-        if current_price is None:
+        # 3. Try to get the latest price using fast_info if we don't have it yet
+        if regular_market_price is None:
+            try:
+                regular_market_price = float(ticker.fast_info['last_price'])
+                current_price = regular_market_price
+                print(f"yfinance fast_info for {symbol}: {regular_market_price}", file=sys.stderr)
+            except Exception as e:
+                print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
+
+        # 4. If still no regular market price, try intraday history with pre/post market data
+        if regular_market_price is None:
             print(f"Trying intraday history with prepost=True for {symbol}", file=sys.stderr)
             intraday_hist = ticker.history(period="2d", interval="5m", prepost=True, auto_adjust=False)
             if not intraday_hist.empty:
-                current_price = float(intraday_hist.iloc[-1]['Close'])
-                print(f"yfinance intraday latest price for {symbol}: {current_price}", file=sys.stderr)
-        
-        # 4. Try to get pre-market or after-hours data specifically
-        if current_price is None or current_price == previous_close:
-            try:
-                print(f"Trying to get pre/post market data for {symbol}", file=sys.stderr)
-                # Try to get ticker info which might have pre-market data
-                info = ticker.info
-                if 'preMarketPrice' in info and info['preMarketPrice'] is not None:
-                    current_price = float(info['preMarketPrice'])
-                    print(f"yfinance preMarketPrice for {symbol}: {current_price}", file=sys.stderr)
-                elif 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
-                    current_price = float(info['regularMarketPrice'])
-                    print(f"yfinance regularMarketPrice for {symbol}: {current_price}", file=sys.stderr)
-            except Exception as e:
-                print(f"yfinance info fetch failed for {symbol}: {e}", file=sys.stderr)
+                regular_market_price = float(intraday_hist.iloc[-1]['Close'])
+                current_price = regular_market_price
+                print(f"yfinance intraday latest price for {symbol}: {regular_market_price}", file=sys.stderr)
         
         # 5. Final fallback: If all else fails, use the latest daily close (previous close).
-        if current_price is None:
-            print(f"All yfinance real-time methods failed for {symbol}. Using previous close as current price.", file=sys.stderr)
-            current_price = previous_close
+        if regular_market_price is None:
+            print(f"All yfinance real-time methods failed for {symbol}. Using previous close as regular market price.", file=sys.stderr)
+            regular_market_price = previous_close
+            current_price = regular_market_price
 
-        # 6. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
-        # This conversion should apply to both current_price and previous_close.
+        # 6. Determine market state based on appropriate timezone for the stock
+        if symbol.upper().endswith('.L'):
+            # LSE stocks - use London timezone
+            try:
+                from zoneinfo import ZoneInfo
+                market_tz = ZoneInfo("Europe/London")
+                print(f"Using zoneinfo for LSE timezone detection", file=sys.stderr)
+            except ImportError:
+                try:
+                    import pytz
+                    market_tz = pytz.timezone("Europe/London")
+                    print(f"Using pytz for LSE timezone detection", file=sys.stderr)
+                except ImportError:
+                    # Final fallback - assume UTC (GMT) for LSE
+                    from datetime import timezone, timedelta
+                    market_tz = timezone(timedelta(hours=0))  # GMT
+                    print(f"Using manual timezone offset for GMT", file=sys.stderr)
+            
+            # Get current time in London timezone
+            now_market = datetime.now(market_tz)
+            current_hour_market = now_market.hour
+            current_minute_market = now_market.minute
+            
+            print(f"Current time London: {now_market.strftime('%H:%M:%S %Z')} (local time: {datetime.now().strftime('%H:%M:%S')})", file=sys.stderr)
+            
+            # LSE market hours (London time):
+            # Pre-market: 7:00 AM - 8:00 AM GMT/BST
+            # Regular: 8:00 AM - 4:30 PM GMT/BST  
+            # Post-market: 4:30 PM - 5:30 PM GMT/BST
+            # Closed: 5:30 PM - 7:00 AM GMT/BST
+            
+            if (current_hour_market >= 7 and current_hour_market < 8):
+                if pre_market_price is not None:
+                    market_state = "PRE"
+                    current_price = pre_market_price
+                    print(f"Market state: PRE-MARKET LSE (using pre-market price: {pre_market_price})", file=sys.stderr)
+                else:
+                    market_state = "PRE"
+                    print(f"Market state: PRE-MARKET LSE (no pre-market price available)", file=sys.stderr)
+            elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
+                market_state = "REGULAR"
+                print(f"Market state: REGULAR HOURS LSE", file=sys.stderr)
+            elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
+                if post_market_price is not None:
+                    market_state = "POST"
+                    current_price = post_market_price
+                    print(f"Market state: POST-MARKET LSE (using post-market price: {post_market_price})", file=sys.stderr)
+                else:
+                    market_state = "POST"
+                    print(f"Market state: POST-MARKET LSE (no post-market price available)", file=sys.stderr)
+            else:
+                market_state = "CLOSED"
+                print(f"Market state: CLOSED LSE", file=sys.stderr)
+        else:
+            # US stocks - use US Eastern timezone
+            try:
+                from zoneinfo import ZoneInfo
+                market_tz = ZoneInfo("America/New_York")
+                print(f"Using zoneinfo for US timezone detection", file=sys.stderr)
+            except ImportError:
+                try:
+                    import pytz
+                    market_tz = pytz.timezone("America/New_York")
+                    print(f"Using pytz for US timezone detection", file=sys.stderr)
+                except ImportError:
+                    # Final fallback - assume UTC-5 (EST) / UTC-4 (EDT)
+                    from datetime import timezone, timedelta
+                    market_tz = timezone(timedelta(hours=-4))  # EDT (summer time)
+                    print(f"Using manual timezone offset for EDT", file=sys.stderr)
+            
+            # Get current time in US Eastern timezone
+            now_market = datetime.now(market_tz)
+            current_hour_market = now_market.hour
+            current_minute_market = now_market.minute
+            
+            print(f"Current time ET: {now_market.strftime('%H:%M:%S %Z')} (local time: {datetime.now().strftime('%H:%M:%S')})", file=sys.stderr)
+            
+            # US market hours (Eastern time):
+            # Pre-market: 4:00 AM - 9:30 AM ET
+            # Regular: 9:30 AM - 4:00 PM ET  
+            # Post-market: 4:00 PM - 8:00 PM ET
+            # Closed: 8:00 PM - 4:00 AM ET
+            
+            if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
+                if pre_market_price is not None:
+                    market_state = "PRE"
+                    current_price = pre_market_price  # Use pre-market price as current
+                    print(f"Market state: PRE-MARKET (using pre-market price: {pre_market_price})", file=sys.stderr)
+                else:
+                    market_state = "PRE"
+                    print(f"Market state: PRE-MARKET (no pre-market price available)", file=sys.stderr)
+            elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
+                market_state = "REGULAR"
+                print(f"Market state: REGULAR HOURS", file=sys.stderr)
+            elif current_hour_market >= 16 and current_hour_market < 20:
+                if post_market_price is not None:
+                    market_state = "POST"
+                    current_price = post_market_price  # Use post-market price as current
+                    print(f"Market state: POST-MARKET (using post-market price: {post_market_price})", file=sys.stderr)
+                else:
+                    market_state = "POST"
+                    print(f"Market state: POST-MARKET (no post-market price available)", file=sys.stderr)
+            else:
+                market_state = "CLOSED"
+                print(f"Market state: CLOSED", file=sys.stderr)
+
+        # 7. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
+        # This conversion should apply to all prices.
         if symbol.upper().endswith('.L'):
             current_price /= 100.0
             previous_close /= 100.0
+            if regular_market_price is not None:
+                regular_market_price /= 100.0
+            if pre_market_price is not None:
+                pre_market_price /= 100.0
+            if post_market_price is not None:
+                post_market_price /= 100.0
             
-        print(f"yfinance data for {symbol}: current_price={current_price}, previous_close={previous_close}", file=sys.stderr)
+        print(f"yfinance data for {symbol}: current_price={current_price}, previous_close={previous_close}, pre_market={pre_market_price}, post_market={post_market_price}, state={market_state}", file=sys.stderr)
             
         return {
             'symbol': symbol,
-            'price': current_price,
+            'price': current_price,  # Display price (includes pre/post market adjustments)
+            'regularMarketPrice': regular_market_price,  # Always the regular market price for day calculations
             'previousClose': previous_close,
+            'preMarketPrice': pre_market_price,
+            'postMarketPrice': post_market_price,
+            'marketState': market_state,
             'timestamp': int(time.time())
         }
         
@@ -234,8 +386,9 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         
-        # Fetch historical data
-        hist = ticker.history(start=start_dt, end=end_dt + timedelta(days=1), prepost=True, auto_adjust=False)
+        # Fetch historical data with intraday interval to capture pre/post market data
+        # Using 1h interval to get extended hours data while keeping data manageable
+        hist = ticker.history(start=start_dt, end=end_dt + timedelta(days=1), prepost=True, auto_adjust=False, interval="1h")
         
         if hist.empty:
             return None
@@ -346,7 +499,7 @@ def fetch_historical_data(symbol, start_date, end_date):
     return fetch_historical_data_fmp(symbol, start_date, end_date)
 
 def fetch_batch(symbols):
-    """Fetch multiple symbols using FMP API"""
+    """Fetch multiple symbols using enhanced real-time API with pre/post market support"""
     results = {}
     
     for symbol in symbols:
@@ -357,26 +510,18 @@ def fetch_batch(symbols):
                 results[symbol] = cached
                 continue
                 
-            # Fetch from API
+            # Fetch from API using enhanced method
             quote_data = fetch_real_time_quote(symbol)
             if quote_data:
-                # Convert to expected format for backward compatibility
-                timestamp_str = datetime.fromtimestamp(quote_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S%z')
-                
-                # For FMP API, we don't have high/low in real-time quotes
-                # Using close price as approximation for high/low
-                close_price = quote_data['price']
-                prev_close = quote_data['previousClose']
-                
-                result = (timestamp_str, close_price, close_price, close_price, prev_close)
-                set_cache(symbol, result)
-                results[symbol] = result
+                # Return the enhanced quote data directly (JSON format)
+                set_cache(symbol, quote_data)
+                results[symbol] = quote_data
             else:
                 print(f"Failed to fetch data for {symbol}", file=sys.stderr)
                 results[symbol] = None
                 
-            # Add delay to respect rate limits (FMP allows 250 requests/day on free tier)
-            time.sleep(0.5)  # 500ms delay between requests
+            # Add delay to respect rate limits and reduce yfinance rate limiting
+            time.sleep(1.0)  # 1 second delay between requests to be more conservative
             
         except Exception as e:
             print(f"Error fetching {symbol}: {e}", file=sys.stderr)
@@ -462,14 +607,45 @@ def main():
                     else:
                         results[symbol] = None
         
-        # Output results
-        for symbol in symbols:
+        # Output results as JSON for new format or legacy text format
+        if len(symbols) == 1:
+            # Single symbol - use legacy text format for backwards compatibility
+            symbol = symbols[0]
             res = results.get(symbol)
             if res:
-                timestamp_str, low_price, high_price, close_price, prev_close = res
-                print(f"{symbol} @ {timestamp_str} | 5m Low: {low_price:.2f}, High: {high_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
+                if isinstance(res, dict):
+                    # New JSON format from enhanced fetch
+                    timestamp_str = datetime.fromtimestamp(res['timestamp']).strftime('%Y-%m-%d %H:%M:%S%z')
+                    close_price = res['price']
+                    prev_close = res['previousClose']
+                    print(f"{symbol} @ {timestamp_str} | 5m Low: {close_price:.2f}, High: {close_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
+                else:
+                    # Legacy tuple format
+                    timestamp_str, low_price, high_price, close_price, prev_close = res
+                    print(f"{symbol} @ {timestamp_str} | 5m Low: {low_price:.2f}, High: {high_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
             else:
                 print(f"Error fetching {symbol}: No data received.")
+                print("FETCH_FAILED")
+        else:
+            # Multiple symbols - output as JSON array
+            json_results = []
+            for symbol in symbols:
+                res = results.get(symbol)
+                if res and isinstance(res, dict):
+                    json_results.append(res)
+                elif res:
+                    # Convert legacy tuple format to dict
+                    timestamp_str, low_price, high_price, close_price, prev_close = res
+                    json_results.append({
+                        'symbol': symbol,
+                        'price': close_price,
+                        'previousClose': prev_close,
+                        'timestamp': int(time.time())
+                    })
+            
+            if json_results:
+                print(json.dumps(json_results))
+            else:
                 print("FETCH_FAILED")
 
 if __name__ == "__main__":
