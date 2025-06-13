@@ -33,6 +33,8 @@ class DataModel: ObservableObject {
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
     public let historicalDataManager = HistoricalDataManager.shared
+    private let tradeDataService = TradeDataService()
+    private let migrationService = DataMigrationService.shared
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
     @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
@@ -88,43 +90,29 @@ class DataModel: ObservableObject {
         // Initialize userData first
         _userData = Published(initialValue: UserData(positions: [], settings: UserSettings()))
 
-        // Load saved trades
-        let data = UserDefaults.standard.object(forKey: "usertrades") as? Data ?? Data()
-        // Decode saved trades or default to empty
-        let decodedTrades = (try? decoder.decode([Trade].self, from: data)) ?? []
-        self.realTimeTrades = decodedTrades.map { RealTimeTrade(trade: $0, realTimeInfo: TradingInfo()) }
-        
-        print("🔄 [DataModel] Loaded \(decodedTrades.count) trades from UserDefaults")
-        for trade in decodedTrades {
-            print("🔄 [DataModel] - Trade: \(trade.name)")
-        }
-        
-        // Write debug info to a file
-        let debugInfo = "DataModel Init: Loaded \(decodedTrades.count) trades at \(Date())\n"
-        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-            try? debugInfo.appendToFile(url: debugFile)
-        }
+        // Initialize realTimeTrades first - will be loaded async after init
+        self.realTimeTrades = []
         
         // Load user data after userData is initialized
         self.userData = loadUserData()
         
-        // Migrate existing data to include costCurrency field
-        migrateCostCurrencyData()
-        
-        // Load saved trading info (last successful stock data)
-        loadSavedTradingInfo()
-        
-        // Migrate existing trading info to ensure currency is set
-        migrateRealTimeTradesCurrency()
+        // Note: All data loading now happens asynchronously via loadTradesAsync()
+        // including migration of cost currency and trading info currency
         
         if self.realTimeTrades.isEmpty {
             logger.warning("No saved trades found, starting with empty list.")
         }
 
         setupPublishers() // Keep as is
-        logger.info("DataModel initialized with \(realTimeTrades.count) trades, using PythonNetworkService")
-        startStaggeredRefresh()
+        logger.info("DataModel initialized, loading trades asynchronously...")
+        
+        // Load trades asynchronously
+        Task {
+            await loadTradesAsync()
+            await MainActor.run {
+                self.startStaggeredRefresh()
+            }
+        }
 
         // Apply normalization to loaded stock currency data to ensure consistency
         normalizeLoadedStockCurrencies()
@@ -191,43 +179,79 @@ class DataModel: ObservableObject {
         }
     }
     
-    // MARK: - Persistent Storage Methods
+    // MARK: - Core Data Aware Persistence Methods
     
-    private func loadSavedTradingInfo() {
-        guard let data = UserDefaults.standard.object(forKey: "tradingInfoData") as? Data else {
-            logger.info("No saved trading info found")
-            return
-        }
+    /// Load trades asynchronously from Core Data
+    private func loadTradesAsync() async {
+        logger.info("🔄 Loading trades from Core Data...")
         
         do {
-            let savedTradingInfo = try decoder.decode([String: TradingInfo].self, from: data)
-            logger.info("Loaded saved trading info for \(savedTradingInfo.count) symbols")
+            // First, trigger migration if needed
+            try await migrationService.performFullMigration()
             
-            // Apply saved trading info to matching trades
-            for trade in realTimeTrades {
-                if let savedInfo = savedTradingInfo[trade.trade.name] {
+            // Load trades from Core Data
+            logger.info("📊 Loading trades from Core Data")
+            let trades = try await tradeDataService.loadAllTrades()
+            
+            // Create RealTimeTrade objects
+            let realTimeTrades = trades.map { RealTimeTrade(trade: $0, realTimeInfo: TradingInfo()) }
+            
+            // Load trading info for each trade
+            await loadTradingInfoAsync(for: realTimeTrades)
+            
+            // Update on main thread
+            await MainActor.run {
+                self.realTimeTrades = realTimeTrades
+                logger.info("✅ Loaded \(realTimeTrades.count) trades successfully from Core Data")
+                
+                // Apply migrations after loading
+                self.migrateCostCurrencyData()
+                self.migrateRealTimeTradesCurrency()
+            }
+            
+        } catch {
+            logger.error("❌ Failed to load trades from Core Data: \(error)")
+            
+            // Initialize with empty trades if Core Data fails
+            await MainActor.run {
+                self.realTimeTrades = []
+                logger.warning("⚠️ Initialized with empty trades due to Core Data failure")
+            }
+        }
+    }
+    
+    /// Load trading info asynchronously from Core Data
+    private func loadTradingInfoAsync(for trades: [RealTimeTrade]) async {
+        do {
+            logger.info("📊 Loading trading info from Core Data")
+            let tradingInfoDict = try await tradeDataService.loadAllTradingInfo()
+            
+            // Apply trading info to trades
+            for trade in trades {
+                if let savedInfo = tradingInfoDict[trade.trade.name] {
                     trade.realTimeInfo = savedInfo
-                    logger.debug("Restored trading info for \(trade.trade.name): Price \(savedInfo.currentPrice), Last Update: \(savedInfo.getTimeInfo())")
+                    logger.debug("Restored trading info for \(trade.trade.name) from Core Data")
                 }
             }
         } catch {
-            logger.error("Failed to load saved trading info: \(error.localizedDescription)")
+            logger.error("❌ Failed to load trading info from Core Data: \(error)")
         }
     }
+    
     
     private func saveTradingInfo() {
         let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades.map { ($0.trade.name, $0.realTimeInfo) })
         
-        // Move encoding and saving to background queue to prevent UI blocking
-        Task.detached(priority: .utility) { [encoder, logger] in
+        // Move saving to background queue to prevent UI blocking
+        Task.detached(priority: .utility) { [weak self, logger] in
+            guard let self = self else { return }
+            
             do {
-                let data = try encoder.encode(tradingInfoDict)
-                await MainActor.run {
-                    UserDefaults.standard.set(data, forKey: "tradingInfoData")
-                }
-                logger.debug("Saved trading info for \(tradingInfoDict.count) symbols")
+                // Save directly to Core Data
+                try await self.tradeDataService.saveAllTradingInfo(tradingInfoDict)
+                logger.debug("Saved trading info for \(tradingInfoDict.count) symbols to Core Data")
             } catch {
-                logger.error("Failed to save trading info: \(error.localizedDescription)")
+                logger.error("Failed to save trading info to Core Data: \(error.localizedDescription)")
             }
         }
     }
@@ -1127,20 +1151,22 @@ class DataModel: ObservableObject {
     }
 
     private func saveTrades(_ trades: [RealTimeTrade]) {
-        logger.debug("Saving \(trades.count) trades to UserDefaults")
+        logger.debug("Saving \(trades.count) trades to Core Data")
         
-        // Move encoding and saving to background queue to prevent UI blocking
-        Task.detached(priority: .utility) { [encoder, logger] in
+        // Move saving to background queue to prevent UI blocking
+        Task.detached(priority: .utility) { [weak self, logger] in
+            guard let self = self else { return }
+            
             do {
-                // Filter out any potential placeholder/empty trades before saving if needed
+                // Filter out any potential placeholder/empty trades before saving
                 let tradesToSave = trades.filter { !$0.trade.name.isEmpty }
-                let tradesData = try encoder.encode(tradesToSave.map { $0.trade })
-                await MainActor.run {
-                    UserDefaults.standard.set(tradesData, forKey: "usertrades")
-                }
-                logger.debug("Successfully saved \(tradesToSave.count) trades.")
+                let tradeModels = tradesToSave.map { $0.trade }
+                
+                // Save directly to Core Data
+                try await self.tradeDataService.saveAllTrades(tradeModels)
+                logger.debug("Successfully saved \(tradesToSave.count) trades to Core Data")
             } catch {
-                logger.error("Failed to save trades: \(error.localizedDescription)")
+                logger.error("Failed to save trades to Core Data: \(error.localizedDescription)")
             }
         }
     }
