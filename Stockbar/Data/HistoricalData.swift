@@ -275,3 +275,99 @@ struct PortfolioAnalytics: Codable {
         self.consecutiveLosses = consecutiveLosses
     }
 }
+
+// MARK: - Performance Optimization Types
+
+struct PerformanceStats {
+    let compressionStats: CompressionStats
+    let memoryStats: MemoryStats
+    let chartCacheStats: ChartCacheStats
+    let totalDataPoints: Int
+    let coreDataStorageSize: Double // MB
+    
+    var overallHealthScore: Double {
+        var score = 100.0
+        
+        // Memory usage impact (0-30 points)
+        let memoryImpact = min(30, (memoryStats.usagePercentage / 100.0) * 30)
+        score -= memoryImpact
+        
+        // Cache efficiency impact (0-20 points)
+        let cacheEfficiency = chartCacheStats.cacheHitRatio * 20
+        score = score - 20 + cacheEfficiency
+        
+        // Compression benefit (0-20 points)
+        let compressionBenefit = compressionStats.compressionRatio * 20
+        score += compressionBenefit
+        
+        // Data density impact (0-30 points)
+        let dataDensity = min(30, Double(totalDataPoints) / 100000.0 * 30)
+        score -= dataDensity
+        
+        return max(0, min(100, score))
+    }
+    
+    var performanceLevel: PerformanceLevel {
+        let score = overallHealthScore
+        if score >= 80 {
+            return .excellent
+        } else if score >= 60 {
+            return .good
+        } else if score >= 40 {
+            return .fair
+        } else {
+            return .poor
+        }
+    }
+    
+    var recommendations: [String] {
+        var suggestions: [String] = []
+        
+        if memoryStats.memoryStatus != .normal {
+            suggestions.append("Consider reducing chart cache size or enabling compression")
+        }
+        
+        if chartCacheStats.cacheHitRatio < 0.5 {
+            suggestions.append("Chart cache hit ratio is low - consider prefetching common time ranges")
+        }
+        
+        if compressionStats.compressionRatio > 0.3 {
+            suggestions.append("Large amount of compressible data detected - run data compression")
+        }
+        
+        if totalDataPoints > 50000 {
+            suggestions.append("Consider archiving very old data to improve performance")
+        }
+        
+        if coreDataStorageSize > 100 {
+            suggestions.append("Database size is large - consider running optimization")
+        }
+        
+        return suggestions
+    }
+}
+
+enum PerformanceLevel {
+    case excellent
+    case good
+    case fair
+    case poor
+    
+    var description: String {
+        switch self {
+        case .excellent: return "Excellent"
+        case .good: return "Good"
+        case .fair: return "Fair"
+        case .poor: return "Poor"
+        }
+    }
+    
+    var color: String {
+        switch self {
+        case .excellent: return "green"
+        case .good: return "blue"
+        case .fair: return "orange"
+        case .poor: return "red"
+        }
+    }
+}
