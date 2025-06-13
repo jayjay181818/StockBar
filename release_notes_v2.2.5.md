@@ -131,6 +131,6 @@ This release includes automatic data migration and requires no manual interventi
 
 ---
 
-*Released on: {RELEASE_DATE}*
+*Released on: June 13, 2025*
 *Build: v2.2.5*
-*Commit: {COMMIT_HASH}*
+*Commit: 419f879*
