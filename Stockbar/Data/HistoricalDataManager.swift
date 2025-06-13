@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreData
 
 extension Array {
     func chunked(into size: Int) -> [[Element]] {
@@ -47,8 +48,16 @@ class HistoricalDataManager: ObservableObject {
     
     private let logger = Logger.shared
     private let encoder = JSONEncoder()
+    
+    // Performance optimization services
+    private let compressionService = DataCompressionService.shared
+    private let chartDataService = OptimizedChartDataService.shared
+    private let batchService = BatchProcessingService.shared
+    private let memoryService = MemoryManagementService.shared
     private let decoder = JSONDecoder()
     private let cacheManager = CacheManager.shared
+    private let coreDataService: HistoricalDataServiceProtocol
+    private let migrationService = DataMigrationService.shared
     
     @Published var portfolioSnapshots: [PortfolioSnapshot] = []
     @Published var priceSnapshots: [String: [PriceSnapshot]] = [:]
@@ -82,16 +91,97 @@ class HistoricalDataManager: ObservableObject {
         static let lastPortfolioCalculationDate = "lastPortfolioCalculationDate"
     }
     
-    // Increased limits to handle 5+ years of daily data
-    private let maxDataPoints = 2500 // Increased from 1000 to accommodate 5+ years
-    private let maxPortfolioSnapshots = 2000 // Limit for portfolio snapshots
+    // Core Data Era: Dramatically increased limits for decades of data retention
+    private let maxDataPoints = 25000 // 10x increase: 50+ years per stock (Core Data optimized)
+    private let maxPortfolioSnapshots = 8000 // 4x increase: 25+ years portfolio history
     
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
     
     private init() {
+        self.coreDataService = CoreDataHistoricalDataService()
         loadHistoricalData()
         setupPeriodicSave()
+        
+        // Perform Core Data migration if needed
+        Task {
+            await performMigrationIfNeeded()
+        }
+    }
+    
+    // MARK: - Core Data Migration
+    
+    private func performMigrationIfNeeded() async {
+        do {
+            if !migrationService.isPriceSnapshotsMigrated || !migrationService.isPortfolioSnapshotsMigrated {
+                logger.info("🔄 Starting Core Data migration...")
+                try await migrationService.performFullMigration()
+                
+                // Verify migration success
+                let success = try await migrationService.verifyMigration()
+                if success {
+                    logger.info("✅ Core Data migration completed successfully")
+                    // Optionally clean up legacy data after successful verification
+                    // migrationService.cleanupLegacyData()
+                } else {
+                    logger.warning("⚠️ Core Data migration verification failed")
+                }
+            } else {
+                logger.info("✅ Core Data migration already completed")
+            }
+        } catch {
+            logger.error("❌ Core Data migration failed: \(error)")
+        }
+    }
+    
+    // MARK: - Core Data Integration
+    
+    /// Load price snapshots from Core Data for a specific symbol
+    func loadPriceSnapshotsFromCoreData(for symbol: String, timeRange: ChartTimeRange) async -> [PriceSnapshot] {
+        do {
+            let startDate = timeRange.startDate()
+            let endDate = Date()
+            let snapshots = try await coreDataService.fetchPriceSnapshots(for: symbol, from: startDate, to: endDate)
+            logger.debug("📊 Loaded \(snapshots.count) price snapshots from Core Data for \(symbol)")
+            return snapshots
+        } catch {
+            logger.error("❌ Failed to load price snapshots from Core Data for \(symbol): \(error)")
+            return []
+        }
+    }
+    
+    /// Load portfolio snapshots from Core Data
+    func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
+        do {
+            let startDate = timeRange.startDate()
+            let endDate = Date()
+            let snapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
+            logger.debug("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
+            return snapshots
+        } catch {
+            logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            return []
+        }
+    }
+    
+    /// Save new price snapshots to Core Data
+    private func savePriceSnapshotsToCoreData(_ snapshots: [PriceSnapshot]) async {
+        do {
+            try await coreDataService.savePriceSnapshots(snapshots)
+            logger.debug("💾 Saved \(snapshots.count) price snapshots to Core Data")
+        } catch {
+            logger.error("❌ Failed to save price snapshots to Core Data: \(error)")
+        }
+    }
+    
+    /// Save portfolio snapshot to Core Data
+    private func savePortfolioSnapshotToCoreData(_ snapshot: HistoricalPortfolioSnapshot) async {
+        do {
+            try await coreDataService.savePortfolioSnapshot(snapshot)
+            logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)")
+        } catch {
+            logger.error("❌ Failed to save portfolio snapshot to Core Data: \(error)")
+        }
     }
     
     // MARK: - Tiered Cache Integration
@@ -470,8 +560,38 @@ class HistoricalDataManager: ObservableObject {
         // Invalidate relevant caches since we have new data
         invalidateRelatedCaches()
         
-        // Save data
+        // Save data to legacy storage
         saveHistoricalData()
+        
+        // Save data to Core Data (async in background)
+        Task {
+            await savePriceSnapshotsToCoreData(currentPriceSnapshots)
+            
+            // Convert legacy portfolio snapshot to enhanced format for Core Data
+            let portfolioComposition: [String: PositionSnapshot] = Dictionary(uniqueKeysWithValues: 
+                dataModel.realTimeTrades.map { trade in
+                    let positionSnapshot = PositionSnapshot(
+                        symbol: trade.trade.name,
+                        units: trade.trade.position.unitSize,
+                        priceAtDate: trade.realTimeInfo.currentPrice,
+                        valueAtDate: trade.realTimeInfo.currentPrice * trade.trade.position.unitSize,
+                        currency: trade.realTimeInfo.currency ?? "USD"
+                    )
+                    return (trade.trade.name, positionSnapshot)
+                }
+            )
+            
+            let enhancedPortfolioSnapshot = HistoricalPortfolioSnapshot(
+                date: now,
+                totalValue: totalValue,
+                totalGains: gains.amount,
+                totalCost: totalValue - gains.amount,
+                currency: gains.currency,
+                portfolioComposition: portfolioComposition
+            )
+            
+            await savePortfolioSnapshotToCoreData(enhancedPortfolioSnapshot)
+        }
         
         logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)")
     }
@@ -479,6 +599,8 @@ class HistoricalDataManager: ObservableObject {
     func getChartData(for type: ChartType, timeRange: ChartTimeRange, dataModel: DataModel? = nil) -> [ChartDataPoint] {
         switch type {
         case .portfolioValue:
+            // Note: Core Data loading is now handled in loadHistoricalData() to prevent infinite loops
+            
             // NEW: Use stored portfolio snapshots if available
             if !historicalPortfolioSnapshots.isEmpty {
                 let data = getStoredPortfolioValues(for: timeRange)
@@ -545,6 +667,8 @@ class HistoricalDataManager: ObservableObject {
             return data
             
         case .portfolioGains:
+            // Note: Core Data loading is now handled in loadHistoricalData() to prevent infinite loops
+            
             // NEW: Use stored portfolio gains if available
             if !historicalPortfolioSnapshots.isEmpty {
                 let data = getStoredPortfolioGains(for: timeRange)
@@ -963,7 +1087,24 @@ class HistoricalDataManager: ObservableObject {
         
         // Load historical portfolio snapshots (large dataset - likely from archive cache)
         historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
-        logger.info("📈 Loaded \(historicalPortfolioSnapshots.count) historical portfolio snapshots")
+        logger.info("📈 Loaded \(historicalPortfolioSnapshots.count) historical portfolio snapshots from cache")
+        
+        // Load additional data from Core Data if migration is complete
+        if migrationService.isPortfolioSnapshotsMigrated {
+            Task {
+                let coreDataSnapshots = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                await MainActor.run {
+                    // Merge Core Data snapshots with existing cache data (avoid duplicates)
+                    let existingTimestamps = Set(historicalPortfolioSnapshots.map { $0.date })
+                    let newSnapshots = coreDataSnapshots.filter { !existingTimestamps.contains($0.date) }
+                    
+                    historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
+                    historicalPortfolioSnapshots.sort { $0.date < $1.date }
+                    
+                    logger.info("📈 Loaded additional \(newSnapshots.count) portfolio snapshots from Core Data (total: \(historicalPortfolioSnapshots.count))")
+                }
+            }
+        }
         
         // Load current portfolio composition (frequently accessed - likely from memory cache)
         currentPortfolioComposition = retrieveFromCache(PortfolioComposition.self, key: StorageKeys.currentPortfolioComposition)
@@ -1804,6 +1945,135 @@ class HistoricalDataManager: ObservableObject {
         return finalAmount
     }
     
+    // MARK: - Performance Optimization Methods
+    
+    /// Performs comprehensive data compression and optimization
+    public func performDataOptimization() async throws {
+        logger.info("⚡ Starting comprehensive data optimization")
+        
+        await compressionService.performDataCompression()
+        await memoryService.performMemoryCleanup()
+        try await batchService.performDatabaseOptimization()
+        
+        logger.info("⚡ Data optimization completed")
+    }
+    
+    /// Gets optimized chart data using the enhanced chart service
+    public func getOptimizedChartData(for chartType: ChartType, timeRange: ChartTimeRange, maxPoints: Int = 1000) async -> [ChartDataPoint] {
+        do {
+            // Try optimized service first
+            let data = try await chartDataService.fetchChartData(for: chartType, timeRange: timeRange, maxPoints: maxPoints)
+            if !data.isEmpty {
+                return data
+            }
+        } catch {
+            logger.warning("⚡ Optimized chart data fetch failed, falling back to legacy method: \(error)")
+        }
+        
+        // Fallback to legacy method
+        return getChartData(for: chartType, timeRange: timeRange, dataModel: nil)
+    }
+    
+    /// Performs lightweight performance optimization
+    public func performLightweightOptimization() async {
+        logger.debug("⚡ Performing lightweight optimization")
+        
+        await compressionService.performLightweightCompression()
+        await memoryService.optimizeChartDataMemory()
+        
+        logger.debug("⚡ Lightweight optimization completed")
+    }
+    
+    /// Gets comprehensive performance statistics
+    public func getPerformanceStats() async -> PerformanceStats {
+        let compressionStats = await compressionService.getCompressionStats()
+        let memoryStats = await memoryService.getMemoryStats()
+        let chartCacheStats = await chartDataService.getCacheStats()
+        
+        return PerformanceStats(
+            compressionStats: compressionStats,
+            memoryStats: memoryStats,
+            chartCacheStats: chartCacheStats,
+            totalDataPoints: getTotalDataPointCount(),
+            coreDataStorageSize: await estimateCoreDataStorageSize()
+        )
+    }
+    
+    /// Performs batch operations for large data sets
+    public func performBatchDataInsertion(_ snapshots: [PriceSnapshot]) async throws {
+        logger.info("⚡ Starting batch insertion of \(snapshots.count) price snapshots")
+        
+        try await batchService.batchInsertPriceSnapshots(snapshots)
+        
+        // Update local cache after batch insertion
+        for snapshot in snapshots {
+            if var existingSnapshots = priceSnapshots[snapshot.symbol] {
+                existingSnapshots.append(snapshot)
+                priceSnapshots[snapshot.symbol] = existingSnapshots.sorted { $0.timestamp < $1.timestamp }
+            } else {
+                priceSnapshots[snapshot.symbol] = [snapshot]
+            }
+        }
+        
+        // Save snapshots handled by Core Data services
+        logger.info("⚡ Batch insertion completed")
+    }
+    
+    /// Cleans up old data with performance optimizations
+    public func performOptimizedDataCleanup(olderThan cutoffDate: Date) async throws -> BatchDeletionResult {
+        logger.info("⚡ Starting optimized data cleanup")
+        
+        let result = try await batchService.batchDeleteOldData(olderThan: cutoffDate)
+        
+        // Update local caches
+        for (symbol, snapshots) in priceSnapshots {
+            let filteredSnapshots = snapshots.filter { $0.timestamp >= cutoffDate }
+            if filteredSnapshots.count != snapshots.count {
+                priceSnapshots[symbol] = filteredSnapshots
+            }
+        }
+        
+        portfolioSnapshots = portfolioSnapshots.filter { $0.timestamp >= cutoffDate }
+        
+        // Save snapshots handled by Core Data services
+        
+        logger.info("⚡ Optimized data cleanup completed - \(result.totalDeleted) items removed")
+        return result
+    }
+    
+    /// Configures performance optimization settings
+    public func configurePerformanceSettings(
+        maxCacheSize: Int? = nil,
+        compressionEnabled: Bool? = nil,
+        memoryThresholds: (warning: Double, critical: Double)? = nil
+    ) async {
+        if let _ = maxCacheSize {
+            await chartDataService.clearCache() // Reset with new size
+        }
+        
+        if let thresholds = memoryThresholds {
+            await memoryService.configureMemorySettings(
+                warningThreshold: thresholds.warning,
+                criticalThreshold: thresholds.critical
+            )
+        }
+        
+        logger.info("⚡ Performance settings updated")
+    }
+    
+    private func getTotalDataPointCount() -> Int {
+        let priceCount = priceSnapshots.values.reduce(0) { $0 + $1.count }
+        let portfolioCount = portfolioSnapshots.count
+        return priceCount + portfolioCount
+    }
+    
+    private func estimateCoreDataStorageSize() async -> Double {
+        // Rough estimate based on entity counts and average sizes
+        let totalDataPoints = getTotalDataPointCount()
+        let bytesPerDataPoint = 150.0 // Average estimate including overhead
+        return Double(totalDataPoints) * bytesPerDataPoint / (1024 * 1024) // Convert to MB
+    }
+
     // MARK: - Debug Methods
     
     /// Gets the current snapshot interval for debug purposes
@@ -1857,20 +2127,15 @@ class HistoricalDataManager: ObservableObject {
     /// Main method to trigger retroactive portfolio calculation
     func calculateRetroactivePortfolioHistory(using dataModel: DataModel) async {
         // CRITICAL FIX: Prevent concurrent calculation overlaps
-        calculationLock.lock()
         guard !isCalculationInProgress else {
-            calculationLock.unlock()
             logger.warning("🔄 RETROACTIVE: Calculation already in progress, skipping duplicate request")
             return
         }
         isCalculationInProgress = true
-        calculationLock.unlock()
         
         // Ensure calculation state is cleared when function exits
         defer {
-            calculationLock.lock()
             isCalculationInProgress = false
-            calculationLock.unlock()
         }
         
         logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation")

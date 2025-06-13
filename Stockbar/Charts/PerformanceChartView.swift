@@ -83,27 +83,16 @@ struct PerformanceChartView: View {
         }
         .onChange(of: selectedDataPoints) { _, _ in
             // Update analytics when selection changes - SwiftUI will automatically update
-            // Notify if significant content changes affect layout
-            if selectedDataPoints.count > 0 {
-                NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
-            }
         }
         .onAppear {
             // Initialize chart interactions
             setupKeyboardShortcuts()
-            // Ensure proper window sizing on first load
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NotificationCenter.default.post(name: .forceWindowResize, object: nil)
-            }
         }
     }
     
     private func adjustChartWindowSize(expanded: Bool) {
         // Notify the parent PreferenceView to handle window resizing
-        // This ensures consistent sizing logic and avoids conflicts
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NotificationCenter.default.post(name: .forceWindowResize, object: nil)
-        }
+        // Auto-resizing will handle window sizing automatically
     }
     
     private var chartTypePicker: some View {
@@ -418,8 +407,7 @@ struct PerformanceChartView: View {
             if showingExportOptions {
                 exportOptionsView
                     .onAppear {
-                        // Request window resize when export options expand
-                        NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+                        // Auto-resizing will handle layout changes
                     }
             }
         }
@@ -1091,8 +1079,7 @@ struct PerformanceChartView: View {
             if showingDataFilters {
                 dataFiltersView
                     .onAppear {
-                        // Request window resize when data filters expand
-                        NotificationCenter.default.post(name: .contentSizeChanged, object: nil)
+                        // Auto-resizing will handle layout changes
                     }
             }
         }
