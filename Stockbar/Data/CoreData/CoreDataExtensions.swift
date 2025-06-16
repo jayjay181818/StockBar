@@ -58,13 +58,15 @@ extension PositionSnapshotEntity {
 extension PortfolioSnapshotEntity {
     
     func toHistoricalPortfolioSnapshot() -> HistoricalPortfolioSnapshot {
-        // Note: Based on auto-generated code, this entity has a single positionSnapshot relationship
-        // We'll need to restructure the data model or work with what we have
         var portfolioComposition: [String: PositionSnapshot] = [:]
         
-        // Check if we have a single position snapshot
-        if let position = positionSnapshot {
-            portfolioComposition[position.symbol ?? ""] = position.toPositionSnapshot()
+        // Iterate over the to-many relationship 'positionSnapshots'
+        if let snapshots = self.positionSnapshots as? Set<PositionSnapshotEntity> {
+            for positionEntity in snapshots {
+                if let symbol = positionEntity.symbol, !symbol.isEmpty {
+                    portfolioComposition[symbol] = positionEntity.toPositionSnapshot()
+                }
+            }
         }
         
         return HistoricalPortfolioSnapshot(
@@ -87,10 +89,11 @@ extension PortfolioSnapshotEntity {
         entity.currency = snapshot.currency
         entity.compositionHash = snapshot.portfolioComposition.map { "\($0.key):\($0.value.units)" }.sorted().joined(separator: ",")
         
-        // For now, we'll store the first position (this needs to be restructured)
-        if let firstPosition = snapshot.portfolioComposition.values.first {
-            let positionEntity = PositionSnapshotEntity.fromPositionSnapshot(firstPosition, in: context)
-            entity.positionSnapshot = positionEntity
+        // Iterate through the model's composition and add each as a PositionSnapshotEntity
+        for positionModel in snapshot.portfolioComposition.values {
+            let positionEntity = PositionSnapshotEntity.fromPositionSnapshot(positionModel, in: context)
+            // Assuming 'addToPositionSnapshots' is the auto-generated method for the to-many relationship
+            entity.addToPositionSnapshots(positionEntity)
         }
         
         return entity
