@@ -278,11 +278,7 @@ class DataModel: ObservableObject {
         logger.info("🔍 Checking for missing historical data gaps (1-month scope)")
         
         // Log to file
-        let debugInfo = "🔍 HISTORICAL BACKFILL: Starting data coverage check at \(Date())\n"
-        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-            try? debugInfo.appendToFile(url: debugFile)
-        }
+        logger.debug("🔍 HISTORICAL BACKFILL: Starting data coverage check at \(Date())")
         
         let symbols = realTimeTrades.map { $0.trade.name }
         let calendar = Calendar.current
@@ -533,11 +529,7 @@ class DataModel: ObservableObject {
             logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
             
             // Log to file for debugging
-            let errorInfo = "❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)\n"
-            if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-                try? errorInfo.appendToFile(url: debugFile)
-            }
+            logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
         }
     }
     
@@ -558,11 +550,7 @@ class DataModel: ObservableObject {
         logger.info("🚀 HISTORICAL BACKFILL: End date: \(endDate)")
         
         // Log to file
-        let debugInfo = "🚀 HISTORICAL BACKFILL: Starting for \(symbols.count) symbols at \(Date())\nSymbols: \(symbols)\nDate range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))\n"
-        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-            try? debugInfo.appendToFile(url: debugFile)
-        }
+        logger.debug("🚀 HISTORICAL BACKFILL: Starting for \(symbols.count) symbols at \(Date()). Symbols: \(symbols). Date range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
         
         for symbol in symbols {
             do {
@@ -623,11 +611,7 @@ class DataModel: ObservableObject {
                 logger.error("❌ HISTORICAL BACKFILL: Failed to backfill historical data for \(symbol): \(error.localizedDescription)")
                 
                 // Log to file for debugging
-                let errorInfo = "❌ HISTORICAL BACKFILL ERROR for \(symbol) at \(Date()): \(error.localizedDescription)\n"
-                if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                    let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-                    try? errorInfo.appendToFile(url: debugFile)
-                }
+                logger.error("❌ HISTORICAL BACKFILL ERROR for \(symbol) at \(Date()): \(error.localizedDescription)")
             }
         }
         
@@ -1088,12 +1072,8 @@ class DataModel: ObservableObject {
                         
                         // Reduced file logging frequency - only log to file occasionally to improve performance
                         if Int.random(in: 1...10) == 1 { // 10% chance to reduce I/O load
-                            Task.detached(priority: .utility) {
-                                let debugInfo = "✅ SUCCESS: Updated \(symbol) at \(Date())\nTriggering snapshot after successful update for \(symbol) at \(Date())\n"
-                                if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                                    let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-                                    try? debugInfo.appendToFile(url: debugFile)
-                                }
+                            Task.detached(priority: .utility) { [logger] in // Capture logger
+                                logger.debug("✅ SUCCESS: Updated \(symbol) at \(Date()). Triggering snapshot after successful update for \(symbol) at \(Date())")
                             }
                         }
                         
@@ -1104,12 +1084,8 @@ class DataModel: ObservableObject {
                         
                         // Reduced file logging frequency for failures too
                         if Int.random(in: 1...5) == 1 { // 20% chance for errors (higher than success)
-                            Task.detached(priority: .utility) {
-                                let debugInfo = "❌ FAILED: Update failed for \(symbol) at \(Date())\n"
-                                if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                                    let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-                                    try? debugInfo.appendToFile(url: debugFile)
-                                }
+                            Task.detached(priority: .utility) { [logger] in // Capture logger
+                                logger.warning("❌ FAILED: Update failed for \(symbol) at \(Date())")
                             }
                         }
                     }
@@ -1121,12 +1097,8 @@ class DataModel: ObservableObject {
                 
                 // Reduced file logging frequency for network errors
                 if Int.random(in: 1...3) == 1 { // 33% chance for network errors (higher priority)
-                    Task.detached(priority: .utility) {
-                        let debugInfo = "🚨 ERROR: Network error for \(symbol) at \(Date()): \(error.localizedDescription)\n"
-                        if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                            let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-                            try? debugInfo.appendToFile(url: debugFile)
-                        }
+                    Task.detached(priority: .utility) { [logger] in // Capture logger
+                        logger.error("🚨 ERROR: Network error for \(symbol) at \(Date()): \(error.localizedDescription)")
                     }
                 }
             }
