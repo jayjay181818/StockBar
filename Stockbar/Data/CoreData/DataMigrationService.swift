@@ -1,4 +1,5 @@
 import Foundation
+import CoreData // Ensure CoreData is imported
 
 class DataMigrationService {
     static let shared = DataMigrationService()
@@ -6,6 +7,7 @@ class DataMigrationService {
     private let coreDataService: HistoricalDataServiceProtocol
     private let tradeDataMigrationService = TradeDataMigrationService()
     private let userDefaults = UserDefaults.standard
+    private let coreDataStack = CoreDataStack.shared // Added for direct context access
     
     private init(coreDataService: HistoricalDataServiceProtocol = CoreDataHistoricalDataService()) {
         self.coreDataService = coreDataService
@@ -15,78 +17,130 @@ class DataMigrationService {
     
     private enum MigrationKeys {
         static let priceSnapshotsMigrated = "priceSnapshotsMigratedToCoreData"
-        static let portfolioSnapshotsMigrated = "portfolioSnapshotsMigratedToCoreData"
+        static let portfolioSnapshotsMigrated = "portfolioSnapshotsMigratedToCoreData" // This flag might need re-evaluation
         static let tradesMigrated = "tradesMigratedToCoreData"
         static let tradingInfoMigrated = "tradingInfoMigratedToCoreData"
         static let migrationVersion = "coreDataMigrationVersion"
+        static let needsRetroactiveCalculationAfterMigration = "needsRetroactiveCalculationAfterMigration" // New flag
     }
     
-    private let currentMigrationVersion = 2
+    // Increment this version due to PortfolioSnapshotEntity schema change
+    private let currentMigrationVersion = 3 // Assuming previous was 2
     
     var isPriceSnapshotsMigrated: Bool {
-        return userDefaults.bool(forKey: MigrationKeys.priceSnapshotsMigrated)
+        // If overall migration version is up-to-date, individual flags are less critical
+        // but can be kept for very granular checks or older migration paths.
+        return userDefaults.bool(forKey: MigrationKeys.priceSnapshotsMigrated) || migrationVersionStored >= currentMigrationVersion
     }
     
     var isPortfolioSnapshotsMigrated: Bool {
-        return userDefaults.bool(forKey: MigrationKeys.portfolioSnapshotsMigrated)
+        // This specific flag might become misleading due to schema change.
+        // Rely more on the overall migrationVersion.
+        return userDefaults.bool(forKey: MigrationKeys.portfolioSnapshotsMigrated) || migrationVersionStored >= currentMigrationVersion
     }
     
     var isTradesMigrated: Bool {
-        return userDefaults.bool(forKey: MigrationKeys.tradesMigrated)
+        return userDefaults.bool(forKey: MigrationKeys.tradesMigrated) || migrationVersionStored >= currentMigrationVersion
     }
     
     var isTradingInfoMigrated: Bool {
-        return userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated)
+        return userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated) || migrationVersionStored >= currentMigrationVersion
     }
     
-    var migrationVersion: Int {
+    var migrationVersionStored: Int {
         return userDefaults.integer(forKey: MigrationKeys.migrationVersion)
+    }
+
+    var needsRetroactiveCalculation: Bool {
+        get { userDefaults.bool(forKey: MigrationKeys.needsRetroactiveCalculationAfterMigration) }
+        set { userDefaults.set(newValue, forKey: MigrationKeys.needsRetroactiveCalculationAfterMigration) }
     }
     
     // MARK: - Full Migration
     
     func performFullMigration() async throws {
-        Logger.shared.info("Starting full migration to Core Data...")
+        Logger.shared.info("DataMigrationService: Starting full migration check. Stored version: \(migrationVersionStored), Current app version: \(currentMigrationVersion)")
         
-        // Check if migration is needed
-        if migrationVersion >= currentMigrationVersion {
-            Logger.shared.info("Migration already completed for version \(currentMigrationVersion)")
+        if migrationVersionStored >= currentMigrationVersion {
+            Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)). No full migration needed.")
+            // Check if a pending retroactive calculation is needed from a previous partial migration
+            if needsRetroactiveCalculation {
+                Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.")
+                // Consider how to trigger this or notify HistoricalDataManager
+            }
             return
         }
         
+        Logger.shared.info("DataMigrationService: Migration required from version \(migrationVersionStored) to \(currentMigrationVersion).")
+
         do {
-            // Migrate price snapshots
-            if !isPriceSnapshotsMigrated {
+            // Handle PortfolioSnapshotEntity schema change (if migrating from version < 3)
+            if migrationVersionStored < 3 {
+                Logger.shared.info("DataMigrationService: Migrating PortfolioSnapshotEntity schema (pre-version 3). Deleting old entities.")
+                try await deleteOldPortfolioSnapshotEntities()
+                // Set a flag to indicate that retroactive calculation should be run
+                // This flag can be checked by HistoricalDataManager or DataModel after migration.
+                needsRetroactiveCalculation = true
+                Logger.shared.info("DataMigrationService: Marked that retroactive portfolio calculation is needed post-migration.")
+            }
+
+            // Migrate price snapshots from UserDefaults (if not done and older version)
+            if !userDefaults.bool(forKey: MigrationKeys.priceSnapshotsMigrated) && migrationVersionStored < currentMigrationVersion {
                 try await migratePriceSnapshots()
                 userDefaults.set(true, forKey: MigrationKeys.priceSnapshotsMigrated)
             }
             
-            // Migrate portfolio snapshots
-            if !isPortfolioSnapshotsMigrated {
-                try await migratePortfolioSnapshots()
+            // Portfolio snapshots from UserDefaults (if not done and older version)
+            // This migration might also need adjustment if the target Core Data structure changed.
+            // However, the deleteOldPortfolioSnapshotEntities might make this redundant if it clears all.
+            // For safety, ensure this runs before the delete if it's intended to migrate UserDefaults to the *new* structure.
+            // Given the strategy is delete & recalc for PortfolioSnapshots, this specific migration might be less relevant
+            // unless it's about getting *other* portfolio-related data from UserDefaults.
+            // The current migratePortfolioSnapshots loads from UD and saves to CD. If old CD entities are deleted,
+            // this will effectively populate with UD data, which will then be stored with the new (correct) structure.
+            if !userDefaults.bool(forKey: MigrationKeys.portfolioSnapshotsMigrated) && migrationVersionStored < currentMigrationVersion {
+                try await migratePortfolioSnapshots() // This will now use the corrected CoreDataExtensions
                 userDefaults.set(true, forKey: MigrationKeys.portfolioSnapshotsMigrated)
             }
             
-            // Migrate trades (always ensure migration is complete)
-            if !isTradesMigrated {
+            // Migrate trades from UserDefaults
+            if !userDefaults.bool(forKey: MigrationKeys.tradesMigrated) && migrationVersionStored < currentMigrationVersion {
                 try await migrateTrades()
                 userDefaults.set(true, forKey: MigrationKeys.tradesMigrated)
             }
             
-            // Migrate trading info (always ensure migration is complete)
-            if !isTradingInfoMigrated {
+            // Migrate trading info from UserDefaults
+            if !userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated) && migrationVersionStored < currentMigrationVersion {
                 try await migrateTradingInfo()
                 userDefaults.set(true, forKey: MigrationKeys.tradingInfoMigrated)
             }
             
             // Update migration version
             userDefaults.set(currentMigrationVersion, forKey: MigrationKeys.migrationVersion)
-            
-            Logger.shared.info("Migration to Core Data completed successfully")
+            Logger.shared.info("DataMigrationService: Migration to version \(currentMigrationVersion) completed successfully.")
             
         } catch {
-            Logger.shared.error("Migration failed: \(error)")
+            Logger.shared.error("DataMigrationService: Migration failed: \(error)")
             throw error
+        }
+    }
+
+    private func deleteOldPortfolioSnapshotEntities() async throws {
+        let context = coreDataStack.newBackgroundContext()
+        try await context.perform {
+            let fetchRequest: NSFetchRequest<NSFetchRequestResult> = PortfolioSnapshotEntity.fetchRequest()
+            let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+            deleteRequest.resultType = .resultTypeCount // Get count of deleted items
+
+            do {
+                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                let deletedCount = result?.result as? Int ?? 0
+                try context.save()
+                Logger.shared.info("DataMigrationService: Deleted \(deletedCount) old PortfolioSnapshotEntity instances for schema migration.")
+            } catch {
+                Logger.shared.error("DataMigrationService: Failed to delete old PortfolioSnapshotEntity instances: \(error)")
+                throw error // Re-throw to be caught by performFullMigration
+            }
         }
     }
     
