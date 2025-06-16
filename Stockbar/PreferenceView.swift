@@ -170,7 +170,7 @@ struct PreferenceView: View {
             }
         }
         .padding() // Add some padding around the content
-        .frame(minWidth: 650, idealWidth: 750, maxWidth: 1200)
+        .frame(minWidth: 650, idealWidth: 1200, maxWidth: 1200)
         .fixedSize(horizontal: false, vertical: true) // Allow horizontal expansion but prefer natural vertical size
     }
     
@@ -233,22 +233,11 @@ struct PreferenceView: View {
                     .help(isAPIKeyVisible ? "Hide API key" : "Show API key")
                     .buttonStyle(BorderlessButtonStyle())
                     
-                    Button("Paste") {
-                        if let clipboardString = NSPasteboard.general.string(forType: .string) {
-                            apiKey = clipboardString.trimmingCharacters(in: .whitespacesAndNewlines)
-                        }
-                    }
-                    .help("Paste API key from clipboard")
-                    
-                    Button("Save") {
-                        saveAPIKey()
+                    Button("Save & Test") {
+                        saveAndTestAPIKey()
                     }
                     .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    
-                    Button("Test") {
-                        testAPIKey()
-                    }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Save API key and test its validity")
                     
                     Button("Clear") {
                         clearAPIKey()
@@ -727,6 +716,32 @@ struct PreferenceView: View {
             } catch {
                 DispatchQueue.main.async {
                     showAPIKeyAlert(title: "API Test Failed", message: "Failed to test API key: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func saveAndTestAPIKey() {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        
+        // Save the key first
+        configManager.setFMPAPIKey(trimmedKey)
+        
+        // Then test it
+        Task {
+            do {
+                let testResult = try await userdata.testAPIConnection()
+                DispatchQueue.main.async {
+                    if testResult {
+                        showAPIKeyAlert(title: "API Key Saved & Validated", message: "Your Financial Modeling Prep API key has been saved and is working correctly!")
+                    } else {
+                        showAPIKeyAlert(title: "API Key Saved but Invalid", message: "The API key has been saved but could not be validated. Please check your key.")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    showAPIKeyAlert(title: "API Key Saved", message: "Your API key has been saved, but testing failed: \(error.localizedDescription)")
                 }
             }
         }
