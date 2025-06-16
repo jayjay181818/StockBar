@@ -53,9 +53,11 @@ class PreferenceHostingController<Content: View>: NSHostingController<AnyView> {
         let minSize = CGSize(width: 650, height: 600)
         let maxSize = CGSize(width: 1200, height: 1200) // Increased max height
         
+        // For width, prefer the ideal width (1200) if the content supports it
         // For height, prefer the natural size but ensure minimum
+        let preferredWidth = max(minSize.width, min(maxSize.width, max(newSize.width, 1200)))
         let constrainedSize = CGSize(
-            width: max(minSize.width, min(maxSize.width, newSize.width)),
+            width: preferredWidth,
             height: max(minSize.height, min(maxSize.height, newSize.height))
         )
 

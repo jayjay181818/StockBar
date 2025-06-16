@@ -19,6 +19,9 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
         window.title = "StockBar Preferences"
         window.isReleasedWhenClosed = false
         
+        // Set the initial window size to 1200px wide
+        window.setContentSize(NSSize(width: 1200, height: 800))
+        
         self.init(window: window)
         
         // Keep a strong reference to the hosting controller
@@ -27,8 +30,8 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // This is good practice to ensure the window controller can be deallocated
-        self.window?.contentViewController = nil
+        // Window is closing but we keep the content view controller
+        // so it can be reopened properly
     }
 
     override func showWindow(_ sender: Any?) {
