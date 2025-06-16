@@ -5,13 +5,28 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
 
     // Keep a strong reference to the hosting controller
     private var hostingController: NSViewController!
+    private let dataModel: DataModel
 
     convenience init(dataModel: DataModel) {
-        // Create the SwiftUI view
+        self.init(dataModel: dataModel, window: nil)
+    }
+    
+    init(dataModel: DataModel, window: NSWindow?) {
+        self.dataModel = dataModel
+        super.init(window: window)
+        setupWindow()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    private func setupWindow() {
+        // Create a fresh SwiftUI view with the data model
         let preferenceView = PreferenceView(userdata: dataModel)
         
-        // Use our new AutoResizingHostingController
-        let hostingController = PreferenceHostingController(rootView: preferenceView)
+        // Use standard NSHostingController 
+        let hostingController = NSHostingController(rootView: preferenceView)
         
         // Create a resizable window that can auto-resize and be manually adjusted
         let window = NSWindow(contentViewController: hostingController)
@@ -22,7 +37,7 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
         // Set the initial window size to 1200px wide
         window.setContentSize(NSSize(width: 1200, height: 800))
         
-        self.init(window: window)
+        self.window = window
         
         // Keep a strong reference to the hosting controller
         self.hostingController = hostingController
@@ -30,8 +45,13 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Window is closing but we keep the content view controller
-        // so it can be reopened properly
+        // Perform any cleanup when window closes
+        // The window controller will be recreated fresh next time
+    }
+    
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Ensure the window is properly activated and responsive
+        window?.makeFirstResponder(window?.contentView)
     }
 
     override func showWindow(_ sender: Any?) {
@@ -44,5 +64,11 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
     
     func showWindow() {
         showWindow(nil)
+    }
+    
+    deinit {
+        // Ensure proper cleanup when the window controller is deallocated
+        window?.delegate = nil
+        hostingController = nil
     }
 }
