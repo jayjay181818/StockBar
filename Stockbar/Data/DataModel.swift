@@ -125,9 +125,18 @@ class DataModel: ObservableObject {
             // Wait 60 seconds after app startup to avoid interfering with initial data loading
             try? await Task.sleep(nanoseconds: 60_000_000_000)
             
-            // Check if we need to calculate retroactive portfolio history
-            logger.info("🔄 STARTUP: Checking if retroactive portfolio calculation is needed")
-            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+            // Check if migration service indicates retroactive calculation is needed
+            if migrationService.needsRetroactiveCalculation {
+                logger.info("🔄 MIGRATION: DataMigrationService indicates retroactive portfolio calculation is needed")
+                await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+                // Clear the flag after calculation
+                migrationService.needsRetroactiveCalculation = false
+                logger.info("🔄 MIGRATION: Retroactive calculation completed and flag cleared")
+            } else {
+                // Check if we need to calculate retroactive portfolio history (regular check)
+                logger.info("🔄 STARTUP: Checking if regular retroactive portfolio calculation is needed")
+                await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+            }
         }
     }
 
