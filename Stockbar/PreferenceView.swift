@@ -282,11 +282,6 @@ struct PreferenceView: View {
                         .disabled(isBackfillingData || (configManager.getFMPAPIKey()?.isEmpty ?? true))
                         .help("Checks for missing historical data and fetches only missing days")
                         
-                        Button("Clear Bad Data") {
-                            clearBadHistoricalData()
-                        }
-                        .help("Clears corrupted historical data for UK stocks (RR.L, etc.)")
-                        
                         Button("Clean Anomalous Data") {
                             cleanAnomalousData()
                         }
@@ -303,13 +298,6 @@ struct PreferenceView: View {
                         .disabled(isBackfillingData || (configManager.getFMPAPIKey()?.isEmpty ?? true))
                         .foregroundColor(.blue)
                         .help("Fetch 5 years of historical data in yearly chunks")
-                        
-                        Button("Calculate 5Y Portfolio Values") {
-                            calculate5YearPortfolioValues()
-                        }
-                        .disabled(isBackfillingData)
-                        .foregroundColor(.green)
-                        .help("Calculate 5 years of portfolio values for charts using existing price data")
                     }
                     
                     if !backfillStatus.isEmpty {
@@ -547,19 +535,6 @@ struct PreferenceView: View {
             
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
-                    Button("Force Snapshot") {
-                        forceDataSnapshot()
-                    }
-                    .buttonStyle(.bordered)
-                    .help("Manually trigger a data snapshot for charts")
-                    
-                    Button("Clear Historical Data") {
-                        clearHistoricalData()
-                    }
-                    .buttonStyle(.bordered)
-                    .foregroundColor(.red)
-                    .help("Delete all historical price data and charts")
-                    
                     Button("Reset to Defaults") {
                         resetToDefaults()
                     }
@@ -568,13 +543,6 @@ struct PreferenceView: View {
                 }
                 
                 HStack(spacing: 12) {
-                    Button("Fetch 5 Years Historical Data") {
-                        fetch5YearsHistoricalData()
-                    }
-                    .buttonStyle(.bordered)
-                    .foregroundColor(.blue)
-                    .help("Fetch 5 years of historical data in yearly chunks (avoids hanging)")
-                    
                     Button("Show Automatic Check Status") {
                         showAutomaticCheckStatus()
                     }
@@ -583,12 +551,6 @@ struct PreferenceView: View {
                 }
                 
                 HStack(spacing: 12) {
-                    Button("Calculate 5Y Portfolio Values") {
-                        calculate5YearPortfolioValuesDebug()
-                    }
-                    .buttonStyle(.bordered)
-                    .foregroundColor(.green)
-                    .help("Calculate 5 years of portfolio values for charts using existing price data")
                 }
             }
         }
