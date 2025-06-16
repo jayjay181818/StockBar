@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788.4" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
+    <entity name="PortfolioSnapshotEntity" representedClassName="PortfolioSnapshotEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="compositionHash" optional="YES" attributeType="String"/>
+        <attribute name="currency" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="totalCost" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="totalGains" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="totalValue" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <fetchIndex name="byTimestamp">
+            <fetchIndexElement property="timestamp" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byTimestampAndHash">
+            <fetchIndexElement property="timestamp" type="Binary" order="ascending"/>
+            <fetchIndexElement property="compositionHash" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <relationship name="positionSnapshots" optional="NO" toMany="YES" deletionRule="Cascade" destinationEntity="PositionSnapshotEntity" inverseName="portfolioSnapshot" inverseEntity="PositionSnapshotEntity"/>
+    </entity>
+    <entity name="PositionSnapshotEntity" representedClassName="PositionSnapshotEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="currency" optional="YES" attributeType="String"/>
+        <attribute name="priceAtDate" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="symbol" optional="YES" attributeType="String"/>
+        <attribute name="units" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="valueAtDate" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <fetchIndex name="bySymbol">
+            <fetchIndexElement property="symbol" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <relationship name="portfolioSnapshot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PortfolioSnapshotEntity" inverseName="positionSnapshots" inverseEntity="PortfolioSnapshotEntity"/>
+    </entity>
+    <entity name="PriceSnapshotEntity" representedClassName="PriceSnapshotEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="previousClose" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="price" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="symbol" optional="YES" attributeType="String"/>
+        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="volume" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <fetchIndex name="bySymbolAndTimestamp">
+            <fetchIndexElement property="symbol" type="Binary" order="ascending"/>
+            <fetchIndexElement property="timestamp" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byTimestamp">
+            <fetchIndexElement property="timestamp" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="bySymbol">
+            <fetchIndexElement property="symbol" type="Binary" order="ascending"/>
+        </fetchIndex>
+    </entity>
+    <entity name="TradeEntity" representedClassName="TradeEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="costCurrency" optional="YES" attributeType="String"/>
+        <attribute name="currency" optional="YES" attributeType="String"/>
+        <attribute name="lastModified" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="positionAvgCost" optional="YES" attributeType="String"/>
+        <attribute name="unitSize" optional="YES" attributeType="String"/>
+        <fetchIndex name="byName">
+            <fetchIndexElement property="name" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byLastModified">
+            <fetchIndexElement property="lastModified" type="Binary" order="descending"/>
+        </fetchIndex>
+        <relationship name="tradingInfo" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="TradingInfoEntity" inverseName="trade" inverseEntity="TradingInfoEntity"/>
+    </entity>
+    <entity name="TradingInfoEntity" representedClassName="TradingInfoEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="currency" optional="YES" attributeType="String"/>
+        <attribute name="currentPrice" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="exchangeTimezoneName" optional="YES" attributeType="String"/>
+        <attribute name="lastModified" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastUpdateTime" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="marketState" optional="YES" attributeType="String"/>
+        <attribute name="postMarketChange" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="postMarketChangePercent" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="postMarketPrice" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="postMarketTime" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="preMarketChange" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="preMarketChangePercent" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="preMarketPrice" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="preMarketTime" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="prevClosePrice" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="previousClose" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="regularMarketTime" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="shortName" optional="YES" attributeType="String"/>
+        <attribute name="symbol" optional="YES" attributeType="String"/>
+        <fetchIndex name="bySymbol">
+            <fetchIndexElement property="symbol" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byLastUpdateTime">
+            <fetchIndexElement property="lastUpdateTime" type="Binary" order="descending"/>
+        </fetchIndex>
+        <relationship name="trade" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TradeEntity" inverseName="tradingInfo" inverseEntity="TradeEntity"/>
+    </entity>
+</model>

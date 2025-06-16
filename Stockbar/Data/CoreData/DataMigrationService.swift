@@ -76,12 +76,21 @@ class DataMigrationService {
         do {
             // Handle PortfolioSnapshotEntity schema change (if migrating from version < 3)
             if migrationVersionStored < 3 {
-                Logger.shared.info("DataMigrationService: Migrating PortfolioSnapshotEntity schema (pre-version 3). Deleting old entities.")
+                Logger.shared.info("DataMigrationService: Migrating schema aspects related to pre-version 3 for PortfolioSnapshotEntity. Stored version: \(migrationVersionStored).")
+
+                // Delete old entities regardless, as the schema might be incompatible even if empty.
+                // This is harmless on a fresh install (migrationVersionStored == 0) as it will delete nothing.
                 try await deleteOldPortfolioSnapshotEntities()
-                // Set a flag to indicate that retroactive calculation should be run
-                // This flag can be checked by HistoricalDataManager or DataModel after migration.
-                needsRetroactiveCalculation = true
-                Logger.shared.info("DataMigrationService: Marked that retroactive portfolio calculation is needed post-migration.")
+                Logger.shared.info("DataMigrationService: Attempted deletion of old PortfolioSnapshotEntity instances (if any existed).")
+
+                // Only set the retroactive calculation flag if we are upgrading from an actual previous version (1 or 2)
+                // that would have had data in the old format.
+                if migrationVersionStored > 0 {
+                    needsRetroactiveCalculation = true
+                    Logger.shared.info("DataMigrationService: Marked that retroactive portfolio calculation is needed post-migration from version \(migrationVersionStored).")
+                } else {
+                    Logger.shared.info("DataMigrationService: Fresh install (version 0). Schema is current. No v3-specific retroactive calculation trigger needed from this step.")
+                }
             }
 
             // Migrate price snapshots from UserDefaults (if not done and older version)
