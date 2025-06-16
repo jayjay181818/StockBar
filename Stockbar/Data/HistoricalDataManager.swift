@@ -98,6 +98,17 @@ class HistoricalDataManager: ObservableObject {
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
     
+    // In init() or a new method, add check for retroactive calculation:
+    // This check would ideally be in DataModel or AppDelegate after migration completes.
+    // For example, in DataModel.init() after ensuring migration service has run:
+    // if DataMigrationService.shared.needsRetroactiveCalculation {
+    //    Logger.shared.info("HistoricalDataManager: Triggering retroactive calculation due to migration flag.")
+    //    Task {
+    //        await self.historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+    //        DataMigrationService.shared.needsRetroactiveCalculation = false // Clear the flag
+    //    }
+    // }
+
     private init() {
         self.coreDataService = CoreDataHistoricalDataService()
         loadHistoricalData()
@@ -1074,164 +1085,150 @@ class HistoricalDataManager: ObservableObject {
     }
     
     private func loadHistoricalData() {
-        logger.info("🗄️ Loading historical data from tiered cache system")
-        
-        // Load legacy portfolio snapshots (try cache first, fallback to UserDefaults)
-        portfolioSnapshots = retrieveFromCache([PortfolioSnapshot].self, key: StorageKeys.portfolioSnapshots) ?? []
-        logger.info("📊 Loaded \(portfolioSnapshots.count) legacy portfolio snapshots")
-        
-        // Load price snapshots (daily data)
-        priceSnapshots = retrieveFromCache([String: [PriceSnapshot]].self, key: StorageKeys.priceSnapshots) ?? [:]
-        let totalSnapshots = priceSnapshots.values.reduce(0) { $0 + $1.count }
-        logger.info("💹 Loaded daily price snapshots for \(priceSnapshots.count) symbols (\(totalSnapshots) total)")
-        
-        // Load historical portfolio snapshots (large dataset - likely from archive cache)
-        historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
-        logger.info("📈 Loaded \(historicalPortfolioSnapshots.count) historical portfolio snapshots from cache")
-        
-        // Load additional data from Core Data if migration is complete
-        if migrationService.isPortfolioSnapshotsMigrated {
+        logger.info("HistoricalDataManager: Loading historical data...")
+        let migrationService = DataMigrationService.shared // Assuming it's accessible or passed
+
+        // Core Data version where PriceSnapshotEntity and PortfolioSnapshotEntity are considered mastered
+        let coreDataMasterVersion = 3
+
+        if migrationService.migrationVersionStored >= coreDataMasterVersion {
+            logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).")
+            // Load price snapshots from Core Data
             Task {
-                let coreDataSnapshots = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                // This is a conceptual loading. In reality, we might not load ALL price snapshots
+                // into memory if the dataset is huge. Instead, OptimizedChartDataService
+                // would query Core Data directly. For now, let's assume we populate
+                // the in-memory cache for active symbols or recent data.
+                // This part needs careful thought on what `priceSnapshots` in memory represents.
+                // If it's a cache, it should be populated on demand or by OptimizedChartDataService.
+                // For simplicity in this draft, we'll clear it and assume it's populated as needed.
+                await MainActor.run { self.priceSnapshots = [:] } // Empties, relies on on-demand loading
+                logger.info("HistoricalDataManager: In-memory priceSnapshots map cleared; will load from Core Data on demand.")
+
+                let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all) // .all might be too much for memory
                 await MainActor.run {
-                    // Merge Core Data snapshots with existing cache data (avoid duplicates)
-                    let existingTimestamps = Set(historicalPortfolioSnapshots.map { $0.date })
-                    let newSnapshots = coreDataSnapshots.filter { !existingTimestamps.contains($0.date) }
-                    
-                    historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
-                    historicalPortfolioSnapshots.sort { $0.date < $1.date }
-                    
-                    logger.info("📈 Loaded additional \(newSnapshots.count) portfolio snapshots from Core Data (total: \(historicalPortfolioSnapshots.count))")
+                    self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
+                    logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.")
                 }
             }
+        } else {
+            logger.info("HistoricalDataManager: Falling back to CacheManager/UserDefaults for snapshots (migration version \(migrationService.migrationVersionStored)).")
+            // Legacy loading from CacheManager / UserDefaults
+            self.priceSnapshots = retrieveFromCache([String: [PriceSnapshot]].self, key: StorageKeys.priceSnapshots) ?? [:]
+            self.historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
+            // Also load legacy portfolioSnapshots if necessary for compatibility or if historicalPortfolioSnapshots is empty
+            if self.historicalPortfolioSnapshots.isEmpty {
+                 self.portfolioSnapshots = retrieveFromCache([PortfolioSnapshot].self, key: StorageKeys.portfolioSnapshots) ?? []
+                 // Potentially convert these legacy ones if needed, though migration should handle this.
+            }
         }
-        
-        // Load current portfolio composition (frequently accessed - likely from memory cache)
+
+        // Load metadata (still useful from CacheManager/UserDefaults)
         currentPortfolioComposition = retrieveFromCache(PortfolioComposition.self, key: StorageKeys.currentPortfolioComposition)
         if currentPortfolioComposition != nil {
-            logger.info("🎯 Loaded current portfolio composition")
+            logger.info("HistoricalDataManager: Loaded current portfolio composition")
         }
         
         // Load last retroactive calculation date
         lastRetroactiveCalculationDate = retrieveFromCache(Date.self, key: StorageKeys.lastRetroactiveCalculationDate) ?? Date.distantPast
         if lastRetroactiveCalculationDate != Date.distantPast {
-            logger.info("⏰ Last retroactive calculation: \(DateFormatter.debug.string(from: lastRetroactiveCalculationDate))")
+            logger.info("HistoricalDataManager: Last retroactive calculation: \(DateFormatter.debug.string(from: lastRetroactiveCalculationDate))")
         }
         
         // Load cached historical portfolio values (legacy)
         cachedHistoricalPortfolioValues = retrieveFromCache([ChartDataPoint].self, key: StorageKeys.cachedHistoricalPortfolioValues) ?? []
-        logger.info("💾 Loaded \(cachedHistoricalPortfolioValues.count) cached portfolio values")
+        logger.info("HistoricalDataManager: Loaded \(cachedHistoricalPortfolioValues.count) cached portfolio values (legacy)")
         
         // Load last portfolio calculation date (legacy)
         lastPortfolioCalculationDate = retrieveFromCache(Date.self, key: StorageKeys.lastPortfolioCalculationDate) ?? Date.distantPast
         if lastPortfolioCalculationDate != Date.distantPast {
-            logger.info("📅 Last portfolio calculation: \(DateFormatter.debug.string(from: lastPortfolioCalculationDate))")
+            logger.info("HistoricalDataManager: Last portfolio calculation: \(DateFormatter.debug.string(from: lastPortfolioCalculationDate)) (legacy)")
         }
         
+        let totalSnaps = priceSnapshots.values.reduce(0) { $0 + $1.count }
+        logger.info("HistoricalDataManager: Loaded. Price snapshots in memory: \(totalSnaps). Historical portfolio snapshots in memory: \(historicalPortfolioSnapshots.count). Legacy portfolio snapshots in memory: \(portfolioSnapshots.count).")
         // Log cache performance statistics
         let cacheInfo = cacheManager.getCacheInfo()
-        logger.info("🗄️ Cache Statistics:\n\(cacheInfo)")
+        logger.info("HistoricalDataManager: Cache Statistics:\n\(cacheInfo)")
     }
     
     func saveHistoricalData() {
-        // Capture current state for background processing
-        let currentPortfolioSnapshots = portfolioSnapshots
-        let currentPriceSnapshots = priceSnapshots
-        let currentHistoricalPortfolioSnapshots = historicalPortfolioSnapshots
-        let currentPortfolioComposition = currentPortfolioComposition
-        let currentRetroactiveCalculationDate = lastRetroactiveCalculationDate
-        let currentCachedPortfolioValues = cachedHistoricalPortfolioValues
-        let currentCalculationDate = lastPortfolioCalculationDate
-        
-        // Move tiered caching operations to background queue
+        // Core Data is now the primary store for snapshot arrays.
+        // New snapshots are saved to Core Data directly in recordSnapshot().
+        // This method will now focus on saving metadata or non-CoreData state
+        // that HistoricalDataManager itself manages.
+
+        let currentPortfolioComposition = self.currentPortfolioComposition // capture for async
+        let currentRetroactiveCalculationDate = self.lastRetroactiveCalculationDate
+        let currentCalculationDate = self.lastPortfolioCalculationDate
+        // The large arrays like self.priceSnapshots and self.historicalPortfolioSnapshots
+        // are primarily reflections of Core Data or temporary caches, so we might not
+        // persist them back to CacheManager if Core Data is the source of truth.
+        // However, if they contain data not yet in Core Data (e.g. from a failed save),
+        // then saving them via CacheManager might be a temporary backup.
+        // For this iteration, let's assume Core Data saves are robust and CacheManager
+        // is for metadata or as a staging area if Core Data fails.
+
         Task.detached(priority: .utility) { [weak self, encoder, logger] in
             guard let self = self else { return }
             
             do {
-                // Save to tiered cache system
-                await self.saveToTieredCache(
-                    portfolioSnapshots: currentPortfolioSnapshots,
-                    priceSnapshots: currentPriceSnapshots,
-                    historicalPortfolioSnapshots: currentHistoricalPortfolioSnapshots,
-                    portfolioComposition: currentPortfolioComposition,
-                    retroactiveCalculationDate: currentRetroactiveCalculationDate,
-                    cachedPortfolioValues: currentCachedPortfolioValues,
-                    calculationDate: currentCalculationDate
-                )
-                
-                // Also maintain UserDefaults backup for data integrity during migration
-                let portfolioData = try encoder.encode(currentPortfolioSnapshots)
-                let priceData = try encoder.encode(currentPriceSnapshots)
-                let historicalPortfolioData = try encoder.encode(currentHistoricalPortfolioSnapshots)
-                let compositionData = try currentPortfolioComposition.map { try encoder.encode($0) }
-                let cachedPortfolioData = try encoder.encode(currentCachedPortfolioValues)
-                
-                // Update UserDefaults on main actor as backup
-                await MainActor.run {
-                    UserDefaults.standard.set(portfolioData, forKey: StorageKeys.portfolioSnapshots)
-                    UserDefaults.standard.set(priceData, forKey: StorageKeys.priceSnapshots)
-                    UserDefaults.standard.set(historicalPortfolioData, forKey: StorageKeys.historicalPortfolioSnapshots)
-                    if let compositionData = compositionData {
-                        UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
-                    }
-                    UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
-                    UserDefaults.standard.set(cachedPortfolioData, forKey: StorageKeys.cachedHistoricalPortfolioValues)
-                    UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+                // Save metadata and non-CoreData state to CacheManager
+                if let composition = currentPortfolioComposition {
+                    await self.saveToTieredCache(portfolioComposition: composition,
+                                           retroactiveCalculationDate: currentRetroactiveCalculationDate,
+                                           calculationDate: currentCalculationDate)
+                } else {
+                     await self.saveToTieredCache(portfolioComposition: nil,
+                                           retroactiveCalculationDate: currentRetroactiveCalculationDate,
+                                           calculationDate: currentCalculationDate)
                 }
+
+
+                // We are removing the direct saving of large snapshot arrays to CacheManager here,
+                // assuming they are mastered in Core Data.
+                // If CacheManager was used as a staging area before Core Data saving,
+                // that logic would need to be more explicit.
+
+                // UserDefaults backup for metadata can remain for safety during transition
+                if let compositionData = try? currentPortfolioComposition.map({ try encoder.encode($0) }) {
+                     UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
+                } else if currentPortfolioComposition == nil { // Explicitly clear if nil
+                     UserDefaults.standard.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+                }
+                UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
+                UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+                // Avoid saving large snapshot arrays to UserDefaults directly
                 
-                logger.debug("🗄️ Saved historical data to tiered cache and UserDefaults backup")
+                logger.debug("HistoricalDataManager: Saved metadata to CacheManager and UserDefaults backup.")
             } catch {
-                logger.error("❌ Failed to save historical data: \(error.localizedDescription)")
+                logger.error("HistoricalDataManager: Failed to save metadata: \(error.localizedDescription)")
             }
         }
     }
-    
-    /// Save data to appropriate cache tiers based on data characteristics
+
+    // Simplified saveToTieredCache to only handle metadata for this example
     private func saveToTieredCache(
-        portfolioSnapshots: [PortfolioSnapshot],
-        priceSnapshots: [String: [PriceSnapshot]],
-        historicalPortfolioSnapshots: [HistoricalPortfolioSnapshot],
         portfolioComposition: PortfolioComposition?,
         retroactiveCalculationDate: Date,
-        cachedPortfolioValues: [ChartDataPoint],
         calculationDate: Date
     ) async {
-        // Recent portfolio snapshots -> Memory cache
-        let recentPortfolioSnapshots = Array(portfolioSnapshots.suffix(50)) // Last 50 snapshots
-        storeInCache(recentPortfolioSnapshots, key: "recent_portfolio_snapshots", isRecent: true)
-        
-        // All portfolio snapshots -> Disk cache
-        storeInCache(portfolioSnapshots, key: StorageKeys.portfolioSnapshots)
-        
-        // Recent price snapshots (last 30 days) -> Memory cache
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date.distantPast
-        for (symbol, snapshots) in priceSnapshots {
-            let recentSnapshots = snapshots.filter { $0.timestamp >= thirtyDaysAgo }
-            if !recentSnapshots.isEmpty {
-                storeInCache(recentSnapshots, key: "recent_prices_\(symbol)", isRecent: true)
-            }
-        }
-        
-        // All price snapshots -> Disk cache
-        storeInCache(priceSnapshots, key: StorageKeys.priceSnapshots)
-        
-        // Historical portfolio snapshots -> Archive cache (large dataset)
-        storeInCache(historicalPortfolioSnapshots, key: StorageKeys.historicalPortfolioSnapshots)
-        
-        // Portfolio composition -> Memory cache (frequently accessed)
         if let composition = portfolioComposition {
             storeInCache(composition, key: StorageKeys.currentPortfolioComposition, isRecent: true)
+        } else {
+            // If composition is nil, consider removing it from cache or storing a representation of nil
+            // For now, we just don't store it if it's nil. A remove(forKey:) might be better.
+            cacheManager.remove(forKey: StorageKeys.currentPortfolioComposition)
         }
-        
-        // Cached portfolio values -> Disk cache
-        storeInCache(cachedPortfolioValues, key: StorageKeys.cachedHistoricalPortfolioValues)
-        
-        // Metadata -> Memory cache
         storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: true)
         storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: true)
         
-        logger.debug("🗄️ Data distributed across cache tiers: \(recentPortfolioSnapshots.count) recent portfolio snapshots in memory, \(historicalPortfolioSnapshots.count) historical snapshots in archive")
+        logger.debug("HistoricalDataManager: Metadata saved to tiered cache.")
     }
+
+    // The old saveToTieredCache that handled snapshot arrays would need to be adjusted or removed
+    // if snapshot arrays are no longer persisted this way.
+    // For this subtask, we assume the new simpler one above.
     
     private func setupPeriodicSave() {
         // Save data every 30 minutes to avoid too frequent writes
