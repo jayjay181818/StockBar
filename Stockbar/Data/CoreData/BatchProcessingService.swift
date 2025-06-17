@@ -23,7 +23,7 @@ actor BatchProcessingService {
     
     /// Performs batch insertion of price snapshots with optimal memory management
     func batchInsertPriceSnapshots(_ snapshots: [PriceSnapshot]) async throws {
-        logger.info("🔄 Starting batch insert of \(snapshots.count) price snapshots")
+        Task { await logger.info("🔄 Starting batch insert of \(snapshots.count) price snapshots") }
         
         let operationId = UUID().uuidString
         let operation = BatchOperation(
@@ -44,12 +44,12 @@ actor BatchProcessingService {
             try await self.insertPriceSnapshotBatch(batch, context: context)
         }
         
-        logger.info("✅ Completed batch insert of \(snapshots.count) price snapshots")
+        Task { await logger.info("✅ Completed batch insert of \(snapshots.count) price snapshots") }
     }
     
     /// Performs batch insertion of portfolio snapshots
     func batchInsertPortfolioSnapshots(_ snapshots: [HistoricalPortfolioSnapshot]) async throws {
-        logger.info("🔄 Starting batch insert of \(snapshots.count) portfolio snapshots")
+        Task { await logger.info("🔄 Starting batch insert of \(snapshots.count) portfolio snapshots") }
         
         let operationId = UUID().uuidString
         let operation = BatchOperation(
@@ -70,12 +70,12 @@ actor BatchProcessingService {
             try await self.insertPortfolioSnapshotBatch(batch, context: context)
         }
         
-        logger.info("✅ Completed batch insert of \(snapshots.count) portfolio snapshots")
+        Task { await logger.info("✅ Completed batch insert of \(snapshots.count) portfolio snapshots") }
     }
     
     /// Performs batch deletion of old data with optimal performance
     func batchDeleteOldData(olderThan cutoffDate: Date) async throws -> BatchDeletionResult {
-        logger.info("🗑️ Starting batch deletion of data older than \(cutoffDate)")
+        Task { await logger.info("🗑️ Starting batch deletion of data older than \(cutoffDate)") }
         
         let context = coreDataStack.newBackgroundContext()
         
@@ -106,7 +106,7 @@ actor BatchProcessingService {
             
             try context.save()
             
-            self.logger.info("🗑️ Deleted \(deletedPriceCount) price snapshots and \(deletedPortfolioCount) portfolio snapshots")
+            Task { await self.logger.info("🗑️ Deleted \(deletedPriceCount) price snapshots and \(deletedPortfolioCount) portfolio snapshots") }
             
             return BatchDeletionResult(
                 deletedPriceSnapshots: deletedPriceCount,
@@ -121,7 +121,7 @@ actor BatchProcessingService {
         matching predicate: NSPredicate,
         updates: [String: Any]
     ) async throws -> Int {
-        logger.info("🔄 Starting batch update of price snapshots")
+        Task { await logger.info("🔄 Starting batch update of price snapshots") }
         
         let context = coreDataStack.newBackgroundContext()
         
@@ -139,7 +139,7 @@ actor BatchProcessingService {
             
             try context.save()
             
-            self.logger.info("✅ Updated \(updatedCount) price snapshots")
+            Task { await self.logger.info("✅ Updated \(updatedCount) price snapshots") }
             return updatedCount
         }
     }
@@ -159,7 +159,7 @@ actor BatchProcessingService {
     
     /// Performs database optimization operations
     func performDatabaseOptimization() async throws {
-        logger.info("⚡ Starting database optimization")
+        Task { await logger.info("⚡ Starting database optimization") }
         
         let context = coreDataStack.newBackgroundContext()
         
@@ -170,7 +170,7 @@ actor BatchProcessingService {
             // Reset the context to clear the persistent store cache
             context.reset()
             
-            self.logger.info("⚡ Database optimization completed")
+            Task { await self.logger.info("⚡ Database optimization completed") }
         }
         
         // Trigger SQLite optimization
@@ -247,7 +247,7 @@ actor BatchProcessingService {
                         }
                         
                     } catch {
-                        self.logger.error("🔄 Batch insertion failed for batch \(batchIndex): \(error)")
+                        Task { await self.logger.error("🔄 Batch insertion failed for batch \(batchIndex): \(error)") }
                         throw error
                     }
                 }
@@ -336,7 +336,7 @@ actor BatchProcessingService {
             // In a real implementation, you might use lower-level SQLite commands
             try context.execute(vacuumRequest)
             
-            self.logger.info("⚡ SQLite optimization completed")
+            Task { await self.logger.info("⚡ SQLite optimization completed") }
         }
     }
 }

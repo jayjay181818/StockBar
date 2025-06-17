@@ -170,8 +170,9 @@ struct PreferenceView: View {
             }
         }
         .padding() // Add some padding around the content
-        .frame(minWidth: 650, idealWidth: 1200, maxWidth: 1200)
-        .fixedSize(horizontal: false, vertical: true) // Allow horizontal expansion but prefer natural vertical size
+        .frame(minWidth: 650, idealWidth: 1000, maxWidth: 1200,
+               minHeight: 500, idealHeight: 700, maxHeight: 900)
+        .fixedSize(horizontal: false, vertical: false) // Allow both horizontal and vertical resizing
     }
     
     private var portfolioView: some View {
@@ -388,26 +389,41 @@ struct PreferenceView: View {
                     Text("+")
                 }
             }
-            ForEach(userdata.realTimeTrades) { item in
-                HStack {
-                    Button(action: {
-                        if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
-                            self.userdata.realTimeTrades.remove(at: index)
+            
+            // List for drag-and-drop functionality
+            List {
+                ForEach(userdata.realTimeTrades) { item in
+                    HStack {
+                        // Drag handle icon
+                        Image(systemName: "line.3.horizontal")
+                            .foregroundColor(.secondary)
+                            .help("Drag to reorder stocks in menu bar")
+                        
+                        Button(action: {
+                            if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
+                                self.userdata.realTimeTrades.remove(at: index)
+                            }
+                        }) {
+                            Text("-")
                         }
-                    }) {
-                        Text("-")
-                    }
-                    PreferenceRow(realTimeTrade: item)
-                    Button(action: {
-                        let emptyTrade = emptyRealTimeTrade()
-                        if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
-                            self.userdata.realTimeTrades.insert(emptyTrade, at: index + 1)
+                        PreferenceRow(realTimeTrade: item)
+                        Button(action: {
+                            let emptyTrade = emptyRealTimeTrade()
+                            if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
+                                self.userdata.realTimeTrades.insert(emptyTrade, at: index + 1)
+                            }
+                        }) {
+                            Text("+")
                         }
-                    }) {
-                        Text("+")
                     }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
+                .onMove(perform: moveStocks)
+                .onDelete(perform: deleteStocks)
             }
+            .listStyle(PlainListStyle())
+            .frame(minHeight: CGFloat(userdata.realTimeTrades.count * 40 + 20))
             }
         }
         .padding(.horizontal, 16)
@@ -424,18 +440,13 @@ struct PreferenceView: View {
     }
     
     private var debugView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Refresh Frequency Controls
-            debugFrequencyControls
-            
-            Divider()
-                .padding(.horizontal, 16)
-            
-            // Debug Actions
-            debugActions
-            
-            Divider()
-                .padding(.horizontal, 16)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                debugFrequencyControls
+                debugActions
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             
             // Debug Logs section - remove from container since DebugLogView handles its own layout
             DebugLogView()
@@ -447,6 +458,14 @@ struct PreferenceView: View {
             currentRefreshInterval = userdata.refreshInterval
             currentCacheInterval = userdata.cacheInterval
             currentSnapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            // Sync state variables when debug tab is selected
+            if newTab == .debug {
+                currentRefreshInterval = userdata.refreshInterval
+                currentCacheInterval = userdata.cacheInterval
+                currentSnapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
+            }
         }
     }
     
@@ -562,16 +581,16 @@ struct PreferenceView: View {
         ("30 seconds", 30),
         ("1 minute", 60),
         ("2 minutes", 120),
-        ("5 minutes", 300),
-        ("15 minutes (default)", 900),
+        ("5 minutes (default)", 300),
+        ("15 minutes", 900),
         ("30 minutes", 1800),
         ("1 hour", 3600)
     ]
     
     private let cacheIntervalOptions: [(String, TimeInterval)] = [
         ("1 minute", 60),
-        ("5 minutes", 300),
-        ("15 minutes (default)", 900),
+        ("5 minutes (default)", 300),
+        ("15 minutes", 900),
         ("30 minutes", 1800),
         ("1 hour", 3600)
     ]
@@ -579,9 +598,9 @@ struct PreferenceView: View {
     private let snapshotIntervalOptions: [(String, TimeInterval)] = [
         ("5 seconds", 5),
         ("10 seconds", 10),
-        ("30 seconds (default)", 30),
+        ("30 seconds", 30),
         ("1 minute", 60),
-        ("5 minutes", 300)
+        ("5 minutes (default)", 300)
     ]
     
     // MARK: - Debug Action Functions
@@ -599,7 +618,7 @@ struct PreferenceView: View {
     
     private func setRefreshInterval(_ interval: TimeInterval) {
         userdata.refreshInterval = interval
-        Logger.shared.info("🔧 Debug: Refresh interval changed to \(interval) seconds")
+        Task { await Logger.shared.info("🔧 Debug: Refresh interval changed to \(interval) seconds") }
         
         // Notify the menu bar controller to restart its timer
         NotificationCenter.default.post(name: .refreshIntervalChanged, object: interval)
@@ -607,43 +626,43 @@ struct PreferenceView: View {
     
     private func setCacheInterval(_ interval: TimeInterval) {
         userdata.cacheInterval = interval
-        Logger.shared.info("🔧 Debug: Cache interval changed to \(interval) seconds")
+        Task { await Logger.shared.info("🔧 Debug: Cache interval changed to \(interval) seconds") }
     }
     
     private func setSnapshotInterval(_ interval: TimeInterval) {
         HistoricalDataManager.shared.setSnapshotInterval(interval)
-        Logger.shared.info("🔧 Debug: Snapshot interval changed to \(interval) seconds")
+        Task { await Logger.shared.info("🔧 Debug: Snapshot interval changed to \(interval) seconds") }
     }
     
     private func forceDataSnapshot() {
         HistoricalDataManager.shared.forceSnapshot(from: userdata)
-        Logger.shared.info("🔧 Debug: Forced data snapshot")
+        Task { await Logger.shared.info("🔧 Debug: Forced data snapshot") }
     }
     
     private func clearHistoricalData() {
         HistoricalDataManager.shared.clearAllData()
-        Logger.shared.info("🔧 Debug: Cleared all historical data")
+        Task { await Logger.shared.info("🔧 Debug: Cleared all historical data") }
     }
     
     private func fetch5YearsHistoricalData() {
         Task {
-            Logger.shared.info("🔧 Debug: Starting 5-year historical data fetch")
+            await Logger.shared.info("🔧 Debug: Starting 5-year historical data fetch")
             await userdata.triggerFullHistoricalBackfill()
-            Logger.shared.info("🔧 Debug: 5-year historical data fetch completed")
+            await Logger.shared.info("🔧 Debug: 5-year historical data fetch completed")
         }
     }
     
     private func resetToDefaults() {
-        userdata.refreshInterval = 900  // 15 minutes
-        userdata.cacheInterval = 900    // 15 minutes
-        HistoricalDataManager.shared.setSnapshotInterval(30)  // 30 seconds
+        userdata.refreshInterval = 300  // 5 minutes
+        userdata.cacheInterval = 300    // 5 minutes
+        HistoricalDataManager.shared.setSnapshotInterval(300)  // 5 minutes
         
         // Update state variables to reflect the reset
-        currentRefreshInterval = 900
-        currentCacheInterval = 900
-        currentSnapshotInterval = 30
+        currentRefreshInterval = 300
+        currentCacheInterval = 300
+        currentSnapshotInterval = 300
         
-        Logger.shared.info("🔧 Debug: Reset all intervals to defaults")
+        Task { await Logger.shared.info("🔧 Debug: Reset all intervals to defaults") }
         
         // Notify the menu bar controller to restart its timer
         NotificationCenter.default.post(name: .refreshIntervalChanged, object: TimeInterval(900))
@@ -723,6 +742,16 @@ struct PreferenceView: View {
     private func showAPIKeyAlert(title: String, message: String) {
         apiKeyAlertMessage = message
         showingAPIKeyAlert = true
+    }
+    
+    private func moveStocks(from source: IndexSet, to destination: Int) {
+        userdata.realTimeTrades.move(fromOffsets: source, toOffset: destination)
+        // The move operation will automatically trigger the DataModel's didSet observer
+        // which will save the new order to UserDefaults
+    }
+    
+    private func deleteStocks(at offsets: IndexSet) {
+        userdata.realTimeTrades.remove(atOffsets: offsets)
     }
     
     private func showCurrentDataStatus() {
@@ -806,9 +835,9 @@ struct PreferenceView: View {
                     // If we have less than 50 unique days of data in the past year, trigger backfill
                     if uniqueDays.count < 50 {
                         symbolsNeedingBackfill.append(symbol)
-                        print("DEBUG: \(symbol) has only \(uniqueDays.count) unique days of data, needs backfill")
-                    } else {
-                        print("DEBUG: \(symbol) has \(uniqueDays.count) unique days of data, sufficient")
+                                            await Logger.shared.debug("DEBUG: \(symbol) has only \(uniqueDays.count) unique days of data, needs backfill")
+                } else {
+                    await Logger.shared.debug("DEBUG: \(symbol) has \(uniqueDays.count) unique days of data, sufficient")
                     }
                 }
                 
@@ -947,9 +976,9 @@ struct PreferenceView: View {
     
     private func calculate5YearPortfolioValuesDebug() {
         Task {
-            Logger.shared.info("🔧 Debug: Starting 5-year portfolio value calculation")
+            await Logger.shared.info("🔧 Debug: Starting 5-year portfolio value calculation")
             await userdata.calculate5YearPortfolioValues()
-            Logger.shared.info("🔧 Debug: 5-year portfolio value calculation completed")
+            await Logger.shared.info("🔧 Debug: 5-year portfolio value calculation completed")
         }
     }
 }
@@ -962,8 +991,10 @@ enum PreferenceTab {
 
 struct DebugLogView: View {
     @State private var logEntries: [String] = []
-    @State private var isAutoRefresh = true
-    @State private var maxLines = 500
+    @State private var logFilePath: String = ""
+    @AppStorage("debugLogAutoRefresh") private var isAutoRefresh: Bool = true
+    @AppStorage("debugLogMaxLines") private var maxLines: Int = 500
+    @AppStorage("debugLogTailMode") private var useTailMode: Bool = false
     private let logger = Logger.shared
     private let timer = Timer.publish(every: 10.0, on: .main, in: .common).autoconnect()
     
@@ -974,7 +1005,7 @@ struct DebugLogView: View {
                 HStack {
                     Text("Debug Logs")
                         .font(.headline)
-                    Text("(Scrollable)")
+                    Text(useTailMode ? "(Tail Mode)" : "(Scrollable)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -982,6 +1013,10 @@ struct DebugLogView: View {
                 HStack(spacing: 8) {
                     Toggle("Auto Refresh", isOn: $isAutoRefresh)
                         .toggleStyle(SwitchToggleStyle())
+                    
+                    Toggle("Tail Mode", isOn: $useTailMode)
+                        .toggleStyle(SwitchToggleStyle())
+                        .help("Use tail mode for very large log files")
                     
                     Stepper("Max Lines: \(maxLines)", value: $maxLines, in: 100...2000, step: 100)
                         .frame(width: 140)
@@ -1000,12 +1035,12 @@ struct DebugLogView: View {
             }
             
             // Log file path info - compact
-            if let logPath = logger.getLogFilePath() {
+            if !logFilePath.isEmpty {
                 HStack {
                     Text("Log File:")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(logPath)
+                    Text(logFilePath)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .textSelection(.enabled)
@@ -1047,22 +1082,46 @@ struct DebugLogView: View {
         .padding(.vertical, 8)
         .onAppear {
             refreshLogs()
+            Task {
+                let path = await logger.getLogFilePath() ?? ""
+                await MainActor.run {
+                    logFilePath = path
+                }
+            }
         }
         .onReceive(timer) { _ in
             if isAutoRefresh {
                 refreshLogs()
             }
         }
+        .onChange(of: useTailMode) { _, _ in
+            refreshLogs()
+        }
     }
     
     private func refreshLogs() {
-        logEntries = logger.getRecentLogs(maxLines: maxLines)
+        Task {
+            let logs: [String]
+            if useTailMode {
+                logs = await logger.getTailLogs(maxLines: min(maxLines, 500)) // Limit tail mode to 500 lines max
+            } else {
+                logs = await logger.getRecentLogs(maxLines: maxLines)
+            }
+            
+            await MainActor.run {
+                logEntries = logs
+            }
+        }
     }
     
     private func clearLogs() {
-        logger.clearLogs()
-        logEntries = []
-        logger.info("Debug logs cleared by user")
+        Task {
+            await logger.clearLogs()
+            await MainActor.run {
+                logEntries = []
+            }
+            await logger.info("Debug logs cleared by user")
+        }
     }
     
     private func colorForLogEntry(_ entry: String) -> Color {

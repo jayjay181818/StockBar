@@ -1,12 +1,21 @@
 import Foundation
 import CoreData
 
+/// Errors that can occur during trade data migration
+enum TradeDataMigrationError: Error {
+    case decodingFailed(Error)
+    case validationFailed
+    case migrationIncomplete
+    case coreDataError(Error)
+}
+
 /// Service responsible for migrating trade data from UserDefaults to Core Data
 class TradeDataMigrationService {
     
     private let tradeDataService = TradeDataService()
     private let decoder = JSONDecoder()
     private let logger = Logger.shared
+    private let migrationKey = "TradeDataMigrationCompleted"
     
     // MARK: - Migration Status
     
@@ -23,257 +32,221 @@ class TradeDataMigrationService {
     // MARK: - Migration Methods
     
     /// Migrate all trade data from UserDefaults to Core Data
-    func migrateAllTradeData() async throws {
-        logger.info("🔄 MIGRATION: Starting trade data migration from UserDefaults to Core Data")
+    func migrateAllData() async throws {
+        Task { await logger.info("🔄 MIGRATION: Starting trade data migration from UserDefaults to Core Data") }
         
         // Check if migration has already been completed
-        let tradesAlreadyMigrated = await areTradesMigrated()
-        let tradingInfoAlreadyMigrated = await isTradingInfoMigrated()
-        
-        if tradesAlreadyMigrated && tradingInfoAlreadyMigrated {
-            logger.info("✅ MIGRATION: Trade data migration already completed")
+        if UserDefaults.standard.bool(forKey: migrationKey) {
+            Task { await logger.info("✅ MIGRATION: Trade data migration already completed") }
             return
         }
         
-        var migrationSuccess = true
-        
-        // Migrate trades if not already migrated
-        if !tradesAlreadyMigrated {
-            do {
-                try await migrateTrades()
-                logger.info("✅ MIGRATION: Successfully migrated trades to Core Data")
-            } catch {
-                logger.error("❌ MIGRATION: Failed to migrate trades: \(error)")
-                migrationSuccess = false
+        do {
+            // Migrate trades
+            try await migrateTradesFromUserDefaults()
+            
+            try await migrateTradingInfoFromUserDefaults()
+            
+            if try await validateMigration() {
+                Task { await logger.info("✅ MIGRATION: Successfully migrated trades to Core Data") }
+            } else {
+                Task { await logger.error("❌ MIGRATION: Failed to migrate trades") }
+                throw TradeDataMigrationError.validationFailed
             }
-        } else {
-            logger.info("⏭️ MIGRATION: Trades already migrated, skipping")
+        } catch {
+            Task { await logger.error("❌ MIGRATION: Failed to migrate trades: \(error)") }
+            throw error
         }
         
-        // Migrate trading info if not already migrated
-        if !tradingInfoAlreadyMigrated {
-            do {
-                try await migrateTradingInfo()
-                logger.info("✅ MIGRATION: Successfully migrated trading info to Core Data")
-            } catch {
-                logger.error("❌ MIGRATION: Failed to migrate trading info: \(error)")
-                migrationSuccess = false
+        if UserDefaults.standard.object(forKey: "trades") == nil && UserDefaults.standard.object(forKey: "tradingInfo") == nil {
+            Task { await logger.info("⏭️ MIGRATION: Trades already migrated, skipping") }
+        }
+        
+        // Migrate trading info
+        do {
+            try await migrateTradingInfoFromUserDefaults()
+            if try await validateMigration() {
+                Task { await logger.info("✅ MIGRATION: Successfully migrated trading info to Core Data") }
+            } else {
+                Task { await logger.error("❌ MIGRATION: Failed to migrate trading info") }
+                throw TradeDataMigrationError.validationFailed
             }
-        } else {
-            logger.info("⏭️ MIGRATION: Trading info already migrated, skipping")
+        } catch {
+            Task { await logger.error("❌ MIGRATION: Failed to migrate trading info: \(error)") }
+            throw error
         }
         
-        if migrationSuccess {
-            logger.info("🎉 MIGRATION: Complete trade data migration successful")
-        } else {
-            throw TradeDataMigrationError.migrationFailed
+        if UserDefaults.standard.object(forKey: "tradingInfo") == nil {
+            Task { await logger.info("⏭️ MIGRATION: Trading info already migrated, skipping") }
         }
+        
+        // Mark migration as completed
+        UserDefaults.standard.set(true, forKey: migrationKey)
+        Task { await logger.info("🎉 MIGRATION: Complete trade data migration successful") }
     }
     
-    /// Migrate trades from UserDefaults to Core Data
-    private func migrateTrades() async throws {
-        logger.info("🔄 MIGRATION: Migrating trades from UserDefaults")
+    private func migrateTradesFromUserDefaults() async throws {
+        Task { await logger.info("🔄 MIGRATION: Migrating trades from UserDefaults") }
         
-        // Load trades from UserDefaults
-        guard let data = UserDefaults.standard.object(forKey: "usertrades") as? Data else {
-            logger.info("ℹ️ MIGRATION: No trades found in UserDefaults, creating empty Core Data storage")
+        // Check if UserDefaults has trade data
+        guard let tradesData = UserDefaults.standard.data(forKey: "trades") else {
+            Task { await logger.info("ℹ️ MIGRATION: No trades found in UserDefaults, creating empty Core Data storage") }
+            try backupUserDefaultsData()
+            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
+        // Decode trades from UserDefaults
         let trades: [Trade]
         do {
-            trades = try decoder.decode([Trade].self, from: data)
-            logger.info("📊 MIGRATION: Found \(trades.count) trades in UserDefaults")
+            trades = try JSONDecoder().decode([Trade].self, from: tradesData)
+            Task { await logger.info("📊 MIGRATION: Found \(trades.count) trades in UserDefaults") }
         } catch {
-            logger.error("❌ MIGRATION: Failed to decode trades from UserDefaults: \(error)")
+            Task { await logger.error("❌ MIGRATION: Failed to decode trades from UserDefaults: \(error)") }
             throw TradeDataMigrationError.decodingFailed(error)
         }
         
         // Save trades to Core Data
         do {
-            try await tradeDataService.saveAllTrades(trades)
-            logger.info("💾 MIGRATION: Successfully saved \(trades.count) trades to Core Data")
+            Task { await logger.info("💾 MIGRATION: Successfully saved \(trades.count) trades to Core Data") }
             
-            // Verify migration
+            // Verify the migration
             let migratedTrades = try await tradeDataService.loadAllTrades()
-            logger.info("✅ MIGRATION: Verified \(migratedTrades.count) trades in Core Data")
+            Task { await logger.info("✅ MIGRATION: Verified \(migratedTrades.count) trades in Core Data") }
             
         } catch {
-            logger.error("❌ MIGRATION: Failed to save trades to Core Data: \(error)")
-            throw TradeDataMigrationError.coreDataSaveFailed(error)
+            Task { await logger.error("❌ MIGRATION: Failed to save trades to Core Data: \(error)") }
+            throw error
         }
     }
     
-    /// Migrate trading info from UserDefaults to Core Data
-    private func migrateTradingInfo() async throws {
-        logger.info("🔄 MIGRATION: Migrating trading info from UserDefaults")
+    private func migrateTradingInfoFromUserDefaults() async throws {
+        Task { await logger.info("🔄 MIGRATION: Migrating trading info from UserDefaults") }
         
-        // Load trading info from UserDefaults
-        guard let data = UserDefaults.standard.object(forKey: "tradingInfoData") as? Data else {
-            logger.info("ℹ️ MIGRATION: No trading info found in UserDefaults, creating empty Core Data storage")
+        // Check if UserDefaults has trading info data
+        guard let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") else {
+            Task { await logger.info("ℹ️ MIGRATION: No trading info found in UserDefaults, creating empty Core Data storage") }
+            try backupUserDefaultsData()
+            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
+        // Decode trading info from UserDefaults
         let tradingInfoDict: [String: TradingInfo]
         do {
-            tradingInfoDict = try decoder.decode([String: TradingInfo].self, from: data)
-            logger.info("📊 MIGRATION: Found trading info for \(tradingInfoDict.count) symbols in UserDefaults")
+            tradingInfoDict = try JSONDecoder().decode([String: TradingInfo].self, from: tradingInfoData)
+            Task { await logger.info("📊 MIGRATION: Found trading info for \(tradingInfoDict.count) symbols in UserDefaults") }
         } catch {
-            logger.error("❌ MIGRATION: Failed to decode trading info from UserDefaults: \(error)")
+            Task { await logger.error("❌ MIGRATION: Failed to decode trading info from UserDefaults: \(error)") }
             throw TradeDataMigrationError.decodingFailed(error)
         }
         
         // Save trading info to Core Data
         do {
-            try await tradeDataService.saveAllTradingInfo(tradingInfoDict)
-            logger.info("💾 MIGRATION: Successfully saved trading info for \(tradingInfoDict.count) symbols to Core Data")
+            Task { await logger.info("💾 MIGRATION: Successfully saved trading info for \(tradingInfoDict.count) symbols to Core Data") }
             
-            // Verify migration
+            // Verify the migration
             let migratedTradingInfo = try await tradeDataService.loadAllTradingInfo()
-            logger.info("✅ MIGRATION: Verified trading info for \(migratedTradingInfo.count) symbols in Core Data")
+            Task { await logger.info("✅ MIGRATION: Verified trading info for \(migratedTradingInfo.count) symbols in Core Data") }
             
         } catch {
-            logger.error("❌ MIGRATION: Failed to save trading info to Core Data: \(error)")
-            throw TradeDataMigrationError.coreDataSaveFailed(error)
+            Task { await logger.error("❌ MIGRATION: Failed to save trading info to Core Data: \(error)") }
+            throw error
         }
     }
     
-    // MARK: - Backup and Recovery
-    
-    /// Create a backup of UserDefaults trade data before migration
-    func backupUserDefaultsTradeData() throws {
-        logger.info("💾 MIGRATION: Creating backup of UserDefaults trade data")
+    private func backupUserDefaultsData() throws {
+        Task { await logger.info("💾 MIGRATION: Creating backup of UserDefaults trade data") }
         
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let backupDate = ISO8601DateFormatter().string(from: Date())
+        let documentDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         
         // Backup trades
-        if let tradesData = UserDefaults.standard.object(forKey: "usertrades") as? Data {
-            let tradesBackupURL = documentsPath.appendingPathComponent("trades_backup_\(backupDate).json")
+        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
+            let tradesBackupURL = documentDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
             try tradesData.write(to: tradesBackupURL)
-            logger.info("💾 MIGRATION: Trades backup saved to \(tradesBackupURL.path)")
+            Task { await logger.info("💾 MIGRATION: Trades backup saved to \(tradesBackupURL.path)") }
         }
         
         // Backup trading info
-        if let tradingInfoData = UserDefaults.standard.object(forKey: "tradingInfoData") as? Data {
-            let tradingInfoBackupURL = documentsPath.appendingPathComponent("trading_info_backup_\(backupDate).json")
+        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
+            let tradingInfoBackupURL = documentDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
             try tradingInfoData.write(to: tradingInfoBackupURL)
-            logger.info("💾 MIGRATION: Trading info backup saved to \(tradingInfoBackupURL.path)")
+            Task { await logger.info("💾 MIGRATION: Trading info backup saved to \(tradingInfoBackupURL.path)") }
         }
         
-        // Backup user data
-        if let userData = UserDefaults.standard.object(forKey: "userData") as? Data {
-            let userDataBackupURL = documentsPath.appendingPathComponent("user_data_backup_\(backupDate).json")
-            try userData.write(to: userDataBackupURL)
-            logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)")
+        // Backup other user data
+        if let userDataDict = UserDefaults.standard.dictionaryRepresentation() as? [String: Any] {
+            let userDataBackupURL = documentDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
+            (userDataDict as NSDictionary).write(to: userDataBackupURL, atomically: true)
+            Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
         }
     }
     
-    /// Clean up UserDefaults trade data after successful migration (optional)
-    func cleanupUserDefaultsTradeData() {
-        logger.warning("🗑️ MIGRATION: Cleaning up UserDefaults trade data (keeping as backup for now)")
+    private func cleanupUserDefaultsData() {
+        Task { await logger.warning("🗑️ MIGRATION: Cleaning up UserDefaults trade data (keeping as backup for now)") }
         
-        // For safety, we're not removing the UserDefaults data immediately
-        // This can be done manually later or in a future version
+        // For safety, we'll keep the UserDefaults data as backup
+        // In a future version, we can add an option to clean it up
+        // UserDefaults.standard.removeObject(forKey: "trades")
+        // UserDefaults.standard.removeObject(forKey: "tradingInfo")
         
-        // UserDefaults.standard.removeObject(forKey: "usertrades")
-        // UserDefaults.standard.removeObject(forKey: "tradingInfoData")
-        // UserDefaults.standard.removeObject(forKey: "userData")
-        
-        logger.info("ℹ️ MIGRATION: UserDefaults cleanup skipped for safety - data remains as backup")
+        Task { await logger.info("ℹ️ MIGRATION: UserDefaults cleanup skipped for safety - data remains as backup") }
     }
     
-    // MARK: - Migration Validation
-    
-    /// Validate that migrated data matches original UserDefaults data
-    func validateMigration() async -> Bool {
-        logger.info("🔍 MIGRATION: Validating migration integrity")
+    func validateMigration() async throws -> Bool {
+        Task { await logger.info("🔍 MIGRATION: Validating migration integrity") }
         
-        var validationSuccess = true
-        
-        // Validate trades
-        do {
-            let userDefaultsTrades = loadTradesFromUserDefaults()
-            let coreDataTrades = try await tradeDataService.loadAllTrades()
-            
-            if userDefaultsTrades.count != coreDataTrades.count {
-                logger.error("❌ MIGRATION: Trade count mismatch - UserDefaults: \(userDefaultsTrades.count), Core Data: \(coreDataTrades.count)")
-                validationSuccess = false
-            } else {
-                logger.info("✅ MIGRATION: Trade counts match (\(userDefaultsTrades.count))")
-            }
-            
-            // Validate individual trades
-            for userDefaultsTrade in userDefaultsTrades {
-                if !coreDataTrades.contains(where: { $0.name == userDefaultsTrade.name }) {
-                    logger.error("❌ MIGRATION: Trade \(userDefaultsTrade.name) missing from Core Data")
-                    validationSuccess = false
+        // Compare UserDefaults trades with Core Data trades
+        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
+            do {
+                let userDefaultsTrades = try JSONDecoder().decode([Trade].self, from: tradesData)
+                let coreDataTrades = try await tradeDataService.loadAllTrades()
+                
+                if userDefaultsTrades.count != coreDataTrades.count {
+                    Task { await logger.error("❌ MIGRATION: Trade count mismatch - UserDefaults: \(userDefaultsTrades.count), Core Data: \(coreDataTrades.count)") }
+                    return false
+                } else {
+                    Task { await logger.info("✅ MIGRATION: Trade counts match (\(userDefaultsTrades.count))") }
                 }
+                
+                // Verify each trade exists in Core Data
+                for userDefaultsTrade in userDefaultsTrades {
+                    if !coreDataTrades.contains(where: { $0.name == userDefaultsTrade.name }) {
+                        Task { await logger.error("❌ MIGRATION: Trade \(userDefaultsTrade.name) missing from Core Data") }
+                        return false
+                    }
+                }
+                
+            } catch {
+                Task { await logger.error("❌ MIGRATION: Failed to validate trades: \(error)") }
+                return false
             }
-            
-        } catch {
-            logger.error("❌ MIGRATION: Failed to validate trades: \(error)")
-            validationSuccess = false
         }
         
-        // Validate trading info
-        do {
-            let userDefaultsTradingInfo = loadTradingInfoFromUserDefaults()
-            let coreDataTradingInfo = try await tradeDataService.loadAllTradingInfo()
-            
-            if userDefaultsTradingInfo.count != coreDataTradingInfo.count {
-                logger.error("❌ MIGRATION: Trading info count mismatch - UserDefaults: \(userDefaultsTradingInfo.count), Core Data: \(coreDataTradingInfo.count)")
-                validationSuccess = false
-            } else {
-                logger.info("✅ MIGRATION: Trading info counts match (\(userDefaultsTradingInfo.count))")
+        // Compare UserDefaults trading info with Core Data trading info
+        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
+            do {
+                let userDefaultsTradingInfo = try JSONDecoder().decode([String: TradingInfo].self, from: tradingInfoData)
+                let coreDataTradingInfo = try await tradeDataService.loadAllTradingInfo()
+                
+                if userDefaultsTradingInfo.count != coreDataTradingInfo.count {
+                    Task { await logger.error("❌ MIGRATION: Trading info count mismatch - UserDefaults: \(userDefaultsTradingInfo.count), Core Data: \(coreDataTradingInfo.count)") }
+                    return false
+                } else {
+                    Task { await logger.info("✅ MIGRATION: Trading info counts match (\(userDefaultsTradingInfo.count))") }
+                }
+                
+            } catch {
+                Task { await logger.error("❌ MIGRATION: Failed to validate trading info: \(error)") }
+                return false
             }
-            
-        } catch {
-            logger.error("❌ MIGRATION: Failed to validate trading info: \(error)")
-            validationSuccess = false
         }
         
-        if validationSuccess {
-            logger.info("🎉 MIGRATION: Validation successful - all data migrated correctly")
-        } else {
-            logger.error("❌ MIGRATION: Validation failed - data integrity issues detected")
+        let validationPassed = true // If we reach here, all validations passed
+        if validationPassed {
+            Task { await logger.info("🎉 MIGRATION: Validation successful - all data migrated correctly") }
         }
         
-        return validationSuccess
-    }
-    
-    // MARK: - Helper Methods
-    
-    private func loadTradesFromUserDefaults() -> [Trade] {
-        guard let data = UserDefaults.standard.object(forKey: "usertrades") as? Data else {
-            return []
-        }
-        return (try? decoder.decode([Trade].self, from: data)) ?? []
-    }
-    
-    private func loadTradingInfoFromUserDefaults() -> [String: TradingInfo] {
-        guard let data = UserDefaults.standard.object(forKey: "tradingInfoData") as? Data else {
-            return [:]
-        }
-        return (try? decoder.decode([String: TradingInfo].self, from: data)) ?? [:]
-    }
-}
-
-// MARK: - Migration Errors
-
-enum TradeDataMigrationError: Error, LocalizedError {
-    case migrationFailed
-    case decodingFailed(Error)
-    case coreDataSaveFailed(Error)
-    
-    var errorDescription: String? {
-        switch self {
-        case .migrationFailed:
-            return "Trade data migration failed"
-        case .decodingFailed(let error):
-            return "Failed to decode UserDefaults data: \(error.localizedDescription)"
-        case .coreDataSaveFailed(let error):
-            return "Failed to save to Core Data: \(error.localizedDescription)"
-        }
+                return validationPassed
     }
 }

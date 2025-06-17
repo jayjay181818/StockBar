@@ -5,13 +5,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let dataModel = DataModel()
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Perform legacy cleanup on first launch
+        LegacyCleanupService.shared.performCleanupIfNeeded()
+        
         // Perform Core Data migration before initializing the UI
         Task {
             do {
                 try await DataMigrationService.shared.performFullMigration()
-                Logger.shared.info("AppDelegate: Core Data migration completed successfully")
+                await Logger.shared.info("AppDelegate: Core Data migration completed successfully")
             } catch {
-                Logger.shared.error("AppDelegate: Core Data migration failed: \(error)")
+                await Logger.shared.error("AppDelegate: Core Data migration failed: \(error)")
             }
         }
         
