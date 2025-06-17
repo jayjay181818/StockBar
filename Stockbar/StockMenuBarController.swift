@@ -29,7 +29,7 @@ class StockMenuBarController {
     // MARK: - Private Methods
     private func setupTimer() {
         Task { await data.refreshAllTrades() } // initial fetch
-        self.timer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in
+        self.timer = Timer.scheduledTimer(withTimeInterval: data.refreshInterval, repeats: true) { [weak self] _ in
             Task {
                 await self?.data.refreshAllTrades()
             }
@@ -66,10 +66,13 @@ class StockMenuBarController {
     }
     
     @objc private func showPreferences(_ sender: Any?) {
-        // Create window controller if it doesn't exist
-        if preferenceWindowController == nil {
-            preferenceWindowController = PreferenceWindowController(dataModel: data)
-        }
+        // Close any existing preferences window first
+        preferenceWindowController?.close()
+        preferenceWindowController = nil
+        
+        // Always create a fresh window controller to avoid SwiftUI hosting issues
+        // This ensures the window content is properly initialized each time
+        preferenceWindowController = PreferenceWindowController(dataModel: data)
         
         // Show the window
         preferenceWindowController?.showWindow()
@@ -99,7 +102,7 @@ class StockMenuBarController {
             }
         }
         
-        Logger.shared.info("🔧 MenuBar: Restarted timer with \(newInterval) second interval")
+        Task { await Logger.shared.info("🔧 MenuBar: Restarted timer with \(newInterval) second interval") }
     }
     
     deinit {

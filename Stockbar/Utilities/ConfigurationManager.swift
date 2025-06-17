@@ -27,7 +27,7 @@ public class ConfigurationManager {
             let config = try JSONSerialization.jsonObject(with: data, options: []) as? [String: String] ?? [:]
             return config
         } catch {
-            Logger.shared.error("Failed to load configuration: \(error.localizedDescription)")
+            Task { await Logger.shared.error("Failed to load configuration: \(error.localizedDescription)") }
             return [:]
         }
     }
@@ -35,16 +35,16 @@ public class ConfigurationManager {
     /// Saves configuration to the local file
     private func saveConfiguration(_ config: [String: String]) {
         guard let configFileURL = getConfigFileURL() else {
-            Logger.shared.error("Could not get configuration file URL")
+            Task { await Logger.shared.error("Could not get configuration file URL") }
             return
         }
         
         do {
             let data = try JSONSerialization.data(withJSONObject: config, options: .prettyPrinted)
             try data.write(to: configFileURL)
-            Logger.shared.debug("Configuration saved to \(configFileURL.path)")
+            Task { await Logger.shared.debug("Configuration saved to \(configFileURL.path)") }
         } catch {
-            Logger.shared.error("Failed to save configuration: \(error.localizedDescription)")
+            Task { await Logger.shared.error("Failed to save configuration: \(error.localizedDescription)") }
         }
     }
     
@@ -59,7 +59,7 @@ public class ConfigurationManager {
         var config = loadConfiguration()
         config["FMP_API_KEY"] = apiKey
         saveConfiguration(config)
-        Logger.shared.info("FMP API key updated")
+        Task { await Logger.shared.info("FMP API key updated") }
     }
     
     /// Removes the FMP API key from local storage
@@ -67,7 +67,7 @@ public class ConfigurationManager {
         var config = loadConfiguration()
         config.removeValue(forKey: "FMP_API_KEY")
         saveConfiguration(config)
-        Logger.shared.info("FMP API key removed")
+        Task { await Logger.shared.info("FMP API key removed") }
     }
     
     /// Gets the configuration file path for display
@@ -93,9 +93,9 @@ public class ConfigurationManager {
         do {
             let data = try JSONSerialization.data(withJSONObject: sampleConfig, options: .prettyPrinted)
             try data.write(to: configFileURL)
-            Logger.shared.info("Sample configuration file created at \(configFileURL.path)")
+            Task { await Logger.shared.info("Sample configuration file created at \(configFileURL.path)") }
         } catch {
-            Logger.shared.error("Failed to create sample configuration file: \(error.localizedDescription)")
+            Task { await Logger.shared.error("Failed to create sample configuration file: \(error.localizedDescription)") }
         }
     }
 }

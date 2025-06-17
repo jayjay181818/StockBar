@@ -40,7 +40,7 @@ class BackgroundCalculationManager: ObservableObject {
             self.lastError = nil
             self.estimatedTimeRemaining = 0
             
-            logger.info("📊 PROGRESS: Started \(operation) with \(totalOperations) operations")
+            Task { await logger.info("📊 PROGRESS: Started \(operation) with \(totalOperations) operations") }
         }
     }
     
@@ -51,7 +51,7 @@ class BackgroundCalculationManager: ObservableObject {
             let newProgress = min(1.0, Double(completed) / Double(max(1, totalOperations)))
             
             if newProgress < calculationProgress && calculationProgress < 1.0 {
-                logger.warning("📊 PROGRESS: Progress went backwards: \(Int(calculationProgress * 100))% -> \(Int(newProgress * 100))%")
+                Task { await logger.warning("📊 PROGRESS: Progress went backwards: \(Int(calculationProgress * 100))% -> \(Int(newProgress * 100))%") }
                 // Don't update backwards progress unless it's completion
                 return
             }
@@ -60,7 +60,7 @@ class BackgroundCalculationManager: ObservableObject {
             if let startTime = startTime {
                 let elapsed = Date().timeIntervalSince(startTime)
                 if elapsed > 600 && newProgress < 0.1 { // 10 minutes with <10% progress
-                    logger.error("📊 PROGRESS: Calculation appears stalled after \(Int(elapsed))s with only \(Int(newProgress * 100))% progress")
+                    Task { await logger.error("📊 PROGRESS: Calculation appears stalled after \(Int(elapsed))s with only \(Int(newProgress * 100))% progress") }
                     reportError("Calculation stalled - taking too long to complete")
                     return
                 }
@@ -84,7 +84,7 @@ class BackgroundCalculationManager: ObservableObject {
             // Update memory usage
             self.updateMemoryUsage()
             
-            logger.debug("📊 PROGRESS: \(completed)/\(totalOperations) (\(Int(calculationProgress * 100))%) - \(calculationStatus)")
+            Task { await logger.debug("📊 PROGRESS: \(completed)/\(totalOperations) (\(Int(calculationProgress * 100))%) - \(calculationStatus)") }
         }
     }
     
@@ -132,7 +132,7 @@ class BackgroundCalculationManager: ObservableObject {
             
             if let startTime = startTime {
                 let totalTime = Date().timeIntervalSince(startTime)
-                logger.info("📊 PROGRESS: Completed \(calculationStatus) in \(String(format: "%.1f", totalTime))s")
+                Task { await logger.info("📊 PROGRESS: Completed \(calculationStatus) in \(String(format: "%.1f", totalTime))s") }
             }
             
             // Clear status after a delay
@@ -150,7 +150,7 @@ class BackgroundCalculationManager: ObservableObject {
         Task { @MainActor in
             self.lastError = error
             self.isCalculating = false
-            logger.error("📊 PROGRESS ERROR: \(error)")
+            Task { await logger.error("📊 PROGRESS ERROR: \(error)") }
             
             // Clear error after a delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
@@ -171,7 +171,7 @@ class BackgroundCalculationManager: ObservableObject {
             self.calculationProgress = 0.0
             self.estimatedTimeRemaining = 0
             
-            logger.info("📊 PROGRESS: Calculation cancelled by user")
+            Task { await logger.info("📊 PROGRESS: Calculation cancelled by user") }
             
             // Clear status after a delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {

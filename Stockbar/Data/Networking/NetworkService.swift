@@ -49,16 +49,16 @@ class PythonNetworkService: NetworkService {
     private let scriptName = "get_stock_data.py"
 
     func fetchQuote(for symbol: String) async throws -> StockFetchResult {
-        logger.debug("Attempting to fetch quote for \(symbol) using Python script.")
+        await logger.debug("Attempting to fetch quote for \(symbol) using Python script.")
 
         guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            logger.error("Script '\(scriptName)' not found in bundle.")
+            await logger.error("Script '\(scriptName)' not found in bundle.")
             throw NetworkError.scriptNotFound(scriptName)
         }
-        logger.debug("Found script at path: \(scriptPath)")
+        await logger.debug("Found script at path: \(scriptPath)")
 
         guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
             throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
         }
 
@@ -79,20 +79,20 @@ class PythonNetworkService: NetworkService {
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                logger.error("Python script stderr for \(symbol): \(err)")
+                await logger.error("Python script stderr for \(symbol): \(err)")
             }
 
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                logger.warning("Python script stdout for \(symbol) is empty.")
+                await logger.warning("Python script stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from script for \(symbol)")
             }
-            logger.debug("Python script stdout for \(symbol): \(output)")
+            await logger.debug("Python script stdout for \(symbol): \(output)")
 
             // Check for multi-line output which indicates an error from the new script format
             let outputLines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             
             if outputLines.count > 1 && outputLines.last == "FETCH_FAILED" {
-                logger.warning("Script explicitly reported FETCH_FAILED for \(symbol). Error: \(outputLines.first ?? "Unknown error")")
+                await logger.warning("Script explicitly reported FETCH_FAILED for \(symbol). Error: \(outputLines.first ?? "Unknown error")")
                 throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol): \(outputLines.first ?? "")")
             }
             
@@ -106,7 +106,7 @@ class PythonNetworkService: NetworkService {
                        let prevClosePrice = Double(output[prevCloseRange]) {
                         // Detect currency based on symbol - Python script already converts pence to pounds for .L stocks
                         let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
-                        logger.info("Successfully fetched Close=\(closePrice), PrevClose=\(prevClosePrice) for \(symbol) via Python. Detected currency: \(detectedCurrency)")
+                        await logger.info("Successfully fetched Close=\(closePrice), PrevClose=\(prevClosePrice) for \(symbol) via Python. Detected currency: \(detectedCurrency)")
                         // Determine timezone based on symbol
                         let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
                         return StockFetchResult(
@@ -124,27 +124,27 @@ class PythonNetworkService: NetworkService {
             }
             
             // If parsing fails, it's an invalid response
-            logger.error("Failed to parse script output for \(symbol): '\(output)'")
+            await logger.error("Failed to parse script output for \(symbol): '\(output)'")
             throw NetworkError.invalidResponse("Could not parse expected data from script output: \(output)")
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
-            logger.error("Failed to run Python script for \(symbol): \(error.localizedDescription)")
+            await logger.error("Failed to run Python script for \(symbol): \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }
     
     /// Enhanced fetch quote with pre/post market data support
     func fetchEnhancedQuote(for symbol: String) async throws -> StockFetchResult {
-        logger.debug("Attempting to fetch enhanced quote for \(symbol) using Python script.")
+        await logger.debug("Attempting to fetch enhanced quote for \(symbol) using Python script.")
 
         guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            logger.error("Script '\(scriptName)' not found in bundle.")
+            await logger.error("Script '\(scriptName)' not found in bundle.")
             throw NetworkError.scriptNotFound(scriptName)
         }
 
         guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
             throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
         }
 
@@ -166,18 +166,18 @@ class PythonNetworkService: NetworkService {
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                logger.error("Python script stderr for enhanced \(symbol): \(err)")
+                await logger.error("Python script stderr for enhanced \(symbol): \(err)")
             }
 
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                logger.warning("Python script stdout for enhanced \(symbol) is empty.")
+                await logger.warning("Python script stdout for enhanced \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from script for \(symbol)")
             }
-            logger.debug("Python script stdout for enhanced \(symbol): \(output)")
+            await logger.debug("Python script stdout for enhanced \(symbol): \(output)")
 
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
-                logger.warning("Script explicitly reported FETCH_FAILED for enhanced \(symbol).")
+                await logger.warning("Script explicitly reported FETCH_FAILED for enhanced \(symbol).")
                 throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol)")
             }
             
@@ -199,14 +199,14 @@ class PythonNetworkService: NetworkService {
                 return try parseEnhancedQuoteData(quoteData, symbol: symbol)
                 
             } catch {
-                logger.error("Failed to parse JSON from enhanced script output: \(error.localizedDescription)")
+                await logger.error("Failed to parse JSON from enhanced script output: \(error.localizedDescription)")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
             
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
-            logger.error("Failed to run Python script for enhanced \(symbol): \(error.localizedDescription)")
+            await logger.error("Failed to run Python script for enhanced \(symbol): \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }
@@ -253,7 +253,7 @@ class PythonNetworkService: NetworkService {
         let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
         let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
         
-        logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil")")
+        Task { await logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil")") }
         
         return StockFetchResult(
             currency: detectedCurrency,
@@ -277,7 +277,7 @@ class PythonNetworkService: NetworkService {
     }
 
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
-        logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
+        await logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
 
         guard !symbols.isEmpty else { return [] }
 
@@ -289,7 +289,7 @@ class PythonNetworkService: NetworkService {
                 let result = try await fetchEnhancedQuote(for: symbol)
                 results.append(result)
             } catch {
-                logger.error("Failed to fetch quote for \(symbol) in batch: \(error.localizedDescription)")
+                await logger.error("Failed to fetch quote for \(symbol) in batch: \(error.localizedDescription)")
                 // Create a placeholder result for failed fetches to maintain currency info
                 let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
                 let placeholderResult = StockFetchResult(
@@ -321,7 +321,7 @@ class PythonNetworkService: NetworkService {
                 do {
                     try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                 } catch {
-                    logger.warning("Task.sleep failed: \(error.localizedDescription)")
+                    await logger.warning("Task.sleep failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -335,20 +335,20 @@ class PythonNetworkService: NetworkService {
     }
     
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] {
-        logger.info("🐍 PYTHON SCRIPT: Starting historical data fetch for \(symbol)")
+        await logger.info("🐍 PYTHON SCRIPT: Starting historical data fetch for \(symbol)")
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
-        logger.info("🐍 PYTHON SCRIPT: Date range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
+        await logger.info("🐍 PYTHON SCRIPT: Date range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
         
         guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            logger.error("Script '\(scriptName)' not found in bundle.")
+            await logger.error("Script '\(scriptName)' not found in bundle.")
             throw NetworkError.scriptNotFound(scriptName)
         }
         
         guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
             throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
         }
         
@@ -358,13 +358,13 @@ class PythonNetworkService: NetworkService {
         let startDateString = scriptDateFormatter.string(from: startDate)
         let endDateString = scriptDateFormatter.string(from: endDate)
         
-        logger.info("🐍 PYTHON SCRIPT: Formatted dates - start: \(startDateString), end: \(endDateString)")
+        await logger.info("🐍 PYTHON SCRIPT: Formatted dates - start: \(startDateString), end: \(endDateString)")
         
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
         process.arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
         
-        logger.info("🐍 PYTHON SCRIPT: Command: \(pythonInterpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
+        await logger.info("🐍 PYTHON SCRIPT: Command: \(pythonInterpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
         
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -372,30 +372,41 @@ class PythonNetworkService: NetworkService {
         process.standardError = errorPipe
         
         do {
-            logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
+            await logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
             try process.run()
+            
+            // Add timeout protection for historical data fetching (5 minutes max)
+            let timeoutTask = Task {
+                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
+                if process.isRunning {
+                    await logger.warning("🐍 PYTHON SCRIPT: Timeout reached for \(symbol), terminating process")
+                    process.terminate()
+                }
+            }
+            
             process.waitUntilExit()
+            timeoutTask.cancel() // Cancel timeout if process finishes normally
             
             let exitCode = process.terminationStatus
-            logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
+            await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
             
             let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                logger.error("🐍 PYTHON SCRIPT: stderr for \(symbol): \(err)")
+                await logger.error("🐍 PYTHON SCRIPT: stderr for \(symbol): \(err)")
             }
             
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
+                await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
             }
             
-            logger.info("🐍 PYTHON SCRIPT: Raw output for \(symbol) (\(output.count) chars): \(String(output.prefix(200)))...")
+            await logger.info("🐍 PYTHON SCRIPT: Raw output for \(symbol) (\(output.count) chars): \(String(output.prefix(200)))...")
             
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
-                logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")
+                await logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")
                 throw NetworkError.noData("Script reported FETCH_FAILED for historical \(symbol)")
             }
             
@@ -414,7 +425,7 @@ class PythonNetworkService: NetworkService {
                           let price = item["price"] as? Double,
                           let previousClose = item["previousClose"] as? Double,
                           let symbolValue = item["symbol"] as? String else {
-                        logger.warning("Skipping invalid historical data item: \(item)")
+                        await logger.warning("Skipping invalid historical data item: \(item)")
                         continue
                     }
                     
@@ -428,27 +439,27 @@ class PythonNetworkService: NetworkService {
                     priceSnapshots.append(snapshot)
                 }
                 
-                logger.info("🐍 PYTHON SCRIPT: Successfully parsed \(priceSnapshots.count) historical data points for \(symbol)")
+                await logger.info("🐍 PYTHON SCRIPT: Successfully parsed \(priceSnapshots.count) historical data points for \(symbol)")
                 
                 // Show sample of parsed data for debugging
                 if !priceSnapshots.isEmpty {
                     let sortedSnapshots = priceSnapshots.sorted { $0.timestamp < $1.timestamp }
                     if let first = sortedSnapshots.first, let last = sortedSnapshots.last {
-                        logger.info("🐍 PYTHON SCRIPT: \(symbol) parsed data range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
+                        await logger.info("🐍 PYTHON SCRIPT: \(symbol) parsed data range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
                     }
                 }
                 
                 return priceSnapshots
                 
             } catch {
-                logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
+                await logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
             
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
-            logger.error("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
+            await logger.error("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }

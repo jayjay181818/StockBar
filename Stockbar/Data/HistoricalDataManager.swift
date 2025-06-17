@@ -98,6 +98,17 @@ class HistoricalDataManager: ObservableObject {
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
     
+    // In init() or a new method, add check for retroactive calculation:
+    // This check would ideally be in DataModel or AppDelegate after migration completes.
+    // For example, in DataModel.init() after ensuring migration service has run:
+    // if DataMigrationService.shared.needsRetroactiveCalculation {
+    //    Logger.shared.info("HistoricalDataManager: Triggering retroactive calculation due to migration flag.")
+    //    Task {
+    //        await self.historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+    //        DataMigrationService.shared.needsRetroactiveCalculation = false // Clear the flag
+    //    }
+    // }
+
     private init() {
         self.coreDataService = CoreDataHistoricalDataService()
         loadHistoricalData()
@@ -114,23 +125,23 @@ class HistoricalDataManager: ObservableObject {
     private func performMigrationIfNeeded() async {
         do {
             if !migrationService.isPriceSnapshotsMigrated || !migrationService.isPortfolioSnapshotsMigrated {
-                logger.info("🔄 Starting Core Data migration...")
+                await logger.info("🔄 Starting Core Data migration...")
                 try await migrationService.performFullMigration()
                 
                 // Verify migration success
                 let success = try await migrationService.verifyMigration()
                 if success {
-                    logger.info("✅ Core Data migration completed successfully")
+                    await logger.info("✅ Core Data migration completed successfully")
                     // Optionally clean up legacy data after successful verification
                     // migrationService.cleanupLegacyData()
                 } else {
-                    logger.warning("⚠️ Core Data migration verification failed")
+                    await logger.warning("⚠️ Core Data migration verification failed")
                 }
             } else {
-                logger.info("✅ Core Data migration already completed")
+                await logger.info("✅ Core Data migration already completed")
             }
         } catch {
-            logger.error("❌ Core Data migration failed: \(error)")
+            await logger.error("❌ Core Data migration failed: \(error)")
         }
     }
     
@@ -142,10 +153,10 @@ class HistoricalDataManager: ObservableObject {
             let startDate = timeRange.startDate()
             let endDate = Date()
             let snapshots = try await coreDataService.fetchPriceSnapshots(for: symbol, from: startDate, to: endDate)
-            logger.debug("📊 Loaded \(snapshots.count) price snapshots from Core Data for \(symbol)")
+            await logger.debug("📊 Loaded \(snapshots.count) price snapshots from Core Data for \(symbol)") 
             return snapshots
         } catch {
-            logger.error("❌ Failed to load price snapshots from Core Data for \(symbol): \(error)")
+            await logger.error("❌ Failed to load price snapshots from Core Data for \(symbol): \(error)") 
             return []
         }
     }
@@ -156,21 +167,24 @@ class HistoricalDataManager: ObservableObject {
             let startDate = timeRange.startDate()
             let endDate = Date()
             let snapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
-            logger.debug("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
+            await logger.debug("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data") 
             return snapshots
         } catch {
-            logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            await logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)") 
             return []
         }
     }
     
-    /// Save new price snapshots to Core Data
+    /// Save new price snapshots to Core Data using optimized background context
     private func savePriceSnapshotsToCoreData(_ snapshots: [PriceSnapshot]) async {
-        do {
-            try await coreDataService.savePriceSnapshots(snapshots)
-            logger.debug("💾 Saved \(snapshots.count) price snapshots to Core Data")
-        } catch {
-            logger.error("❌ Failed to save price snapshots to Core Data: \(error)")
+        // Use optimized background context for heavy save operations
+        try? await performOptimizedBackgroundOperation("save price snapshots") { [self] in
+            do {
+                try await self.coreDataService.savePriceSnapshots(snapshots)
+                await self.logger.debug("💾 Saved \(snapshots.count) price snapshots to Core Data") 
+            } catch {
+                await self.logger.error("❌ Failed to save price snapshots to Core Data: \(error)") 
+            }
         }
     }
     
@@ -178,10 +192,52 @@ class HistoricalDataManager: ObservableObject {
     private func savePortfolioSnapshotToCoreData(_ snapshot: HistoricalPortfolioSnapshot) async {
         do {
             try await coreDataService.savePortfolioSnapshot(snapshot)
-            logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)")
+            await logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)") 
         } catch {
-            logger.error("❌ Failed to save portfolio snapshot to Core Data: \(error)")
+            await logger.error("❌ Failed to save portfolio snapshot to Core Data: \(error)") 
         }
+    }
+    
+    // MARK: - Optimized Background Operations
+    
+    /// Perform heavy operations using optimized background context to prevent UI blocking
+    private func performOptimizedBackgroundOperation<T>(_ operationName: String, operation: @escaping () async throws -> T) async throws -> T {
+        await logger.debug("🔄 Starting optimized background operation: \(operationName)")
+        
+        // Use task with specific priority for background work
+        return try await Task.detached(priority: .utility) {
+            let result = try await operation()
+            await Logger.shared.debug("✅ Completed optimized background operation: \(operationName)")
+            return result
+        }.value
+    }
+    
+    /// Batch process large datasets in chunks to prevent memory spikes
+    private func processBatchOperation<T, R>(
+        items: [T],
+        batchSize: Int = 100,
+        operationName: String,
+        operation: @escaping ([T]) async throws -> R
+    ) async throws -> [R] {
+        let batches = items.chunked(into: batchSize)
+        var results: [R] = []
+        
+        await logger.info("🔄 Processing \(items.count) items in \(batches.count) batches for \(operationName)")
+        
+        for (index, batch) in batches.enumerated() {
+            let result = try await performOptimizedBackgroundOperation("\(operationName) batch \(index + 1)") {
+                return try await operation(batch)
+            }
+            results.append(result)
+            
+            // Small delay between batches to prevent overwhelming the system
+            if index < batches.count - 1 {
+                try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+            }
+        }
+        
+        await logger.info("✅ Completed batch processing for \(operationName)")
+        return results
     }
     
     // MARK: - Tiered Cache Integration
@@ -205,7 +261,7 @@ class HistoricalDataManager: ObservableObject {
            let decoded = try? decoder.decode(type, from: data) {
             // Migrate to cache for future access
             storeInCache(decoded, key: key)
-            logger.debug("🔄 Migrated \(key) from UserDefaults to cache")
+                            Task { await logger.debug("🔄 Migrated \(key) from UserDefaults to cache") }
             return decoded
         }
         
@@ -276,7 +332,7 @@ class HistoricalDataManager: ObservableObject {
             cacheManager.remove(forKey: "analytics_\(timeRange.rawValue)_\(Date().timeIntervalSince1970 / 3600)")
         }
         
-        logger.debug("🗑️ Invalidated caches for symbol: \(symbol ?? "all")")
+        Task { await logger.debug("🗑️ Invalidated caches for symbol: \(symbol ?? "all")") }
     }
     
     // MARK: - Performance Enhancement Methods
@@ -285,7 +341,7 @@ class HistoricalDataManager: ObservableObject {
     func getOrCalculateAnalytics(for timeRange: ChartTimeRange) -> PortfolioAnalytics? {
         // Try to get from cache first
         if let cached = getCachedPortfolioAnalytics(for: timeRange) {
-            logger.debug("📊 Using cached analytics for \(timeRange.rawValue)")
+            Task { await logger.debug("📊 Using cached analytics for \(timeRange.rawValue)") }
             return cached
         }
         
@@ -297,7 +353,7 @@ class HistoricalDataManager: ObservableObject {
         
         // Cache for future use
         setCachedPortfolioAnalytics(analytics, for: timeRange)
-        logger.debug("📊 Calculated and cached analytics for \(timeRange.rawValue)")
+        Task { await logger.debug("📊 Calculated and cached analytics for \(timeRange.rawValue)") }
         
         return analytics
     }
@@ -318,7 +374,7 @@ class HistoricalDataManager: ObservableObject {
                 _ = self.getHistoricalPortfolioSnapshots(timeRange: timeRange)
             }
             
-            self.logger.debug("🚀 Preloaded frequently accessed data into memory cache")
+            Task { await self.logger.debug("🚀 Preloaded frequently accessed data into memory cache") }
         }
     }
     
@@ -491,29 +547,29 @@ class HistoricalDataManager: ObservableObject {
         let now = Date()
         let timeSinceLastSnapshot = now.timeIntervalSince(lastSnapshotTime)
         
-        logger.debug("📸 Snapshot attempt: timeSinceLastSnapshot=\(Int(timeSinceLastSnapshot))s, required=\(Int(snapshotInterval))s")
+        Task { await logger.debug("📸 Snapshot attempt: timeSinceLastSnapshot=\(Int(timeSinceLastSnapshot))s, required=\(Int(snapshotInterval))s") }
         
         guard timeSinceLastSnapshot >= snapshotInterval else {
-            logger.debug("📸 Skipping snapshot - too soon (\(Int(timeSinceLastSnapshot))s < \(Int(snapshotInterval))s)")
+            Task { await logger.debug("📸 Skipping snapshot - too soon (\(Int(timeSinceLastSnapshot))s < \(Int(snapshotInterval))s)") }
             return // Too soon since last snapshot
         }
         
         lastSnapshotTime = now
-        logger.debug("📸 Recording snapshot at \(now)")
+        Task { await logger.debug("📸 Recording snapshot at \(now)") }
         
         var currentPriceSnapshots: [PriceSnapshot] = []
         var hasValidData = false
         
-        logger.debug("📸 Checking \(dataModel.realTimeTrades.count) trades for valid data")
+        Task { await logger.debug("📸 Checking \(dataModel.realTimeTrades.count) trades for valid data") }
         
         for trade in dataModel.realTimeTrades {
             let price = trade.realTimeInfo.currentPrice
             let prevClose = trade.realTimeInfo.prevClosePrice
             
-            logger.debug("📸 \(trade.trade.name): price=\(price), prevClose=\(prevClose), currency=\(trade.realTimeInfo.currency ?? "nil")")
+            Task { await logger.debug("📸 \(trade.trade.name): price=\(price), prevClose=\(prevClose), currency=\(trade.realTimeInfo.currency ?? "nil")") }
             
             guard !price.isNaN && !prevClose.isNaN && price > 0 else {
-                logger.debug("📸 Skipping \(trade.trade.name) - invalid data")
+                Task { await logger.debug("📸 Skipping \(trade.trade.name) - invalid data") }
                 continue // Skip invalid data
             }
             
@@ -536,7 +592,7 @@ class HistoricalDataManager: ObservableObject {
         }
         
         guard hasValidData else {
-            logger.debug("Skipping snapshot - no valid price data")
+            Task { await logger.debug("Skipping snapshot - no valid price data") }
             return
         }
         
@@ -593,7 +649,7 @@ class HistoricalDataManager: ObservableObject {
             await savePortfolioSnapshotToCoreData(enhancedPortfolioSnapshot)
         }
         
-        logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)")
+        Task { await logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)") }
     }
     
     func getChartData(for type: ChartType, timeRange: ChartTimeRange, dataModel: DataModel? = nil) -> [ChartDataPoint] {
@@ -604,7 +660,7 @@ class HistoricalDataManager: ObservableObject {
             // NEW: Use stored portfolio snapshots if available
             if !historicalPortfolioSnapshots.isEmpty {
                 let data = getStoredPortfolioValues(for: timeRange)
-                logger.debug("📊 Portfolio value chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)")
+                Task { await logger.debug("📊 Portfolio value chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)") }
                 
                 // If we have good coverage, return stored data
                 if data.count > 10 || timeRange == .day || timeRange == .week {
@@ -618,8 +674,8 @@ class HistoricalDataManager: ObservableObject {
                 
                 // Trigger retroactive calculation if it's been a while or we have no stored data
                 if timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
-                    logger.info("📊 Portfolio value chart: Triggering background retroactive calculation")
-                    Task.detached(priority: .background) {
+                    Task { await logger.info("📊 Portfolio value chart: Triggering background retroactive calculation") }
+                    Task.detached(priority: .background) { [self] in
                         await self.calculateRetroactivePortfolioHistory(using: dataModel)
                     }
                 }
@@ -639,7 +695,7 @@ class HistoricalDataManager: ObservableObject {
                 let filteredData = cachedHistoricalPortfolioValues
                     .filter { $0.date >= startDate }
                     .sorted { $0.date < $1.date }
-                logger.debug("📊 Portfolio value chart data: \(filteredData.count) legacy cached points for range \(timeRange.rawValue)")
+                Task { await logger.debug("📊 Portfolio value chart data: \(filteredData.count) legacy cached points for range \(timeRange.rawValue)") }
                 return filteredData
             }
             
@@ -648,11 +704,11 @@ class HistoricalDataManager: ObservableObject {
                 .filter { $0.timestamp >= startDate }
                 .map { ChartDataPoint(date: $0.timestamp, value: $0.totalValue) }
                 .sorted { $0.date < $1.date }
-            logger.debug("📊 Portfolio value chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)")
+            Task { await logger.debug("📊 Portfolio value chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)") }
             
             // Special handling for 1-day range: if we don't have any data, force a snapshot
             if data.isEmpty && timeRange == .day, let dataModel = dataModel {
-                logger.info("📊 No 1-day portfolio data available, forcing snapshot creation")
+                Task { await logger.info("📊 No 1-day portfolio data available, forcing snapshot creation") }
                 forceSnapshot(from: dataModel)
                 
                 // Try again after creating snapshot
@@ -660,7 +716,7 @@ class HistoricalDataManager: ObservableObject {
                     .filter { $0.timestamp >= startDate }
                     .map { ChartDataPoint(date: $0.timestamp, value: $0.totalValue) }
                     .sorted { $0.date < $1.date }
-                logger.debug("📊 Portfolio value chart data after forced snapshot: \(newData.count) points")
+                Task { await logger.debug("📊 Portfolio value chart data after forced snapshot: \(newData.count) points") }
                 return newData
             }
             
@@ -672,7 +728,7 @@ class HistoricalDataManager: ObservableObject {
             // NEW: Use stored portfolio gains if available
             if !historicalPortfolioSnapshots.isEmpty {
                 let data = getStoredPortfolioGains(for: timeRange)
-                logger.debug("📊 Portfolio gains chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)")
+                Task { await logger.debug("📊 Portfolio gains chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)") }
                 
                 // If we have good coverage, return stored data
                 if data.count > 10 || timeRange == .day || timeRange == .week {
@@ -686,7 +742,7 @@ class HistoricalDataManager: ObservableObject {
                 
                 // Trigger retroactive calculation if it's been a while or we have no stored data
                 if timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
-                    logger.info("📊 Portfolio gains chart: Triggering background retroactive calculation")
+                    Task { await logger.info("📊 Portfolio gains chart: Triggering background retroactive calculation") }
                     Task.detached(priority: .background) {
                         await self.calculateRetroactivePortfolioHistory(using: dataModel)
                     }
@@ -709,7 +765,7 @@ class HistoricalDataManager: ObservableObject {
                     .sorted { $0.date < $1.date }
                 
                 let gainsData = calculateHistoricalGains(from: filteredPortfolioValues, dataModel: dataModel)
-                logger.debug("📊 Portfolio gains chart data: \(gainsData.count) legacy cached points for range \(timeRange.rawValue)")
+                Task { await logger.debug("📊 Portfolio gains chart data: \(gainsData.count) legacy cached points for range \(timeRange.rawValue)") }
                 return gainsData
             }
             
@@ -718,11 +774,11 @@ class HistoricalDataManager: ObservableObject {
                 .filter { $0.timestamp >= startDate }
                 .map { ChartDataPoint(date: $0.timestamp, value: $0.totalGains) }
                 .sorted { $0.date < $1.date }
-            logger.debug("📊 Portfolio gains chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)")
+            Task { await logger.debug("📊 Portfolio gains chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)") }
             
             // Special handling for 1-day range: if we don't have any data, force a snapshot
             if data.isEmpty && timeRange == .day, let dataModel = dataModel {
-                logger.info("📊 No 1-day portfolio gains data available, forcing snapshot creation")
+                Task { await logger.info("📊 No 1-day portfolio gains data available, forcing snapshot creation") }
                 forceSnapshot(from: dataModel)
                 
                 // Try again after creating snapshot
@@ -730,7 +786,7 @@ class HistoricalDataManager: ObservableObject {
                     .filter { $0.timestamp >= startDate }
                     .map { ChartDataPoint(date: $0.timestamp, value: $0.totalGains) }
                     .sorted { $0.date < $1.date }
-                logger.debug("📊 Portfolio gains chart data after forced snapshot: \(newData.count) points")
+                Task { await logger.debug("📊 Portfolio gains chart data after forced snapshot: \(newData.count) points") }
                 return newData
             }
             
@@ -752,11 +808,80 @@ class HistoricalDataManager: ObservableObject {
             .map { ChartDataPoint(date: $0.timestamp, value: $0.price, symbol: symbol) }
             .sorted { $0.date < $1.date }
         
-        logger.debug("📊 Stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count) points")
+        Task { await logger.debug("📊 Stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count) points") }
+        
+        // Check if we have insufficient data for the requested time range
+        let minimumExpectedDataPoints = getExpectedDataPointsForTimeRange(timeRange)
+        let hasInsufficientData = filteredData.count < minimumExpectedDataPoints
+        
+        // Trigger historical data fetching if we don't have enough data
+        if hasInsufficientData {
+            Task { await logger.info("📊 Insufficient stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count)/\(minimumExpectedDataPoints) points. Triggering historical data fetch.") }
+            
+            // Trigger background historical data fetch
+            Task.detached(priority: .background) { [weak self] in
+                await self?.triggerHistoricalDataFetch(for: symbol, timeRange: timeRange, startDate: startDate)
+            }
+        }
         
         return filteredData
     }
     
+    /// Determines expected minimum data points for a time range
+    private func getExpectedDataPointsForTimeRange(_ timeRange: ChartTimeRange) -> Int {
+        switch timeRange {
+        case .day:
+            return 10  // Expect at least 10 data points for a day
+        case .week:
+            return 30  // Expect at least 30 data points for a week
+        case .month:
+            return 60  // Expect at least 60 data points for a month
+        case .threeMonths:
+            return 100 // Expect at least 100 data points for 3 months
+        case .sixMonths:
+            return 150 // Expect at least 150 data points for 6 months
+        case .year:
+            return 200 // Expect at least 200 data points for a year
+        case .all:
+            return 300 // Expect at least 300 data points for all time
+        }
+    }
+    
+    /// Triggers historical data fetching for a specific symbol and time range
+    private func triggerHistoricalDataFetch(for symbol: String, timeRange: ChartTimeRange, startDate: Date) async {
+        await logger.info("🔄 Starting historical data fetch for \(symbol) from \(startDate)")
+        
+        // Use NetworkService to fetch historical data
+        guard let networkService = getNetworkService() else {
+            await logger.error("❌ Cannot fetch historical data: NetworkService not available")
+            return
+        }
+        
+        do {
+            let endDate = Date()
+            let historicalData = try await networkService.fetchHistoricalData(for: symbol, from: startDate, to: endDate)
+            
+            await logger.info("📥 Received \(historicalData.count) historical data points for \(symbol)")
+            
+            if !historicalData.isEmpty {
+                // Add the historical data to our cache
+                addImportedSnapshots(historicalData, for: symbol)
+                await logger.info("✅ Successfully added \(historicalData.count) historical data points for \(symbol)")
+            } else {
+                await logger.warning("⚠️ No historical data received for \(symbol)")
+            }
+            
+        } catch {
+            await logger.error("❌ Failed to fetch historical data for \(symbol): \(error.localizedDescription)")
+        }
+    }
+    
+    /// Gets the NetworkService instance - this should be updated to use dependency injection
+    private func getNetworkService() -> NetworkService? {
+        // For now, we'll create a PythonNetworkService instance
+        // In the future, this should be injected as a dependency
+        return PythonNetworkService()
+    }
     
     func getPerformanceMetrics(for timeRange: ChartTimeRange) -> PerformanceMetrics? {
         let startDate = timeRange.startDate(from: Date())
@@ -1017,11 +1142,11 @@ class HistoricalDataManager: ObservableObject {
         if totalSnapshots > 40000 {
             // Aggressive cleanup for very large datasets
             targetLimit = 1500
-            logger.warning("📊 Aggressive cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))")
+            Task { await logger.warning("📊 Aggressive cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else if totalSnapshots > 20000 {
             // Moderate cleanup for large datasets
             targetLimit = 2000
-            logger.info("📊 Moderate cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))")
+            Task { await logger.info("📊 Moderate cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else {
             // Standard cleanup
             targetLimit = maxDataPoints
@@ -1036,13 +1161,13 @@ class HistoricalDataManager: ObservableObject {
         for symbol in priceSnapshots.keys {
             if let snapshots = priceSnapshots[symbol], snapshots.count > targetLimit {
                 priceSnapshots[symbol] = Array(snapshots.suffix(targetLimit))
-                logger.debug("📊 Trimmed \(symbol) from \(snapshots.count) to \(targetLimit) snapshots")
+                Task { await logger.debug("📊 Trimmed \(symbol) from \(snapshots.count) to \(targetLimit) snapshots") }
             }
         }
         
         let newTotal = priceSnapshots.values.map { $0.count }.reduce(0, +)
         if newTotal != totalSnapshots {
-            logger.info("📊 Data cleanup completed: \(totalSnapshots) → \(newTotal) snapshots")
+            Task { await logger.info("📊 Data cleanup completed: \(totalSnapshots) → \(newTotal) snapshots") }
         }
     }
     
@@ -1067,171 +1192,153 @@ class HistoricalDataManager: ObservableObject {
         let isValid = percentageDifference <= 0.5 // 50% threshold
         
         if !isValid {
-            logger.warning("Price validation failed for \(symbol): current=\(price), median=\(medianPrice), diff=\(percentageDifference * 100)%")
+            Task { await logger.warning("Price validation failed for \(symbol): current=\(price), median=\(medianPrice), diff=\(percentageDifference * 100)%") }
         }
         
         return isValid
     }
     
     private func loadHistoricalData() {
-        logger.info("🗄️ Loading historical data from tiered cache system")
-        
-        // Load legacy portfolio snapshots (try cache first, fallback to UserDefaults)
-        portfolioSnapshots = retrieveFromCache([PortfolioSnapshot].self, key: StorageKeys.portfolioSnapshots) ?? []
-        logger.info("📊 Loaded \(portfolioSnapshots.count) legacy portfolio snapshots")
-        
-        // Load price snapshots (daily data)
-        priceSnapshots = retrieveFromCache([String: [PriceSnapshot]].self, key: StorageKeys.priceSnapshots) ?? [:]
-        let totalSnapshots = priceSnapshots.values.reduce(0) { $0 + $1.count }
-        logger.info("💹 Loaded daily price snapshots for \(priceSnapshots.count) symbols (\(totalSnapshots) total)")
-        
-        // Load historical portfolio snapshots (large dataset - likely from archive cache)
-        historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
-        logger.info("📈 Loaded \(historicalPortfolioSnapshots.count) historical portfolio snapshots from cache")
-        
-        // Load additional data from Core Data if migration is complete
-        if migrationService.isPortfolioSnapshotsMigrated {
+        Task { await logger.info("HistoricalDataManager: Loading historical data...") }
+        let migrationService = DataMigrationService.shared // Assuming it's accessible or passed
+
+        // Core Data version where PriceSnapshotEntity and PortfolioSnapshotEntity are considered mastered
+        let coreDataMasterVersion = 3
+
+        if migrationService.migrationVersionStored >= coreDataMasterVersion {
+            Task { await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).") }
+            // Load price snapshots from Core Data
             Task {
-                let coreDataSnapshots = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                // This is a conceptual loading. In reality, we might not load ALL price snapshots
+                // into memory if the dataset is huge. Instead, OptimizedChartDataService
+                // would query Core Data directly. For now, let's assume we populate
+                // the in-memory cache for active symbols or recent data.
+                // This part needs careful thought on what `priceSnapshots` in memory represents.
+                // If it's a cache, it should be populated on demand or by OptimizedChartDataService.
+                // For simplicity in this draft, we'll clear it and assume it's populated as needed.
+                await MainActor.run { self.priceSnapshots = [:] } // Empties, relies on on-demand loading
+                Task { await logger.info("HistoricalDataManager: In-memory priceSnapshots map cleared; will load from Core Data on demand.") }
+
+                let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all) // .all might be too much for memory
                 await MainActor.run {
-                    // Merge Core Data snapshots with existing cache data (avoid duplicates)
-                    let existingTimestamps = Set(historicalPortfolioSnapshots.map { $0.date })
-                    let newSnapshots = coreDataSnapshots.filter { !existingTimestamps.contains($0.date) }
-                    
-                    historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
-                    historicalPortfolioSnapshots.sort { $0.date < $1.date }
-                    
-                    logger.info("📈 Loaded additional \(newSnapshots.count) portfolio snapshots from Core Data (total: \(historicalPortfolioSnapshots.count))")
+                    self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
+                    Task { await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.") }
                 }
             }
+        } else {
+            Task { await logger.info("HistoricalDataManager: Falling back to CacheManager/UserDefaults for snapshots (migration version \(migrationService.migrationVersionStored)).") }
+            // Legacy loading from CacheManager / UserDefaults
+            self.priceSnapshots = retrieveFromCache([String: [PriceSnapshot]].self, key: StorageKeys.priceSnapshots) ?? [:]
+            self.historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
+            // Also load legacy portfolioSnapshots if necessary for compatibility or if historicalPortfolioSnapshots is empty
+            if self.historicalPortfolioSnapshots.isEmpty {
+                 self.portfolioSnapshots = retrieveFromCache([PortfolioSnapshot].self, key: StorageKeys.portfolioSnapshots) ?? []
+                 // Potentially convert these legacy ones if needed, though migration should handle this.
+            }
         }
-        
-        // Load current portfolio composition (frequently accessed - likely from memory cache)
+
+        // Load metadata (still useful from CacheManager/UserDefaults)
         currentPortfolioComposition = retrieveFromCache(PortfolioComposition.self, key: StorageKeys.currentPortfolioComposition)
         if currentPortfolioComposition != nil {
-            logger.info("🎯 Loaded current portfolio composition")
+            Task { await logger.info("HistoricalDataManager: Loaded current portfolio composition") }
         }
         
         // Load last retroactive calculation date
         lastRetroactiveCalculationDate = retrieveFromCache(Date.self, key: StorageKeys.lastRetroactiveCalculationDate) ?? Date.distantPast
         if lastRetroactiveCalculationDate != Date.distantPast {
-            logger.info("⏰ Last retroactive calculation: \(DateFormatter.debug.string(from: lastRetroactiveCalculationDate))")
+            Task { await logger.info("HistoricalDataManager: Last retroactive calculation: \(DateFormatter.debug.string(from: lastRetroactiveCalculationDate))") }
         }
         
         // Load cached historical portfolio values (legacy)
         cachedHistoricalPortfolioValues = retrieveFromCache([ChartDataPoint].self, key: StorageKeys.cachedHistoricalPortfolioValues) ?? []
-        logger.info("💾 Loaded \(cachedHistoricalPortfolioValues.count) cached portfolio values")
+        Task { await logger.info("HistoricalDataManager: Loaded \(cachedHistoricalPortfolioValues.count) cached portfolio values (legacy)") }
         
         // Load last portfolio calculation date (legacy)
         lastPortfolioCalculationDate = retrieveFromCache(Date.self, key: StorageKeys.lastPortfolioCalculationDate) ?? Date.distantPast
         if lastPortfolioCalculationDate != Date.distantPast {
-            logger.info("📅 Last portfolio calculation: \(DateFormatter.debug.string(from: lastPortfolioCalculationDate))")
+            Task { await logger.info("HistoricalDataManager: Last portfolio calculation: \(DateFormatter.debug.string(from: lastPortfolioCalculationDate)) (legacy)") }
         }
         
+        let totalSnaps = priceSnapshots.values.reduce(0) { $0 + $1.count }
+        Task { await logger.info("HistoricalDataManager: Loaded. Price snapshots in memory: \(totalSnaps). Historical portfolio snapshots in memory: \(historicalPortfolioSnapshots.count). Legacy portfolio snapshots in memory: \(portfolioSnapshots.count).") }
         // Log cache performance statistics
         let cacheInfo = cacheManager.getCacheInfo()
-        logger.info("🗄️ Cache Statistics:\n\(cacheInfo)")
+        Task { await logger.info("HistoricalDataManager: Cache Statistics:\n\(cacheInfo)") }
     }
     
     func saveHistoricalData() {
-        // Capture current state for background processing
-        let currentPortfolioSnapshots = portfolioSnapshots
-        let currentPriceSnapshots = priceSnapshots
-        let currentHistoricalPortfolioSnapshots = historicalPortfolioSnapshots
-        let currentPortfolioComposition = currentPortfolioComposition
-        let currentRetroactiveCalculationDate = lastRetroactiveCalculationDate
-        let currentCachedPortfolioValues = cachedHistoricalPortfolioValues
-        let currentCalculationDate = lastPortfolioCalculationDate
-        
-        // Move tiered caching operations to background queue
+        // Core Data is now the primary store for snapshot arrays.
+        // New snapshots are saved to Core Data directly in recordSnapshot().
+        // This method will now focus on saving metadata or non-CoreData state
+        // that HistoricalDataManager itself manages.
+
+        let currentPortfolioComposition = self.currentPortfolioComposition // capture for async
+        let currentRetroactiveCalculationDate = self.lastRetroactiveCalculationDate
+        let currentCalculationDate = self.lastPortfolioCalculationDate
+        // The large arrays like self.priceSnapshots and self.historicalPortfolioSnapshots
+        // are primarily reflections of Core Data or temporary caches, so we might not
+        // persist them back to CacheManager if Core Data is the source of truth.
+        // However, if they contain data not yet in Core Data (e.g. from a failed save),
+        // then saving them via CacheManager might be a temporary backup.
+        // For this iteration, let's assume Core Data saves are robust and CacheManager
+        // is for metadata or as a staging area if Core Data fails.
+
         Task.detached(priority: .utility) { [weak self, encoder, logger] in
             guard let self = self else { return }
             
-            do {
-                // Save to tiered cache system
-                await self.saveToTieredCache(
-                    portfolioSnapshots: currentPortfolioSnapshots,
-                    priceSnapshots: currentPriceSnapshots,
-                    historicalPortfolioSnapshots: currentHistoricalPortfolioSnapshots,
-                    portfolioComposition: currentPortfolioComposition,
-                    retroactiveCalculationDate: currentRetroactiveCalculationDate,
-                    cachedPortfolioValues: currentCachedPortfolioValues,
-                    calculationDate: currentCalculationDate
-                )
-                
-                // Also maintain UserDefaults backup for data integrity during migration
-                let portfolioData = try encoder.encode(currentPortfolioSnapshots)
-                let priceData = try encoder.encode(currentPriceSnapshots)
-                let historicalPortfolioData = try encoder.encode(currentHistoricalPortfolioSnapshots)
-                let compositionData = try currentPortfolioComposition.map { try encoder.encode($0) }
-                let cachedPortfolioData = try encoder.encode(currentCachedPortfolioValues)
-                
-                // Update UserDefaults on main actor as backup
-                await MainActor.run {
-                    UserDefaults.standard.set(portfolioData, forKey: StorageKeys.portfolioSnapshots)
-                    UserDefaults.standard.set(priceData, forKey: StorageKeys.priceSnapshots)
-                    UserDefaults.standard.set(historicalPortfolioData, forKey: StorageKeys.historicalPortfolioSnapshots)
-                    if let compositionData = compositionData {
-                        UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
-                    }
-                    UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
-                    UserDefaults.standard.set(cachedPortfolioData, forKey: StorageKeys.cachedHistoricalPortfolioValues)
-                    UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
-                }
-                
-                logger.debug("🗄️ Saved historical data to tiered cache and UserDefaults backup")
-            } catch {
-                logger.error("❌ Failed to save historical data: \(error.localizedDescription)")
+            // Save metadata and non-CoreData state to CacheManager
+            if let composition = currentPortfolioComposition {
+                await self.saveToTieredCache(portfolioComposition: composition,
+                                       retroactiveCalculationDate: currentRetroactiveCalculationDate,
+                                       calculationDate: currentCalculationDate)
+            } else {
+                 await self.saveToTieredCache(portfolioComposition: nil,
+                                       retroactiveCalculationDate: currentRetroactiveCalculationDate,
+                                       calculationDate: currentCalculationDate)
             }
+
+
+            // We are removing the direct saving of large snapshot arrays to CacheManager here,
+            // assuming they are mastered in Core Data.
+            // If CacheManager was used as a staging area before Core Data saving,
+            // that logic would need to be more explicit.
+
+            // UserDefaults backup for metadata can remain for safety during transition
+            if let compositionData = try? currentPortfolioComposition.map({ try encoder.encode($0) }) {
+                 UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
+            } else if currentPortfolioComposition == nil { // Explicitly clear if nil
+                 UserDefaults.standard.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+            }
+            UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
+            UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+            // Avoid saving large snapshot arrays to UserDefaults directly
+            
+            Task { await logger.debug("HistoricalDataManager: Saved metadata to CacheManager and UserDefaults backup.") }
         }
     }
-    
-    /// Save data to appropriate cache tiers based on data characteristics
+
+    // Simplified saveToTieredCache to only handle metadata for this example
     private func saveToTieredCache(
-        portfolioSnapshots: [PortfolioSnapshot],
-        priceSnapshots: [String: [PriceSnapshot]],
-        historicalPortfolioSnapshots: [HistoricalPortfolioSnapshot],
         portfolioComposition: PortfolioComposition?,
         retroactiveCalculationDate: Date,
-        cachedPortfolioValues: [ChartDataPoint],
         calculationDate: Date
     ) async {
-        // Recent portfolio snapshots -> Memory cache
-        let recentPortfolioSnapshots = Array(portfolioSnapshots.suffix(50)) // Last 50 snapshots
-        storeInCache(recentPortfolioSnapshots, key: "recent_portfolio_snapshots", isRecent: true)
-        
-        // All portfolio snapshots -> Disk cache
-        storeInCache(portfolioSnapshots, key: StorageKeys.portfolioSnapshots)
-        
-        // Recent price snapshots (last 30 days) -> Memory cache
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date.distantPast
-        for (symbol, snapshots) in priceSnapshots {
-            let recentSnapshots = snapshots.filter { $0.timestamp >= thirtyDaysAgo }
-            if !recentSnapshots.isEmpty {
-                storeInCache(recentSnapshots, key: "recent_prices_\(symbol)", isRecent: true)
-            }
-        }
-        
-        // All price snapshots -> Disk cache
-        storeInCache(priceSnapshots, key: StorageKeys.priceSnapshots)
-        
-        // Historical portfolio snapshots -> Archive cache (large dataset)
-        storeInCache(historicalPortfolioSnapshots, key: StorageKeys.historicalPortfolioSnapshots)
-        
-        // Portfolio composition -> Memory cache (frequently accessed)
         if let composition = portfolioComposition {
             storeInCache(composition, key: StorageKeys.currentPortfolioComposition, isRecent: true)
+        } else {
+            // If composition is nil, consider removing it from cache or storing a representation of nil
+            // For now, we just don't store it if it's nil. A remove(forKey:) might be better.
+            cacheManager.remove(forKey: StorageKeys.currentPortfolioComposition)
         }
-        
-        // Cached portfolio values -> Disk cache
-        storeInCache(cachedPortfolioValues, key: StorageKeys.cachedHistoricalPortfolioValues)
-        
-        // Metadata -> Memory cache
         storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: true)
         storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: true)
         
-        logger.debug("🗄️ Data distributed across cache tiers: \(recentPortfolioSnapshots.count) recent portfolio snapshots in memory, \(historicalPortfolioSnapshots.count) historical snapshots in archive")
+        Task { await logger.debug("HistoricalDataManager: Metadata saved to tiered cache.") }
     }
+
+    // The old saveToTieredCache that handled snapshot arrays would need to be adjusted or removed
+    // if snapshot arrays are no longer persisted this way.
+    // For this subtask, we assume the new simpler one above.
     
     private func setupPeriodicSave() {
         // Save data every 30 minutes to avoid too frequent writes
@@ -1251,11 +1358,9 @@ class HistoricalDataManager: ObservableObject {
         let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
         
         if totalSnapshots > 30000 {
-            logger.info("📊 Performing periodic maintenance on \(totalSnapshots) snapshots")
+            await logger.info("📊 Performing periodic maintenance on \(totalSnapshots) snapshots") 
             
             // Force more aggressive cleanup during maintenance
-            let originalMaxDataPoints = maxDataPoints
-            
             // Temporarily reduce limits for maintenance cleanup
             for symbol in priceSnapshots.keys {
                 if let snapshots = priceSnapshots[symbol], snapshots.count > 1800 {
@@ -1268,7 +1373,7 @@ class HistoricalDataManager: ObservableObject {
             }
             
             let newTotal = priceSnapshots.values.map { $0.count }.reduce(0, +)
-            logger.info("📊 Maintenance cleanup: \(totalSnapshots) → \(newTotal) snapshots")
+            await logger.info("📊 Maintenance cleanup: \(totalSnapshots) → \(newTotal) snapshots") 
             
             // Clear cached calculations to force recalculation with clean data
             cachedHistoricalPortfolioValues.removeAll()
@@ -1295,7 +1400,7 @@ class HistoricalDataManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
         UserDefaults.standard.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
         
-        logger.info("Cleared all historical data including enhanced portfolio snapshots")
+        Task { await logger.info("Cleared all historical data including enhanced portfolio snapshots") }
     }
     
     func clearInconsistentData() {
@@ -1306,19 +1411,17 @@ class HistoricalDataManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "portfolioSnapshots")
         UserDefaults.standard.removeObject(forKey: "cachedHistoricalPortfolioValues")
         UserDefaults.standard.removeObject(forKey: "lastPortfolioCalculationDate")
-        logger.info("Cleared inconsistent portfolio historical data and cache - will rebuild with correct calculations")
+        Task { await logger.info("Cleared inconsistent portfolio historical data and cache - will rebuild with correct calculations") }
     }
     
     func forceSnapshot(from dataModel: DataModel) {
-        logger.info("🔧 FORCING snapshot for debugging")
-        let originalInterval = snapshotInterval
-        let originalLastTime = lastSnapshotTime
+        Task { await logger.info("🔧 FORCING snapshot for debugging") }
         
         // Temporarily bypass the interval check
         lastSnapshotTime = Date.distantPast
         recordSnapshot(from: dataModel)
         
-        logger.info("🔧 Forced snapshot complete. Portfolio snapshots: \(portfolioSnapshots.count), Price snapshots: \(priceSnapshots.count)")
+        Task { await logger.info("🔧 Forced snapshot complete. Portfolio snapshots: \(portfolioSnapshots.count), Price snapshots: \(priceSnapshots.count)") }
     }
     
     func cleanAnomalousData() {
@@ -1328,8 +1431,8 @@ class HistoricalDataManager: ObservableObject {
         let currentValue = getCurrentPortfolioValue()
         let reasonableRange = (currentValue * 0.6)...(currentValue * 1.4) // Allow 40% variance
         
-        logger.info("🧹 Cleaning anomalous data. Current portfolio value: £\(String(format: "%.2f", currentValue))")
-        logger.info("🧹 Acceptable range: £\(String(format: "%.2f", reasonableRange.lowerBound)) - £\(String(format: "%.2f", reasonableRange.upperBound))")
+        Task { await logger.info("🧹 Cleaning anomalous data. Current portfolio value: £\(String(format: "%.2f", currentValue))") }
+        Task { await logger.info("🧹 Acceptable range: £\(String(format: "%.2f", reasonableRange.lowerBound)) - £\(String(format: "%.2f", reasonableRange.upperBound))") }
         
         // Clean portfolio snapshots - be more aggressive with outliers
         let originalPortfolioCount = portfolioSnapshots.count
@@ -1342,7 +1445,7 @@ class HistoricalDataManager: ObservableObject {
             let isValid = isReasonable && isNotZero && isNotExcessive
             if !isValid {
                 removedCount += 1
-                logger.debug("🧹 Removing portfolio snapshot: £\(String(format: "%.2f", snapshot.totalValue)) at \(snapshot.timestamp)")
+                Task { await logger.debug("🧹 Removing portfolio snapshot: £\(String(format: "%.2f", snapshot.totalValue)) at \(snapshot.timestamp)") }
             }
             return isValid
         }
@@ -1359,9 +1462,9 @@ class HistoricalDataManager: ObservableObject {
         
         if removedCount > 0 {
             saveHistoricalData()
-            logger.info("🧹 Cleaned \(removedCount) anomalous data points from historical data")
+            Task { await logger.info("🧹 Cleaned \(removedCount) anomalous data points from historical data") }
         } else {
-            logger.info("🧹 No anomalous data found during cleanup")
+            Task { await logger.info("🧹 No anomalous data found during cleanup") }
         }
     }
     
@@ -1379,7 +1482,7 @@ class HistoricalDataManager: ObservableObject {
     func clearDataForSymbol(_ symbol: String) {
         priceSnapshots.removeValue(forKey: symbol)
         saveHistoricalData()
-        logger.info("Cleared historical data for symbol: \(symbol) (all data tiers)")
+        Task { await logger.info("Cleared historical data for symbol: \(symbol) (all data tiers)") }
     }
     
     func clearDataForSymbols(_ symbols: [String]) {
@@ -1387,7 +1490,7 @@ class HistoricalDataManager: ObservableObject {
             priceSnapshots.removeValue(forKey: symbol)
         }
         saveHistoricalData()
-        logger.info("Cleared historical data for \(symbols.count) symbols: \(symbols) (all data tiers)")
+        Task { await logger.info("Cleared historical data for \(symbols.count) symbols: \(symbols) (all data tiers)") }
     }
     
     /// Gets the date of the last recorded snapshot for historical data gap detection
@@ -1403,7 +1506,7 @@ class HistoricalDataManager: ObservableObject {
     
     /// Adds imported historical snapshots while avoiding duplicates
     func addImportedSnapshots(_ snapshots: [PriceSnapshot], for symbol: String) {
-        logger.debug("Adding \(snapshots.count) imported snapshots for \(symbol)")
+        Task { await logger.debug("Adding \(snapshots.count) imported snapshots for \(symbol)") }
         
         if priceSnapshots[symbol] == nil {
             priceSnapshots[symbol] = []
@@ -1412,11 +1515,11 @@ class HistoricalDataManager: ObservableObject {
         // Get existing days that already have data to avoid duplicates
         let existingDays = Set(priceSnapshots[symbol]?.map { Calendar.current.startOfDay(for: $0.timestamp) } ?? [])
         
-        logger.debug("🔍 DUPLICATE FILTER: \(symbol) has existing data for \(existingDays.count) days")
+        Task { await logger.debug("🔍 DUPLICATE FILTER: \(symbol) has existing data for \(existingDays.count) days") }
         if !existingDays.isEmpty {
             let sortedExistingDays = existingDays.sorted()
-            logger.debug("🔍 DUPLICATE FILTER: First existing day: \(DateFormatter.debug.string(from: sortedExistingDays.first!))")
-            logger.debug("🔍 DUPLICATE FILTER: Last existing day: \(DateFormatter.debug.string(from: sortedExistingDays.last!))")
+            Task { await logger.debug("🔍 DUPLICATE FILTER: First existing day: \(DateFormatter.debug.string(from: sortedExistingDays.first!))") }
+            Task { await logger.debug("🔍 DUPLICATE FILTER: Last existing day: \(DateFormatter.debug.string(from: sortedExistingDays.last!))") }
         }
         
         // Filter out snapshots for days that already have data (preserve existing data)
@@ -1425,7 +1528,7 @@ class HistoricalDataManager: ObservableObject {
             return !existingDays.contains(snapshotDay)
         }
         
-        logger.debug("🔍 DUPLICATE FILTER: Filtered \(snapshots.count) snapshots down to \(newSnapshots.count) new snapshots for \(symbol)")
+        Task { await logger.debug("🔍 DUPLICATE FILTER: Filtered \(snapshots.count) snapshots down to \(newSnapshots.count) new snapshots for \(symbol)") }
         
         if !newSnapshots.isEmpty {
             priceSnapshots[symbol]?.append(contentsOf: newSnapshots)
@@ -1436,20 +1539,20 @@ class HistoricalDataManager: ObservableObject {
             // Clean up old data if we exceed the limit
             if let count = priceSnapshots[symbol]?.count, count > maxDataPoints {
                 priceSnapshots[symbol] = Array(priceSnapshots[symbol]?.suffix(maxDataPoints) ?? [])
-                logger.debug("Trimmed \(symbol) snapshots to \(maxDataPoints) most recent")
+                Task { await logger.debug("Trimmed \(symbol) snapshots to \(maxDataPoints) most recent") }
             }
             
             // Save the updated data
             saveHistoricalData()
             
-            logger.info("Added \(newSnapshots.count) new historical snapshots for \(symbol) (filtered from \(snapshots.count) total)")
+            Task { await logger.info("Added \(newSnapshots.count) new historical snapshots for \(symbol) (filtered from \(snapshots.count) total)") }
             
             // Invalidate portfolio cache when new historical data is added
             cachedHistoricalPortfolioValues.removeAll()
             lastPortfolioCalculationDate = Date.distantPast
-            logger.debug("📊 Invalidated portfolio cache due to new historical data for \(symbol)")
+            Task { await logger.debug("📊 Invalidated portfolio cache due to new historical data for \(symbol)") }
         } else {
-            logger.debug("No new snapshots to add for \(symbol) - all would be duplicates")
+            Task { await logger.debug("No new snapshots to add for \(symbol) - all would be duplicates") }
         }
     }
     
@@ -1467,7 +1570,7 @@ class HistoricalDataManager: ObservableObject {
         let expectedBusinessDays = max(1, days * 5 / 7)
         let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
         
-        logger.debug("Data coverage for \(symbol): \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))%)")
+        Task { await logger.debug("Data coverage for \(symbol): \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))%)") }
         
         return coverageRatio >= 0.75 // 75% coverage threshold
     }
@@ -1481,7 +1584,7 @@ class HistoricalDataManager: ObservableObject {
     
     /// Calculates 5 years of historical portfolio values in monthly chunks with delays
     func calculate5YearHistoricalPortfolioValues(using dataModel: DataModel) async {
-        logger.info("📊 COMPREHENSIVE: Starting 5-year historical portfolio value calculation in monthly chunks")
+        await logger.info("📊 COMPREHENSIVE: Starting 5-year historical portfolio value calculation in monthly chunks") 
         
         // Clear existing cache to start fresh
         await MainActor.run {
@@ -1506,8 +1609,8 @@ class HistoricalDataManager: ObservableObject {
         let requestedStartDate = calendar.date(byAdding: .year, value: -5, to: endDate) ?? endDate
         let actualStartDate = max(requestedStartDate, earliestDataDate)
         
-        logger.info("📊 COMPREHENSIVE: Earliest available data: \(DateFormatter.debug.string(from: earliestDataDate))")
-        logger.info("📊 COMPREHENSIVE: Calculating portfolio values from \(DateFormatter.debug.string(from: actualStartDate)) to \(DateFormatter.debug.string(from: endDate))")
+        await logger.info("📊 COMPREHENSIVE: Earliest available data: \(DateFormatter.debug.string(from: earliestDataDate))") 
+        await logger.info("📊 COMPREHENSIVE: Calculating portfolio values from \(DateFormatter.debug.string(from: actualStartDate)) to \(DateFormatter.debug.string(from: endDate))") 
         
         var allPortfolioValues: [ChartDataPoint] = []
         var currentDate = actualStartDate
@@ -1519,7 +1622,7 @@ class HistoricalDataManager: ObservableObject {
             let actualMonthEnd = min(monthEnd, endDate)
             
             monthCount += 1
-            logger.info("📊 COMPREHENSIVE: Processing month \(monthCount) - \(DateFormatter.debug.string(from: currentDate)) to \(DateFormatter.debug.string(from: actualMonthEnd))")
+            await logger.info("📊 COMPREHENSIVE: Processing month \(monthCount) - \(DateFormatter.debug.string(from: currentDate)) to \(DateFormatter.debug.string(from: actualMonthEnd))") 
             
             // Calculate portfolio values for this month
             let monthValues = await calculateHistoricalPortfolioValuesForPeriod(
@@ -1530,7 +1633,7 @@ class HistoricalDataManager: ObservableObject {
             
             if !monthValues.isEmpty {
                 allPortfolioValues.append(contentsOf: monthValues)
-                logger.info("📊 COMPREHENSIVE: Month \(monthCount) added \(monthValues.count) portfolio values")
+                await logger.info("📊 COMPREHENSIVE: Month \(monthCount) added \(monthValues.count) portfolio values") 
                 
                 // Update cache with accumulated values so far (provides progress feedback)
                 await MainActor.run {
@@ -1538,7 +1641,7 @@ class HistoricalDataManager: ObservableObject {
                     self.lastPortfolioCalculationDate = Date()
                 }
             } else {
-                logger.warning("📊 COMPREHENSIVE: Month \(monthCount) yielded no portfolio values")
+                await logger.warning("📊 COMPREHENSIVE: Month \(monthCount) yielded no portfolio values") 
             }
             
             // Move to next month
@@ -1546,7 +1649,7 @@ class HistoricalDataManager: ObservableObject {
             
             // Reduced delay between months to improve responsiveness (3 seconds instead of 10)
             if currentDate < endDate {
-                logger.info("📊 COMPREHENSIVE: Waiting 3 seconds before processing next month...")
+                await logger.info("📊 COMPREHENSIVE: Waiting 3 seconds before processing next month...") 
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
@@ -1557,7 +1660,7 @@ class HistoricalDataManager: ObservableObject {
             self.lastPortfolioCalculationDate = Date()
         }
         
-        logger.info("📊 COMPREHENSIVE: Completed 5-year calculation with \(allPortfolioValues.count) total portfolio values across \(monthCount) months")
+        await logger.info("📊 COMPREHENSIVE: Completed 5-year calculation with \(allPortfolioValues.count) total portfolio values across \(monthCount) months") 
     }
     
     /// Calculates historical portfolio values for a specific time period
@@ -1568,7 +1671,7 @@ class HistoricalDataManager: ObservableObject {
         
         // Debug: Show what symbols we're working with
         let symbols = dataModel.realTimeTrades.map { $0.trade.name }
-        logger.debug("📊 PERIOD CALC: Processing symbols: \(symbols)")
+        Task { await logger.debug("📊 PERIOD CALC: Processing symbols: \(symbols)") }
         
         // Get all available historical dates in this period across all symbols
         var allDates = Set<Date>()
@@ -1589,20 +1692,20 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        logger.debug("📊 PERIOD CALC: Data availability for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)):")
+        Task { await logger.debug("📊 PERIOD CALC: Data availability for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)):") }
         for (symbol, count) in symbolDataCounts {
-            logger.debug("📊 PERIOD CALC: - \(symbol): \(count) data points")
+            Task { await logger.debug("📊 PERIOD CALC: - \(symbol): \(count) data points") }
         }
         
         guard !allDates.isEmpty else {
-            logger.warning("📊 PERIOD CALC: No historical price data available for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))")
+            Task { await logger.warning("📊 PERIOD CALC: No historical price data available for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))") }
             return []
         }
         
         var portfolioValues: [ChartDataPoint] = []
         let sortedDates = Array(allDates.sorted())
         
-        logger.debug("📊 PERIOD CALC: Processing \(sortedDates.count) unique dates for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))")
+        Task { await logger.debug("📊 PERIOD CALC: Processing \(sortedDates.count) unique dates for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))") }
         
         // Process each date
         var validDatesCount = 0
@@ -1649,16 +1752,16 @@ class HistoricalDataManager: ObservableObject {
                         symbolsWithData += 1
                         
                         if index < 3 || validDatesCount % 20 == 0 { // Log first few and every 20th date
-                            logger.debug("📊 PERIOD CALC: \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), value=\(valueInUSD) USD (snapshot age: \(daysDifference) days)")
+                            Task { await logger.debug("📊 PERIOD CALC: \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), value=\(valueInUSD) USD (snapshot age: \(daysDifference) days)") }
                         }
                     } else {
                         if index < 3 || validDatesCount % 20 == 0 {
-                            logger.debug("📊 PERIOD CALC: Rejected \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), units=\(units), age=\(daysDifference) days")
+                            Task { await logger.debug("📊 PERIOD CALC: Rejected \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), units=\(units), age=\(daysDifference) days") }
                         }
                     }
                 } else {
                     if index < 3 || validDatesCount % 20 == 0 {
-                        logger.debug("📊 PERIOD CALC: No data found for \(symbol) on \(DateFormatter.debug.string(from: date))")
+                        Task { await logger.debug("📊 PERIOD CALC: No data found for \(symbol) on \(DateFormatter.debug.string(from: date))") }
                     }
                 }
             }
@@ -1669,7 +1772,7 @@ class HistoricalDataManager: ObservableObject {
             if hasValidData {
                 validDatesCount += 1
                 if index < 3 || validDatesCount % 10 == 0 { // Log first few and every 10th valid date
-                    logger.debug("📊 PERIOD CALC: Date \(DateFormatter.debug.string(from: date)): \(symbolsWithData)/\(symbolsProcessed) symbols, totalUSD=\(totalValueUSD)")
+                    Task { await logger.debug("📊 PERIOD CALC: Date \(DateFormatter.debug.string(from: date)): \(symbolsWithData)/\(symbolsProcessed) symbols, totalUSD=\(totalValueUSD)") }
                 }
                 
                 // Convert to preferred currency
@@ -1684,7 +1787,7 @@ class HistoricalDataManager: ObservableObject {
                 portfolioValues.append(ChartDataPoint(date: date, value: finalValue))
             } else {
                 if index < 5 || validDatesCount % 50 == 0 { // Less frequent logging for rejections
-                    logger.debug("📊 PERIOD CALC: Rejected date \(DateFormatter.debug.string(from: date)): only \(symbolsWithData)/\(symbolsProcessed) symbols have valid data")
+                    Task { await logger.debug("📊 PERIOD CALC: Rejected date \(DateFormatter.debug.string(from: date)): only \(symbolsWithData)/\(symbolsProcessed) symbols have valid data") }
                 }
             }
             
@@ -1694,7 +1797,7 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        logger.debug("📊 PERIOD CALC: Summary for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)): \(validDatesCount)/\(sortedDates.count) dates yielded portfolio values, result: \(portfolioValues.count) data points")
+        Task { await logger.debug("📊 PERIOD CALC: Summary for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)): \(validDatesCount)/\(sortedDates.count) dates yielded portfolio values, result: \(portfolioValues.count) data points") }
         
         return portfolioValues.sorted { $0.date < $1.date }
     }
@@ -1710,26 +1813,26 @@ class HistoricalDataManager: ObservableObject {
         if totalSnapshots > 50000 {
             // For very large datasets, limit to 3 months
             startDate = Calendar.current.date(byAdding: .month, value: -3, to: Date()) ?? Date()
-            logger.warning("📊 Large dataset (\(totalSnapshots) snapshots) - using 3-month window with sampling")
+            await logger.warning("📊 Large dataset (\(totalSnapshots) snapshots) - using 3-month window with sampling") 
         } else if totalSnapshots > 25000 {
             // For large datasets, limit to 6 months
             startDate = Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date()
-            logger.info("📊 Medium dataset (\(totalSnapshots) snapshots) - using 6-month window")
+            await logger.info("📊 Medium dataset (\(totalSnapshots) snapshots) - using 6-month window") 
         } else {
             // For reasonable datasets, use 1 year
             startDate = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
-            logger.debug("📊 Processing \(totalSnapshots) snapshots with 1-year window")
+            await logger.debug("📊 Processing \(totalSnapshots) snapshots with 1-year window") 
         }
         
-        logger.debug("📊 Starting background calculation of historical portfolio values")
+        await logger.debug("📊 Starting background calculation of historical portfolio values") 
         
         let portfolioValues = await calculateHistoricalPortfolioValues(from: startDate, using: dataModel, useSampling: useSampling)
         
         await MainActor.run {
             self.cachedHistoricalPortfolioValues = portfolioValues
             self.lastPortfolioCalculationDate = Date()
-            logger.debug("📊 Cached \(portfolioValues.count) historical portfolio values")
         }
+        await logger.debug("📊 Cached \(portfolioValues.count) historical portfolio values")
     }
     
     /// Calculates historical portfolio values using historical price data (sync, for background use)
@@ -1758,7 +1861,7 @@ class HistoricalDataManager: ObservableObject {
         }
         
         guard !allDates.isEmpty else {
-            logger.debug("📊 No historical price data available for portfolio calculation")
+            Task { await logger.debug("📊 No historical price data available for portfolio calculation") }
             return []
         }
         
@@ -1774,11 +1877,11 @@ class HistoricalDataManager: ObservableObject {
             // Sample every 3rd data point for large datasets to maintain performance
             let step = max(1, sortedAllDates.count / 500) // Target ~500 data points
             sortedDates = stride(from: 0, to: sortedAllDates.count, by: step).map { sortedAllDates[$0] }
-            logger.debug("📊 Sampling \(sortedDates.count) dates from \(sortedAllDates.count) total dates (step: \(step))")
+            Task { await logger.debug("📊 Sampling \(sortedDates.count) dates from \(sortedAllDates.count) total dates (step: \(step))") }
         } else {
             // For smaller datasets, use all data but limit to reasonable amount
             sortedDates = Array(sortedAllDates.suffix(800))
-            logger.debug("📊 Using \(sortedDates.count) dates from \(sortedAllDates.count) total dates")
+            Task { await logger.debug("📊 Using \(sortedDates.count) dates from \(sortedAllDates.count) total dates") }
         }
         
         // Process in chunks to avoid hanging
@@ -1838,7 +1941,7 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        logger.debug("📊 Calculated \(portfolioValues.count) historical portfolio values from \(sortedDates.count) dates")
+        Task { await logger.debug("📊 Calculated \(portfolioValues.count) historical portfolio values from \(sortedDates.count) dates") }
         return portfolioValues.sorted { $0.date < $1.date }
     }
     
@@ -1949,13 +2052,13 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs comprehensive data compression and optimization
     public func performDataOptimization() async throws {
-        logger.info("⚡ Starting comprehensive data optimization")
+        await logger.info("⚡ Starting comprehensive data optimization") 
         
         await compressionService.performDataCompression()
         await memoryService.performMemoryCleanup()
         try await batchService.performDatabaseOptimization()
         
-        logger.info("⚡ Data optimization completed")
+        Task { await logger.info("⚡ Data optimization completed") }
     }
     
     /// Gets optimized chart data using the enhanced chart service
@@ -1967,7 +2070,7 @@ class HistoricalDataManager: ObservableObject {
                 return data
             }
         } catch {
-            logger.warning("⚡ Optimized chart data fetch failed, falling back to legacy method: \(error)")
+            await logger.warning("⚡ Optimized chart data fetch failed, falling back to legacy method: \(error)") 
         }
         
         // Fallback to legacy method
@@ -1976,12 +2079,12 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs lightweight performance optimization
     public func performLightweightOptimization() async {
-        logger.debug("⚡ Performing lightweight optimization")
+        await logger.debug("⚡ Performing lightweight optimization") 
         
         await compressionService.performLightweightCompression()
         await memoryService.optimizeChartDataMemory()
         
-        logger.debug("⚡ Lightweight optimization completed")
+        await logger.debug("⚡ Lightweight optimization completed") 
     }
     
     /// Gets comprehensive performance statistics
@@ -2001,7 +2104,7 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs batch operations for large data sets
     public func performBatchDataInsertion(_ snapshots: [PriceSnapshot]) async throws {
-        logger.info("⚡ Starting batch insertion of \(snapshots.count) price snapshots")
+        await logger.info("⚡ Starting batch insertion of \(snapshots.count) price snapshots") 
         
         try await batchService.batchInsertPriceSnapshots(snapshots)
         
@@ -2016,12 +2119,12 @@ class HistoricalDataManager: ObservableObject {
         }
         
         // Save snapshots handled by Core Data services
-        logger.info("⚡ Batch insertion completed")
+        Task { await logger.info("⚡ Batch insertion completed") }
     }
     
     /// Cleans up old data with performance optimizations
     public func performOptimizedDataCleanup(olderThan cutoffDate: Date) async throws -> BatchDeletionResult {
-        logger.info("⚡ Starting optimized data cleanup")
+        await logger.info("⚡ Starting optimized data cleanup") 
         
         let result = try await batchService.batchDeleteOldData(olderThan: cutoffDate)
         
@@ -2037,7 +2140,7 @@ class HistoricalDataManager: ObservableObject {
         
         // Save snapshots handled by Core Data services
         
-        logger.info("⚡ Optimized data cleanup completed - \(result.totalDeleted) items removed")
+        Task { await logger.info("⚡ Optimized data cleanup completed - \(result.totalDeleted) items removed") }
         return result
     }
     
@@ -2058,7 +2161,7 @@ class HistoricalDataManager: ObservableObject {
             )
         }
         
-        logger.info("⚡ Performance settings updated")
+        Task { await logger.info("⚡ Performance settings updated") }
     }
     
     private func getTotalDataPointCount() -> Int {
@@ -2084,18 +2187,18 @@ class HistoricalDataManager: ObservableObject {
     /// Sets the snapshot interval for debug purposes
     func setSnapshotInterval(_ interval: TimeInterval) {
         snapshotInterval = interval
-        logger.info("📊 Snapshot interval changed to \(interval) seconds")
+        Task { await logger.info("📊 Snapshot interval changed to \(interval) seconds") }
     }
     
     /// Manually triggers data cleanup for all symbols
     func optimizeAllDataStorage() {
-        logger.info("📊 MANUAL OPTIMIZATION: Starting data cleanup for all symbols")
+        Task { await logger.info("📊 MANUAL OPTIMIZATION: Starting data cleanup for all symbols") }
         
         // Simply clean up old data to ensure we stay within limits
         cleanupOldData()
         
         saveHistoricalData()
-        logger.info("📊 MANUAL OPTIMIZATION: Completed data cleanup")
+        Task { await logger.info("📊 MANUAL OPTIMIZATION: Completed data cleanup") }
     }
     
     /// Gets comprehensive data status
@@ -2128,7 +2231,7 @@ class HistoricalDataManager: ObservableObject {
     func calculateRetroactivePortfolioHistory(using dataModel: DataModel) async {
         // CRITICAL FIX: Prevent concurrent calculation overlaps
         guard !isCalculationInProgress else {
-            logger.warning("🔄 RETROACTIVE: Calculation already in progress, skipping duplicate request")
+            await logger.warning("🔄 RETROACTIVE: Calculation already in progress, skipping duplicate request") 
             return
         }
         isCalculationInProgress = true
@@ -2138,10 +2241,10 @@ class HistoricalDataManager: ObservableObject {
             isCalculationInProgress = false
         }
         
-        logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation")
+        await logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation") 
         
         // Initialize progress tracking
-        let calculationManager = BackgroundCalculationManager.shared
+        let calculationManager = await BackgroundCalculationManager.shared
         await calculationManager.startCalculation(operation: "Portfolio History Calculation", totalOperations: 100)
         
         do {
@@ -2154,11 +2257,11 @@ class HistoricalDataManager: ObservableObject {
             let needsFullRecalculation = hasPortfolioCompositionChanged(newComposition)
             
             if needsFullRecalculation {
-                logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
+                await logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed") 
                 await calculationManager.updateProgress(completed: 30, status: "Starting full recalculation")
                 await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
             } else {
-                logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update")
+                await logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update") 
                 await calculationManager.updateProgress(completed: 30, status: "Starting incremental update")
                 await performIncrementalPortfolioUpdate(using: dataModel)
             }
@@ -2176,10 +2279,10 @@ class HistoricalDataManager: ObservableObject {
             
             // Complete the calculation
             await calculationManager.completeCalculation()
-            logger.info("🔄 RETROACTIVE: Portfolio history calculation completed")
+            await logger.info("🔄 RETROACTIVE: Portfolio history calculation completed") 
             
         } catch {
-            logger.error("🔄 RETROACTIVE: Portfolio calculation failed: \(error.localizedDescription)")
+            await logger.error("🔄 RETROACTIVE: Portfolio calculation failed: \(error.localizedDescription)") 
             await calculationManager.reportError("Portfolio calculation failed: \(error.localizedDescription)")
         }
     }
@@ -2207,9 +2310,9 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs full portfolio recalculation for entire history
     private func performFullPortfolioRecalculation(using dataModel: DataModel, composition: PortfolioComposition) async {
-        logger.info("🔄 FULL RECALC: Starting full portfolio history recalculation")
+        await logger.info("🔄 FULL RECALC: Starting full portfolio history recalculation") 
         
-        let calculationManager = BackgroundCalculationManager.shared
+        let calculationManager = await BackgroundCalculationManager.shared
         
         // Clear existing portfolio snapshots
         await calculationManager.updateProgress(completed: 40, status: "Clearing existing data")
@@ -2222,7 +2325,7 @@ class HistoricalDataManager: ObservableObject {
         let earliestDate = findEarliestHistoricalData()
         let endDate = Date()
         
-        logger.info("🔄 FULL RECALC: Calculating from \(DateFormatter.debug.string(from: earliestDate)) to \(DateFormatter.debug.string(from: endDate))")
+        await logger.info("🔄 FULL RECALC: Calculating from \(DateFormatter.debug.string(from: earliestDate)) to \(DateFormatter.debug.string(from: endDate))") 
         
         // Calculate portfolio values for the entire historical period
         await calculationManager.updateProgress(completed: 50, status: "Calculating portfolio values")
@@ -2238,12 +2341,12 @@ class HistoricalDataManager: ObservableObject {
             self.historicalPortfolioSnapshots = snapshots.sorted { $0.date < $1.date }
         }
         
-        logger.info("🔄 FULL RECALC: Generated \(snapshots.count) portfolio snapshots")
+        await logger.info("🔄 FULL RECALC: Generated \(snapshots.count) portfolio snapshots") 
     }
     
     /// Performs incremental portfolio update for new dates only
     private func performIncrementalPortfolioUpdate(using dataModel: DataModel) async {
-        let calculationManager = BackgroundCalculationManager.shared
+        let calculationManager = await BackgroundCalculationManager.shared
         
         await calculationManager.updateProgress(completed: 40, status: "Checking for new data")
         let lastCalculatedDate = getLastPortfolioSnapshotDate()
@@ -2251,12 +2354,12 @@ class HistoricalDataManager: ObservableObject {
         
         // Only calculate if there's a meaningful gap (more than 1 day)
         guard endDate.timeIntervalSince(lastCalculatedDate) > 86400 else {
-            logger.debug("🔄 INCREMENTAL: No significant time gap, skipping update")
+            await logger.debug("🔄 INCREMENTAL: No significant time gap, skipping update") 
             await calculationManager.updateProgress(completed: 85, status: "No update needed")
             return
         }
         
-        logger.info("🔄 INCREMENTAL: Updating from \(DateFormatter.debug.string(from: lastCalculatedDate)) to \(DateFormatter.debug.string(from: endDate))")
+        await logger.info("🔄 INCREMENTAL: Updating from \(DateFormatter.debug.string(from: lastCalculatedDate)) to \(DateFormatter.debug.string(from: endDate))") 
         
         await calculationManager.updateProgress(completed: 50, status: "Calculating new portfolio values")
         let newSnapshots = await calculatePortfolioSnapshotsForPeriod(
@@ -2277,7 +2380,7 @@ class HistoricalDataManager: ObservableObject {
             }
         }
         
-        logger.info("🔄 INCREMENTAL: Added \(newSnapshots.count) new portfolio snapshots")
+        await logger.info("🔄 INCREMENTAL: Added \(newSnapshots.count) new portfolio snapshots") 
     }
     
     /// Calculates portfolio snapshots for a specific date range with concurrent processing
@@ -2335,14 +2438,14 @@ class HistoricalDataManager: ObservableObject {
         }
         
         guard !allDates.isEmpty else {
-            logger.warning("🔄 CALC PERIOD: No historical data available for period")
+            Task { await logger.warning("🔄 CALC PERIOD: No historical data available for period") }
             return []
         }
         
         var portfolioSnapshots: [HistoricalPortfolioSnapshot] = []
         let sortedDates = Array(allDates.sorted())
         
-        logger.debug("🔄 CALC PERIOD: Processing \(sortedDates.count) unique dates")
+        Task { await logger.debug("🔄 CALC PERIOD: Processing \(sortedDates.count) unique dates") }
         
         // Calculate total investment cost (what was originally paid)
         let totalInvestmentCost = calculateTotalInvestmentCost(composition: composition, currencyConverter: currencyConverter, preferredCurrency: preferredCurrency)
@@ -2352,7 +2455,7 @@ class HistoricalDataManager: ObservableObject {
             if index % 20 == 0 {
                 await Task.yield()
                 let progress = 50 + Int(Double(index) / Double(sortedDates.count) * 35) // 50-85% progress range
-                let calculationManager = BackgroundCalculationManager.shared
+                let calculationManager = await BackgroundCalculationManager.shared
                 await calculationManager.updateProgress(completed: progress, status: "Processing date \(index + 1)/\(sortedDates.count)")
                 await calculationManager.updateDataPointsCount(portfolioSnapshots.count)
             }
@@ -2420,20 +2523,20 @@ class HistoricalDataManager: ObservableObject {
             
             // Log validation issues for debugging
             if !invalidPositions.isEmpty && index < 5 {
-                logger.debug("🔄 VALIDATION: Invalid positions on \(DateFormatter.debug.string(from: date)): \(invalidPositions.joined(separator: ", "))")
+                Task { await logger.debug("🔄 VALIDATION: Invalid positions on \(DateFormatter.debug.string(from: date)): \(invalidPositions.joined(separator: ", "))") }
             }
             
             // Only create portfolio snapshot if we have data for at least 50% of positions
             guard validPositions >= max(1, composition.positions.count / 2) else {
                 if index < 5 {
-                    logger.debug("🔄 VALIDATION: Skipping date \(DateFormatter.debug.string(from: date)) - only \(validPositions)/\(composition.positions.count) valid positions")
+                    Task { await logger.debug("🔄 VALIDATION: Skipping date \(DateFormatter.debug.string(from: date)) - only \(validPositions)/\(composition.positions.count) valid positions") }
                 }
                 continue
             }
             
             // Validate total portfolio value
             guard totalValueUSD.isFinite && totalValueUSD > 0 else {
-                logger.warning("🔄 VALIDATION: Invalid total portfolio value on \(DateFormatter.debug.string(from: date)): \(totalValueUSD)")
+                Task { await logger.warning("🔄 VALIDATION: Invalid total portfolio value on \(DateFormatter.debug.string(from: date)): \(totalValueUSD)") }
                 continue
             }
             
@@ -2460,7 +2563,7 @@ class HistoricalDataManager: ObservableObject {
             portfolioSnapshots.append(portfolioSnapshot)
         }
         
-        logger.debug("🔄 CALC PERIOD: Generated \(portfolioSnapshots.count) snapshots from \(sortedDates.count) dates")
+        Task { await logger.debug("🔄 CALC PERIOD: Generated \(portfolioSnapshots.count) snapshots from \(sortedDates.count) dates") }
         return portfolioSnapshots
     }
     
@@ -2472,7 +2575,7 @@ class HistoricalDataManager: ObservableObject {
         composition: PortfolioComposition
     ) async -> [HistoricalPortfolioSnapshot] {
         
-        logger.info("🔄 CONCURRENT: Starting concurrent portfolio calculation")
+        Task { await logger.info("🔄 CONCURRENT: Starting concurrent portfolio calculation") }
         
         let calendar = Calendar.current
         let currencyConverter = CurrencyConverter()
@@ -2490,12 +2593,12 @@ class HistoricalDataManager: ObservableObject {
         }
         
         guard !allDates.isEmpty else {
-            logger.warning("🔄 CONCURRENT: No historical data available for period")
+            Task { await logger.warning("🔄 CONCURRENT: No historical data available for period") }
             return []
         }
         
         let sortedDates = Array(allDates.sorted())
-        logger.info("🔄 CONCURRENT: Processing \(sortedDates.count) dates with concurrent processing")
+        Task { await logger.info("🔄 CONCURRENT: Processing \(sortedDates.count) dates with concurrent processing") }
         
         // Calculate total investment cost once (thread-safe)
         let totalInvestmentCost = calculateTotalInvestmentCost(
@@ -2509,7 +2612,7 @@ class HistoricalDataManager: ObservableObject {
         let optimalChunks = min(processorCount, 8) // Cap at 8 to avoid too much overhead
         let chunkSize = max(10, sortedDates.count / optimalChunks) // Minimum 10 dates per chunk
         
-        logger.info("🔄 CONCURRENT: Using \(optimalChunks) concurrent tasks with ~\(chunkSize) dates each")
+        Task { await logger.info("🔄 CONCURRENT: Using \(optimalChunks) concurrent tasks with ~\(chunkSize) dates each") }
         
         // Split dates into chunks for concurrent processing
         let dateChunks = sortedDates.chunked(into: chunkSize)
@@ -2543,13 +2646,13 @@ class HistoricalDataManager: ObservableObject {
                 return results
             }
         } ?? {
-            logger.error("🔄 CONCURRENT: TaskGroup timed out after 10 minutes, returning partial results")
+            Task { await logger.error("🔄 CONCURRENT: TaskGroup timed out after 10 minutes, returning partial results") }
             return []
         }()
         
         // Sort results by date and return
         let sortedSnapshots = allSnapshots.sorted { $0.date < $1.date }
-        logger.info("🔄 CONCURRENT: Generated \(sortedSnapshots.count) snapshots using concurrent processing")
+        Task { await logger.info("🔄 CONCURRENT: Generated \(sortedSnapshots.count) snapshots using concurrent processing") }
         
         return sortedSnapshots
     }
@@ -2572,7 +2675,7 @@ class HistoricalDataManager: ObservableObject {
             do {
                 try Task.checkCancellation()
             } catch {
-                logger.info("🔄 CHUNK \(chunkIndex): Task cancelled, stopping processing at date \(dateIndex)/\(dates.count)")
+                Task { await logger.info("🔄 CHUNK \(chunkIndex): Task cancelled, stopping processing at date \(dateIndex)/\(dates.count)") }
                 break
             }
             

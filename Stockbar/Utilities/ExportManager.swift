@@ -71,13 +71,13 @@ class ExportManager {
             csvContent += generateCSVData(chartData: chartData)
             
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
-            logger.info("Successfully exported CSV to \(url.lastPathComponent)")
+            Task { await logger.info("Successfully exported CSV to \(url.lastPathComponent)") }
             
             // Show success notification
             showExportNotification(fileName: url.lastPathComponent, success: true)
             
         } catch {
-            logger.error("Failed to export CSV: \(error.localizedDescription)")
+            Task { await logger.error("Failed to export CSV: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
         }
     }
@@ -117,11 +117,11 @@ class ExportManager {
             }
             
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
-            logger.info("Successfully exported detailed portfolio CSV to \(url.lastPathComponent)")
+            Task { await logger.info("Successfully exported detailed portfolio CSV to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
             
         } catch {
-            logger.error("Failed to export portfolio CSV: \(error.localizedDescription)")
+            Task { await logger.error("Failed to export portfolio CSV: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
         }
     }
@@ -175,11 +175,11 @@ class ExportManager {
             )
             
             try pdfData.write(to: url)
-            logger.info("Successfully exported PDF to \(url.lastPathComponent)")
+            Task { await logger.info("Successfully exported PDF to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
             
         } catch {
-            logger.error("Failed to export PDF: \(error.localizedDescription)")
+            Task { await logger.error("Failed to export PDF: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
         }
     }
