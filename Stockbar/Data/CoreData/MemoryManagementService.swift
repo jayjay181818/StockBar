@@ -25,7 +25,9 @@ actor MemoryManagementService {
     private let maxHistorySize = 100
     
     private init() {
-        setupMemoryPressureMonitoring()
+        Task {
+            await setupMemoryPressureMonitoring()
+        }
     }
     
     deinit {
@@ -56,7 +58,7 @@ actor MemoryManagementService {
     func performMemoryCleanup(forced: Bool = false) async {
         let currentUsage = getCurrentMemoryUsage()
         
-        logger.info("🧹 Memory cleanup - Current usage: \(String(format: "%.1f", currentUsage))MB")
+        Task { await logger.info("🧹 Memory cleanup - Current usage: \(String(format: "%.1f", currentUsage))MB") }
         
         if forced || currentUsage > memoryWarningThreshold {
             await performCacheCleanup()
@@ -65,13 +67,13 @@ actor MemoryManagementService {
             
             let newUsage = getCurrentMemoryUsage()
             let saved = currentUsage - newUsage
-            logger.info("🧹 Memory cleanup completed - Freed \(String(format: "%.1f", saved))MB")
+            Task { await logger.info("🧹 Memory cleanup completed - Freed \(String(format: "%.1f", saved))MB") }
         }
     }
     
     /// Optimizes memory usage for chart data
     func optimizeChartDataMemory() async {
-        logger.debug("📊 Optimizing chart data memory usage")
+        Task { await logger.debug("📊 Optimizing chart data memory usage") }
         
         // Remove expired cache entries
         let now = Date()
@@ -93,7 +95,7 @@ actor MemoryManagementService {
             }
         }
         
-        logger.debug("📊 Chart data memory optimization completed - \(chartDataMemoryCache.count) items cached")
+        Task { await logger.debug("📊 Chart data memory optimization completed - \(chartDataMemoryCache.count) items cached") }
     }
     
     /// Caches chart data with intelligent memory management
@@ -102,7 +104,7 @@ actor MemoryManagementService {
         let currentUsage = getCurrentMemoryUsage()
         
         if currentUsage > memoryCriticalThreshold && priority != .high {
-            logger.debug("📊 Skipping cache due to memory pressure")
+            Task { await logger.debug("📊 Skipping cache due to memory pressure") }
             return
         }
         
@@ -121,7 +123,7 @@ actor MemoryManagementService {
             priority: priority
         )
         
-        logger.debug("📊 Cached \(data.count) chart points (\(String(format: "%.1f", estimatedSize))KB) for key: \(key)")
+        Task { await logger.debug("📊 Cached \(data.count) chart points (\(String(format: "%.1f", estimatedSize))KB) for key: \(key)") }
     }
     
     /// Retrieves cached chart data with access tracking
@@ -160,7 +162,7 @@ actor MemoryManagementService {
             self.memoryCriticalThreshold = max(100, min(critical, 400))
         }
         
-        logger.info("🧹 Memory settings updated - Cache: \(self.maxCacheSize), Warning: \(String(format: "%.0f", self.memoryWarningThreshold))MB")
+        Task { await logger.info("🧹 Memory settings updated - Cache: \(self.maxCacheSize), Warning: \(String(format: "%.0f", self.memoryWarningThreshold))MB") }
     }
     
     /// Gets memory usage history for analysis
@@ -201,10 +203,10 @@ actor MemoryManagementService {
             
             // Check for memory pressure
             if usage > memoryCriticalThreshold {
-                logger.warning("🚨 Critical memory usage: \(String(format: "%.1f", usage))MB")
+                Task { await logger.warning("🚨 Critical memory usage: \(String(format: "%.1f", usage))MB") }
                 await performMemoryCleanup()
             } else if usage > memoryWarningThreshold {
-                logger.info("⚠️ High memory usage: \(String(format: "%.1f", usage))MB")
+                Task { await logger.info("⚠️ High memory usage: \(String(format: "%.1f", usage))MB") }
                 await optimizeChartDataMemory()
             }
             
@@ -214,7 +216,7 @@ actor MemoryManagementService {
     }
     
     private func handleMemoryWarning() async {
-        logger.warning("🚨 Memory warning received")
+        Task { await logger.warning("🚨 Memory warning received") }
         lastMemoryWarning = Date()
         
         await performMemoryCleanup(forced: true)
@@ -229,7 +231,7 @@ actor MemoryManagementService {
     }
     
     private func performCacheCleanup() async {
-        logger.debug("🧹 Performing cache cleanup")
+        Task { await logger.debug("🧹 Performing cache cleanup") }
         
         let currentUsage = getCurrentMemoryUsage()
         
@@ -248,7 +250,7 @@ actor MemoryManagementService {
     }
     
     private func performCoreDataCleanup() async {
-        logger.debug("🧹 Performing Core Data cleanup")
+        Task { await logger.debug("🧹 Performing Core Data cleanup") }
         
         let context = coreDataStack.newBackgroundContext()
         
@@ -262,7 +264,7 @@ actor MemoryManagementService {
     }
     
     private func performLowMemoryOptimizations() async {
-        logger.debug("🧹 Performing low memory optimizations")
+        Task { await logger.debug("🧹 Performing low memory optimizations") }
         
         // Trigger garbage collection
         // Note: In Swift, there's no explicit garbage collection, but we can help by clearing references
@@ -305,7 +307,7 @@ actor MemoryManagementService {
                 removedSize += value.estimatedSize
             }
             
-            logger.debug("📊 Freed \(String(format: "%.1f", removedSize))KB to make room for new data")
+            Task { await logger.debug("📊 Freed \(String(format: "%.1f", removedSize))KB to make room for new data") }
         }
     }
     

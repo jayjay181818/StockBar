@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, feature/portfolio-snapshot-migration ]
+  pull_request:
+    branches: [ main, feature/portfolio-snapshot-migration ]
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Select Xcode
+      run: sudo xcode-select -switch /Applications/Xcode_15.2.app/Contents/Developer
+    
+    - name: Install SwiftLint
+      run: brew install swiftlint
+    
+    - name: Run SwiftLint
+      run: swiftlint
+    
+    - name: Build for Testing
+      run: |
+        xcodebuild build-for-testing \
+          -project Stockbar.xcodeproj \
+          -scheme Stockbar \
+          -configuration Debug \
+          -destination 'platform=macOS'
+    
+    - name: Run Tests
+      run: |
+        xcodebuild test \
+          -project Stockbar.xcodeproj \
+          -scheme Stockbar \
+          -configuration Debug \
+          -destination 'platform=macOS' 
