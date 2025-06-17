@@ -32,11 +32,11 @@ actor OptimizedChartDataService {
         // Check cache first
         if let cachedData = chartDataCache[cacheKey],
            cachedData.isValid {
-            logger.debug("📊 Chart data cache hit for \(cacheKey)")
+            Task { await logger.debug("📊 Chart data cache hit for \(cacheKey)") }
             return cachedData.data
         }
         
-        logger.info("📊 Fetching optimized chart data for \(chartType.title) - \(timeRange.description)")
+        Task { await logger.info("📊 Fetching optimized chart data for \(chartType.title) - \(timeRange.description)") }
         
         let startTime = CFAbsoluteTimeGetCurrent()
         let data: [ChartDataPoint]
@@ -51,7 +51,7 @@ actor OptimizedChartDataService {
         }
         
         let fetchTime = CFAbsoluteTimeGetCurrent() - startTime
-        logger.info("📊 Fetched \(data.count) chart points in \(String(format: "%.3f", fetchTime))s")
+        Task { await logger.info("📊 Fetched \(data.count) chart points in \(String(format: "%.3f", fetchTime))s") }
         
         // Cache the result
         await updateCache(key: cacheKey, data: data)
@@ -70,7 +70,7 @@ actor OptimizedChartDataService {
         timeRanges: [ChartTimeRange],
         maxPoints: Int = 1000
     ) async {
-        logger.debug("📊 Prefetching chart data for \(timeRanges.count) time ranges")
+        Task { await logger.debug("📊 Prefetching chart data for \(timeRanges.count) time ranges") }
         
         await withTaskGroup(of: Void.self) { group in
             for timeRange in timeRanges {
@@ -78,7 +78,7 @@ actor OptimizedChartDataService {
                     do {
                         _ = try await self.fetchChartData(for: chartType, timeRange: timeRange, maxPoints: maxPoints)
                     } catch {
-                        self.logger.debug("📊 Prefetch failed for \(timeRange.description): \(error)")
+                        Task { await self.logger.debug("📊 Prefetch failed for \(timeRange.description): \(error)") }
                     }
                 }
             }
@@ -89,7 +89,7 @@ actor OptimizedChartDataService {
     func clearCache() async {
         chartDataCache.removeAll()
         prefetchBuffer.removeAll()
-        logger.debug("📊 Chart data cache cleared")
+        Task { await logger.debug("📊 Chart data cache cleared") }
     }
     
     /// Gets cache statistics
@@ -398,7 +398,7 @@ actor OptimizedChartDataService {
                 do {
                     _ = try await fetchChartData(for: chartType, timeRange: range, maxPoints: maxPoints)
                 } catch {
-                    logger.debug("📊 Prefetch failed for \(range.description): \(error)")
+                    Task { await logger.debug("📊 Prefetch failed for \(range.description): \(error)") }
                 }
             }
         }

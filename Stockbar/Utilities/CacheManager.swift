@@ -50,30 +50,30 @@ class CacheManager: ObservableObject {
     // MARK: - Cache Storage
     
     // Memory Cache - fastest access for recent data
-    private var memoryCache: [String: CacheEntry] = [:]
-    private let memoryCacheQueue = DispatchQueue(label: "com.stockbar.cache.memory", qos: .userInteractive)
+    internal var memoryCache: [String: CacheEntry] = [:]
+    internal let memoryCacheQueue = DispatchQueue(label: "com.stockbar.cache.memory", qos: .userInteractive)
     
     // Disk Cache - file-based storage for medium-term data
-    private var diskCacheDirectory: URL
-    private let diskCacheQueue = DispatchQueue(label: "com.stockbar.cache.disk", qos: .utility)
+    internal var diskCacheDirectory: URL
+    internal let diskCacheQueue = DispatchQueue(label: "com.stockbar.cache.disk", qos: .utility)
     
     // Archived Cache - compressed long-term storage
-    private var archiveCacheDirectory: URL
-    private let archiveCacheQueue = DispatchQueue(label: "com.stockbar.cache.archive", qos: .background)
+    internal var archiveCacheDirectory: URL
+    internal let archiveCacheQueue = DispatchQueue(label: "com.stockbar.cache.archive", qos: .background)
     
     // Cache statistics for monitoring
     @Published var cacheStats = CacheStatistics()
     
     // MARK: - Cache Entry Structure
     
-    private struct CacheEntry: Codable {
-        let key: String
-        let data: Data
-        let timestamp: Date
-        let size: Int
-        let compressionLevel: String
-        var accessCount: Int
-        var lastAccessed: Date
+    internal struct CacheEntry: Codable {
+        internal let key: String
+        internal let data: Data
+        internal let timestamp: Date
+        internal let size: Int
+        internal let compressionLevel: String
+        internal var accessCount: Int
+        internal var lastAccessed: Date
         
         init<T: Codable>(key: String, value: T, compressionLevel: CompressionLevel = .none, encoder: JSONEncoder = JSONEncoder()) throws {
             self.key = key
@@ -184,9 +184,9 @@ class CacheManager: ObservableObject {
         // Setup periodic cleanup
         setupPeriodicCleanup()
         
-        logger.info("🗄️ CacheManager initialized with tiered storage")
-        logger.info("📂 Disk cache: \(diskCacheDirectory.path)")
-        logger.info("📦 Archive cache: \(archiveCacheDirectory.path)")
+        Task { await logger.info("🗄️ CacheManager initialized with tiered storage") }
+        Task { await logger.info("📂 Disk cache: \(diskCacheDirectory.path)") }
+        Task { await logger.info("📦 Archive cache: \(archiveCacheDirectory.path)") }
     }
     
     // MARK: - Cache Operations
@@ -208,10 +208,10 @@ class CacheManager: ObservableObject {
             }
             
             updateStatistics(for: targetLevel, operation: .store, size: entry.size)
-            logger.debug("🗄️ Stored \(key) in \(targetLevel.rawValue) cache (\(entry.size) bytes)")
+            Task { await logger.debug("🗄️ Stored \(key) in \(targetLevel.rawValue) cache (\(entry.size) bytes)") }
             
         } catch {
-            logger.error("❌ Failed to store \(key) in cache: \(error)")
+            Task { await logger.error("❌ Failed to store \(key) in cache: \(error)") }
         }
     }
     
@@ -242,7 +242,7 @@ class CacheManager: ObservableObject {
         }
         updateStatistics(for: .archived, operation: .miss)
         
-        logger.debug("🔍 Cache miss for key: \(key)")
+        Task { await logger.debug("🔍 Cache miss for key: \(key)") }
         return nil
     }
     
@@ -264,7 +264,7 @@ class CacheManager: ObservableObject {
             try? FileManager.default.removeItem(at: fileURL)
         }
         
-        logger.debug("🗑️ Removed \(key) from all cache tiers")
+        Task { await logger.debug("🗑️ Removed \(key) from all cache tiers") }
     }
     
     /// Clear all cache data
@@ -289,7 +289,7 @@ class CacheManager: ObservableObject {
             self?.cacheStats = CacheStatistics()
         }
         
-        logger.info("🧹 Cleared all cache data")
+        Task { await logger.info("🧹 Cleared all cache data") }
     }
     
     // MARK: - Cache Tier Operations
@@ -309,7 +309,7 @@ class CacheManager: ObservableObject {
                 let data = try self.encoder.encode(entry)
                 try data.write(to: fileURL)
             } catch {
-                self.logger.error("❌ Failed to write disk cache for \(entry.key): \(error)")
+                Task { await self.logger.error("❌ Failed to write disk cache for \(entry.key): \(error)") }
             }
         }
     }
@@ -322,7 +322,7 @@ class CacheManager: ObservableObject {
                 let data = try self.encoder.encode(entry)
                 try data.write(to: fileURL)
             } catch {
-                self.logger.error("❌ Failed to write archive cache for \(entry.key): \(error)")
+                Task { await self.logger.error("❌ Failed to write archive cache for \(entry.key): \(error)") }
             }
         }
     }
@@ -337,7 +337,7 @@ class CacheManager: ObservableObject {
             do {
                 return try entry.getValue(as: type, decoder: decoder)
             } catch {
-                logger.error("❌ Failed to decode memory cache entry for \(key): \(error)")
+                Task { await logger.error("❌ Failed to decode memory cache entry for \(key): \(error)") }
                 memoryCache.removeValue(forKey: key)
                 return nil
             }
@@ -361,7 +361,7 @@ class CacheManager: ObservableObject {
                 
                 return try entry.getValue(as: type, decoder: decoder)
             } catch {
-                logger.error("❌ Failed to read disk cache for \(key): \(error)")
+                Task { await logger.error("❌ Failed to read disk cache for \(key): \(error)") }
                 try? FileManager.default.removeItem(at: fileURL)
                 return nil
             }
@@ -379,7 +379,7 @@ class CacheManager: ObservableObject {
                 let entry = try decoder.decode(CacheEntry.self, from: data)
                 return try entry.getValue(as: type, decoder: decoder)
             } catch {
-                logger.error("❌ Failed to read archive cache for \(key): \(error)")
+                Task { await logger.error("❌ Failed to read archive cache for \(key): \(error)") }
                 try? FileManager.default.removeItem(at: fileURL)
                 return nil
             }
@@ -411,9 +411,9 @@ class CacheManager: ObservableObject {
             do {
                 let entry = try CacheEntry(key: key, value: value, compressionLevel: .none, encoder: self.encoder)
                 self.memoryCache[key] = entry
-                self.logger.debug("⬆️ Promoted \(key) to memory cache")
+                Task { await self.logger.debug("⬆️ Promoted \(key) to memory cache") }
             } catch {
-                self.logger.error("❌ Failed to promote \(key) to memory cache: \(error)")
+                Task { await self.logger.error("❌ Failed to promote \(key) to memory cache: \(error)") }
             }
         }
     }
@@ -428,9 +428,9 @@ class CacheManager: ObservableObject {
                 let fileURL = self.diskCacheDirectory.appendingPathComponent("\(key).cache")
                 let data = try self.encoder.encode(entry)
                 try data.write(to: fileURL)
-                self.logger.debug("⬆️ Promoted \(key) to disk cache")
+                Task { await self.logger.debug("⬆️ Promoted \(key) to disk cache") }
             } catch {
-                self.logger.error("❌ Failed to promote \(key) to disk cache: \(error)")
+                Task { await self.logger.error("❌ Failed to promote \(key) to disk cache: \(error)") }
             }
         }
     }
@@ -446,7 +446,7 @@ class CacheManager: ObservableObject {
             memoryCache.removeValue(forKey: entry.key)
         }
         
-        logger.debug("🧹 Evicted \(itemsToRemove.count) items from memory cache")
+        Task { await logger.debug("🧹 Evicted \(itemsToRemove.count) items from memory cache") }
     }
     
     // MARK: - Statistics and Monitoring
@@ -509,7 +509,7 @@ class CacheManager: ObservableObject {
     }
     
     private func performCleanup() {
-        logger.info("🧹 Starting cache cleanup")
+        Task { await logger.info("🧹 Starting cache cleanup") }
         
         // Cleanup memory cache (remove expired items)
         memoryCacheQueue.async { [weak self] in
@@ -524,7 +524,7 @@ class CacheManager: ObservableObject {
             }
             
             if !expiredKeys.isEmpty {
-                self.logger.debug("🧹 Removed \(expiredKeys.count) expired items from memory cache")
+                Task { await self.logger.debug("🧹 Removed \(expiredKeys.count) expired items from memory cache") }
             }
         }
         
@@ -562,12 +562,12 @@ class CacheManager: ObservableObject {
                     removedCount += 1
                 }
             } catch {
-                logger.error("❌ Failed to process disk cache file \(fileURL): \(error)")
+                Task { await logger.error("❌ Failed to process disk cache file \(fileURL): \(error)") }
             }
         }
         
         if removedCount > 0 {
-            logger.debug("🧹 Removed \(removedCount) expired files from disk cache")
+            Task { await logger.debug("🧹 Removed \(removedCount) expired files from disk cache") }
         }
     }
     
@@ -586,12 +586,12 @@ class CacheManager: ObservableObject {
                     removedCount += 1
                 }
             } catch {
-                logger.error("❌ Failed to process archive cache file \(fileURL): \(error)")
+                Task { await logger.error("❌ Failed to process archive cache file \(fileURL): \(error)") }
             }
         }
         
         if removedCount > 0 {
-            logger.debug("🧹 Removed \(removedCount) corrupted files from archive cache")
+            Task { await logger.debug("🧹 Removed \(removedCount) corrupted files from archive cache") }
         }
     }
     
