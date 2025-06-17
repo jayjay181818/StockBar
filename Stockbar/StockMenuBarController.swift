@@ -29,7 +29,7 @@ class StockMenuBarController {
     // MARK: - Private Methods
     private func setupTimer() {
         Task { await data.refreshAllTrades() } // initial fetch
-        self.timer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in
+        self.timer = Timer.scheduledTimer(withTimeInterval: data.refreshInterval, repeats: true) { [weak self] _ in
             Task {
                 await self?.data.refreshAllTrades()
             }

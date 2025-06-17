@@ -59,37 +59,37 @@ class DataMigrationService {
     // MARK: - Full Migration
     
     func performFullMigration() async throws {
-        Logger.shared.info("DataMigrationService: Starting full migration check. Stored version: \(migrationVersionStored), Current app version: \(currentMigrationVersion)")
+        Task { await Logger.shared.info("DataMigrationService: Starting full migration check. Stored version: \(migrationVersionStored), Current app version: \(currentMigrationVersion)") }
         
         if migrationVersionStored >= currentMigrationVersion {
-            Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)). No full migration needed.")
+            Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)). No full migration needed.") }
             // Check if a pending retroactive calculation is needed from a previous partial migration
             if needsRetroactiveCalculation {
-                Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.")
+                Task { await Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.") }
                 // Consider how to trigger this or notify HistoricalDataManager
             }
             return
         }
         
-        Logger.shared.info("DataMigrationService: Migration required from version \(migrationVersionStored) to \(currentMigrationVersion).")
+        Task { await Logger.shared.info("DataMigrationService: Migration required from version \(migrationVersionStored) to \(currentMigrationVersion).") }
 
         do {
             // Handle PortfolioSnapshotEntity schema change (if migrating from version < 3)
             if migrationVersionStored < 3 {
-                Logger.shared.info("DataMigrationService: Migrating schema aspects related to pre-version 3 for PortfolioSnapshotEntity. Stored version: \(migrationVersionStored).")
+                Task { await Logger.shared.info("DataMigrationService: Migrating schema aspects related to pre-version 3 for PortfolioSnapshotEntity. Stored version: \(migrationVersionStored).") }
 
                 // Delete old entities regardless, as the schema might be incompatible even if empty.
                 // This is harmless on a fresh install (migrationVersionStored == 0) as it will delete nothing.
                 try await deleteOldPortfolioSnapshotEntities()
-                Logger.shared.info("DataMigrationService: Attempted deletion of old PortfolioSnapshotEntity instances (if any existed).")
+                Task { await Logger.shared.info("DataMigrationService: Attempted deletion of old PortfolioSnapshotEntity instances (if any existed).") }
 
                 // Only set the retroactive calculation flag if we are upgrading from an actual previous version (1 or 2)
                 // that would have had data in the old format.
                 if migrationVersionStored > 0 {
                     needsRetroactiveCalculation = true
-                    Logger.shared.info("DataMigrationService: Marked that retroactive portfolio calculation is needed post-migration from version \(migrationVersionStored).")
+                    Task { await Logger.shared.info("DataMigrationService: Marked that retroactive portfolio calculation is needed post-migration from version \(migrationVersionStored).") }
                 } else {
-                    Logger.shared.info("DataMigrationService: Fresh install (version 0). Schema is current. No v3-specific retroactive calculation trigger needed from this step.")
+                    Task { await Logger.shared.info("DataMigrationService: Fresh install (version 0). Schema is current. No v3-specific retroactive calculation trigger needed from this step.") }
                 }
             }
 
@@ -126,10 +126,10 @@ class DataMigrationService {
             
             // Update migration version
             userDefaults.set(currentMigrationVersion, forKey: MigrationKeys.migrationVersion)
-            Logger.shared.info("DataMigrationService: Migration to version \(currentMigrationVersion) completed successfully.")
+            Task { await Logger.shared.info("DataMigrationService: Migration to version \(currentMigrationVersion) completed successfully.") }
             
         } catch {
-            Logger.shared.error("DataMigrationService: Migration failed: \(error)")
+            Task { await Logger.shared.error("DataMigrationService: Migration failed: \(error)") }
             throw error
         }
     }
@@ -145,9 +145,9 @@ class DataMigrationService {
                 let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
                 let deletedCount = result?.result as? Int ?? 0
                 try context.save()
-                Logger.shared.info("DataMigrationService: Deleted \(deletedCount) old PortfolioSnapshotEntity instances for schema migration.")
+                Task { await Logger.shared.info("DataMigrationService: Deleted \(deletedCount) old PortfolioSnapshotEntity instances for schema migration.") }
             } catch {
-                Logger.shared.error("DataMigrationService: Failed to delete old PortfolioSnapshotEntity instances: \(error)")
+                Task { await Logger.shared.error("DataMigrationService: Failed to delete old PortfolioSnapshotEntity instances: \(error)") }
                 throw error // Re-throw to be caught by performFullMigration
             }
         }
@@ -156,17 +156,17 @@ class DataMigrationService {
     // MARK: - Price Snapshots Migration
     
     private func migratePriceSnapshots() async throws {
-        Logger.shared.info("Migrating price snapshots from UserDefaults to Core Data...")
+        Task { await Logger.shared.info("Migrating price snapshots from UserDefaults to Core Data...") }
         
         // Load existing price snapshots from UserDefaults
         let existingSnapshots = loadPriceSnapshotsFromUserDefaults()
         
         if existingSnapshots.isEmpty {
-            Logger.shared.info("No price snapshots found in UserDefaults")
+            Task { await Logger.shared.info("No price snapshots found in UserDefaults") }
             return
         }
         
-        Logger.shared.info("Found \(existingSnapshots.count) price snapshots to migrate")
+        Task { await Logger.shared.info("Found \(existingSnapshots.count) price snapshots to migrate") }
         
         // Save to Core Data in batches to avoid memory issues
         let batchSize = 100
@@ -174,10 +174,10 @@ class DataMigrationService {
         
         for (index, batch) in batches.enumerated() {
             try await coreDataService.savePriceSnapshots(batch)
-            Logger.shared.debug("Migrated batch \(index + 1)/\(batches.count) (\(batch.count) items)")
+            Task { await Logger.shared.debug("Migrated batch \(index + 1)/\(batches.count) (\(batch.count) items)") }
         }
         
-        Logger.shared.info("Successfully migrated \(existingSnapshots.count) price snapshots")
+        Task { await Logger.shared.info("Successfully migrated \(existingSnapshots.count) price snapshots") }
     }
     
     private func loadPriceSnapshotsFromUserDefaults() -> [PriceSnapshot] {
@@ -190,9 +190,9 @@ class DataMigrationService {
                 for (_, snapshots) in tieredCache {
                     allSnapshots.append(contentsOf: snapshots)
                 }
-                Logger.shared.info("Loaded \(allSnapshots.count) snapshots from tiered cache")
+                Task { await Logger.shared.info("Loaded \(allSnapshots.count) snapshots from tiered cache") }
             } catch {
-                Logger.shared.error("Failed to decode tiered cache data: \(error)")
+                Task { await Logger.shared.error("Failed to decode tiered cache data: \(error)") }
             }
         }
         
@@ -203,9 +203,9 @@ class DataMigrationService {
                 for (_, snapshots) in legacySnapshots {
                     allSnapshots.append(contentsOf: snapshots)
                 }
-                Logger.shared.info("Loaded additional \(legacySnapshots.values.flatMap { $0 }.count) snapshots from legacy storage")
+                Task { await Logger.shared.info("Loaded additional \(legacySnapshots.values.flatMap { $0 }.count) snapshots from legacy storage") }
             } catch {
-                Logger.shared.error("Failed to decode legacy price snapshots: \(error)")
+                Task { await Logger.shared.error("Failed to decode legacy price snapshots: \(error)") }
             }
         }
         
@@ -221,35 +221,35 @@ class DataMigrationService {
     // MARK: - Portfolio Snapshots Migration
     
     private func migratePortfolioSnapshots() async throws {
-        Logger.shared.info("Migrating portfolio snapshots from UserDefaults to Core Data...")
+        Task { await Logger.shared.info("Migrating portfolio snapshots from UserDefaults to Core Data...") }
         
         // Load existing portfolio snapshots from UserDefaults
         let existingSnapshots = loadPortfolioSnapshotsFromUserDefaults()
         
         if existingSnapshots.isEmpty {
-            Logger.shared.info("No portfolio snapshots found in UserDefaults")
+            Task { await Logger.shared.info("No portfolio snapshots found in UserDefaults") }
             return
         }
         
-        Logger.shared.info("Found \(existingSnapshots.count) portfolio snapshots to migrate")
+        Task { await Logger.shared.info("Found \(existingSnapshots.count) portfolio snapshots to migrate") }
         
         // Save to Core Data
         for snapshot in existingSnapshots {
             try await coreDataService.savePortfolioSnapshot(snapshot)
         }
         
-        Logger.shared.info("Successfully migrated \(existingSnapshots.count) portfolio snapshots")
+        Task { await Logger.shared.info("Successfully migrated \(existingSnapshots.count) portfolio snapshots") }
     }
     
     // MARK: - Trade Data Migration
     
     private func migrateTrades() async throws {
-        Logger.shared.info("Migrating trades from UserDefaults to Core Data...")
-        try await tradeDataMigrationService.migrateAllTradeData()
+        Task { await Logger.shared.info("Migrating trades from UserDefaults to Core Data...") }
+        try await tradeDataMigrationService.migrateAllData()
     }
     
     private func migrateTradingInfo() async throws {
-        Logger.shared.info("Migrating trading info from UserDefaults to Core Data...")
+        Task { await Logger.shared.info("Migrating trading info from UserDefaults to Core Data...") }
         // Trading info is handled within the migrateAllTradeData method
         // This method is kept separate for granular migration control
     }
@@ -262,9 +262,9 @@ class DataMigrationService {
             do {
                 let snapshots = try JSONDecoder().decode([HistoricalPortfolioSnapshot].self, from: data)
                 allSnapshots.append(contentsOf: snapshots)
-                Logger.shared.info("Loaded \(snapshots.count) enhanced portfolio snapshots")
+                Task { await Logger.shared.info("Loaded \(snapshots.count) enhanced portfolio snapshots") }
             } catch {
-                Logger.shared.error("Failed to decode enhanced portfolio snapshots: \(error)")
+                Task { await Logger.shared.error("Failed to decode enhanced portfolio snapshots: \(error)") }
             }
         }
         
@@ -274,9 +274,9 @@ class DataMigrationService {
                 let legacySnapshots = try JSONDecoder().decode([PortfolioSnapshot].self, from: legacyData)
                 let convertedSnapshots = legacySnapshots.map { convertLegacyPortfolioSnapshot($0) }
                 allSnapshots.append(contentsOf: convertedSnapshots)
-                Logger.shared.info("Loaded and converted \(legacySnapshots.count) legacy portfolio snapshots")
+                Task { await Logger.shared.info("Loaded and converted \(legacySnapshots.count) legacy portfolio snapshots") }
             } catch {
-                Logger.shared.error("Failed to decode legacy portfolio snapshots: \(error)")
+                Task { await Logger.shared.error("Failed to decode legacy portfolio snapshots: \(error)") }
             }
         }
         
@@ -310,7 +310,7 @@ class DataMigrationService {
     // MARK: - Cleanup
     
     func cleanupLegacyData() {
-        Logger.shared.info("Cleaning up legacy UserDefaults data...")
+        Task { await Logger.shared.info("Cleaning up legacy UserDefaults data...") }
         
         let keysToRemove = [
             "priceSnapshots",
@@ -325,13 +325,13 @@ class DataMigrationService {
             userDefaults.removeObject(forKey: key)
         }
         
-        Logger.shared.info("Legacy data cleanup completed")
+        Task { await Logger.shared.info("Legacy data cleanup completed") }
     }
     
     // MARK: - Verification
     
     func verifyMigration() async throws -> Bool {
-        Logger.shared.info("Verifying migration...")
+        Task { await Logger.shared.info("Verifying migration...") }
         
         // Check that data exists in Core Data
         let portfolioCount = try await coreDataService.getPortfolioSnapshotCount()
@@ -341,9 +341,9 @@ class DataMigrationService {
         // This is a simplified check - in a real implementation you'd want to check specific symbols
         
         // Check trade data migration
-        let tradesValid = await tradeDataMigrationService.validateMigration()
+        let tradesValid = (try? await tradeDataMigrationService.validateMigration()) ?? false
         
-        Logger.shared.info("Verification: \(portfolioCount) portfolio snapshots, \(totalPriceSnapshots) price snapshots, trades valid: \(tradesValid)")
+        Task { await Logger.shared.info("Verification: \(portfolioCount) portfolio snapshots, \(totalPriceSnapshots) price snapshots, trades valid: \(tradesValid)") }
         
         return (portfolioCount > 0 || totalPriceSnapshots > 0) && tradesValid
     }
