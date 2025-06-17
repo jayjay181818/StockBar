@@ -4,31 +4,45 @@ import Foundation
 public class CurrencyConverter: ObservableObject {
     @Published public var exchangeRates: [String: Double] = [:]
     private let baseURL = "https://api.exchangerate-api.com/v4/latest/USD"
+    private var lastRefreshTime: Date = Date.distantPast
+    private let refreshCooldown: TimeInterval = 300 // 5 minutes minimum between refreshes
 
     public init() {
         refreshRates()
     }
 
     public func refreshRates() {
+        // Throttle refresh requests to prevent excessive API calls
+        let now = Date()
+        let timeSinceLastRefresh = now.timeIntervalSince(lastRefreshTime)
+        
+        guard timeSinceLastRefresh >= refreshCooldown else {
+            Task { await Logger.shared.debug("💱 [CurrencyConverter] Skipping refresh - last refresh was \(Int(timeSinceLastRefresh))s ago") }
+            return
+        }
+        
+        lastRefreshTime = now
         guard let url = URL(string: baseURL) else { return }
         
-        print("💱 [CurrencyConverter] Fetching exchange rates from API...")
+        Task { await Logger.shared.info("💱 [CurrencyConverter] Fetching exchange rates from API...") }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
             guard let data = data,
                   let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
-                print("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates")
+                Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
                 return
             }
 
             DispatchQueue.main.async {
                 self?.exchangeRates = response.rates
-                print("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
-                print("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
-                print("💱 [CurrencyConverter] USD to EUR: \(response.rates["EUR"] ?? 0.0)")
-                if let gbpRate = response.rates["GBP"] {
-                    let gbpToUsd = 1.0 / gbpRate
-                    print("💱 [CurrencyConverter] GBP to USD: \(gbpToUsd) (£1 = $\(String(format: "%.4f", gbpToUsd)))")
+                Task {
+                    await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to EUR: \(response.rates["EUR"] ?? 0.0)")
+                    if let gbpRate = response.rates["GBP"] {
+                        let gbpToUsd = 1.0 / gbpRate
+                        await Logger.shared.debug("💱 [CurrencyConverter] GBP to USD: \(gbpToUsd) (£1 = $\(String(format: "%.4f", gbpToUsd)))")
+                    }
                 }
             }
         }.resume()
@@ -40,7 +54,7 @@ public class CurrencyConverter: ObservableObject {
             return amount
         }
         
-        print("💱 [CurrencyConverter] Converting \(amount) from \(from) to \(to)")
+        Task { await Logger.shared.debug("💱 [CurrencyConverter] Converting \(amount) from \(from) to \(to)") }
         
         // Handle USD as base currency (API uses USD as base)
         if from == "USD" {
@@ -48,22 +62,22 @@ public class CurrencyConverter: ObservableObject {
                 // Fallback rates if API fails
                 let fallbackRate = getFallbackRate(to: to)
                 let result = amount * fallbackRate
-                print("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(to)")
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(to)") }
                 return result
             }
             let result = amount * targetRate
-            print("💱 [CurrencyConverter] Using API rate: \(amount) USD × \(targetRate) = \(result) \(to)")
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) USD × \(targetRate) = \(result) \(to)") }
             return result
         } else if to == "USD" {
             guard let sourceRate = exchangeRates[from] else {
                 // Fallback rates if API fails
                 let fallbackRate = getFallbackRate(to: from)
                 let result = amount / fallbackRate
-                print("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) \(from) ÷ \(fallbackRate) = \(result) USD")
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) \(from) ÷ \(fallbackRate) = \(result) USD") }
                 return result
             }
             let result = amount / sourceRate
-            print("💱 [CurrencyConverter] Using API rate: \(amount) \(from) ÷ \(sourceRate) = \(result) USD")
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) \(from) ÷ \(sourceRate) = \(result) USD") }
             return result
         } else {
             // Convert from source to USD, then USD to target
@@ -74,12 +88,12 @@ public class CurrencyConverter: ObservableObject {
                 let fallbackToRate = getFallbackRate(to: to)
                 let usdAmount = amount / fallbackFromRate
                 let result = usdAmount * fallbackToRate
-                print("💱 [CurrencyConverter] Using FALLBACK rates: \(amount) \(from) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(to)")
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rates: \(amount) \(from) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(to)") }
                 return result
             }
             let amountInUSD = amount / sourceRate
             let result = amountInUSD * targetRate
-            print("💱 [CurrencyConverter] Using API rates: \(amount) \(from) ÷ \(sourceRate) × \(targetRate) = \(result) \(to)")
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rates: \(amount) \(from) ÷ \(sourceRate) × \(targetRate) = \(result) \(to)") }
             return result
         }
     }

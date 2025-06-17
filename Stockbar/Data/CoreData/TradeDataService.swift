@@ -162,7 +162,7 @@ class TradeDataService {
                 return !trades.isEmpty
             }
         } catch {
-            Logger.shared.error("Failed to check trade migration status: \(error)")
+            Task { await Logger.shared.error("Failed to check trade migration status: \(error)") }
             return false
         }
     }
@@ -177,7 +177,7 @@ class TradeDataService {
                 return !infos.isEmpty
             }
         } catch {
-            Logger.shared.error("Failed to check trading info migration status: \(error)")
+            Task { await Logger.shared.error("Failed to check trading info migration status: \(error)") }
             return false
         }
     }

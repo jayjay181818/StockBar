@@ -2,6 +2,33 @@ import Foundation
 import CoreData
 import OSLog
 
+/// Statistics about compression status
+struct CompressionStats {
+    let totalPriceSnapshots: Int
+    let totalPortfolioSnapshots: Int
+    let compressiblePriceSnapshots: Int
+    let compressiblePortfolioSnapshots: Int
+    let aggregatablePriceSnapshots: Int
+    let compressionAge: TimeInterval
+    let aggregationAge: TimeInterval
+    
+    var compressionRatio: Double {
+        guard totalPriceSnapshots > 0 else { return 0 }
+        return Double(compressiblePriceSnapshots) / Double(totalPriceSnapshots)
+    }
+    
+    var potentialSpaceSavings: String {
+        let compressibleRatio = Double(compressiblePriceSnapshots) / max(1, Double(totalPriceSnapshots))
+        let aggregatableRatio = Double(aggregatablePriceSnapshots) / max(1, Double(totalPriceSnapshots))
+        
+        let compressionSavings = compressibleRatio * 0.75 // 75% compression for old data
+        let aggregationSavings = aggregatableRatio * 0.90 // 90% compression for ancient data
+        
+        let totalSavings = (compressionSavings + aggregationSavings) * 100
+        return String(format: "%.1f%%", min(totalSavings, 90))
+    }
+}
+
 /// Service for compressing and managing older historical data to optimize storage and performance
 actor DataCompressionService {
     static let shared = DataCompressionService()
@@ -24,24 +51,24 @@ actor DataCompressionService {
     
     /// Performs comprehensive data compression and cleanup
     func performDataCompression() async {
-        logger.info("🗜️ Starting comprehensive data compression")
+        await logger.info("🗜️ Starting comprehensive data compression")
         
         await compressionStep1_RemoveVeryOldData()
         await compressionStep2_AggregateAncientData()
         await compressionStep3_CompressOldData()
         await compressionStep4_OptimizeRecentData()
         
-        logger.info("🗜️ Data compression completed")
+        await logger.info("🗜️ Data compression completed")
     }
     
     /// Performs lightweight compression for regular maintenance
     func performLightweightCompression() async {
-        logger.info("🗜️ Starting lightweight data compression")
+        await logger.info("🗜️ Starting lightweight data compression")
         
         await compressionStep3_CompressOldData()
         await compressionStep4_OptimizeRecentData()
         
-        logger.info("🗜️ Lightweight compression completed")
+        await logger.info("🗜️ Lightweight compression completed")
     }
     
     /// Gets compression statistics
@@ -84,7 +111,7 @@ actor DataCompressionService {
     
     /// Step 1: Remove data older than 5 years (configurable)
     private func compressionStep1_RemoveVeryOldData() async {
-        logger.info("🗜️ Step 1: Removing very old data (>5 years)")
+        await logger.info("🗜️ Step 1: Removing very old data (>5 years)")
         
         let context = coreDataStack.newBackgroundContext()
         let cutoffDate = Date().addingTimeInterval(-deletionAge)
@@ -113,17 +140,17 @@ actor DataCompressionService {
                 
                 try context.save()
                 
-                self.logger.info("🗜️ Deleted \(deletedPriceCount) old price snapshots and \(deletedPortfolioCount) old portfolio snapshots")
+                Task { await self.logger.info("🗜️ Deleted \(deletedPriceCount) old price snapshots and \(deletedPortfolioCount) old portfolio snapshots") }
                 
             } catch {
-                self.logger.error("🗜️ Failed to remove very old data: \(error)")
+                Task { await self.logger.error("🗜️ Failed to remove very old data: \(error)") }
             }
         }
     }
     
     /// Step 2: Aggregate very old data (1+ years) into weekly summaries
     private func compressionStep2_AggregateAncientData() async {
-        logger.info("🗜️ Step 2: Aggregating ancient data into weekly summaries")
+        await logger.info("🗜️ Step 2: Aggregating ancient data into weekly summaries")
         
         let context = coreDataStack.newBackgroundContext()
         let cutoffDate = Date().addingTimeInterval(-aggregationAge)
@@ -148,14 +175,14 @@ actor DataCompressionService {
                 try context.save()
                 
             } catch {
-                self.logger.error("🗜️ Failed to aggregate ancient data: \(error)")
+                Task { await self.logger.error("🗜️ Failed to aggregate ancient data: \(error)") }
             }
         }
     }
     
     /// Step 3: Compress old data (30+ days) by reducing density
     private func compressionStep3_CompressOldData() async {
-        logger.info("🗜️ Step 3: Compressing old data (>30 days)")
+        await logger.info("🗜️ Step 3: Compressing old data (>30 days)")
         
         let context = coreDataStack.newBackgroundContext()
         let cutoffDate = Date().addingTimeInterval(-compressionAge)
@@ -179,17 +206,17 @@ actor DataCompressionService {
                 }
                 
                 try context.save()
-                self.logger.info("🗜️ Compressed \(totalCompressed) data points")
+                Task { await self.logger.info("🗜️ Compressed \(totalCompressed) data points") }
                 
             } catch {
-                self.logger.error("🗜️ Failed to compress old data: \(error)")
+                Task { await self.logger.error("🗜️ Failed to compress old data: \(error)") }
             }
         }
     }
     
     /// Step 4: Optimize recent data storage
     private func compressionStep4_OptimizeRecentData() async {
-        logger.info("🗜️ Step 4: Optimizing recent data storage")
+        await logger.info("🗜️ Step 4: Optimizing recent data storage")
         
         let context = coreDataStack.newBackgroundContext()
         
@@ -202,7 +229,7 @@ actor DataCompressionService {
                 try context.save()
                 
             } catch {
-                self.logger.error("🗜️ Failed to optimize recent data: \(error)")
+                Task { await self.logger.error("🗜️ Failed to optimize recent data: \(error)") }
             }
         }
     }
@@ -250,10 +277,10 @@ actor DataCompressionService {
                 context.delete(snapshot)
             }
             
-            logger.debug("🗜️ Aggregated \(toDelete.count) snapshots for \(symbol) into weekly summaries")
+            Task { await logger.debug("🗜️ Aggregated \(toDelete.count) snapshots for \(symbol) into weekly summaries") }
             
         } catch {
-            logger.error("🗜️ Failed to aggregate weekly data for \(symbol): \(error)")
+            Task { await logger.error("🗜️ Failed to aggregate weekly data for \(symbol): \(error)") }
         }
     }
     
@@ -289,11 +316,11 @@ actor DataCompressionService {
                 context.delete(snapshot)
             }
             
-            logger.debug("🗜️ Compressed \(toDelete.count) snapshots for \(symbol)")
+            Task { await logger.debug("🗜️ Compressed \(toDelete.count) snapshots for \(symbol)") }
             return toDelete.count
             
         } catch {
-            logger.error("🗜️ Failed to compress data for \(symbol): \(error)")
+            Task { await logger.error("🗜️ Failed to compress data for \(symbol): \(error)") }
             return 0
         }
     }
@@ -330,7 +357,7 @@ actor DataCompressionService {
                 context.delete(duplicate)
             }
             
-            logger.debug("🗜️ Removed \(duplicatePriceSnapshots.count) duplicate price snapshots")
+            Task { await logger.debug("🗜️ Removed \(duplicatePriceSnapshots.count) duplicate price snapshots") }
             
             // Remove duplicate portfolio snapshots (same timestamp + composition hash)
             let portfolioRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
@@ -353,38 +380,14 @@ actor DataCompressionService {
                 context.delete(duplicate)
             }
             
-            logger.debug("🗜️ Removed \(duplicatePortfolioSnapshots.count) duplicate portfolio snapshots")
+            Task { await logger.debug("🗜️ Removed \(duplicatePortfolioSnapshots.count) duplicate portfolio snapshots") }
             
         } catch {
-            logger.error("🗜️ Failed to remove duplicate entries: \(error)")
+            Task { await logger.error("🗜️ Failed to remove duplicate entries: \(error)") }
         }
     }
 }
 
 // MARK: - Supporting Types
 
-struct CompressionStats {
-    let totalPriceSnapshots: Int
-    let totalPortfolioSnapshots: Int
-    let compressiblePriceSnapshots: Int
-    let compressiblePortfolioSnapshots: Int
-    let aggregatablePriceSnapshots: Int
-    let compressionAge: TimeInterval
-    let aggregationAge: TimeInterval
-    
-    var compressionRatio: Double {
-        guard totalPriceSnapshots > 0 else { return 0 }
-        return Double(compressiblePriceSnapshots) / Double(totalPriceSnapshots)
-    }
-    
-    var potentialSpaceSavings: String {
-        let compressibleRatio = Double(compressiblePriceSnapshots) / max(1, Double(totalPriceSnapshots))
-        let aggregatableRatio = Double(aggregatablePriceSnapshots) / max(1, Double(totalPriceSnapshots))
-        
-        let compressionSavings = compressibleRatio * 0.75 // 75% compression for old data
-        let aggregationSavings = aggregatableRatio * 0.90 // 90% compression for ancient data
-        
-        let totalSavings = (compressionSavings + aggregationSavings) * 100
-        return String(format: "%.1f%%", min(totalSavings, 90))
-    }
-}
+// Note: CompressionStats struct is already defined at the top of the file

@@ -25,7 +25,7 @@ struct UserData: Codable {
 struct UserSettings: Codable {
     var preferredCurrency: String = "USD"
     var showColorCoding: Bool = true
-    var refreshInterval: TimeInterval = 60.0
+    var refreshInterval: TimeInterval = 300.0
     
     init() {}
 }
