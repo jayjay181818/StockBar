@@ -127,4 +127,8 @@ venv.bak/
 
 # StockBar specific
 *.log
-.stockbar_cache.json 
+.stockbar_cache.json
+
+# Release artifacts
+Stockbar-v*.app
+Stockbar-v*.zip 
