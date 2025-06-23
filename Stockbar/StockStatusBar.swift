@@ -1,6 +1,7 @@
 import Cocoa
 import Combine
 import Foundation
+import SwiftUI
 
 // MARK: - Models
 struct TradingData {
@@ -201,6 +202,29 @@ class StockStatusItemController {
     
     private func updateMenu(trade: Trade, data: TradingData) {
         let menu = NSMenu()
+        
+        // Add price chart as the first item
+        let chartHostingView = MenuPriceChartHostingView(
+            symbol: trade.name,
+            currentPrice: data.displayPrice,
+            currency: data.currency
+        )
+        
+        // Ensure the hosting view is properly sized before adding to menu
+        chartHostingView.needsLayout = true
+        chartHostingView.layoutSubtreeIfNeeded()
+        
+        let chartMenuItem = NSMenuItem()
+        chartMenuItem.view = chartHostingView
+        
+        // Set menu item size explicitly
+        chartMenuItem.representedObject = NSValue(size: NSSize(width: 260, height: 180))
+        
+        menu.addItem(chartMenuItem)
+        
+        // Add separator after chart
+        menu.addItem(NSMenuItem.separator())
+        
         // Use display price which includes pre/post market data when applicable
         let safeDisplay = data.displayPrice.isFinite ? data.displayPrice : 0
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
