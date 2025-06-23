@@ -61,8 +61,22 @@ class DataMigrationService {
     func performFullMigration() async throws {
         Task { await Logger.shared.info("DataMigrationService: Starting full migration check. Stored version: \(migrationVersionStored), Current app version: \(currentMigrationVersion)") }
         
-        if migrationVersionStored >= currentMigrationVersion {
-            Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)). No full migration needed.") }
+        // Check if we have UserDefaults data that needs migration regardless of version
+        let userTradesData = userDefaults.data(forKey: "usertrades")
+        let tradingInfoDataContent = userDefaults.data(forKey: "tradingInfoData")
+        let hasUserTrades = userTradesData != nil
+        let hasTradingInfo = tradingInfoDataContent != nil
+        let needsDataMigration = hasUserTrades || hasTradingInfo
+        
+        Task { await Logger.shared.info("DataMigrationService: UserDefaults data check - usertrades: \(hasUserTrades) (size: \(userTradesData?.count ?? 0)), tradingInfoData: \(hasTradingInfo) (size: \(tradingInfoDataContent?.count ?? 0)), needsDataMigration: \(needsDataMigration)") }
+        
+        // Debug: List all UserDefaults keys to see what's available
+        let allKeys = userDefaults.dictionaryRepresentation().keys.sorted()
+        let tradeKeys = allKeys.filter { $0.contains("trade") || $0.contains("info") }
+        Task { await Logger.shared.info("DataMigrationService: Available UserDefaults keys: \(tradeKeys)") }
+        
+        if migrationVersionStored >= currentMigrationVersion && !needsDataMigration {
+            Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)) and no UserDefaults data found. No full migration needed.") }
             // Check if a pending retroactive calculation is needed from a previous partial migration
             if needsRetroactiveCalculation {
                 Task { await Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.") }
@@ -113,13 +127,15 @@ class DataMigrationService {
             }
             
             // Migrate trades from UserDefaults
-            if !userDefaults.bool(forKey: MigrationKeys.tradesMigrated) && migrationVersionStored < currentMigrationVersion {
+            let hasUserTrades = userDefaults.data(forKey: "usertrades") != nil
+            if !userDefaults.bool(forKey: MigrationKeys.tradesMigrated) && (migrationVersionStored < currentMigrationVersion || hasUserTrades) {
                 try await migrateTrades()
                 userDefaults.set(true, forKey: MigrationKeys.tradesMigrated)
             }
             
             // Migrate trading info from UserDefaults
-            if !userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated) && migrationVersionStored < currentMigrationVersion {
+            let hasTradingInfo = userDefaults.data(forKey: "tradingInfoData") != nil
+            if !userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated) && (migrationVersionStored < currentMigrationVersion || hasTradingInfo) {
                 try await migrateTradingInfo()
                 userDefaults.set(true, forKey: MigrationKeys.tradingInfoMigrated)
             }

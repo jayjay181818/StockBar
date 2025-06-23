@@ -43,6 +43,7 @@ func withTaskTimeout<T>(seconds: TimeInterval, operation: @escaping () async thr
     }
 }
 
+@MainActor
 class HistoricalDataManager: ObservableObject {
     static let shared = HistoricalDataManager()
     
@@ -90,6 +91,13 @@ class HistoricalDataManager: ObservableObject {
         static let cachedHistoricalPortfolioValues = "cachedHistoricalPortfolioValues"
         static let lastPortfolioCalculationDate = "lastPortfolioCalculationDate"
     }
+    
+    // MARK: - Performance Caching
+    
+    // Cache for getOptimalStockData results to prevent repeated expensive calculations
+    private var stockDataCache: [String: [ChartDataPoint]] = [:]
+    private var stockDataCacheTimestamp: [String: Date] = [:]
+    private let stockDataCacheInterval: TimeInterval = 30 // 30 seconds cache
     
     // Core Data Era: Dramatically increased limits for decades of data retention
     private let maxDataPoints = 25000 // 10x increase: 50+ years per stock (Core Data optimized)
@@ -364,14 +372,14 @@ class HistoricalDataManager: ObservableObject {
             guard let self = self else { return }
             
             // Preload recent data for all symbols
-            for symbol in self.priceSnapshots.keys {
-                _ = self.getRecentPriceSnapshots(for: symbol, days: 7)  // Week data
-                _ = self.getRecentPriceSnapshots(for: symbol, days: 30) // Month data
+            for symbol in await self.priceSnapshots.keys {
+                _ = await self.getRecentPriceSnapshots(for: symbol, days: 7)  // Week data
+                _ = await self.getRecentPriceSnapshots(for: symbol, days: 30) // Month data
             }
             
             // Preload common time ranges
             for timeRange in [ChartTimeRange.day, .week, .month] {
-                _ = self.getHistoricalPortfolioSnapshots(timeRange: timeRange)
+                _ = await self.getHistoricalPortfolioSnapshots(timeRange: timeRange)
             }
             
             Task { await self.logger.debug("🚀 Preloaded frequently accessed data into memory cache") }
@@ -588,6 +596,9 @@ class HistoricalDataManager: ObservableObject {
                 priceSnapshots[trade.trade.name] = []
             }
             priceSnapshots[trade.trade.name]?.append(snapshot)
+            
+            // CRITICAL FIX: Keep snapshots sorted by timestamp for binary search performance
+            priceSnapshots[trade.trade.name]?.sort { $0.timestamp < $1.timestamp }
             hasValidData = true
         }
         
@@ -798,8 +809,18 @@ class HistoricalDataManager: ObservableObject {
         }
     }
     
-    /// Gets stock data for charts with increased data limits
+    /// Gets stock data for charts with increased data limits and caching
     private func getOptimalStockData(for symbol: String, timeRange: ChartTimeRange, startDate: Date) -> [ChartDataPoint] {
+        let cacheKey = "\(symbol)-\(timeRange.rawValue)-\(Int(startDate.timeIntervalSince1970))"
+        
+        // Check cache first
+        if let cachedData = stockDataCache[cacheKey],
+           let cacheTime = stockDataCacheTimestamp[cacheKey],
+           Date().timeIntervalSince(cacheTime) < stockDataCacheInterval {
+            Task { await logger.debug("📊 CACHE HIT: Stock data for \(symbol) \(timeRange.rawValue): \(cachedData.count) points") }
+            return cachedData
+        }
+        
         let allSnapshots = priceSnapshots[symbol] ?? []
         
         // Filter and convert to chart data points
@@ -808,7 +829,11 @@ class HistoricalDataManager: ObservableObject {
             .map { ChartDataPoint(date: $0.timestamp, value: $0.price, symbol: symbol) }
             .sorted { $0.date < $1.date }
         
-        Task { await logger.debug("📊 Stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count) points") }
+        Task { await logger.debug("📊 CACHE MISS: Stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count) points") }
+        
+        // Cache the result
+        stockDataCache[cacheKey] = filteredData
+        stockDataCacheTimestamp[cacheKey] = Date()
         
         // Check if we have insufficient data for the requested time range
         let minimumExpectedDataPoints = getExpectedDataPointsForTimeRange(timeRange)
@@ -1946,11 +1971,12 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Finds the closest historical snapshot to a given date using optimized binary search
-    private func findClosestSnapshot(in snapshots: [PriceSnapshot], to targetDate: Date) -> PriceSnapshot? {
-        guard !snapshots.isEmpty else { return nil }
+    /// CRITICAL FIX: Assumes snapshots are already sorted to avoid O(n log n) performance bottleneck
+    private func findClosestSnapshot(in sortedSnapshots: [PriceSnapshot], to targetDate: Date) -> PriceSnapshot? {
+        guard !sortedSnapshots.isEmpty else { return nil }
         
-        // Ensure snapshots are sorted by timestamp for binary search
-        let sortedSnapshots = snapshots.sorted { $0.timestamp < $1.timestamp }
+        // PERFORMANCE: Snapshots MUST be pre-sorted by timestamp for binary search to work
+        // This function no longer sorts to avoid O(n log n) bottleneck on every call
         let targetDayStart = Calendar.current.startOfDay(for: targetDate)
         
         // Binary search for exact or closest match
