@@ -2874,6 +2874,30 @@ class HistoricalDataManager: ObservableObject {
             ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
         }
     }
+    
+    /// Gets price snapshots for a specific symbol within a time range
+    /// Used by MenuPriceChartView for individual stock charts
+    func getPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date = Date()) -> [PriceSnapshot] {
+        guard let snapshots = priceSnapshots[symbol] else {
+            Task { await logger.debug("📊 No price snapshots found for symbol: \(symbol)") }
+            return []
+        }
+        
+        let filteredSnapshots = snapshots
+            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+            .sorted { $0.timestamp < $1.timestamp }
+        
+        Task { await logger.debug("📊 Retrieved \(filteredSnapshots.count) price snapshots for \(symbol) from \(startDate) to \(endDate)") }
+        
+        // If we have insufficient data, trigger background fetch
+        if filteredSnapshots.count < 10 {
+            Task.detached(priority: .background) { [weak self] in
+                await self?.triggerHistoricalDataFetch(for: symbol, timeRange: .day, startDate: startDate)
+            }
+        }
+        
+        return filteredSnapshots
+    }
 
 }
 
