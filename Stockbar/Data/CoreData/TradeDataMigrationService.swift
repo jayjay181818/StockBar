@@ -58,7 +58,7 @@ class TradeDataMigrationService {
             throw error
         }
         
-        if UserDefaults.standard.object(forKey: "trades") == nil && UserDefaults.standard.object(forKey: "tradingInfo") == nil {
+        if UserDefaults.standard.object(forKey: "usertrades") == nil && UserDefaults.standard.object(forKey: "tradingInfoData") == nil {
             Task { await logger.info("⏭️ MIGRATION: Trades already migrated, skipping") }
         }
         
@@ -76,7 +76,7 @@ class TradeDataMigrationService {
             throw error
         }
         
-        if UserDefaults.standard.object(forKey: "tradingInfo") == nil {
+        if UserDefaults.standard.object(forKey: "tradingInfoData") == nil {
             Task { await logger.info("⏭️ MIGRATION: Trading info already migrated, skipping") }
         }
         
@@ -88,8 +88,8 @@ class TradeDataMigrationService {
     private func migrateTradesFromUserDefaults() async throws {
         Task { await logger.info("🔄 MIGRATION: Migrating trades from UserDefaults") }
         
-        // Check if UserDefaults has trade data
-        guard let tradesData = UserDefaults.standard.data(forKey: "trades") else {
+        // Check if UserDefaults has trade data (using correct key)
+        guard let tradesData = UserDefaults.standard.data(forKey: "usertrades") else {
             Task { await logger.info("ℹ️ MIGRATION: No trades found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
             UserDefaults.standard.set(true, forKey: migrationKey)
@@ -108,6 +108,7 @@ class TradeDataMigrationService {
         
         // Save trades to Core Data
         do {
+            try await tradeDataService.saveAllTrades(trades)
             Task { await logger.info("💾 MIGRATION: Successfully saved \(trades.count) trades to Core Data") }
             
             // Verify the migration
@@ -123,8 +124,8 @@ class TradeDataMigrationService {
     private func migrateTradingInfoFromUserDefaults() async throws {
         Task { await logger.info("🔄 MIGRATION: Migrating trading info from UserDefaults") }
         
-        // Check if UserDefaults has trading info data
-        guard let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") else {
+        // Check if UserDefaults has trading info data (using correct key)
+        guard let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") else {
             Task { await logger.info("ℹ️ MIGRATION: No trading info found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
             UserDefaults.standard.set(true, forKey: migrationKey)
@@ -143,6 +144,7 @@ class TradeDataMigrationService {
         
         // Save trading info to Core Data
         do {
+            try await tradeDataService.saveAllTradingInfo(tradingInfoDict)
             Task { await logger.info("💾 MIGRATION: Successfully saved trading info for \(tradingInfoDict.count) symbols to Core Data") }
             
             // Verify the migration

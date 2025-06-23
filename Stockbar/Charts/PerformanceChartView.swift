@@ -18,6 +18,10 @@ struct PerformanceChartView: View {
     @State private var dateFilterEnabled = false
     @State private var customStartDate = Date().addingTimeInterval(-30 * 24 * 60 * 60) // 30 days ago
     @State private var customEndDate = Date()
+    // CRITICAL FIX: Replace caching with proper state management for UI responsiveness
+    @State private var displayableChartData: [ChartDataPoint] = []
+    @State private var isLoadingData = false
+    @State private var chartError: String? = nil
     
     let availableSymbols: [String]
     let dataModel: DataModel?
@@ -50,22 +54,22 @@ struct PerformanceChartView: View {
             chartView
             
             // Performance Metrics Toggle
-            if !chartData.isEmpty {
+            if !displayableChartData.isEmpty {
                 metricsSection
             }
             
             // Data Filters
-            if !chartData.isEmpty {
+            if !displayableChartData.isEmpty {
                 dataFiltersSection
             }
             
             // Export Options
-            if !chartData.isEmpty {
+            if !displayableChartData.isEmpty {
                 exportSection
             }
             
             // Comprehensive Return Analysis
-            if !chartData.isEmpty && dataModel != nil {
+            if !displayableChartData.isEmpty && dataModel != nil {
                 switch selectedChartType {
                 case .portfolioValue, .portfolioGains:
                     portfolioReturnAnalysisSection
@@ -83,6 +87,13 @@ struct PerformanceChartView: View {
         }
         .onChange(of: selectedDataPoints) { _, _ in
             // Update analytics when selection changes - SwiftUI will automatically update
+        }
+        // CRITICAL FIX: Use .task to load data asynchronously when dependencies change
+        .task(id: selectedTimeRange) {
+            await loadChartData()
+        }
+        .task(id: selectedChartType) {
+            await loadChartData()
         }
         .onAppear {
             // Initialize chart interactions
@@ -207,43 +218,70 @@ struct PerformanceChartView: View {
         .pickerStyle(SegmentedPickerStyle())
     }
     
-    private var chartData: [ChartDataPoint] {
-        let data = historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange, dataModel: dataModel)
-        // Debug: Log the data we're getting
-        print("📊 Chart data for \(selectedChartType.title) (\(selectedTimeRange.rawValue)): \(data.count) points")
-        if data.isEmpty {
-            print("📊 No chart data available for \(selectedChartType.title) with \(selectedTimeRange.rawValue) time range")
-            let startDate = selectedTimeRange.startDate(from: Date())
-            print("📊 Time range: \(startDate) to \(Date())")
-        } else {
-            let dateRange = data.isEmpty ? "N/A" : "\(data.first?.date ?? Date()) to \(data.last?.date ?? Date())"
-            print("📊 Date range: \(dateRange)")
-        }
-        return data
-    }
-    
-    private var filteredChartData: [ChartDataPoint] {
-        var filtered = chartData
+    // CRITICAL FIX: Replaced synchronous computed property with async function
+    private func loadChartData() async {
+        isLoadingData = true
+        chartError = nil
         
-        // Apply value threshold filter
-        if valueThreshold > 0 {
-            filtered = filtered.filter { abs($0.value) >= valueThreshold }
-        }
-        
-        // Apply custom date range filter
-        if dateFilterEnabled {
-            filtered = filtered.filter { dataPoint in
-                dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+        do {
+            // Run data fetching in background task to avoid blocking UI
+            let data = await withTaskGroup(of: [ChartDataPoint].self) { group in
+                group.addTask {
+                    await historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange, dataModel: dataModel)
+                }
+                return await group.next() ?? []
+            }
+            
+            // Apply filtering and downsampling on background task
+            let processedData = await processChartData(data)
+            
+            // Update UI state on main actor
+            await MainActor.run {
+                displayableChartData = processedData
+                isLoadingData = false
+                print("📊 Loaded \(processedData.count) chart data points for \(selectedChartType.title) (\(selectedTimeRange.rawValue))")
+            }
+        } catch {
+            await MainActor.run {
+                chartError = "Failed to load chart data: \(error.localizedDescription)"
+                isLoadingData = false
+                displayableChartData = []
             }
         }
-        
-        return filtered
+    }
+    
+    // CRITICAL FIX: Move filtering and processing to background task
+    private func processChartData(_ data: [ChartDataPoint]) async -> [ChartDataPoint] {
+        return await Task.detached {
+            var filtered = data
+            
+            // Apply value threshold filter
+            if valueThreshold > 0 {
+                filtered = filtered.filter { abs($0.value) >= valueThreshold }
+            }
+            
+            // Apply custom date range filter
+            if dateFilterEnabled {
+                filtered = filtered.filter { dataPoint in
+                    dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+                }
+            }
+            
+            // Intelligent downsampling for performance
+            if filtered.count > 1000 {
+                let strideValue = filtered.count / 800 // Target ~800 points for smooth rendering
+                filtered = Array(stride(from: 0, to: filtered.count, by: max(1, strideValue)).map { filtered[$0] })
+                print("📊 Downsampled chart data from \(data.count) to \(filtered.count) points for performance")
+            }
+            
+            return filtered
+        }.value
     }
     
     private var yAxisDomain: ClosedRange<Double> {
-        guard !filteredChartData.isEmpty else { return 0...1 }
+        guard !displayableChartData.isEmpty else { return 0...1 }
         
-        let values = filteredChartData.map { $0.value }
+        let values = displayableChartData.map { $0.value }
         let minValue = values.min() ?? 0
         let maxValue = values.max() ?? 1
         
@@ -257,17 +295,24 @@ struct PerformanceChartView: View {
         // Ensure we don't have a zero range
         if paddedMin == paddedMax {
             return (paddedMin - 0.5)...(paddedMax + 0.5)
+        } else {
+            return paddedMin...paddedMax
         }
-        
-        return paddedMin...paddedMax
     }
     
     private var chartView: some View {
         Group {
-            if filteredChartData.isEmpty {
+            if isLoadingData {
+                ProgressView("Loading chart data...")
+                    .frame(height: 300)
+            } else if let error = chartError {
+                Text("Error: \(error)")
+                    .foregroundColor(.red)
+                    .frame(height: 300)
+            } else if displayableChartData.isEmpty {
                 emptyChartView
             } else {
-                Chart(filteredChartData) { dataPoint in
+                Chart(displayableChartData) { dataPoint in
                         LineMark(
                             x: .value("Date", dataPoint.date),
                             y: .value("Value", dataPoint.value)
@@ -326,7 +371,7 @@ struct PerformanceChartView: View {
                                 .contentShape(Rectangle())
                                 .background(
                                     EnhancedChartInteractionView(
-                                        chartData: chartData,
+                                        chartData: displayableChartData,
                                         selectedDataPoints: $selectedDataPoints,
                                         hoveredDataPoint: $hoveredDataPoint,
                                         chartScale: $chartScale,
@@ -941,7 +986,7 @@ struct PerformanceChartView: View {
         case .portfolioValue:
             return .blue
         case .portfolioGains:
-            return chartData.last?.value ?? 0 >= 0 ? .green : .red
+            return displayableChartData.last?.value ?? 0 >= 0 ? .green : .red
         case .individualStock:
             return .purple
         }
@@ -1037,10 +1082,10 @@ struct PerformanceChartView: View {
     
     /// Gets change information for a data point relative to the previous point
     private func getChangeInfo(for dataPoint: ChartDataPoint) -> (absoluteChange: Double, percentChange: Double)? {
-        guard let currentIndex = filteredChartData.firstIndex(where: { $0.id == dataPoint.id }),
+        guard let currentIndex = displayableChartData.firstIndex(where: { $0.id == dataPoint.id }),
               currentIndex > 0 else { return nil }
         
-        let previousPoint = filteredChartData[currentIndex - 1]
+        let previousPoint = displayableChartData[currentIndex - 1]
         let absoluteChange = dataPoint.value - previousPoint.value
         let percentChange = previousPoint.value != 0 ? (absoluteChange / previousPoint.value) * 100 : 0
         
@@ -1049,7 +1094,7 @@ struct PerformanceChartView: View {
     
     /// Gets position information for a data point within the dataset
     private func getPositionInfo(for dataPoint: ChartDataPoint) -> (rank: Int, total: Int, percentile: Double)? {
-        let sortedByValue = filteredChartData.sorted { $0.value > $1.value }
+        let sortedByValue = displayableChartData.sorted { $0.value > $1.value }
         guard let rank = sortedByValue.firstIndex(where: { $0.id == dataPoint.id }) else { return nil }
         
         let total = sortedByValue.count
@@ -1129,7 +1174,7 @@ struct PerformanceChartView: View {
             // Selection tools
             HStack {
                 Button("Select All") {
-                    selectedDataPoints = Set(filteredChartData.map { $0.id })
+                    selectedDataPoints = Set(displayableChartData.map { $0.id })
                 }
                 .buttonStyle(PlainButtonStyle())
                 .font(.caption)
@@ -1269,8 +1314,8 @@ struct PerformanceChartView: View {
     
     private func exportToCSV() {
         let metrics = getRelevantPerformanceMetrics()
-        let dataToExport = selectedDataPoints.isEmpty ? filteredChartData : 
-            filteredChartData.filter { selectedDataPoints.contains($0.id) }
+        let dataToExport = selectedDataPoints.isEmpty ? displayableChartData : 
+            displayableChartData.filter { selectedDataPoints.contains($0.id) }
         
         exportManager.exportToCSV(
             chartData: dataToExport,
@@ -1283,8 +1328,8 @@ struct PerformanceChartView: View {
     private func exportToPDF() {
         let metrics = getRelevantPerformanceMetrics()
         let chartImage = captureChartAsImage()
-        let dataToExport = selectedDataPoints.isEmpty ? filteredChartData : 
-            filteredChartData.filter { selectedDataPoints.contains($0.id) }
+        let dataToExport = selectedDataPoints.isEmpty ? displayableChartData : 
+            displayableChartData.filter { selectedDataPoints.contains($0.id) }
         
         exportManager.exportToPDF(
             chartData: dataToExport,

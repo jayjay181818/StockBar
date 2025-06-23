@@ -71,9 +71,28 @@ class DataModel: ObservableObject {
     private var lastComprehensiveCheckTime: Date = Date.distantPast
     private let comprehensiveCheckCooldown: TimeInterval = 3600 * 2 // 2 hours minimum between comprehensive checks
     
-    // MARK: - Caching Properties
-    private var lastSuccessfulFetch: [String: Date] = [:] // Track last successful fetch time per symbol
-    private var lastFailedFetch: [String: Date] = [:] // Track last failed fetch time per symbol
+    // CRITICAL FIX: Simplify threading to prevent race conditions and memory leaks
+    // Since this is an @MainActor-bound ObservableObject, keep cache access simple
+    private var lastSuccessfulFetch: [String: Date] = [:]
+    private var lastFailedFetch: [String: Date] = [:]
+    
+    // Simplified cache operations without complex threading
+    private func setSuccessfulFetch(for symbol: String, at time: Date) {
+        lastSuccessfulFetch[symbol] = time
+        lastFailedFetch.removeValue(forKey: symbol)
+    }
+    
+    private func setFailedFetch(for symbol: String, at time: Date) {
+        lastFailedFetch[symbol] = time
+    }
+    
+    private func getLastSuccessfulFetch(for symbol: String) -> Date? {
+        return lastSuccessfulFetch[symbol]
+    }
+    
+    private func getLastFailedFetch(for symbol: String) -> Date? {
+        return lastFailedFetch[symbol]
+    }
     
     @Published var cacheInterval: TimeInterval = UserDefaults.standard.object(forKey: "cacheInterval") as? TimeInterval ?? 300 { // 5 minutes default
         didSet {
@@ -127,6 +146,9 @@ class DataModel: ObservableObject {
         // Load trades asynchronously
         Task {
             await loadTradesAsync()
+            
+            // Emergency recovery removed by user request
+            
             await MainActor.run {
                 self.startStaggeredRefresh()
             }
@@ -136,13 +158,13 @@ class DataModel: ObservableObject {
         normalizeLoadedStockCurrencies()
         
         // Clear inconsistent historical data (one-time fix for calculation method changes)
-        historicalDataManager.clearInconsistentData()
+        Task { await historicalDataManager.clearInconsistentData() }
         
         // Initialize memory optimization
         setupMemoryManagement()
         
         // NEW: Start enhanced portfolio calculation in background after app startup
-        Task {
+        Task { @MainActor in
             // Prevent multiple startup tasks
             guard !hasRunStartupBackfill else {
                 await logger.info("🔍 STARTUP: Skipping - startup backfill already initiated")
@@ -171,7 +193,7 @@ class DataModel: ObservableObject {
             await logger.info("🚀 AUTO-BACKFILL: Starting automatic historical data check")
             
             // Check if this looks like a first run or we have very little historical data
-            let totalHistoricalSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
+            let totalHistoricalSnapshots = await historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
             let symbolCount = realTimeTrades.count
             
             if totalHistoricalSnapshots < (symbolCount * 50) { // Less than ~50 data points per symbol suggests we need backfill
@@ -250,7 +272,7 @@ class DataModel: ObservableObject {
         lastFailedFetch = lastFailedFetch.filter { $0.value > cutoffTime }
         
         // Notify historical data manager to clean up
-        historicalDataManager.clearInconsistentData()
+        await historicalDataManager.clearInconsistentData()
         
         await logger.info("Memory optimization completed")
     }
@@ -380,6 +402,7 @@ class DataModel: ObservableObject {
     // MARK: - Public Methods
 
     /// Checks for missing historical data and triggers backfill if needed (legacy 1-month check)
+    @MainActor
     public func checkAndBackfillHistoricalData() async {
         // Safety check: Don't run if already running
         guard !isRunningStandardCheck else {
@@ -438,6 +461,7 @@ class DataModel: ObservableObject {
     }
     
     /// Comprehensive 5-year historical data coverage check and automatic backfill
+    @MainActor
     public func checkAndBackfill5YearHistoricalData() async {
         // Safety check: Don't run if already running
         guard !isRunningComprehensiveCheck else {
@@ -542,6 +566,7 @@ class DataModel: ObservableObject {
     }
     
     /// Backfills historical data for a single symbol in yearly chunks
+    @MainActor
     private func backfillHistoricalDataForSymbol(_ symbol: String, yearsToFetch: Int) async {
         let calendar = Calendar.current
         let endDate = Date()
@@ -606,6 +631,7 @@ class DataModel: ObservableObject {
     }
     
     /// Fetches a single chunk of historical data
+    @MainActor
     private func fetchHistoricalDataChunk(for symbol: String, from startDate: Date, to endDate: Date, yearOffset: Int) async {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
@@ -655,6 +681,7 @@ class DataModel: ObservableObject {
     }
     
     /// Legacy backfill method - now calls the chunked version
+    @MainActor
     public func backfillHistoricalDataLegacy(for symbols: [String]) async {
         let calendar = Calendar.current
         let endDate = Date()
@@ -782,8 +809,8 @@ class DataModel: ObservableObject {
         await logger.info("🔍 STARTUP: Checking if portfolio value calculation is needed")
         
         // Check if we have sufficient historical price data but no portfolio value data
-        let totalPriceSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
-        let portfolioValueCount = historicalDataManager.cachedHistoricalPortfolioValues.count
+        let totalPriceSnapshots = await historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
+        let portfolioValueCount = await historicalDataManager.cachedHistoricalPortfolioValues.count
         
         await logger.info("🔍 STARTUP: Found \(totalPriceSnapshots) price snapshots and \(portfolioValueCount) portfolio value points")
         
@@ -824,15 +851,17 @@ class DataModel: ObservableObject {
     }
     
     /// Clears bad historical data for specific symbols
-    public func clearHistoricalDataForSymbol(_ symbol: String) {
-        historicalDataManager.clearDataForSymbol(symbol)
-        Task { await logger.info("Cleared bad historical data for \(symbol)") }
+    @MainActor
+    public func clearHistoricalDataForSymbol(_ symbol: String) async {
+        await historicalDataManager.clearDataForSymbol(symbol)
+        await logger.info("Cleared bad historical data for \(symbol)")
     }
     
     /// Clears bad historical data for multiple symbols
-    public func clearHistoricalDataForSymbols(_ symbols: [String]) {
-        historicalDataManager.clearDataForSymbols(symbols)
-        Task { await logger.info("Cleared bad historical data for \(symbols.count) symbols") }
+    @MainActor
+    public func clearHistoricalDataForSymbols(_ symbols: [String]) async {
+        await historicalDataManager.clearDataForSymbols(symbols)
+        await logger.info("Cleared bad historical data for \(symbols.count) symbols")
     }
     
     /// Manually triggers retroactive portfolio calculation
@@ -867,7 +896,7 @@ class DataModel: ObservableObject {
         // Filter symbols that need refreshing based on cache and retry logic
         let symbolsToRefresh = allSymbols.filter { symbol in
             // Check if we have a successful fetch that's still valid
-            if let lastSuccess = lastSuccessfulFetch[symbol] {
+            if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
                 let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
                 if timeSinceSuccess < cacheInterval {
                     Task { await logger.debug("Symbol \(symbol) successfully cached for \(Int(timeSinceSuccess))s, skipping refresh") }
@@ -876,7 +905,7 @@ class DataModel: ObservableObject {
             }
             
             // Check if we have a recent failed fetch that we shouldn't retry yet
-            if let lastFailure = lastFailedFetch[symbol] {
+            if let lastFailure = getLastFailedFetch(for: symbol) {
                 let timeSinceFailure = now.timeIntervalSince(lastFailure)
                 if timeSinceFailure < retryInterval {
                     Task { await logger.debug("Symbol \(symbol) failed \(Int(timeSinceFailure))s ago, waiting for retry interval") }
@@ -890,7 +919,7 @@ class DataModel: ObservableObject {
         
         // Also force refresh symbols that are very old (beyond max cache age)
         let symbolsToForceRefresh = allSymbols.filter { symbol in
-            guard let lastSuccess = lastSuccessfulFetch[symbol] else { return true }
+            guard let lastSuccess = getLastSuccessfulFetch(for: symbol) else { return true }
             let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
             return timeSinceSuccess >= maxCacheAge
         }
@@ -924,19 +953,18 @@ class DataModel: ObservableObject {
                     
                     // Update cache based on success/failure
                     if wasSuccessful {
-                        self.lastSuccessfulFetch[symbol] = now
-                        self.lastFailedFetch.removeValue(forKey: symbol) // Clear any previous failure
+                        self.setSuccessfulFetch(for: symbol, at: now)
                         await logger.debug("Updated cache for \(symbol) - successful fetch")
                         anySuccessfulUpdate = true
                     } else {
-                        self.lastFailedFetch[symbol] = now
+                        self.setFailedFetch(for: symbol, at: now)
                         await logger.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
                     }
                     
                     await logger.debug("Updated trade \(symbol) from refresh result.")
                 } else {
                     // No result returned - treat as failure
-                    self.lastFailedFetch[symbol] = now
+                    self.setFailedFetch(for: symbol, at: now)
                     await logger.warning("No result returned for symbol \(symbol), treating as failure.")
                 }
             }
@@ -945,7 +973,7 @@ class DataModel: ObservableObject {
             if anySuccessfulUpdate {
                 saveTradingInfo()
                 // Record historical data snapshot after successful updates
-                historicalDataManager.recordSnapshot(from: self)
+                Task { await historicalDataManager.recordSnapshot(from: self) }
                 
                 // NEW: Trigger enhanced portfolio calculation periodically
                 let randomCheck = Int.random(in: 1...100)
@@ -982,7 +1010,7 @@ class DataModel: ObservableObject {
         } catch {
             // Mark all requested symbols as failed
             for symbol in finalSymbolsToRefresh {
-                self.lastFailedFetch[symbol] = now
+                self.setFailedFetch(for: symbol, at: now)
             }
             
             // Log the specific error from NetworkError enum if possible
@@ -1180,7 +1208,7 @@ class DataModel: ObservableObject {
         let now = Date()
         
         // Check if we have a successful fetch that's still valid
-        if let lastSuccess = lastSuccessfulFetch[symbol] {
+        if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
             let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
             if timeSinceSuccess < cacheInterval {
                 Task { await logger.debug("Skipping individual refresh for \(symbol) - successfully cached for \(Int(timeSinceSuccess))s") }
@@ -1190,7 +1218,7 @@ class DataModel: ObservableObject {
         }
         
         // Check if we have a recent failed fetch that we shouldn't retry yet
-        if let lastFailure = lastFailedFetch[symbol] {
+        if let lastFailure = getLastFailedFetch(for: symbol) {
             let timeSinceFailure = now.timeIntervalSince(lastFailure)
             if timeSinceFailure < retryInterval {
                 Task { await logger.debug("Skipping individual refresh for \(symbol) - failed \(Int(timeSinceFailure))s ago, waiting for retry") }
@@ -1214,8 +1242,7 @@ class DataModel: ObservableObject {
                     
                     // Update cache based on success/failure
                     if wasSuccessful {
-                        self.lastSuccessfulFetch[symbol] = now
-                        self.lastFailedFetch.removeValue(forKey: symbol)
+                        self.setSuccessfulFetch(for: symbol, at: now)
                         Task { await self.logger.debug("Updated individual cache for \(symbol) - successful fetch") }
                         
                         // Save trading info for successful individual updates
@@ -1230,9 +1257,9 @@ class DataModel: ObservableObject {
                             }
                         }
                         
-                        self.historicalDataManager.recordSnapshot(from: self)
+                        Task { await self.historicalDataManager.recordSnapshot(from: self) }
                     } else {
-                        self.lastFailedFetch[symbol] = now
+                        self.setFailedFetch(for: symbol, at: now)
                         Task { await self.logger.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data") }
                         
                         // Reduced file logging frequency for failures too
@@ -1245,7 +1272,7 @@ class DataModel: ObservableObject {
                 }
             } catch {
                 // Mark as failed
-                self.lastFailedFetch[symbol] = now
+                self.setFailedFetch(for: symbol, at: now)
                 Task { await self.logger.debug("Individual refresh failed for \(symbol): \(error.localizedDescription)") }
                 
                 // Reduced file logging frequency for network errors
@@ -1263,16 +1290,24 @@ class DataModel: ObservableObject {
 
     // Keep setupPublishers and saveTrades as they are
     private func setupPublishers() {
-        // Increased debounce time to reduce frequency of saves and prevent rapid successive operations
+        // Extended debounce time to reduce hanging during editing and provide longer pause
         $realTimeTrades
-            .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
+            .debounce(for: .seconds(60.0), scheduler: RunLoop.main)
             .sink { [weak self] trades in
                 guard let self = self else { return }
-                self.saveTrades(trades)
-                // Save user's preferred order for menu bar display
-                self.saveUserOrder(trades)
-                // Also save trading info when trades change (e.g., when adding/removing stocks)
-                self.saveTradingInfo()
+                // Save trades with meaningful data (units > 0 OR price set OR symbol set)
+                // This allows saving partial edits where user enters units/price but hasn't set symbol yet
+                let validTrades = trades.filter { trade in
+                    let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    let hasUnits = trade.trade.position.unitSize > 0
+                    let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    return hasSymbol || hasUnits || hasPrice
+                }
+                if !validTrades.isEmpty {
+                    self.saveTrades(validTrades)
+                    self.saveUserOrder(validTrades)
+                    self.saveTradingInfo()
+                }
             }
             .store(in: &cancellables)
     }
@@ -1385,6 +1420,151 @@ class DataModel: ObservableObject {
                 Task { await logger.debug("Normalized currency for \(stock.symbol) to \(stock.currency ?? "nil") upon loading.") }
             }
         }
+    }
+    
+    // MARK: - Emergency Recovery Functions Removed
+    // Emergency recovery functions removed by user request
+
+    // MARK: - Portfolio Export/Import
+    
+    /// Structure for exporting/importing portfolio data (ticker, units, average price only)
+    struct PortfolioExport: Codable {
+        let exportDate: Date
+        let exportVersion: String
+        let trades: [PortfolioTrade]
+        
+        struct PortfolioTrade: Codable {
+            let symbol: String
+            let units: String
+            let averagePrice: String
+            let currency: String?
+            let costCurrency: String?
+        }
+    }
+    
+    /// Exports current portfolio to JSON format
+    func exportPortfolio() async -> String? {
+        await logger.info("📤 EXPORT: Starting portfolio export...")
+        
+        let exportTrades = realTimeTrades.map { trade in
+            PortfolioExport.PortfolioTrade(
+                symbol: trade.trade.name,
+                units: trade.trade.position.unitSizeString,
+                averagePrice: trade.trade.position.positionAvgCostString,
+                currency: trade.trade.position.currency,
+                costCurrency: trade.trade.position.costCurrency
+            )
+        }
+        
+        let portfolioExport = PortfolioExport(
+            exportDate: Date(),
+            exportVersion: "2.2.6",
+            trades: exportTrades
+        )
+        
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            
+            let jsonData = try encoder.encode(portfolioExport)
+            let jsonString = String(data: jsonData, encoding: .utf8)
+            
+            await logger.info("📤 EXPORT: Successfully exported \(exportTrades.count) trades")
+            return jsonString
+        } catch {
+            await logger.error("📤 EXPORT: Failed to encode portfolio data: \(error)")
+            return nil
+        }
+    }
+    
+    /// Imports portfolio from JSON string, optionally replacing current portfolio
+    func importPortfolio(from jsonString: String, replaceExisting: Bool = false) async -> ImportResult {
+        await logger.info("📥 IMPORT: Starting portfolio import (replace existing: \(replaceExisting))...")
+        
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            await logger.error("📥 IMPORT: Invalid JSON string encoding")
+            return ImportResult(success: false, error: "Invalid JSON format", tradesImported: 0, tradesSkipped: 0)
+        }
+        
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            
+            let portfolioImport = try decoder.decode(PortfolioExport.self, from: jsonData)
+            
+            await logger.info("📥 IMPORT: Decoded portfolio export from \(portfolioImport.exportDate) (version \(portfolioImport.exportVersion))")
+            
+            // Backup current trades if replacing
+            let backupTrades = realTimeTrades
+            
+            if replaceExisting {
+                await logger.info("📥 IMPORT: Clearing existing \(realTimeTrades.count) trades")
+                realTimeTrades.removeAll()
+            }
+            
+            var tradesImported = 0
+            var tradesSkipped = 0
+            
+            for importTrade in portfolioImport.trades {
+                // Check if trade already exists (if not replacing)
+                if !replaceExisting && realTimeTrades.contains(where: { $0.trade.name == importTrade.symbol }) {
+                    await logger.info("📥 IMPORT: Skipping existing trade: \(importTrade.symbol)")
+                    tradesSkipped += 1
+                    continue
+                }
+                
+                // Create new trade
+                let position = Position(
+                    unitSize: importTrade.units,
+                    positionAvgCost: importTrade.averagePrice,
+                    currency: importTrade.currency,
+                    costCurrency: importTrade.costCurrency
+                )
+                
+                let trade = Trade(name: importTrade.symbol, position: position)
+                let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: TradingInfo())
+                
+                realTimeTrades.append(realTimeTrade)
+                tradesImported += 1
+                
+                await logger.info("📥 IMPORT: Imported trade: \(importTrade.symbol) (\(importTrade.units) units @ \(importTrade.averagePrice))")
+            }
+            
+            // Save imported trades to Core Data
+            do {
+                for realTimeTrade in realTimeTrades {
+                    try await tradeDataService.saveTrade(realTimeTrade.trade)
+                }
+                await logger.info("📥 IMPORT: Saved all imported trades to Core Data")
+            } catch {
+                await logger.error("📥 IMPORT: Failed to save imported trades to Core Data: \(error)")
+                // Restore backup if saving failed
+                if replaceExisting {
+                    realTimeTrades = backupTrades
+                }
+                return ImportResult(success: false, error: "Failed to save trades: \(error.localizedDescription)", tradesImported: 0, tradesSkipped: 0)
+            }
+            
+            await logger.info("📥 IMPORT: Successfully imported \(tradesImported) trades (skipped \(tradesSkipped))")
+            
+            // Refresh all trades to get current market data
+            await refreshAllTrades()
+            
+            return ImportResult(success: true, error: nil, tradesImported: tradesImported, tradesSkipped: tradesSkipped)
+            
+        } catch {
+            await logger.error("📥 IMPORT: Failed to decode JSON: \(error)")
+            return ImportResult(success: false, error: "Invalid portfolio format: \(error.localizedDescription)", tradesImported: 0, tradesSkipped: 0)
+        }
+    }
+    
+    /// Result of portfolio import operation
+    struct ImportResult {
+        let success: Bool
+        let error: String?
+        let tradesImported: Int
+        let tradesSkipped: Int
     }
 }
 
