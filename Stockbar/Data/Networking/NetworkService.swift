@@ -73,7 +73,18 @@ class PythonNetworkService: NetworkService {
 
         do {
             try process.run()
+            
+            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
+            let timeoutTask = Task {
+                try await Task.sleep(for: .seconds(30)) // 30 second timeout
+                if process.isRunning {
+                    await logger.warning("Process timeout reached for \(symbol), terminating process")
+                    process.terminate()
+                }
+            }
+            
             process.waitUntilExit()
+            timeoutTask.cancel() // Cancel timeout if process finishes normally
 
             let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
@@ -98,7 +109,11 @@ class PythonNetworkService: NetworkService {
             
             // Try to parse the single line success output (legacy format)
             // Example: "AAPL @ 2023-10-27 15:55:00-04:00 | 5m Low: 167.01, High: 167.09, Close: 167.02, PrevClose: 165.50"
-            let regex = try! NSRegularExpression(pattern: "Close: (\\d+\\.\\d+), PrevClose: (\\d+\\.\\d+)")
+            // CRITICAL FIX: Replace force unwrap with safe optional binding
+            guard let regex = try? NSRegularExpression(pattern: "Close: (\\\\d+\\\\.\\\\d+), PrevClose: (\\\\d+\\\\.\\\\d+)") else {
+                await logger.error("Failed to create regex pattern for parsing script output for \(symbol)")
+                throw NetworkError.invalidResponse("Unable to create regex pattern for parsing")
+            }
             if let match = regex.firstMatch(in: output, options: [], range: NSRange(location: 0, length: output.utf16.count)) {
                 if let closeRange = Range(match.range(at: 1), in: output),
                    let prevCloseRange = Range(match.range(at: 2), in: output) {
@@ -160,7 +175,18 @@ class PythonNetworkService: NetworkService {
 
         do {
             try process.run()
+            
+            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
+            let timeoutTask = Task {
+                try await Task.sleep(for: .seconds(30)) // 30 second timeout
+                if process.isRunning {
+                    await logger.warning("Enhanced process timeout reached for \(symbol), terminating process")
+                    process.terminate()
+                }
+            }
+            
             process.waitUntilExit()
+            timeoutTask.cancel() // Cancel timeout if process finishes normally
 
             let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
@@ -371,6 +397,25 @@ class PythonNetworkService: NetworkService {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
         
+        // Improve buffer handling for large outputs
+        var outputData = Data()
+        var errorData = Data()
+        
+        // Set up data handlers to read incrementally and avoid buffer overflow
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                outputData.append(data)
+            }
+        }
+        
+        errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                errorData.append(data)
+            }
+        }
+        
         do {
             await logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
             try process.run()
@@ -387,14 +432,21 @@ class PythonNetworkService: NetworkService {
             process.waitUntilExit()
             timeoutTask.cancel() // Cancel timeout if process finishes normally
             
+            // Clean up the handlers
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            
+            // Read any remaining data
+            let remainingOutputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let remainingErrorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            outputData.append(remainingOutputData)
+            errorData.append(remainingErrorData)
+            
             let exitCode = process.terminationStatus
             await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
             
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.error("🐍 PYTHON SCRIPT: stderr for \(symbol): \(err)")
+                await logger.info("🐍 PYTHON SCRIPT: Debug output for \(symbol): \(err)")
             }
             
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
@@ -408,6 +460,12 @@ class PythonNetworkService: NetworkService {
             if output.contains("FETCH_FAILED") {
                 await logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")
                 throw NetworkError.noData("Script reported FETCH_FAILED for historical \(symbol)")
+            }
+            
+            // Validate JSON structure before parsing
+            guard output.hasPrefix("[") && output.hasSuffix("]") else {
+                await logger.error("🐍 PYTHON SCRIPT: Invalid JSON structure for \(symbol). Output should start with '[' and end with ']'. First 100 chars: \(String(output.prefix(100)))")
+                throw NetworkError.invalidResponse("Invalid JSON structure from script output")
             }
             
             // Parse JSON array response
@@ -453,6 +511,7 @@ class PythonNetworkService: NetworkService {
                 
             } catch {
                 await logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
+                await logger.error("🐍 PYTHON SCRIPT: Problematic output for \(symbol) (first 500 chars): \(String(output.prefix(500)))")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
             

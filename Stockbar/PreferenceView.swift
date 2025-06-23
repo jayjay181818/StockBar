@@ -6,10 +6,132 @@
 
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension Notification.Name {
     static let chartMetricsToggled = Notification.Name("chartMetricsToggled")
     static let refreshIntervalChanged = Notification.Name("refreshIntervalChanged")
+    static let realTimeTradesUIUpdateNeeded = Notification.Name("realTimeTradesUIUpdateNeeded")
+}
+
+// MARK: - Portfolio Export/Import Data Structure
+struct PortfolioExportData: Codable {
+    let symbol: String
+    let units: Double
+    let avgPositionCost: Double
+    let costCurrency: String?
+    
+    init(from trade: Trade) {
+        self.symbol = trade.name
+        self.units = trade.position.unitSize
+        self.avgPositionCost = trade.position.positionAvgCost
+        self.costCurrency = trade.position.costCurrency
+    }
+    
+    func toTrade() -> Trade {
+        let position = Position(unitSize: String(units), 
+                               positionAvgCost: String(avgPositionCost),
+                               currency: costCurrency,
+                               costCurrency: costCurrency)
+        return Trade(name: symbol, position: position)
+    }
+}
+
+// MARK: - CSV Document for Export/Import
+struct CSVDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText] }
+    
+    var text: String
+    
+    init(text: String = "") {
+        self.text = text
+    }
+    
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let string = String(data: data, encoding: .utf8)
+        else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        text = string
+    }
+    
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let data = text.data(using: .utf8)!
+        return .init(regularFileWithContents: data)
+    }
+}
+
+// MARK: - Portfolio Export/Import Manager
+class PortfolioManager {
+    static func exportToCSV(trades: [RealTimeTrade]) -> String {
+        var csvString = "Symbol,Units,AvgPositionCost,CostCurrency\n"
+        
+        for trade in trades {
+            let symbol = trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let units = trade.trade.position.unitSize
+            let avgCost = trade.trade.position.positionAvgCost
+            let currency = trade.trade.position.costCurrency ?? (symbol.uppercased().hasSuffix(".L") ? "GBX" : "USD")
+            
+            // Skip empty trades
+            if !symbol.isEmpty && units > 0 {
+                csvString += "\(symbol),\(units),\(avgCost),\(currency)\n"
+            }
+        }
+        
+        return csvString
+    }
+    
+    static func importFromCSV(_ csvString: String) -> (trades: [Trade], errors: [String]) {
+        var trades: [Trade] = []
+        var errors: [String] = []
+        
+        let lines = csvString.components(separatedBy: .newlines)
+        
+        // Skip header line
+        for (index, line) in lines.enumerated() {
+            if index == 0 || line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                continue
+            }
+            
+            let components = line.components(separatedBy: ",")
+            if components.count >= 3 {
+                let symbol = components[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                let unitsString = components[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let avgCostString = components[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                let currency = components.count > 3 ? components[3].trimmingCharacters(in: .whitespacesAndNewlines) : nil
+                
+                // Validate data
+                guard !symbol.isEmpty else {
+                    errors.append("Line \(index + 1): Empty symbol")
+                    continue
+                }
+                
+                guard let units = Double(unitsString), units > 0 else {
+                    errors.append("Line \(index + 1): Invalid units value '\(unitsString)'")
+                    continue
+                }
+                
+                guard let avgCost = Double(avgCostString), avgCost > 0 else {
+                    errors.append("Line \(index + 1): Invalid average cost value '\(avgCostString)'")
+                    continue
+                }
+                
+                // Create trade
+                let position = Position(unitSize: String(units),
+                                       positionAvgCost: String(avgCost),
+                                       currency: currency,
+                                       costCurrency: currency)
+                let trade = Trade(name: symbol, position: position)
+                
+                trades.append(trade)
+            } else {
+                errors.append("Line \(index + 1): Invalid format - expected at least 3 columns")
+            }
+        }
+        
+        return (trades, errors)
+    }
 }
 
 struct PreferenceRow: View {
@@ -37,13 +159,6 @@ struct PreferenceRow: View {
             // Symbol field - flexible width
             TextField("symbol", text: self.$realTimeTrade.trade.name)
                 .frame(minWidth: 60, idealWidth: 80, maxWidth: 120)
-                .onChange(of: realTimeTrade.trade.name) { _, newValue in
-                    // Auto-detect currency when symbol changes
-                    if realTimeTrade.trade.position.costCurrency == nil {
-                        let newCurrency = newValue.uppercased().hasSuffix(".L") ? "GBX" : "USD"
-                        realTimeTrade.trade.position.costCurrency = newCurrency
-                    }
-                }
             
             // Units field - moderate width
             TextField("Units", text: self.$realTimeTrade.trade.position.unitSizeString)
@@ -119,6 +234,14 @@ struct PreferenceView: View {
     @State private var isAPIKeyVisible = false
     @State private var isBackfillingData = false
     @State private var backfillStatus = ""
+    
+    // Portfolio Export/Import state variables
+    @State private var showingExportSheet = false
+    @State private var showingImportSheet = false
+    @State private var exportDocument: CSVDocument?
+    @State private var showingImportAlert = false
+    @State private var importAlertMessage = ""
+    @State private var importResult: (success: Bool, message: String) = (false, "")
     
     // Debug control state variables
     @State private var currentRefreshInterval: TimeInterval = 900
@@ -424,14 +547,84 @@ struct PreferenceView: View {
             }
             .listStyle(PlainListStyle())
             .frame(minHeight: CGFloat(userdata.realTimeTrades.count * 40 + 20))
+            
+            // Portfolio Export/Import Section
+            VStack(spacing: 12) {
+                Text("Portfolio Management")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                HStack(spacing: 16) {
+                    Button(action: {
+                        exportPortfolio()
+                    }) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Export Portfolio")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Export your stock positions to CSV file")
+                    
+                    Button(action: {
+                        showingImportSheet = true
+                    }) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Import Portfolio")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                    .help("Import stock positions from CSV file")
+                    
+                    Spacer()
+                }
+                
+                Text("Export/import your stock positions: Symbol, Units, Average Position Cost")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .cornerRadius(8)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .fileExporter(
+            isPresented: $showingExportSheet,
+            document: exportDocument,
+            contentType: .commaSeparatedText,
+            defaultFilename: "StockbarPortfolio"
+        ) { result in
+            switch result {
+            case .success(let url):
+                print("Portfolio exported to: \(url)")
+            case .failure(let error):
+                print("Export failed: \(error.localizedDescription)")
+            }
+        }
+        .fileImporter(
+            isPresented: $showingImportSheet,
+            allowedContentTypes: [.commaSeparatedText],
+            allowsMultipleSelection: false
+        ) { result in
+            importPortfolio(result: result)
+        }
         .alert("API Key", isPresented: $showingAPIKeyAlert) {
             Button("OK") { }
         } message: {
             Text(apiKeyAlertMessage)
+        }
+        .alert("Import Result", isPresented: $showingImportAlert) {
+            Button("OK") { }
+        } message: {
+            Text(importAlertMessage)
         }
     }
     
@@ -869,7 +1062,7 @@ struct PreferenceView: View {
         }
     }
     
-    private func clearBadHistoricalData() {
+    private func clearBadHistoricalData() async {
         // Clear corrupted data for known problematic UK stocks that had double conversion issues
         let ukSymbolsWithBadData = ["RR.L", "TSCO.L", "BP.L", "LLOY.L", "VOD.L", "AZN.L", "SHEL.L", "GSK.L", "BT-A.L", "NG.L"]
         
@@ -879,7 +1072,7 @@ struct PreferenceView: View {
         }
         
         if !symbolsToProcess.isEmpty {
-            userdata.clearHistoricalDataForSymbols(symbolsToProcess)
+            await userdata.clearHistoricalDataForSymbols(symbolsToProcess)
             backfillStatus = "✅ Cleared corrupted data for \(symbolsToProcess.count) UK symbols: \(symbolsToProcess.joined(separator: ", "))"
         } else {
             backfillStatus = "No UK stocks found to clear"
@@ -981,6 +1174,71 @@ struct PreferenceView: View {
             await Logger.shared.info("🔧 Debug: 5-year portfolio value calculation completed")
         }
     }
+    
+    // MARK: - Portfolio Export/Import Functions
+    
+    private func exportPortfolio() {
+        let csvContent = PortfolioManager.exportToCSV(trades: self.userdata.realTimeTrades)
+        self.exportDocument = CSVDocument(text: csvContent)
+        self.showingExportSheet = true
+    }
+    
+    private func importPortfolio(result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                self.importAlertMessage = "No file selected"
+                self.showingImportAlert = true
+                return
+            }
+            
+            do {
+                let csvContent = try String(contentsOf: url, encoding: .utf8)
+                let importResult = PortfolioManager.importFromCSV(csvContent)
+                
+                if importResult.errors.isEmpty {
+                    // Clear existing trades and add imported ones
+                    self.userdata.realTimeTrades.removeAll()
+                    
+                    for trade in importResult.trades {
+                        let emptyTradingInfo = TradingInfo()
+                        let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
+                        self.userdata.realTimeTrades.append(realTimeTrade)
+                    }
+                    
+                    self.importAlertMessage = "Successfully imported \(importResult.trades.count) stocks from portfolio"
+                } else {
+                    let successCount = importResult.trades.count
+                    let errorCount = importResult.errors.count
+                    
+                    if successCount > 0 {
+                        // Clear existing trades and add successfully imported ones
+                        self.userdata.realTimeTrades.removeAll()
+                        
+                        for trade in importResult.trades {
+                            let emptyTradingInfo = TradingInfo()
+                            let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
+                            self.userdata.realTimeTrades.append(realTimeTrade)
+                        }
+                        
+                        self.importAlertMessage = "Imported \(successCount) stocks with \(errorCount) errors:\n\(importResult.errors.joined(separator: "\n"))"
+                    } else {
+                        self.importAlertMessage = "Import failed with \(errorCount) errors:\n\(importResult.errors.joined(separator: "\n"))"
+                    }
+                }
+                
+                self.showingImportAlert = true
+                
+            } catch {
+                self.importAlertMessage = "Failed to read file: \(error.localizedDescription)"
+                self.showingImportAlert = true
+            }
+            
+        case .failure(let error):
+            self.importAlertMessage = "Import failed: \(error.localizedDescription)"
+            self.showingImportAlert = true
+        }
+    }
 }
 
 enum PreferenceTab {
@@ -996,7 +1254,8 @@ struct DebugLogView: View {
     @AppStorage("debugLogMaxLines") private var maxLines: Int = 500
     @AppStorage("debugLogTailMode") private var useTailMode: Bool = false
     private let logger = Logger.shared
-    private let timer = Timer.publish(every: 10.0, on: .main, in: .common).autoconnect()
+    // CRITICAL FIX: Use @State for timer to ensure proper cleanup
+    @State private var timerCancellable: AnyCancellable?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1089,9 +1348,19 @@ struct DebugLogView: View {
                 }
             }
         }
-        .onReceive(timer) { _ in
-            if isAutoRefresh {
-                refreshLogs()
+        .onAppear {
+            // CRITICAL FIX: Start timer with proper cleanup
+            startAutoRefreshTimer()
+        }
+        .onDisappear {
+            // CRITICAL FIX: Stop timer to prevent memory leaks
+            stopAutoRefreshTimer()
+        }
+        .onChange(of: isAutoRefresh) { _, newValue in
+            if newValue {
+                startAutoRefreshTimer()
+            } else {
+                stopAutoRefreshTimer()
             }
         }
         .onChange(of: useTailMode) { _, _ in
@@ -1136,6 +1405,24 @@ struct DebugLogView: View {
         } else {
             return .primary
         }
+    }
+    
+    // CRITICAL FIX: Proper timer lifecycle management to prevent memory leaks
+    private func startAutoRefreshTimer() {
+        stopAutoRefreshTimer() // Stop any existing timer first
+        
+        timerCancellable = Timer.publish(every: 10.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                if isAutoRefresh {
+                    refreshLogs()
+                }
+            }
+    }
+    
+    private func stopAutoRefreshTimer() {
+        timerCancellable?.cancel()
+        timerCancellable = nil
     }
 }
 
