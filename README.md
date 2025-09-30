@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.2.6** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.2.9** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 
@@ -25,11 +25,13 @@ StockBar is a high-performance macOS menu bar application for real-time stock po
 
 ### 🎛️ Professional User Interface
 - **Native Menu Bar Integration**: Individual status items for each tracked stock with color coding
+- **Interactive Menu Bar Charts**: Real-time price charts with 1D/1W/1M views in each stock's dropdown menu
+- **Quick Status Menu Actions**: Preferences and Quit commands in every status menu with keyboard shortcuts
 - **Tabbed Preferences Window**: Portfolio Management, Charts, and Debug tabs with responsive layout
-- **Modern SwiftUI Design**: Adaptive interface with automatic window resizing
+- **Modern SwiftUI Design**: Adaptive interface with automatic window resizing and scrollable chart pickers
 - **Pre/Post Market Indicators**: Visual indicators for market hours (🔆 pre-market, 🌙 after-hours, 🔒 closed)
-- **Keyboard Shortcuts**: ⌘, for instant preferences access
-- **Accessibility Support**: Full VoiceOver and keyboard navigation support
+- **Keyboard Shortcuts**: ⌘, for instant preferences access from any status menu
+- **Accessibility Support**: Full VoiceOver and keyboard navigation support with enhanced chart picker labels
 
 ### 🔧 Developer-Grade Debugging
 - **Real-Time Debug Console**: Live application logs with async Swift 6 actor-based logging
@@ -40,8 +42,10 @@ StockBar is a high-performance macOS menu bar application for real-time stock po
 
 ### ⚡ Performance & Reliability
 - **CPU Optimization**: Reduced from 100% to <5% CPU usage with intelligent background processing
+- **Thread-Safe Refresh Pipeline**: Actor-backed coordinator preventing overlapping updates
+- **Memory-Aware Caching**: 512KB entry limits with automatic disk promotion for large payloads
 - **Memory Management**: Automatic cleanup under memory pressure with configurable limits
-- **Network Resilience**: Graceful degradation during outages with smart retry logic
+- **Network Resilience**: Graceful degradation during outages with urllib fallback and smart retry logic
 - **Timeout Protection**: 5-minute limits on data fetching to prevent hanging processes
 - **Error Recovery**: Comprehensive fallback mechanisms with detailed error reporting
 
@@ -57,15 +61,17 @@ StockBar uses a modern hybrid architecture optimized for performance and reliabi
 - **MVVM Pattern**: Clean separation with ObservableObject data models and reactive UI binding
 
 ### Backend & Data Management
-- **Python Integration**: Subprocess-based data fetching using `yfinance` library with timeout protection
+- **Python Integration**: Subprocess-based data fetching using `yfinance` library with timeout protection and urllib fallback
+- **Actor-Based Coordination**: RefreshCoordinator ensures thread-safe, non-overlapping data updates
 - **Core Data Stack**: Modern Core Data Model V2 with automatic lightweight migration
 - **Multi-Tier Storage**: UserDefaults for configuration, Core Data for persistent data, in-memory for active data
 - **Comprehensive Services**: Data migration, memory optimization, cache management, and cleanup services
 
 ### Performance Systems
-- **Intelligent Caching**: Time-based caching with failure retry and memory pressure awareness
+- **Intelligent Caching**: Memory-aware caching with 512KB entry limits and automatic disk promotion
 - **Background Processing**: Prioritized task queue with 3% chance background checks (reduced from 6%)
-- **Memory Optimization**: Automatic data compression, cleanup, and efficient data structures
+- **Memory Optimization**: Automatic data compression, cleanup, and efficient data structures with pressure handling
+- **Thread-Safe Coordination**: Actor-based refresh pipeline preventing overlapping updates
 - **Timeout Management**: 5-minute protection on all network operations with automatic process termination
 
 ## 🚀 Getting Started
@@ -203,16 +209,25 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📋 Release History
 
-### Version 2.2.6 (Current) - Performance & Feature Enhancements
+### Version 2.2.9 (Current) - Reliability & Memory Efficiency
+- **🧭 Quick Status Menu Actions**: Added Preferences and Quit commands to every status menu with keyboard shortcuts
+- **📈 Chart Picker Enhancements**: Replaced segmented control with scrollable horizontal chip buttons for large watchlists
+- **🔄 Safer Refresh Pipeline**: Actor-backed RefreshCoordinator for thread-safe, non-overlapping updates
+- **🧠 Memory-Aware Caching**: 512KB cache entry limits with automatic disk promotion for larger payloads
+- **🐍 Python Backend Improvements**: urllib fallback when requests package unavailable for enhanced reliability
+- **🐛 Bug Fixes**: Staggered refresh scheduling, historical snapshot generation, log compaction improvements
+
+### Version 2.2.8 - Interactive Menu Bar Charts
+- **📊 Interactive Menu Bar Price Charts**: Real-time charts with 1D/1W/1M views directly in stock menu dropdowns
+- **📈 Enhanced Data Visualization**: Smart Y-axis scaling, color-coded charts, hover interactions
+- **🔧 Data Management**: Real data priority with intelligent fallback, price validation, memory-efficient structures
+- **🖥️ Visual Design**: Professional rounded corners, centered content, adaptive colors matching macOS design
+
+### Version 2.2.6 - Performance & Feature Enhancements
 - **🚀 Major Performance Improvements**: Fixed infinite loops, reduced CPU usage from 100% to <5%
 - **✨ New Features**: Drag-and-drop stock reordering, retroactive portfolio calculations
 - **🔧 Technical Improvements**: Core Data Model V2, Swift 6 compliance, enhanced error handling
 - **🐛 Bug Fixes**: Preferences window issues, hanging processes, memory leaks
-
-### Version 2.2.5 - UI & Navigation Improvements  
-- Enhanced preferences window navigation
-- Improved chart loading for extended time ranges
-- Fixed navigation tab visibility issues
 
 ### Previous Versions
 - See [Changelogs/](./Changelogs/) for detailed release notes
@@ -249,14 +264,15 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📊 Performance Metrics
 
-StockBar v2.2.6 delivers professional-grade performance:
+StockBar v2.2.9 delivers professional-grade performance:
 
 - **CPU Usage**: <5% during normal operation (down from 100%)
-- **Memory Footprint**: <50MB with automatic cleanup under pressure  
-- **Response Time**: <2 seconds for portfolio updates
-- **Chart Rendering**: 60fps interactive charts with smooth animations
+- **Memory Footprint**: <50MB with automatic cleanup under pressure and smart cache promotion
+- **Response Time**: <2 seconds for portfolio updates with thread-safe coordination
+- **Chart Rendering**: 60fps interactive charts with smooth animations and scrollable pickers
 - **Data Capacity**: Up to 5 years historical data with automatic optimization
-- **Network Efficiency**: <10 API calls per hour with intelligent caching
+- **Network Efficiency**: <10 API calls per hour with intelligent caching (512KB memory limit)
+- **Cache Intelligence**: Automatic disk promotion for large payloads, memory-aware eviction
 
 ## 📄 License
 
@@ -273,4 +289,4 @@ StockBar v2.2.6 delivers professional-grade performance:
 
 **Built with ❤️ using Swift 6.0 and modern macOS technologies**
 
-*Last updated: June 17, 2025 - Version 2.2.6*
+*Last updated: September 30, 2025 - Version 2.2.9*

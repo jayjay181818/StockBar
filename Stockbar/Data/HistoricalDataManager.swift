@@ -289,8 +289,9 @@ class HistoricalDataManager: ObservableObject {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date.distantPast
         let recentSnapshots = allSnapshots.filter { $0.timestamp >= cutoffDate }
         
-        // Store in memory cache for fast access
-        storeInCache(recentSnapshots, key: cacheKey, isRecent: true)
+        // Store in memory cache only for very small windows; otherwise prefer disk
+        let shouldUseMemory = days <= 7 && recentSnapshots.count <= 4_000
+        storeInCache(recentSnapshots, key: cacheKey, isRecent: shouldUseMemory)
         
         return recentSnapshots
     }
@@ -571,11 +572,11 @@ class HistoricalDataManager: ObservableObject {
         Task { await logger.debug("📸 Checking \(dataModel.realTimeTrades.count) trades for valid data") }
         
         for trade in dataModel.realTimeTrades {
-            let price = trade.realTimeInfo.currentPrice
+            let price = trade.realTimeInfo.getCurrentDisplayPrice()
             let prevClose = trade.realTimeInfo.prevClosePrice
-            
+
             Task { await logger.debug("📸 \(trade.trade.name): price=\(price), prevClose=\(prevClose), currency=\(trade.realTimeInfo.currency ?? "nil")") }
-            
+
             guard !price.isNaN && !prevClose.isNaN && price > 0 else {
                 Task { await logger.debug("📸 Skipping \(trade.trade.name) - invalid data") }
                 continue // Skip invalid data

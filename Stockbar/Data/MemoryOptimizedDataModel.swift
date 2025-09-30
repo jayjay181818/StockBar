@@ -250,18 +250,27 @@ extension Notification.Name {
 
 extension CacheManager {
     func clearMemoryCache() {
-        Task {
-            await Logger.shared.info("🧹 Clearing memory cache due to memory pressure")
-            // Implementation depends on CacheManager structure
-            // This should clear the memory tier cache
+        Task { await Logger.shared.info("🧹 Clearing memory cache due to memory pressure") }
+
+        memoryCacheQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            let removedSize = self.memoryCache.values.reduce(0) { $0 + $1.size }
+            let removedCount = self.memoryCache.count
+            self.memoryCache.removeAll(keepingCapacity: false)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.cacheStats.memorySize = max(0, self.cacheStats.memorySize - removedSize)
+                self.cacheStats.totalEntries = max(0, self.cacheStats.totalEntries - removedCount)
+                self.cacheStats.lastCleanup = Date()
+            }
         }
     }
     
     func performMaintenance() {
-        Task {
-            await Logger.shared.debug("🔧 Performing cache maintenance")
-            // Implementation for routine cache cleanup
-        }
+        Task { await Logger.shared.debug("🔧 Performing cache maintenance") }
+        self.performCleanup()
     }
 }
 

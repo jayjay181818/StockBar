@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Building the Application
 - **Build in Xcode**: Open `Stockbar.xcodeproj` and build the `Stockbar` target
 - **Required Python dependency**: `pip3 install yfinance` (required for the Python backend)
-- **Target Platform**: macOS 15.4+, Swift 5.0, Bundle ID: `com.fhl43211.Stockbar`
+- **Target Platform**: macOS 15.4+, Swift 6.0, Bundle ID: `com.fhl43211.Stockbar`
 
 ### Testing and Debugging
 - **Test single stock**: `python3 Stockbar/Resources/get_stock_data.py AAPL`
@@ -15,6 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Update yfinance**: `pip3 install --upgrade yfinance`
 - **View logs**: Check `~/Documents/stockbar.log` and Console.app for debug output
 - **Test currency conversion**: Verify exchange rates via `CurrencyConverter.refreshRates()`
+- **Run unit tests**: Select `StockbarTests` target in Xcode and run tests (⌘U)
+- **Performance testing**: Use built-in Debug tab in preferences for real-time monitoring
 
 ## Complete Architecture Overview
 
@@ -46,6 +48,10 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
   - `UserDefaults["usertrades"]` - JSON encoded Trade array (configuration)
   - `UserDefaults["tradingInfoData"]` - JSON encoded TradingInfo dictionary (last successful market data)
   - Automatic persistence on data changes via Combine publishers
+- **Swift 6 Concurrency**:
+  - `RefreshCoordinator` actor for serialized refresh operations
+  - Async/await patterns throughout with proper isolation
+  - Main actor binding for UI updates
 
 **Data Models Structure**
 - **`Trade.swift`**:
@@ -57,6 +63,33 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
   - Helper functions for empty trade creation and file logging
 - **`StockFetchResult.swift`**: Network response format from Python service
 - **`StockData.swift`**: Legacy calculated data model (not used in current architecture)
+- **`HistoricalData.swift`**: Price snapshots and portfolio tracking models
+
+### Core Data Services Layer
+
+The application includes a comprehensive service layer for data management located in `Data/CoreData/`:
+
+**Migration & Persistence**
+- **`DataMigrationService.swift`**: Core Data Model V2 migration with automatic lightweight migration
+- **`TradeDataService.swift`**: Portfolio data persistence and retrieval
+- **`TradeDataMigrationService.swift`**: Legacy data migration from UserDefaults to Core Data
+
+**Performance & Optimization**
+- **`MemoryManagementService.swift`**: Automatic cleanup under memory pressure, configurable limits
+- **`DataCompressionService.swift`**: Historical data compression and optimization for storage efficiency
+- **`BatchProcessingService.swift`**: Efficient batch operations for large data sets
+- **`CacheManager.swift`**: Multi-tier caching with intelligent invalidation
+
+**Historical Data Management**
+- **`HistoricalDataService.swift`**: Chart data collection, persistence, and retrieval
+- **`HistoricalDataManager.swift`**: Singleton coordinator for historical data with retroactive calculations
+- **`OptimizedChartDataService.swift`**: Efficient chart data queries and aggregation
+
+**Background Processing Architecture**
+- **3% Comprehensive Check**: Full historical data gap detection and backfill (2-hour cooldown)
+- **2% Standard Gap Check**: Quick gap detection for recent data
+- **Startup Backfill**: One-time historical data validation on app launch
+- **5-Minute Snapshots**: Automatic data collection triggered by successful price updates
 
 ### Networking & Data Fetching
 
@@ -65,10 +98,11 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Implementation**: `PythonNetworkService` for subprocess execution
 - **Error Handling**: Comprehensive `NetworkError` enum covering script execution failures
 - **Resilience**: Failed fetches create `StockFetchResult` with `Double.nan` prices to preserve metadata
+- **Timeout Protection**: 30-second process timeout, 5-minute maximum for network operations
 
 **Python Backend (`get_stock_data.py`)**
 - **Technology**: yfinance library with Yahoo Finance API
-- **Features**: 
+- **Features**:
   - Batch symbol processing with fallback to individual fetches
   - File-based JSON cache in `~/.stockbar_cache.json` (5-minute duration)
   - Previous close calculation using 5-day historical data
@@ -81,6 +115,7 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Parsing**: Regex extraction of Close/PrevClose prices from stdout
 - **Error Recovery**: stderr logging, empty output handling, timeout protection
 - **Rate Limiting**: 1-second delays between batch requests
+- **Process Management**: Automatic termination of hanging processes after 30 seconds
 
 ### UI Architecture & Menu Bar Integration
 
@@ -95,13 +130,24 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 **Preferences UI (SwiftUI/AppKit Hybrid)**
 - **`PreferenceView.swift`**: SwiftUI interface for portfolio management
   - Add/remove stocks with `+`/`-` buttons
+  - Drag-and-drop stock reordering
   - Currency selection picker
   - Color coding toggle
   - Real-time net gains display with color coding
   - Exchange rate refresh functionality
+  - Tabbed interface: Portfolio, Charts, Debug
 - **`PreferenceViewController.swift`**: AppKit wrapper using NSHostingController
 - **`PreferencePopover.swift`**: NSPopover container with transient behavior
 - **`PreferenceHostingController.swift`**: Alternative hosting controller implementation
+- **`PreferenceWindowController.swift`**: Window management for preferences
+
+**Chart Components**
+- **`PerformanceChartView.swift`**: Interactive Swift Charts implementation
+  - Portfolio Value, Portfolio Gains, Individual Stock charts
+  - Time ranges: 1 Day, 1 Week, 1 Month, 3 Months, 6 Months, 1 Year, All Time
+  - Hover tooltips with precise values
+  - Performance metrics: total return, volatility, value ranges
+- **`MenuPriceChartView.swift`**: Compact chart view for menu dropdown
 
 ### Currency Handling & Conversion
 
@@ -125,6 +171,8 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Invalid Data**: Display "N/A" for failed fetches while preserving currency information
 - **Rate Limiting**: Intelligent backoff with cached data display
 - **Python Errors**: Comprehensive error logging with fallback behavior
+- **Timeout Protection**: Automatic process termination after 30 seconds
+- **Memory Pressure**: Automatic cleanup and data compression
 
 **Data Validation**
 - **Price Validation**: `isNaN`/`isFinite` checks throughout calculations
@@ -138,13 +186,21 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Levels**: Debug (🔍), Info (ℹ️), Warning (⚠️), Error (🔴)
 - **Outputs**: Console (debug builds) + file logging to `~/Documents/stockbar.log`
 - **Context**: Automatic file/function/line capturing for debugging
-- **Thread Safety**: Main thread dispatch for UI-related logs
+- **Thread Safety**: Actor-isolated with Swift 6 patterns
+- **Async Operation**: Non-blocking logging with main thread dispatch for UI-related logs
 
 **Debug Capabilities**
 - **Network Tracing**: Request/response logging with timing
 - **Cache Status**: Cache hit/miss logging with timestamps
 - **Price Updates**: Before/after price comparison logging
 - **Currency Conversion**: Detailed conversion calculation logs
+- **Performance Monitoring**: CPU, memory, and network efficiency tracking
+
+**Utilities**
+- **`PerformanceMonitor.swift`**: Real-time performance metrics collection
+- **`ExportManager.swift`**: Portfolio data export functionality
+- **`ConfigurationManager.swift`**: Centralized app configuration management
+- **`CacheOptimizations.swift`**: Advanced caching strategies
 
 ### Legacy Components & Code Patterns
 
@@ -157,6 +213,7 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Threading**: Background network operations with main thread UI updates
 - **Resource Management**: Proper NSStatusItem cleanup and timer invalidation
 - **State Management**: Reactive data flow with minimal imperative updates
+- **Actor Isolation**: Swift 6 concurrency with proper isolation boundaries
 
 ### Key Implementation Details
 
@@ -165,20 +222,47 @@ Stockbar is a macOS menu bar application with a sophisticated hybrid Swift/Pytho
 - **Status Bar Updates**: Automatic menu bar refresh on data changes
 - **Preferences Binding**: Two-way binding between SwiftUI and UserDefaults
 - **Cache Coordination**: Intelligent refresh scheduling based on cache state
+- **RefreshCoordinator Actor**: Serializes refresh operations to prevent race conditions
 
 **Performance Optimizations**
 - **Staggered Refresh**: Individual stock updates spread across refresh interval
 - **Batch Processing**: Multiple symbol fetching with individual fallbacks
-- **Memory Efficiency**: Proper Combine subscription cleanup
+- **Memory Efficiency**: Proper Combine subscription cleanup, automatic data compression
 - **UI Responsiveness**: Background network operations with main thread UI updates
+- **CPU Optimization**: Reduced from 100% to <5% CPU usage
+- **Timeout Management**: 30-second process timeout, 5-minute network operation limit
 
 **Security Considerations**
 - **No Special Entitlements**: App runs with standard sandbox permissions
 - **External API Usage**: Yahoo Finance (via yfinance) and exchange rate API
-- **Local Data Storage**: UserDefaults and file-based caching only
-- **Script Execution**: Python subprocess with controlled input/output
+- **Local Data Storage**: UserDefaults and Core Data only
+- **Script Execution**: Python subprocess with controlled input/output and timeout protection
 
 This architecture provides a robust, maintainable foundation for real-time financial data monitoring with excellent error recovery and user experience.
+
+## Development Workflow
+
+### Code Style and Patterns
+- **Swift 6.0 Features**: Use actor isolation, async/await, and modern concurrency patterns
+- **Memory Management**: Always use `weak self` in closures to prevent retain cycles
+- **Threading**: Network operations on background queues, UI updates on main thread only
+- **Error Handling**: Use comprehensive error types with detailed context
+- **Logging**: Use `Logger.shared` with appropriate severity levels (debug, info, warning, error)
+
+### Key Files for Common Tasks
+- **Adding new stock symbols**: Modify `Trade.swift` and update validation logic
+- **UI changes**: `PreferenceView.swift` for SwiftUI, `StockMenuBarController.swift` for menu bar
+- **Network/data fetching**: `NetworkService.swift` and `get_stock_data.py`
+- **Charts and analytics**: `PerformanceChartView.swift` and `HistoricalDataManager.swift`
+- **Logging and debugging**: `Logger.swift` and Debug tab implementation
+- **Data services**: Files in `Data/CoreData/` for persistence and optimization
+
+### Testing Strategy
+- **Unit Tests**: Located in `StockbarTests/` - run with ⌘U in Xcode
+- **Manual Testing**: Use Debug tab for real-time monitoring during development
+- **Performance Validation**: Monitor CPU usage should stay <5% during normal operation
+- **Python Backend Testing**: Test `get_stock_data.py` script independently with sample symbols
+- **Memory Testing**: Monitor memory usage and verify automatic cleanup under pressure
 
 ## Performance Charts Feature
 
@@ -203,7 +287,8 @@ Stockbar includes comprehensive performance charting capabilities with historica
 - **Snapshot Interval**: 5-minute minimum between recordings
 - **Triggers**: Successful price updates in both batch and individual refresh cycles
 - **Data Limit**: Maximum 1000 data points per symbol to manage storage
-- **Persistence**: UserDefaults storage with automatic cleanup
+- **Persistence**: Core Data storage with automatic cleanup
+- **Background Processing**: 3% chance comprehensive gap check, 2% standard gap check
 
 ### Performance Metrics
 - **Total Return**: Absolute and percentage gains/losses

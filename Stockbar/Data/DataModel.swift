@@ -18,6 +18,23 @@ extension String {
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
+/// Simple async lock used to serialize refresh operations so mutations
+/// to `realTimeTrades` always occur on the main actor in isolation.
+actor RefreshCoordinator {
+    private var isRefreshing = false
+
+    func withLock<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
+        while isRefreshing {
+            await Task.yield()
+        }
+
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        return try await operation()
+    }
+}
+
 class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
@@ -35,6 +52,7 @@ class DataModel: ObservableObject {
     public let historicalDataManager = HistoricalDataManager.shared
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
+    private let refreshCoordinator = RefreshCoordinator()
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
     @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
@@ -875,27 +893,26 @@ class DataModel: ObservableObject {
     
     /// Refreshes all stock data from the network using the configured networkService
     @objc func refreshAllTrades() async {
+        await refreshCoordinator.withLock { [weak self] in
+            guard let self else { return }
+            await self.performRefreshAllTrades()
+        }
+    }
+    
+    /// Internal method that performs the actual refresh work on the main actor
+    @MainActor
+    private func performRefreshAllTrades() async {
         await logger.info("Starting refresh for all trades using PythonNetworkService")
-        // Prevent refresh if no trades are loaded
+
         guard !realTimeTrades.isEmpty else {
             await logger.info("No trades to refresh.")
             return
         }
-        
-        // Use detached task to prevent blocking the calling context (especially timers)
-        await Task.detached(priority: .background) { [weak self] in
-            await self?.performRefreshAllTrades()
-        }.value
-    }
-    
-    /// Internal method that performs the actual refresh work
-    private func performRefreshAllTrades() async {
+
         let allSymbols = realTimeTrades.map { $0.trade.name }
         let now = Date()
-        
-        // Filter symbols that need refreshing based on cache and retry logic
+
         let symbolsToRefresh = allSymbols.filter { symbol in
-            // Check if we have a successful fetch that's still valid
             if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
                 let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
                 if timeSinceSuccess < cacheInterval {
@@ -903,8 +920,7 @@ class DataModel: ObservableObject {
                     return false
                 }
             }
-            
-            // Check if we have a recent failed fetch that we shouldn't retry yet
+
             if let lastFailure = getLastFailedFetch(for: symbol) {
                 let timeSinceFailure = now.timeIntervalSince(lastFailure)
                 if timeSinceFailure < retryInterval {
@@ -912,74 +928,65 @@ class DataModel: ObservableObject {
                     return false
                 }
             }
-            
+
             Task { await logger.debug("Symbol \(symbol) needs refresh") }
             return true
         }
-        
-        // Also force refresh symbols that are very old (beyond max cache age)
+
         let symbolsToForceRefresh = allSymbols.filter { symbol in
             guard let lastSuccess = getLastSuccessfulFetch(for: symbol) else { return true }
             let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
             return timeSinceSuccess >= maxCacheAge
         }
-        
+
         let finalSymbolsToRefresh = Array(Set(symbolsToRefresh + symbolsToForceRefresh))
-        
+
         if finalSymbolsToRefresh.isEmpty {
             await logger.info("All \(allSymbols.count) symbols are cached or in retry cooldown, skipping network refresh")
             return
         }
-        
+
         await logger.info("About to refresh \(finalSymbolsToRefresh.count) of \(allSymbols.count) trades: \(finalSymbolsToRefresh)")
 
         do {
-            // This now calls PythonNetworkService.fetchBatchQuotes
             let results = try await networkService.fetchBatchQuotes(for: finalSymbolsToRefresh)
 
             guard !results.isEmpty else {
-                 await logger.warning("Refresh completed but received no results from network service.")
-                 return
-             }
+                await logger.warning("Refresh completed but received no results from network service.")
+                return
+            }
 
             var anySuccessfulUpdate = false
-            
-            // Update each trade with its corresponding result
-            let resultDict: [String: StockFetchResult] = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
-            for idx in self.realTimeTrades.indices {
-                let symbol = self.realTimeTrades[idx].trade.name
+            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
+
+            for idx in realTimeTrades.indices {
+                let symbol = realTimeTrades[idx].trade.name
                 if let res = resultDict[symbol] {
-                    let wasSuccessful = self.realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
-                    
-                    // Update cache based on success/failure
+                    let wasSuccessful = realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
+
                     if wasSuccessful {
-                        self.setSuccessfulFetch(for: symbol, at: now)
+                        setSuccessfulFetch(for: symbol, at: now)
                         await logger.debug("Updated cache for \(symbol) - successful fetch")
                         anySuccessfulUpdate = true
                     } else {
-                        self.setFailedFetch(for: symbol, at: now)
+                        setFailedFetch(for: symbol, at: now)
                         await logger.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
                     }
-                    
+
                     await logger.debug("Updated trade \(symbol) from refresh result.")
                 } else {
-                    // No result returned - treat as failure
-                    self.setFailedFetch(for: symbol, at: now)
+                    setFailedFetch(for: symbol, at: now)
                     await logger.warning("No result returned for symbol \(symbol), treating as failure.")
                 }
             }
-            
-            // Save trading info if any successful updates occurred
+
             if anySuccessfulUpdate {
                 saveTradingInfo()
-                // Record historical data snapshot after successful updates
                 Task { await historicalDataManager.recordSnapshot(from: self) }
-                
-                // NEW: Trigger enhanced portfolio calculation periodically
+
                 let randomCheck = Int.random(in: 1...100)
-                
+
                 if randomCheck == 1 {
-                    // 1% chance: Trigger retroactive portfolio calculation (only if not already running)
                     if !isRunningComprehensiveCheck && !isRunningStandardCheck {
                         Task {
                             await logger.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
@@ -987,7 +994,6 @@ class DataModel: ObservableObject {
                         }
                     }
                 } else if randomCheck <= 2 {
-                    // 1% chance: Check for comprehensive 5-year historical data gaps (reduced from 2%)
                     if results.count > 0 && !isRunningComprehensiveCheck {
                         Task {
                             await logger.info("🔍 PERIODIC: Triggering comprehensive 5-year gap check")
@@ -995,7 +1001,6 @@ class DataModel: ObservableObject {
                         }
                     }
                 } else if randomCheck <= 4 {
-                    // 2% chance: Check for standard 1-month historical data gaps (reduced from 4%)
                     if results.count > 0 && !isRunningStandardCheck {
                         Task {
                             await logger.info("🔍 PERIODIC: Triggering standard 1-month gap check")
@@ -1003,22 +1008,19 @@ class DataModel: ObservableObject {
                         }
                     }
                 }
-                // 96% of the time: No heavy background processing
             }
-            
+
             await logger.info("Successfully processed \(results.count) trades of \(finalSymbolsToRefresh.count) requested.")
         } catch {
-            // Mark all requested symbols as failed
             for symbol in finalSymbolsToRefresh {
-                self.setFailedFetch(for: symbol, at: now)
+                setFailedFetch(for: symbol, at: now)
             }
-            
-            // Log the specific error from NetworkError enum if possible
+
             if let networkError = error as? NetworkError {
-                 await logger.error("Failed to refresh trades: \(networkError.localizedDescription)")
-             } else {
-                 await logger.error("Failed to refresh trades (unknown error): \(error.localizedDescription)")
-             }
+                await logger.error("Failed to refresh trades: \(networkError.localizedDescription)")
+            } else {
+                await logger.error("Failed to refresh trades (unknown error): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1183,107 +1185,94 @@ class DataModel: ObservableObject {
     }
 
     private func refreshNextSymbol() {
-        guard !realTimeTrades.isEmpty else { 
-            print("🔄 [DataModel] No trades to refresh")
-            return 
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshCoordinator.withLock {
+                await self.performRefreshNextSymbol()
+            }
         }
-        
-        // Ensure currentSymbolIndex is within bounds
+    }
+
+    @MainActor
+    private func performRefreshNextSymbol() async {
+        guard !realTimeTrades.isEmpty else {
+            print("🔄 [DataModel] No trades to refresh")
+            return
+        }
+
         if currentSymbolIndex >= realTimeTrades.count {
             currentSymbolIndex = 0
         }
-        
+
         let symbol = realTimeTrades[currentSymbolIndex].trade.name
-        
         print("🔄 [DataModel] Refreshing symbol: \(symbol) (index \(currentSymbolIndex)/\(realTimeTrades.count))")
-        
-        // Reduced file logging frequency to improve performance
-        // let debugInfo = "Refreshing symbol: \(symbol) at \(Date())\n"
-        // if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-        //     let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-        //     try? debugInfo.appendToFile(url: debugFile)
-        // }
-        
-        // Check cache and retry logic before making individual requests
+
         let now = Date()
-        
-        // Check if we have a successful fetch that's still valid
+
         if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
             let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
             if timeSinceSuccess < cacheInterval {
                 Task { await logger.debug("Skipping individual refresh for \(symbol) - successfully cached for \(Int(timeSinceSuccess))s") }
-                self.currentSymbolIndex = (self.currentSymbolIndex + 1) % self.realTimeTrades.count
+                currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
                 return
             }
         }
-        
-        // Check if we have a recent failed fetch that we shouldn't retry yet
+
         if let lastFailure = getLastFailedFetch(for: symbol) {
             let timeSinceFailure = now.timeIntervalSince(lastFailure)
             if timeSinceFailure < retryInterval {
                 Task { await logger.debug("Skipping individual refresh for \(symbol) - failed \(Int(timeSinceFailure))s ago, waiting for retry") }
-                self.currentSymbolIndex = (self.currentSymbolIndex + 1) % self.realTimeTrades.count
+                currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
                 return
             }
         }
-        
-        Task {
-            do {
-                // Use enhanced quote fetching for individual symbol refreshes to get pre/post market data
-                let result: StockFetchResult
-                if let pythonService = self.networkService as? PythonNetworkService {
-                    result = try await pythonService.fetchEnhancedQuote(for: symbol)
-                } else {
-                    result = try await self.networkService.fetchQuote(for: symbol)
-                }
-                
-                if let index = self.realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
-                    let wasSuccessful = self.realTimeTrades[index].updateWithResult(result, retainOnFailure: true)
-                    
-                    // Update cache based on success/failure
-                    if wasSuccessful {
-                        self.setSuccessfulFetch(for: symbol, at: now)
-                        Task { await self.logger.debug("Updated individual cache for \(symbol) - successful fetch") }
-                        
-                        // Save trading info for successful individual updates
-                        self.saveTradingInfo()
-                        // Record historical data snapshot after successful individual update
-                        print("📸 [DataModel] Triggering snapshot after successful update for \(symbol)")
-                        
-                        // Reduced file logging frequency - only log to file occasionally to improve performance
-                        if Int.random(in: 1...10) == 1 { // 10% chance to reduce I/O load
-                            Task.detached(priority: .utility) { [logger] in // Capture logger
-                                await logger.debug("✅ SUCCESS: Updated \(symbol) at \(Date()). Triggering snapshot after successful update for \(symbol) at \(Date())")
-                            }
-                        }
-                        
-                        Task { await self.historicalDataManager.recordSnapshot(from: self) }
-                    } else {
-                        self.setFailedFetch(for: symbol, at: now)
-                        Task { await self.logger.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data") }
-                        
-                        // Reduced file logging frequency for failures too
-                        if Int.random(in: 1...5) == 1 { // 20% chance for errors (higher than success)
-                            Task.detached(priority: .utility) { [logger] in // Capture logger
-                                await logger.warning("❌ FAILED: Update failed for \(symbol) at \(Date())")
-                            }
+
+        do {
+            let result: StockFetchResult
+            if let pythonService = networkService as? PythonNetworkService {
+                result = try await pythonService.fetchEnhancedQuote(for: symbol)
+            } else {
+                result = try await networkService.fetchQuote(for: symbol)
+            }
+
+            if let index = realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
+                let wasSuccessful = realTimeTrades[index].updateWithResult(result, retainOnFailure: true)
+
+                if wasSuccessful {
+                    setSuccessfulFetch(for: symbol, at: now)
+                    Task { await logger.debug("Updated individual cache for \(symbol) - successful fetch") }
+                    saveTradingInfo()
+
+                    if Int.random(in: 1...10) == 1 {
+                        Task.detached(priority: .utility) { [logger] in
+                            await logger.debug("✅ SUCCESS: Updated \(symbol) at \(Date()). Triggering snapshot after successful update for \(symbol) at \(Date())")
                         }
                     }
-                }
-            } catch {
-                // Mark as failed
-                self.setFailedFetch(for: symbol, at: now)
-                Task { await self.logger.debug("Individual refresh failed for \(symbol): \(error.localizedDescription)") }
-                
-                // Reduced file logging frequency for network errors
-                if Int.random(in: 1...3) == 1 { // 33% chance for network errors (higher priority)
-                    Task.detached(priority: .utility) { [logger] in // Capture logger
-                        await logger.error("🚨 ERROR: Network error for \(symbol) at \(Date()): \(error.localizedDescription)")
+
+                    Task { await historicalDataManager.recordSnapshot(from: self) }
+                } else {
+                    setFailedFetch(for: symbol, at: now)
+                    Task { await logger.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data") }
+
+                    if Int.random(in: 1...5) == 1 {
+                        Task.detached(priority: .utility) { [logger] in
+                            await logger.warning("❌ FAILED: Update failed for \(symbol) at \(Date())")
+                        }
                     }
                 }
             }
-            self.currentSymbolIndex = (self.currentSymbolIndex + 1) % self.realTimeTrades.count
+        } catch {
+            setFailedFetch(for: symbol, at: now)
+            Task { await logger.debug("Individual refresh failed for \(symbol): \(error.localizedDescription)") }
+
+            if Int.random(in: 1...3) == 1 {
+                Task.detached(priority: .utility) { [logger] in
+                    await logger.error("🚨 ERROR: Network error for \(symbol) at \(Date()): \(error.localizedDescription)")
+                }
+            }
         }
+
+        currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
     }
 
     // MARK: - Private Methods

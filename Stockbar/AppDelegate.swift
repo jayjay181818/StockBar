@@ -24,4 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ aNotification: Notification) {
         // Clean up if needed
     }
+
+    @objc func showPreferences(_ sender: Any?) {
+        stockMenuBarController?.showPreferences(sender)
+    }
 }

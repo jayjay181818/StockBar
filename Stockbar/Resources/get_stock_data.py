@@ -1,10 +1,23 @@
-import requests
 import time
 from datetime import datetime, timedelta
 import sys
 import os
 import json
 import argparse
+import urllib.request
+import urllib.parse
+import urllib.error
+
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    requests = None
+    REQUESTS_AVAILABLE = False
+    print(
+        "Warning: python module 'requests' not available; falling back to urllib. Install via `pip3 install requests` for optimal performance.",
+        file=sys.stderr,
+    )
 
 # Try to import yfinance for real-time data
 try:
@@ -82,13 +95,31 @@ def make_fmp_request(url, params=None):
         params = {}
     params['apikey'] = API_KEY
     
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"API request failed: {e}", file=sys.stderr)
-        return None
+    if REQUESTS_AVAILABLE and requests is not None:
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"API request failed via requests: {e}", file=sys.stderr)
+            return None
+    else:
+        try:
+            query = urllib.parse.urlencode(params)
+            full_url = f"{url}?{query}"
+            with urllib.request.urlopen(full_url, timeout=15) as resp:
+                status = getattr(resp, "status", 200)
+                if status >= 400:
+                    print(f"API request failed via urllib with status {status}", file=sys.stderr)
+                    return None
+                data = resp.read()
+                return json.loads(data.decode('utf-8'))
+        except urllib.error.URLError as e:
+            print(f"API request failed via urllib: {e}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Unexpected error during urllib request: {e}", file=sys.stderr)
+            return None
 
 def handle_lse_symbol(symbol):
     """Convert London Stock Exchange symbols for FMP API"""
