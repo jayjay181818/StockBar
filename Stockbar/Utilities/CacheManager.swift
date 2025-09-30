@@ -63,6 +63,9 @@ class CacheManager: ObservableObject {
     
     // Cache statistics for monitoring
     @Published var cacheStats = CacheStatistics()
+
+    // Limit for entries stored directly in memory (bytes)
+    private let maxMemoryEntrySize = 512 * 1024 // 512 KB per entry
     
     // MARK: - Cache Entry Structure
     
@@ -193,10 +196,16 @@ class CacheManager: ObservableObject {
     
     /// Store value in appropriate cache tier based on access patterns
     func store<T: Codable>(_ value: T, forKey key: String, level: CacheLevel? = nil) {
-        let targetLevel = level ?? determineOptimalCacheLevel(for: key)
+        var targetLevel = level ?? determineOptimalCacheLevel(for: key)
         
         do {
-            let entry = try CacheEntry(key: key, value: value, compressionLevel: targetLevel.compressionLevel, encoder: encoder)
+            var entry = try CacheEntry(key: key, value: value, compressionLevel: targetLevel.compressionLevel, encoder: encoder)
+
+            if targetLevel == .memory && entry.size > maxMemoryEntrySize {
+                Task { await logger.debug("⚖️ Cache entry \(key) is \(ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .memory)); using disk cache instead of memory") }
+                targetLevel = .disk
+                entry = try CacheEntry(key: key, value: value, compressionLevel: targetLevel.compressionLevel, encoder: encoder)
+            }
             
             switch targetLevel {
             case .memory:
@@ -410,6 +419,10 @@ class CacheManager: ObservableObject {
             
             do {
                 let entry = try CacheEntry(key: key, value: value, compressionLevel: .none, encoder: self.encoder)
+                guard entry.size <= self.maxMemoryEntrySize else {
+                    Task { await self.logger.debug("⚖️ Skipping memory promotion for \(key) (\(ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .memory)))") }
+                    return
+                }
                 self.memoryCache[key] = entry
                 Task { await self.logger.debug("⬆️ Promoted \(key) to memory cache") }
             } catch {
@@ -441,12 +454,21 @@ class CacheManager: ObservableObject {
         // Remove least recently used items
         let sortedEntries = memoryCache.values.sorted { $0.lastAccessed < $1.lastAccessed }
         let itemsToRemove = sortedEntries.prefix(memoryCache.count - CacheLevel.memory.maxItems)
+        let removedSize = itemsToRemove.reduce(0) { $0 + $1.size }
         
         for entry in itemsToRemove {
             memoryCache.removeValue(forKey: entry.key)
         }
         
         Task { await logger.debug("🧹 Evicted \(itemsToRemove.count) items from memory cache") }
+
+        if removedSize > 0 || !itemsToRemove.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.cacheStats.memorySize = max(0, self.cacheStats.memorySize - removedSize)
+                self.cacheStats.totalEntries = max(0, self.cacheStats.totalEntries - itemsToRemove.count)
+            }
+        }
     }
     
     // MARK: - Statistics and Monitoring
@@ -508,7 +530,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func performCleanup() {
+    func performCleanup() {
         Task { await logger.info("🧹 Starting cache cleanup") }
         
         // Cleanup memory cache (remove expired items)

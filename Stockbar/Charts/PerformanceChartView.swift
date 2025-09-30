@@ -107,15 +107,61 @@ struct PerformanceChartView: View {
     }
     
     private var chartTypePicker: some View {
-        Picker("Chart Type", selection: $selectedChartType) {
-            Text("Portfolio Value").tag(ChartType.portfolioValue)
-            Text("Portfolio Gains").tag(ChartType.portfolioGains)
-            
-            ForEach(availableSymbols, id: \.self) { symbol in
-                Text(symbol).tag(ChartType.individualStock(symbol))
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chartTypeChip(for: .portfolioValue, label: "Portfolio Value")
+                    chartTypeChip(for: .portfolioGains, label: "Portfolio Gains")
+
+                    ForEach(availableSymbols, id: \.self) { symbol in
+                        chartTypeChip(for: .individualStock(symbol), label: symbol)
+                    }
+                }
+                .padding(.vertical, 4)
             }
         }
-        .pickerStyle(SegmentedPickerStyle())
+    }
+
+    private func chartTypeChip(for type: ChartType, label: String) -> some View {
+        let isSelected = type == selectedChartType
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedChartType = type
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if case .individualStock = type {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                Text(label)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 28)
+            .background(buttonBackground(for: isSelected))
+            .overlay(
+                Capsule()
+                    .stroke(buttonBorderColor(isSelected: isSelected), lineWidth: isSelected ? 1.5 : 1)
+            )
+            .foregroundColor(isSelected ? Color.accentColor : Color.primary)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityLabel("Show \(label) chart")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private func buttonBackground(for isSelected: Bool) -> some View {
+        Capsule()
+            .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(NSColor.controlBackgroundColor))
+    }
+
+    private func buttonBorderColor(isSelected: Bool) -> Color {
+        if isSelected { return Color.accentColor }
+        return Color.primary.opacity(0.25)
     }
     
     // MARK: - Progress Indicator Views

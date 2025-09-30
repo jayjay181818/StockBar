@@ -61,27 +61,51 @@ public actor Logger {
         guard let logFileURL = getLogFileURL() else { return }
         
         let messageWithNewline = message + "\n"
-        if let data = messageWithNewline.data(using: .utf8) {
+        guard let data = messageWithNewline.data(using: .utf8) else { return }
+
+        do {
             if fileManager.fileExists(atPath: logFileURL.path) {
-                if let fileHandle = try? FileHandle(forWritingTo: logFileURL) {
-                    fileHandle.seekToEndOfFile()
-                    fileHandle.write(data)
-                    try? fileHandle.close()
-                }
+                let fileHandle = try FileHandle(forWritingTo: logFileURL)
+                defer { try? fileHandle.close() }
+
+                try fileHandle.seekToEnd()
+                try fileHandle.write(contentsOf: data)
             } else {
-                try? messageWithNewline.write(to: logFileURL, atomically: true, encoding: .utf8)
+                try data.write(to: logFileURL, options: .atomic)
             }
-            
+
             // Check if log file needs compacting after writing
             compactLogFileIfNeeded()
+        } catch {
+            // Avoid crashing the app if the file system rejects the write
+            #if DEBUG
+            print("Logger failed to persist log entry: \(error.localizedDescription)")
+            #endif
         }
     }
     
     private func getLogFileURL() -> URL? {
-        guard let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+        guard let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
-        return documentsPath.appendingPathComponent("stockbar.log")
+
+        let bundlePathComponent = Bundle.main.bundleIdentifier?.isEmpty == false
+            ? Bundle.main.bundleIdentifier!
+            : "Stockbar"
+        let appSupportURL = baseURL.appendingPathComponent(bundlePathComponent, isDirectory: true)
+
+        if !fileManager.fileExists(atPath: appSupportURL.path) {
+            do {
+                try fileManager.createDirectory(at: appSupportURL, withIntermediateDirectories: true, attributes: nil)
+            } catch {
+                #if DEBUG
+                print("Logger failed to create Application Support directory: \(error.localizedDescription)")
+                #endif
+                return nil
+            }
+        }
+
+        return appSupportURL.appendingPathComponent("stockbar.log")
     }
     
     public func debug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {

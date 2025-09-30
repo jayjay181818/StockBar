@@ -47,8 +47,8 @@ class DataModelTests: XCTestCase {
     
     func testStockDataHandling() {
         // Test basic stock data structures
-        XCTAssertNotNil(dataModel.stocks)
-        XCTAssertTrue(dataModel.stocks.isEmpty || dataModel.stocks.count >= 0)
+        let trades = dataModel.realTimeTrades
+        XCTAssertTrue(trades.isEmpty || trades.count >= 0)
     }
     
     func testUserDefaultsPersistence() {
