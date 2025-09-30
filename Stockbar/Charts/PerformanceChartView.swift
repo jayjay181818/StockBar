@@ -36,6 +36,7 @@ struct PerformanceChartView: View {
         VStack(spacing: 16) {
             // Chart Type Picker
             chartTypePicker
+                .padding(.top, 8) // Extra top padding to prevent overlap with tab divider
             
             // Time Range Picker
             timeRangePicker
@@ -78,7 +79,8 @@ struct PerformanceChartView: View {
                 }
             }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .frame(minWidth: 600, minHeight: 450)
         .onChange(of: showingMetrics) { _, newValue in
             adjustChartWindowSize(expanded: newValue)
@@ -118,7 +120,9 @@ struct PerformanceChartView: View {
                     }
                 }
                 .padding(.vertical, 4)
+                .padding(.horizontal, 2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
