@@ -280,19 +280,20 @@ struct PreferenceView: View {
             .background(Color(NSColor.windowBackgroundColor))
             .frame(minHeight: 60, idealHeight: 60, maxHeight: 60) // Fixed height for navigation with more space
             
-            // Tab content area - remove ScrollView to let auto-sizing work properly
+            // Tab content area with proper spacing
             Group {
                 switch selectedTab {
                 case .portfolio:
                     portfolioView
                 case .charts:
                     chartsView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .debug:
                     debugView
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding() // Add some padding around the content
         .frame(minWidth: 650, idealWidth: 1000, maxWidth: 1200,
                minHeight: 500, idealHeight: 700, maxHeight: 900)
         .fixedSize(horizontal: false, vertical: false) // Allow both horizontal and vertical resizing
@@ -629,7 +630,9 @@ struct PreferenceView: View {
     }
     
     private var chartsView: some View {
-        PerformanceChartView(availableSymbols: availableSymbols, dataModel: userdata)
+        ScrollView {
+            PerformanceChartView(availableSymbols: availableSymbols, dataModel: userdata)
+        }
     }
     
     private var debugView: some View {
