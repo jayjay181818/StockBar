@@ -298,6 +298,17 @@ class StockStatusItemController {
         menuItems.forEach { title, value in
             menu.addItem(withTitle: "\(title): \(value)", action: nil, keyEquivalent: "")
         }
+
+        menu.addItem(NSMenuItem.separator())
+
+        let preferencesItem = NSMenuItem(title: "Preferences…", action: #selector(AppDelegate.showPreferences(_:)), keyEquivalent: ",")
+        preferencesItem.target = NSApp.delegate
+        menu.addItem(preferencesItem)
+
+        let quitItem = NSMenuItem(title: "Quit StockBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        menu.addItem(quitItem)
+
         item.menu = menu
     }
 }

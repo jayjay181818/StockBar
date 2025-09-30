@@ -65,7 +65,7 @@ class StockMenuBarController {
         NSApp.terminate(self)
     }
     
-    @objc private func showPreferences(_ sender: Any?) {
+    @objc func showPreferences(_ sender: Any?) {
         // Close any existing preferences window first
         preferenceWindowController?.close()
         preferenceWindowController = nil
