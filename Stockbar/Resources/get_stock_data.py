@@ -171,6 +171,7 @@ def fetch_real_time_quote_yfinance(symbol):
 
         current_price = None
         regular_market_price = None  # Keep track of actual regular market price
+        regular_market_time = None  # Timestamp from exchange
         pre_market_price = None
         post_market_price = None
         market_state = "REGULAR"
@@ -179,6 +180,11 @@ def fetch_real_time_quote_yfinance(symbol):
         try:
             info = ticker.info
             print(f"yfinance info keys for {symbol}: {list(info.keys())[:10]}...", file=sys.stderr)
+            
+            # Extract timestamp from regularMarketTime
+            if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
+                regular_market_time = int(info['regularMarketTime'])
+                print(f"yfinance regularMarketTime for {symbol}: {regular_market_time}", file=sys.stderr)
             
             # Extract pre-market data
             if 'preMarketPrice' in info and info['preMarketPrice'] is not None:
@@ -342,7 +348,16 @@ def fetch_real_time_quote_yfinance(symbol):
                 post_market_price /= 100.0
             
         print(f"yfinance data for {symbol}: current_price={current_price}, previous_close={previous_close}, pre_market={pre_market_price}, post_market={post_market_price}, state={market_state}", file=sys.stderr)
-            
+
+        # Use regularMarketTime if available, otherwise fallback to current time
+        timestamp = regular_market_time if regular_market_time is not None else int(time.time())
+
+        # For pre/post market, use current time as the timestamp for those quotes
+        # since yfinance doesn't provide specific pre/post market timestamps
+        current_time = int(time.time())
+        pre_market_time = current_time if (market_state == "PRE" and pre_market_price is not None) else None
+        post_market_time = current_time if (market_state == "POST" and post_market_price is not None) else None
+
         return {
             'symbol': symbol,
             'price': current_price,  # Display price (includes pre/post market adjustments)
@@ -350,8 +365,10 @@ def fetch_real_time_quote_yfinance(symbol):
             'previousClose': previous_close,
             'preMarketPrice': pre_market_price,
             'postMarketPrice': post_market_price,
+            'preMarketTime': pre_market_time,  # Current time when pre-market data is available
+            'postMarketTime': post_market_time,  # Current time when post-market data is available
             'marketState': market_state,
-            'timestamp': int(time.time())
+            'timestamp': timestamp  # Regular market time
         }
         
     except Exception as e:
@@ -574,46 +591,78 @@ def fetch_single(symbol):
         print(f"Single fetch failed for {symbol}: {e}", file=sys.stderr)
     return None
 
+def output_error(error_code, message, symbol=None, retry_after=None):
+    """Output a structured JSON error"""
+    error_obj = {
+        'error': True,
+        'error_code': error_code,
+        'message': message,
+        'timestamp': int(time.time())
+    }
+    if symbol:
+        error_obj['symbol'] = symbol
+    if retry_after:
+        error_obj['retry_after'] = retry_after
+
+    print(json.dumps(error_obj))
+
 def main():
     parser = argparse.ArgumentParser(description='Fetch stock data using Financial Modeling Prep API')
     parser.add_argument('--historical', action='store_true', help='Fetch historical data')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
-    
+
     args = parser.parse_args()
-    
+
     if args.historical:
         # Historical data mode
         if not args.symbols or not args.start_date or not args.end_date:
             print("Error: Historical mode requires symbol, start-date, and end-date", file=sys.stderr)
-            print("FETCH_FAILED")
+            output_error('INVALID_REQUEST', 'Historical mode requires symbol, start-date, and end-date')
             sys.exit(1)
-        
+
         symbol = args.symbols[0]  # Take first symbol for historical fetch
-        
+
         try:
             historical_data = fetch_historical_data(symbol, args.start_date, args.end_date)
             if historical_data:
                 # Output as JSON array for Swift to parse
                 print(json.dumps(historical_data))
             else:
-                print("[]")  # Empty array if no data
+                output_error('NO_DATA', f'No historical data available for {symbol}', symbol=symbol)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', symbol=symbol, retry_after=60)
+            elif e.code == 401 or e.code == 403:
+                output_error('API_KEY_INVALID', 'API key is invalid or unauthorized.', symbol=symbol)
+            else:
+                output_error('NETWORK_ERROR', f'HTTP error {e.code}: {str(e)}', symbol=symbol)
+            sys.exit(1)
+        except (urllib.error.URLError, OSError) as e:
+            output_error('NETWORK_ERROR', f'Network connection failed: {str(e)}', symbol=symbol)
+            sys.exit(1)
         except Exception as e:
-            print(f"Historical fetch failed: {e}", file=sys.stderr)
-            print("FETCH_FAILED")
+            error_str = str(e)
+            if 'timeout' in error_str.lower():
+                output_error('TIMEOUT', f'Request timed out for {symbol}', symbol=symbol)
+            elif 'rate limit' in error_str.lower():
+                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', symbol=symbol, retry_after=60)
+            elif 'invalid symbol' in error_str.lower() or 'not found' in error_str.lower():
+                output_error('INVALID_SYMBOL', f'Symbol {symbol} not found or invalid', symbol=symbol)
+            else:
+                output_error('UNKNOWN', f'Unexpected error: {str(e)}', symbol=symbol)
             sys.exit(1)
     else:
         # Real-time data mode (backward compatible)
         if len(args.symbols) < 1:
             print("Usage: python get_stock_data.py <TICKER_SYMBOL> [<TICKER_SYMBOL> ...]", file=sys.stderr)
-            print("Error: No ticker symbol provided.")
-            print("FETCH_FAILED")
+            output_error('INVALID_REQUEST', 'No ticker symbol provided')
             sys.exit(1)
-        
+
         symbols = [s.upper() for s in args.symbols]
         results = {}
-        
+
         # Check cache first
         symbols_to_fetch = []
         for symbol in symbols:
@@ -622,22 +671,38 @@ def main():
                 results[symbol] = cached
             else:
                 symbols_to_fetch.append(symbol)
-        
+
         # Batch fetch uncached
         if symbols_to_fetch:
-            batch_results = fetch_batch(symbols_to_fetch)
-            for symbol, res in batch_results.items():
-                if res:
-                    results[symbol] = res
-                else:
-                    # Fallback to single fetch
-                    single_res = fetch_single(symbol)
-                    if single_res:
-                        set_cache(symbol, single_res)
-                        results[symbol] = single_res
+            try:
+                batch_results = fetch_batch(symbols_to_fetch)
+                for symbol, res in batch_results.items():
+                    if res:
+                        results[symbol] = res
                     else:
-                        results[symbol] = None
-        
+                        # Fallback to single fetch
+                        single_res = fetch_single(symbol)
+                        if single_res:
+                            set_cache(symbol, single_res)
+                            results[symbol] = single_res
+                        else:
+                            results[symbol] = None
+            except Exception as e:
+                # If batch fetch fails completely, output error
+                error_str = str(e)
+                if 'timeout' in error_str.lower():
+                    output_error('TIMEOUT', 'Request timed out')
+                    sys.exit(1)
+                elif 'rate limit' in error_str.lower():
+                    output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', retry_after=60)
+                    sys.exit(1)
+                elif '401' in error_str or '403' in error_str or 'api key' in error_str.lower():
+                    output_error('API_KEY_INVALID', 'API key is invalid or unauthorized.')
+                    sys.exit(1)
+                else:
+                    output_error('NETWORK_ERROR', f'Network error: {str(e)}')
+                    sys.exit(1)
+
         # Output results as JSON for new format or legacy text format
         if len(symbols) == 1:
             # Single symbol - use legacy text format for backwards compatibility
@@ -655,8 +720,7 @@ def main():
                     timestamp_str, low_price, high_price, close_price, prev_close = res
                     print(f"{symbol} @ {timestamp_str} | 5m Low: {low_price:.2f}, High: {high_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
             else:
-                print(f"Error fetching {symbol}: No data received.")
-                print("FETCH_FAILED")
+                output_error('NO_DATA', f'No data received for {symbol}', symbol=symbol)
         else:
             # Multiple symbols - output as JSON array
             json_results = []
@@ -673,11 +737,11 @@ def main():
                         'previousClose': prev_close,
                         'timestamp': int(time.time())
                     })
-            
+
             if json_results:
                 print(json.dumps(json_results))
             else:
-                print("FETCH_FAILED")
+                output_error('NO_DATA', 'No data received for any symbols')
 
 if __name__ == "__main__":
     main()

@@ -266,95 +266,110 @@ public actor Logger {
         return getLogFileURL()?.path
     }
     
-    /// Compacts the log file if it exceeds 10,000 lines or 10MB
+    /// Rotates the log file if it exceeds maximum size (10MB)
     private func compactLogFileIfNeeded() {
         guard let logFileURL = getLogFileURL(),
               fileManager.fileExists(atPath: logFileURL.path) else { return }
-        
-        // Only check every 50 log entries to avoid performance impact (reduced from 100)
+
+        // Only check every 50 log entries to avoid performance impact
         logCounter += 1
         guard logCounter % 50 == 0 else { return }
-        
+
         do {
-            // Check file size first
             let fileAttributes = try fileManager.attributesOfItem(atPath: logFileURL.path)
             if let fileSize = fileAttributes[.size] as? Int64 {
-                // Compact if file is larger than 10MB (reduced from previous larger size)
+                // Rotate if file is larger than 10MB
                 if fileSize > 10_000_000 {
-                    compactByFileSize(logFileURL: logFileURL, currentSize: fileSize)
+                    rotateLogFiles(currentLogURL: logFileURL)
                     return
                 }
             }
-            
-            // Check line count
+
+            // Also check line count as a secondary measure
             let content = try String(contentsOf: logFileURL, encoding: .utf8)
             let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
-            
-            if lines.count > 5000 { // Reduced from 10,000 to keep files smaller
-                compactByLineCount(logFileURL: logFileURL, lines: lines)
-            }
-        } catch {
-            // If compaction fails, log the error (but don't create infinite loops)
-            let timestamp = dateFormatter.string(from: Date())
-            let errorMessage = "\(timestamp) ⚠️ [WARNING] [Logger.swift] compactLogFileIfNeeded: Compaction failed: \(error.localizedDescription)\n"
-            
-            // Try to write error message directly (bypass normal logging to avoid recursion)
-            if let data = errorMessage.data(using: .utf8) {
-                try? data.write(to: logFileURL, options: .atomic)
-            }
-        }
-    }
-    
-    /// Compacts log file based on file size
-    private func compactByFileSize(logFileURL: URL, currentSize: Int64) {
-        do {
-            // For very large files, read only the last portion
-            let fileHandle = try FileHandle(forReadingFrom: logFileURL)
-            defer { try? fileHandle.close() }
-            
-            // Read last 2MB of the file
-            let readSize = min(2_000_000, Int(currentSize))
-            let seekPosition = max(0, currentSize - Int64(readSize))
-            
-            try fileHandle.seek(toOffset: UInt64(seekPosition))
-            let data = fileHandle.readData(ofLength: readSize)
-            
-            if let content = String(data: data, encoding: .utf8) {
-                // Find the first complete line to avoid partial lines
-                let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
-                if lines.count > 1 {
-                    // Skip the first line as it might be partial, keep the rest
-                    let compactedLines = Array(lines.dropFirst())
-                    let compactedContent = compactedLines.joined(separator: "\n") + "\n"
-                    
-                    // Add compaction notice
-                    let timestamp = dateFormatter.string(from: Date())
-                    let compactionMessage = "\(timestamp) ℹ️ [INFO] [Logger.swift] compactByFileSize: Log file compacted from \(currentSize / 1_000_000)MB to \(compactedContent.count / 1_000_000)MB\n"
-                    let finalContent = compactionMessage + compactedContent
-                    
-                    try finalContent.write(to: logFileURL, atomically: true, encoding: .utf8)
-                }
+
+            if lines.count > 10000 {
+                rotateLogFiles(currentLogURL: logFileURL)
             }
         } catch {
             // Silent failure to avoid logging loops
         }
     }
-    
-    /// Compacts log file based on line count
-    private func compactByLineCount(logFileURL: URL, lines: [String]) {
+
+    /// Rotates log files keeping the last 3 files
+    /// stockbar.log -> stockbar.1.log
+    /// stockbar.1.log -> stockbar.2.log
+    /// stockbar.2.log -> deleted
+    private func rotateLogFiles(currentLogURL: URL) {
         do {
-            // Keep the most recent 2,000 lines (reduced from 5,000)
-            let compactedLines = Array(lines.suffix(2000))
-            let compactedContent = compactedLines.joined(separator: "\n") + "\n"
-            
-            // Add a log entry about the compaction
+            let baseURL = currentLogURL.deletingLastPathComponent()
+            let baseFileName = "stockbar"
+
+            // Delete oldest log (stockbar.2.log)
+            let oldestLog = baseURL.appendingPathComponent("\(baseFileName).2.log")
+            if fileManager.fileExists(atPath: oldestLog.path) {
+                try fileManager.removeItem(at: oldestLog)
+            }
+
+            // Rotate stockbar.1.log -> stockbar.2.log
+            let log1 = baseURL.appendingPathComponent("\(baseFileName).1.log")
+            if fileManager.fileExists(atPath: log1.path) {
+                try fileManager.moveItem(at: log1, to: oldestLog)
+            }
+
+            // Rotate stockbar.log -> stockbar.1.log
+            if fileManager.fileExists(atPath: currentLogURL.path) {
+                try fileManager.moveItem(at: currentLogURL, to: log1)
+            }
+
+            // Create new empty log file with rotation message
             let timestamp = dateFormatter.string(from: Date())
-            let compactionMessage = "\(timestamp) ℹ️ [INFO] [Logger.swift] compactByLineCount: Log file compacted from \(lines.count) to \(compactedLines.count) lines\n"
-            let finalContent = compactionMessage + compactedContent
-            
-            try finalContent.write(to: logFileURL, atomically: true, encoding: .utf8)
+            let message = "\(timestamp) ℹ️ [INFO] [Logger.swift] rotateLogFiles: Log files rotated (previous logs saved as .1.log and .2.log)\n"
+            try message.write(to: currentLogURL, atomically: true, encoding: .utf8)
+
         } catch {
             // Silent failure to avoid logging loops
         }
+    }
+    
+    /// Clears all log files (current and rotated)
+    public func clearAllLogs() {
+        guard let baseURL = getLogFileURL()?.deletingLastPathComponent() else { return }
+
+        let logFiles = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
+
+        for logFile in logFiles {
+            let fileURL = baseURL.appendingPathComponent(logFile)
+            if fileManager.fileExists(atPath: fileURL.path) {
+                try? fileManager.removeItem(at: fileURL)
+            }
+        }
+
+        // Create new empty log file
+        if let newLogURL = getLogFileURL() {
+            let timestamp = dateFormatter.string(from: Date())
+            let message = "\(timestamp) ℹ️ [INFO] [Logger.swift] clearAllLogs: All log files cleared by user\n"
+            try? message.write(to: newLogURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Gets total size of all log files in MB
+    public func getTotalLogSize() -> Double {
+        guard let baseURL = getLogFileURL()?.deletingLastPathComponent() else { return 0 }
+
+        let logFiles = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
+        var totalSize: Int64 = 0
+
+        for logFile in logFiles {
+            let fileURL = baseURL.appendingPathComponent(logFile)
+            if fileManager.fileExists(atPath: fileURL.path),
+               let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+               let fileSize = attributes[.size] as? Int64 {
+                totalSize += fileSize
+            }
+        }
+
+        return Double(totalSize) / 1_000_000.0 // Convert to MB
     }
 }

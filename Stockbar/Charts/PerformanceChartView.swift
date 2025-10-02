@@ -22,7 +22,18 @@ struct PerformanceChartView: View {
     @State private var displayableChartData: [ChartDataPoint] = []
     @State private var isLoadingData = false
     @State private var chartError: String? = nil
-    
+
+    // Comparison Mode state variables
+    @State private var comparisonMode: Bool = false
+    @State private var selectedComparisonSymbols: Set<String> = []
+    @State private var comparisonChartData: [String: [ChartDataPoint]] = [:] // symbol -> data points
+    @State private var normalizedComparison: Bool = true // Normalize to percentage for fair comparison
+
+    // Visual Styling state variables
+    @State private var lineThickness: Double = 2.0 // 1-3pt
+    @State private var showGridLines: Bool = false
+    @State private var useGradientFill: Bool = true
+
     let availableSymbols: [String]
     let dataModel: DataModel?
     private let exportManager = ExportManager.shared
@@ -40,7 +51,20 @@ struct PerformanceChartView: View {
             
             // Time Range Picker
             timeRangePicker
-            
+
+            // Custom Date Range Picker (shown when Custom is selected)
+            if selectedTimeRange == .custom {
+                customDateRangePicker
+            }
+
+            // Comparison Mode Controls (shown for individual stock charts)
+            if case .individualStock = selectedChartType {
+                comparisonModeControls
+            }
+
+            // Visual Styling Controls
+            visualStylingControls
+
             // Progress Indicator
             if calculationManager.isCalculating {
                 calculationProgressView
@@ -267,7 +291,221 @@ struct PerformanceChartView: View {
         }
         .pickerStyle(SegmentedPickerStyle())
     }
-    
+
+    // MARK: - Custom Date Range Picker
+
+    private var customDateRangePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Custom Date Range")
+                .font(.headline)
+                .foregroundColor(.primary)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Start Date")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    DatePicker("", selection: $customStartDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .onChange(of: customStartDate) { _, _ in
+                            // Validate: end date must be after start date
+                            if customEndDate < customStartDate {
+                                customEndDate = customStartDate
+                            }
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("End Date")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    DatePicker("", selection: $customEndDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .onChange(of: customEndDate) { _, _ in
+                            // Validate: end date must be after start date
+                            if customEndDate < customStartDate {
+                                customStartDate = customEndDate
+                            }
+                        }
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Selected Range")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(formattedCustomDateRange)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+        }
+    }
+
+    private var formattedCustomDateRange: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return "\(formatter.string(from: customStartDate)) - \(formatter.string(from: customEndDate))"
+    }
+
+    // MARK: - Comparison Mode Controls
+
+    private var comparisonModeControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle("Comparison Mode", isOn: $comparisonMode)
+                    .toggleStyle(SwitchToggleStyle())
+                    .onChange(of: comparisonMode) { _, newValue in
+                        if !newValue {
+                            // Clear selection when disabling comparison
+                            selectedComparisonSymbols.removeAll()
+                            comparisonChartData.removeAll()
+                        }
+                    }
+
+                Spacer()
+
+                if comparisonMode {
+                    Toggle("Normalized (%)", isOn: $normalizedComparison)
+                        .toggleStyle(SwitchToggleStyle())
+                        .help("Show as percentage change from start date")
+                }
+            }
+
+            if comparisonMode {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Select stocks to compare (max 5)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(availableSymbols, id: \.self) { symbol in
+                                comparisonSymbolChip(for: symbol)
+                            }
+                        }
+                    }
+
+                    if !selectedComparisonSymbols.isEmpty {
+                        HStack {
+                            Text("\(selectedComparisonSymbols.count) stock(s) selected")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+
+                            Spacer()
+
+                            Button("Clear All") {
+                                selectedComparisonSymbols.removeAll()
+                                comparisonChartData.removeAll()
+                            }
+                            .font(.caption)
+                            .buttonStyle(PlainButtonStyle())
+                            .foregroundColor(.blue)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+            }
+        }
+    }
+
+    private func comparisonSymbolChip(for symbol: String) -> some View {
+        let isSelected = selectedComparisonSymbols.contains(symbol)
+        let canSelect = selectedComparisonSymbols.count < 5 || isSelected
+
+        return Button {
+            if isSelected {
+                selectedComparisonSymbols.remove(symbol)
+                comparisonChartData.removeValue(forKey: symbol)
+            } else if canSelect {
+                selectedComparisonSymbols.insert(symbol)
+                // Load data for this symbol
+                Task {
+                    await loadComparisonData(for: symbol)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 10))
+                Text(symbol)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+            .foregroundColor(isSelected ? Color.accentColor : (canSelect ? Color.primary : Color.secondary))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.accentColor : Color.primary.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(!canSelect)
+    }
+
+    // MARK: - Visual Styling Controls
+
+    private var visualStylingControls: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                Text("Line:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Slider(value: $lineThickness, in: 1...3, step: 0.5)
+                    .frame(width: 80)
+                Text("\(Int(lineThickness))pt")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 25)
+            }
+
+            Toggle("Grid", isOn: $showGridLines)
+                .toggleStyle(SwitchToggleStyle())
+                .font(.caption)
+
+            Toggle("Gradient", isOn: $useGradientFill)
+                .toggleStyle(SwitchToggleStyle())
+                .font(.caption)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(6)
+    }
+
+    // MARK: - Comparison Data Loading
+
+    private func loadComparisonData(for symbol: String) async {
+        do {
+            let data = await historicalDataManager.getChartData(
+                for: .individualStock(symbol),
+                timeRange: selectedTimeRange,
+                dataModel: dataModel
+            )
+
+            await MainActor.run {
+                comparisonChartData[symbol] = data
+                print("📊 Loaded \(data.count) data points for comparison symbol: \(symbol)")
+            }
+        } catch {
+            await MainActor.run {
+                print("⚠️ Failed to load comparison data for \(symbol): \(error.localizedDescription)")
+            }
+        }
+    }
+
     // CRITICAL FIX: Replaced synchronous computed property with async function
     private func loadChartData() async {
         isLoadingData = true
@@ -304,26 +542,31 @@ struct PerformanceChartView: View {
     private func processChartData(_ data: [ChartDataPoint]) async -> [ChartDataPoint] {
         return await Task.detached {
             var filtered = data
-            
+
             // Apply value threshold filter
             if valueThreshold > 0 {
                 filtered = filtered.filter { abs($0.value) >= valueThreshold }
             }
-            
-            // Apply custom date range filter
-            if dateFilterEnabled {
+
+            // Apply custom date range filter when custom time range is selected
+            if selectedTimeRange == .custom {
+                filtered = filtered.filter { dataPoint in
+                    dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+                }
+            } else if dateFilterEnabled {
+                // Apply additional date filter if enabled
                 filtered = filtered.filter { dataPoint in
                     dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
                 }
             }
-            
+
             // Intelligent downsampling for performance
             if filtered.count > 1000 {
                 let strideValue = filtered.count / 800 // Target ~800 points for smooth rendering
                 filtered = Array(stride(from: 0, to: filtered.count, by: max(1, strideValue)).map { filtered[$0] })
                 print("📊 Downsampled chart data from \(data.count) to \(filtered.count) points for performance")
             }
-            
+
             return filtered
         }.value
     }
@@ -361,22 +604,41 @@ struct PerformanceChartView: View {
                     .frame(height: 300)
             } else if displayableChartData.isEmpty {
                 emptyChartView
+            } else if comparisonMode && !selectedComparisonSymbols.isEmpty {
+                // COMPARISON MODE: Multi-series chart
+                comparisonChartContent
             } else {
+                // SINGLE SERIES: Standard chart
                 Chart(displayableChartData) { dataPoint in
                         LineMark(
                             x: .value("Date", dataPoint.date),
                             y: .value("Value", dataPoint.value)
                         )
                         .foregroundStyle(chartColor)
-                        .lineStyle(StrokeStyle(lineWidth: 2))
-                        
-                        AreaMark(
-                            x: .value("Date", dataPoint.date),
-                            yStart: .value("Baseline", yAxisDomain.lowerBound),
-                            yEnd: .value("Value", dataPoint.value)
-                        )
-                        .foregroundStyle(chartColor.opacity(0.1))
-                        
+                        .lineStyle(StrokeStyle(lineWidth: lineThickness))
+
+                        if useGradientFill {
+                            AreaMark(
+                                x: .value("Date", dataPoint.date),
+                                yStart: .value("Baseline", yAxisDomain.lowerBound),
+                                yEnd: .value("Value", dataPoint.value)
+                            )
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [chartColor.opacity(0.3), chartColor.opacity(0.05)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        } else {
+                            AreaMark(
+                                x: .value("Date", dataPoint.date),
+                                yStart: .value("Baseline", yAxisDomain.lowerBound),
+                                yEnd: .value("Value", dataPoint.value)
+                            )
+                            .foregroundStyle(chartColor.opacity(0.1))
+                        }
+
                         // Add a point mark for the hovered data point
                         if let hoveredPoint = hoveredDataPoint,
                            hoveredPoint.date == dataPoint.date {
@@ -387,7 +649,7 @@ struct PerformanceChartView: View {
                             .foregroundStyle(chartColor)
                             .symbolSize(50)
                         }
-                        
+
                         // Add selection indicators
                         if selectedDataPoints.contains(dataPoint.id) {
                             PointMark(
@@ -398,17 +660,28 @@ struct PerformanceChartView: View {
                             .symbolSize(30)
                             .symbol(.circle)
                         }
+
+                        // Zero baseline for gains charts
+                        if case .portfolioGains = selectedChartType, dataPoint.value == 0 {
+                            RuleMark(y: .value("Zero", 0))
+                                .foregroundStyle(Color.secondary.opacity(0.5))
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                        }
                     }
                     .chartXAxis {
                         AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                            AxisGridLine()
+                            if showGridLines {
+                                AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                            }
                             AxisTick()
                             AxisValueLabel(format: dateFormat)
                         }
                     }
                     .chartYAxis {
                         AxisMarks(values: .automatic(desiredCount: 8)) { value in
-                            AxisGridLine()
+                            if showGridLines {
+                                AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                            }
                             AxisTick()
                             AxisValueLabel(format: currencyValueFormat)
                         }
@@ -459,18 +732,114 @@ struct PerformanceChartView: View {
             Image(systemName: "chart.line.uptrend.xyaxis")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            
+
             Text("No Data Available")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            
+
             Text("Charts will appear after collecting price data")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
         .frame(height: 250)
     }
-    
+
+    // MARK: - Comparison Chart Content
+
+    private var comparisonChartContent: some View {
+        VStack(spacing: 12) {
+            comparisonChart
+                .frame(height: 300)
+
+            // Color Legend
+            comparisonLegend
+        }
+    }
+
+    private var comparisonChart: some View {
+        let sortedSymbols = Array(selectedComparisonSymbols).sorted()
+
+        return Chart {
+            ForEach(sortedSymbols, id: \.self) { symbol in
+                if let data = comparisonChartData[symbol] {
+                    let processedData = normalizedComparison ? normalizeData(data) : data
+                    let color = colorForSymbol(symbol)
+
+                    ForEach(processedData) { dataPoint in
+                        LineMark(
+                            x: .value("Date", dataPoint.date),
+                            y: .value("Value", dataPoint.value),
+                            series: .value("Symbol", symbol)
+                        )
+                        .foregroundStyle(color)
+                        .lineStyle(StrokeStyle(lineWidth: lineThickness))
+                    }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6))
+        }
+        .chartYAxis {
+            AxisMarks(values: .automatic(desiredCount: 8)) { value in
+                AxisGridLine()
+                AxisTick()
+                if normalizedComparison {
+                    AxisValueLabel {
+                        if let doubleValue = value.as(Double.self) {
+                            Text("\(Int(doubleValue * 100))%")
+                        }
+                    }
+                } else {
+                    AxisValueLabel()
+                }
+            }
+        }
+    }
+
+    private var comparisonLegend: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Legend")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 12) {
+                ForEach(Array(selectedComparisonSymbols).sorted(), id: \.self) { symbol in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(colorForSymbol(symbol))
+                            .frame(width: 10, height: 10)
+                        Text(symbol)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(6)
+    }
+
+    // MARK: - Comparison Helper Functions
+
+    private func normalizeData(_ data: [ChartDataPoint]) -> [ChartDataPoint] {
+        guard let firstValue = data.first?.value, firstValue != 0 else { return data }
+
+        return data.map { point in
+            let percentChange = ((point.value - firstValue) / firstValue)
+            return ChartDataPoint(date: point.date, value: percentChange, symbol: point.symbol)
+        }
+    }
+
+    private func colorForSymbol(_ symbol: String) -> Color {
+        let colors: [Color] = [.blue, .green, .orange, .purple, .pink]
+        let sortedSymbols = Array(selectedComparisonSymbols).sorted()
+        guard let index = sortedSymbols.firstIndex(of: symbol) else { return .gray }
+        return colors[index % colors.count]
+    }
+
     private var metricsSection: some View {
         VStack {
             Button(action: { showingMetrics.toggle() }) {
@@ -1054,6 +1423,8 @@ struct PerformanceChartView: View {
             return .dateTime.month(.abbreviated).day()
         case .year, .all:
             return .dateTime.month(.abbreviated).year()
+        case .custom:
+            return .dateTime.month(.abbreviated).day().year()
         }
     }
     
@@ -1743,6 +2114,7 @@ class EnhancedChartView: NSView {
                 case .threeMonths: return 259200
                 case .sixMonths: return 604800
                 case .year, .all: return 1209600
+                case .custom: return 86400  // Default to day tolerance for custom range
                 }
             }()
             

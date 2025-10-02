@@ -178,6 +178,9 @@ extension ChartTimeRange {
             return calendar.date(byAdding: .year, value: -1, to: now) ?? now
         case .all:
             return calendar.date(byAdding: .year, value: -10, to: now) ?? now
+        case .custom:
+            // Custom range handled by PerformanceChartView customStartDate
+            return calendar.date(byAdding: .month, value: -1, to: now) ?? now
         }
     }
 }

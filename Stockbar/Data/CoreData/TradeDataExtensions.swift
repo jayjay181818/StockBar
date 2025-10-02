@@ -13,10 +13,11 @@ extension TradeEntity {
             currency: currency,
             costCurrency: costCurrency
         )
-        
+
         return Trade(
             name: name ?? "",
-            position: position
+            position: position,
+            isWatchlistOnly: isWatchlistOnly
         )
     }
     
@@ -34,6 +35,7 @@ extension TradeEntity {
         self.positionAvgCost = trade.position.positionAvgCostString
         self.currency = trade.position.currency
         self.costCurrency = trade.position.costCurrency
+        self.isWatchlistOnly = trade.isWatchlistOnly
         self.lastModified = Date()
     }
 }
