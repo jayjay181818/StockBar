@@ -173,27 +173,37 @@ class StockStatusItemController {
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
         let safeUnits = data.units.isFinite ? data.units : 0
         var pnl: Double? = nil
-        
+
         // Calculate day P&L using the current display price (which includes pre/post market) vs yesterday's close
-        if !data.displayPrice.isNaN && !data.previousPrice.isNaN && safePrev != 0 && safeUnits != 0 && safeDisplay > 0 {
+        // Skip P&L calculation for watchlist stocks
+        if !trade.isWatchlistOnly && !data.displayPrice.isNaN && !data.previousPrice.isNaN && safePrev != 0 && safeUnits != 0 && safeDisplay > 0 {
             pnl = (safeDisplay - safePrev) * safeUnits
         }
-        
+
         // Include market state indicator in title for pre/post market hours
         let marketIndicator = dataModel.showMarketIndicators ? data.marketStateIndicator(useEmoji: true) : ""
-        let titleBase = marketIndicator.isEmpty ? trade.name : "\(trade.name) \(marketIndicator)"
-        
+        let watchlistIndicator = trade.isWatchlistOnly ? "👁 " : ""
+        let titleBase = marketIndicator.isEmpty ? "\(watchlistIndicator)\(trade.name)" : "\(watchlistIndicator)\(trade.name) \(marketIndicator)"
+
         let title: String
         if let pnl = pnl, pnl.isFinite {
             title = "\(titleBase) \(String(format: "%+.2f", pnl))"
         } else {
-            title = "\(titleBase) –"
+            title = titleBase
         }
         item.button?.title = title
         item.button?.alternateTitle = trade.name
-        let color = dataModel.showColorCoding ?
-            ((pnl ?? 0) >= 0 ? NSColor.systemGreen : NSColor.systemRed) :
-            NSColor.labelColor
+
+        // For watchlist stocks, use secondary color; for portfolio stocks, use P&L-based coloring
+        let color: NSColor
+        if trade.isWatchlistOnly {
+            color = NSColor.secondaryLabelColor
+        } else {
+            color = dataModel.showColorCoding ?
+                ((pnl ?? 0) >= 0 ? NSColor.systemGreen : NSColor.systemRed) :
+                NSColor.labelColor
+        }
+
         item.button?.attributedTitle = NSAttributedString(
             string: title,
             attributes: [.foregroundColor: color]
@@ -202,26 +212,117 @@ class StockStatusItemController {
     
     private func updateMenu(trade: Trade, data: TradingData) {
         let menu = NSMenu()
-        
-        // Add price chart as the first item
+
+        // Add watchlist indicator at the top if this is a watchlist-only stock
+        if trade.isWatchlistOnly {
+            let watchlistItem = NSMenuItem()
+            let watchlistText = NSMutableAttributedString()
+            watchlistText.append(NSAttributedString(
+                string: "👁 Watchlist Only\n",
+                attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: 13),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            ))
+            watchlistText.append(NSAttributedString(
+                string: "Not included in portfolio calculations",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.tertiaryLabelColor
+                ]
+            ))
+            watchlistItem.attributedTitle = watchlistText
+            watchlistItem.isEnabled = false
+            menu.addItem(watchlistItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // If there's an error message, display it prominently
+        if let errorMsg = dataModel.realTimeTrades.first(where: { $0.trade.name == trade.name })?.realTimeInfo.errorMessage {
+            let errorItem = NSMenuItem()
+            let errorText = NSMutableAttributedString()
+            errorText.append(NSAttributedString(
+                string: "⚠️ Error\n",
+                attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: 13),
+                    .foregroundColor: NSColor.systemRed
+                ]
+            ))
+            errorText.append(NSAttributedString(
+                string: errorMsg,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            ))
+            errorItem.attributedTitle = errorText
+            errorItem.isEnabled = false
+            menu.addItem(errorItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // Check if symbol is suspended (circuit breaker)
+        let cacheStatus = dataModel.cacheCoordinator.getCacheStatus(for: trade.name, at: Date())
+        if case .suspended(let failures, let resumeIn) = cacheStatus {
+            let suspendedItem = NSMenuItem()
+            let suspendedText = NSMutableAttributedString()
+            suspendedText.append(NSAttributedString(
+                string: "🔴 Connection Suspended\n",
+                attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: 13),
+                    .foregroundColor: NSColor.systemOrange
+                ]
+            ))
+            let resumeMinutes = Int(resumeIn / 60)
+            suspendedText.append(NSAttributedString(
+                string: "Failed \(failures) times. Will retry in \(resumeMinutes)m",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            ))
+            suspendedItem.attributedTitle = suspendedText
+            suspendedItem.isEnabled = false
+            menu.addItem(suspendedItem)
+
+            // Add "Retry Now" button for suspended symbols
+            let retryItem = NSMenuItem(
+                title: "Retry Now",
+                action: #selector(retrySymbol(_:)),
+                keyEquivalent: ""
+            )
+            retryItem.representedObject = trade.name
+            retryItem.target = self
+            menu.addItem(retryItem)
+
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // Add compact sparkline trend before the detailed chart
+        let sparklineView = SparklineHostingView(symbol: trade.name, timeRange: .week)
+        let sparklineMenuItem = NSMenuItem()
+        sparklineMenuItem.view = sparklineView
+        menu.addItem(sparklineMenuItem)
+
+        // Add price chart as the second item
         let chartHostingView = MenuPriceChartHostingView(
             symbol: trade.name,
             currentPrice: data.displayPrice,
             currency: data.currency
         )
-        
+
         // Ensure the hosting view is properly sized before adding to menu
         chartHostingView.needsLayout = true
         chartHostingView.layoutSubtreeIfNeeded()
-        
+
         let chartMenuItem = NSMenuItem()
         chartMenuItem.view = chartHostingView
-        
+
         // Set menu item size explicitly
         chartMenuItem.representedObject = NSValue(size: NSSize(width: 260, height: 180))
-        
+
         menu.addItem(chartMenuItem)
-        
+
         // Add separator after chart
         menu.addItem(NSMenuItem.separator())
         
@@ -282,21 +383,66 @@ class StockStatusItemController {
             menu.addItem(NSMenuItem.separator())
         }
         
-        // Regular market data
-        menuItems.append(contentsOf: [
-            ("Day Gain", (dayGain.isFinite ? String(format: "%+.2f", dayGain) : "N/A") +
-                " (" + (dayGainPct.isFinite ? String(format: "%+.2f%%", dayGainPct) : "N/A") + ")"),
-            ("Market Value", marketValueDisplay + " \(data.currency)"),
-            ("Position Cost", fmt(positionCost) + " \(data.currency)"),
-            ("Total P&L", (totalPL.isFinite ? String(format: "%+.2f", totalPL) : "N/A") + " \(data.currency)"),
-            ("Day P&L", (dayPL.isFinite ? String(format: "%+.2f", dayPL) : "N/A") + " \(data.currency)"),
-            ("Units", fmt(safeUnits, decimals: 0)),
-            ("Avg Cost", fmt(safeAvgCost) + " \(data.currency)"),
-            ("Last Update", (data.timeInfo.isEmpty || data.timeInfo.contains("1970") || data.timeInfo.contains("00:00")) ? "–" : data.timeInfo)
-        ])
+        // Regular market data - show position info only for portfolio stocks
+        if trade.isWatchlistOnly {
+            // For watchlist stocks, only show price and day change (no position data)
+            menuItems.append(contentsOf: [
+                ("Day Gain", (dayGain.isFinite ? String(format: "%+.2f", dayGain) : "N/A") +
+                    " (" + (dayGainPct.isFinite ? String(format: "%+.2f%%", dayGainPct) : "N/A") + ")"),
+                ("Last Update", (data.timeInfo.isEmpty || data.timeInfo.contains("1970") || data.timeInfo.contains("00:00")) ? "–" : data.timeInfo)
+            ])
+        } else {
+            // For portfolio stocks, show full position details
+            menuItems.append(contentsOf: [
+                ("Day Gain", (dayGain.isFinite ? String(format: "%+.2f", dayGain) : "N/A") +
+                    " (" + (dayGainPct.isFinite ? String(format: "%+.2f%%", dayGainPct) : "N/A") + ")"),
+                ("Market Value", marketValueDisplay + " \(data.currency)"),
+                ("Position Cost", fmt(positionCost) + " \(data.currency)"),
+                ("Total P&L", (totalPL.isFinite ? String(format: "%+.2f", totalPL) : "N/A") + " \(data.currency)"),
+                ("Day P&L", (dayPL.isFinite ? String(format: "%+.2f", dayPL) : "N/A") + " \(data.currency)"),
+                ("Units", fmt(safeUnits, decimals: 0)),
+                ("Avg Cost", fmt(safeAvgCost) + " \(data.currency)"),
+                ("Last Update", (data.timeInfo.isEmpty || data.timeInfo.contains("1970") || data.timeInfo.contains("00:00")) ? "–" : data.timeInfo)
+            ])
+        }
         
         menuItems.forEach { title, value in
             menu.addItem(withTitle: "\(title): \(value)", action: nil, keyEquivalent: "")
+        }
+
+        // Add exchange rate information if currency conversion is active
+        if data.currency != dataModel.preferredCurrency && data.currency != "N/A" {
+            let rateInfo = dataModel.currencyConverter.getExchangeRateInfo(from: data.currency, to: dataModel.preferredCurrency)
+            let timeSinceRefresh = dataModel.currencyConverter.getTimeSinceRefresh()
+
+            let rateString: String
+            if rateInfo.rate != 1.0 {
+                if rateInfo.isFallback {
+                    rateString = String(format: "1 %@ ≈ %.4f %@ (fallback rate)", data.currency, rateInfo.rate, dataModel.preferredCurrency)
+                } else {
+                    rateString = String(format: "1 %@ = %.4f %@ (updated %@)", data.currency, rateInfo.rate, dataModel.preferredCurrency, timeSinceRefresh)
+                }
+
+                let rateItem = NSMenuItem()
+                let rateText = NSMutableAttributedString()
+                rateText.append(NSAttributedString(
+                    string: "💱 Exchange Rate\n",
+                    attributes: [
+                        .font: NSFont.boldSystemFont(ofSize: 11),
+                        .foregroundColor: NSColor.secondaryLabelColor
+                    ]
+                ))
+                rateText.append(NSAttributedString(
+                    string: rateString,
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: 10),
+                        .foregroundColor: NSColor.tertiaryLabelColor
+                    ]
+                ))
+                rateItem.attributedTitle = rateText
+                rateItem.isEnabled = false
+                menu.addItem(rateItem)
+            }
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -310,5 +456,21 @@ class StockStatusItemController {
         menu.addItem(quitItem)
 
         item.menu = menu
+    }
+
+    // MARK: - Actions
+
+    @objc private func retrySymbol(_ sender: NSMenuItem) {
+        guard let symbol = sender.representedObject as? String else { return }
+
+        Task { await Logger.shared.info("🔄 [StockStatusBar] Manually retrying suspended symbol: \(symbol)") }
+
+        // Clear suspension state
+        dataModel.cacheCoordinator.clearSuspension(for: symbol)
+
+        // Trigger immediate refresh
+        Task {
+            await dataModel.refreshAllTrades()
+        }
     }
 }

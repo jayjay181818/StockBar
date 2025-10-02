@@ -20,6 +20,12 @@ enum NetworkError: LocalizedError {
     case scriptExecutionError(String)
     case pythonInterpreterNotFound(String)
     case scriptNotFound(String)
+    case rateLimit(retryAfter: Int?)
+    case invalidSymbol(String)
+    case networkError(String)
+    case apiKeyInvalid
+    case timeout(String)
+    case unknownError(String)
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +43,55 @@ enum NetworkError: LocalizedError {
             return "Python 3 interpreter not found at \(path). Please ensure Python 3 is installed and accessible."
         case .scriptNotFound(let name):
             return "Python script '\(name)' not found in the app bundle."
+        case .rateLimit(let retryAfter):
+            if let seconds = retryAfter {
+                return "Rate limit exceeded. Please try again in \(seconds) seconds."
+            }
+            return "Rate limit exceeded. Please try again later."
+        case .invalidSymbol(let symbol):
+            return "Invalid or unknown symbol: \(symbol)"
+        case .networkError(let details):
+            return "Network error: \(details)"
+        case .apiKeyInvalid:
+            return "API key is invalid or unauthorized. Please check your configuration."
+        case .timeout(let details):
+            return "Request timed out: \(details)"
+        case .unknownError(let details):
+            return "Unexpected error: \(details)"
+        }
+    }
+
+    var userFriendlyMessage: String {
+        switch self {
+        case .invalidURL:
+            return "Configuration error. Please contact support."
+        case .invalidResponse:
+            return "Unable to parse market data. Please try again."
+        case .httpError:
+            return "Server error. Please try again later."
+        case .noData:
+            return "No market data available. Check symbol or try again."
+        case .scriptExecutionError:
+            return "Data fetch failed. Please try again."
+        case .pythonInterpreterNotFound:
+            return "Python not found. Please reinstall the app."
+        case .scriptNotFound:
+            return "Data script missing. Please reinstall the app."
+        case .rateLimit(let retryAfter):
+            if let seconds = retryAfter, seconds < 120 {
+                return "Rate limit reached. Retry in \(seconds)s."
+            }
+            return "Rate limit reached. Please wait a few minutes."
+        case .invalidSymbol(let symbol):
+            return "Unknown symbol '\(symbol)'. Check spelling and try again."
+        case .networkError:
+            return "Network connection error. Check your internet connection."
+        case .apiKeyInvalid:
+            return "API key invalid. Please update in Preferences."
+        case .timeout:
+            return "Request timed out. Try again or check your connection."
+        case .unknownError:
+            return "Unexpected error occurred. Please try again."
         }
     }
 }
@@ -47,6 +102,47 @@ class PythonNetworkService: NetworkService {
     // Default interpreter path; adjust if necessary
     private let pythonInterpreterPath = "/usr/bin/python3"
     private let scriptName = "get_stock_data.py"
+
+    /// Parse JSON error from Python script output
+    private func parseError(from output: String) throws {
+        guard let jsonData = output.data(using: .utf8) else {
+            throw NetworkError.invalidResponse("Could not convert output to data")
+        }
+
+        do {
+            if let errorObj = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+               let isError = errorObj["error"] as? Bool,
+               isError,
+               let errorCode = errorObj["error_code"] as? String,
+               let message = errorObj["message"] as? String {
+
+                Task { await logger.warning("Python script returned error: \(errorCode) - \(message)") }
+
+                switch errorCode {
+                case "RATE_LIMIT":
+                    let retryAfter = errorObj["retry_after"] as? Int
+                    throw NetworkError.rateLimit(retryAfter: retryAfter)
+                case "INVALID_SYMBOL":
+                    let symbol = errorObj["symbol"] as? String ?? "unknown"
+                    throw NetworkError.invalidSymbol(symbol)
+                case "NETWORK_ERROR":
+                    throw NetworkError.networkError(message)
+                case "API_KEY_INVALID":
+                    throw NetworkError.apiKeyInvalid
+                case "TIMEOUT":
+                    throw NetworkError.timeout(message)
+                case "NO_DATA":
+                    throw NetworkError.noData(message)
+                default:
+                    throw NetworkError.unknownError(message)
+                }
+            }
+        } catch let error as NetworkError {
+            throw error
+        } catch {
+            // Not a JSON error, continue with normal parsing
+        }
+    }
 
     func fetchQuote(for symbol: String) async throws -> StockFetchResult {
         await logger.debug("Attempting to fetch quote for \(symbol) using Python script.")
@@ -99,9 +195,18 @@ class PythonNetworkService: NetworkService {
             }
             await logger.debug("Python script stdout for \(symbol): \(output)")
 
-            // Check for multi-line output which indicates an error from the new script format
+            // Try to parse as JSON error first
+            do {
+                try parseError(from: output)
+            } catch let error as NetworkError {
+                throw error
+            } catch {
+                // Not a JSON error, continue with normal parsing
+            }
+
+            // Check for multi-line output which indicates an error from the legacy script format
             let outputLines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            
+
             if outputLines.count > 1 && outputLines.last == "FETCH_FAILED" {
                 await logger.warning("Script explicitly reported FETCH_FAILED for \(symbol). Error: \(outputLines.first ?? "Unknown error")")
                 throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol): \(outputLines.first ?? "")")
@@ -201,6 +306,15 @@ class PythonNetworkService: NetworkService {
             }
             await logger.debug("Python script stdout for enhanced \(symbol): \(output)")
 
+            // Try to parse as JSON error first
+            do {
+                try parseError(from: output)
+            } catch let error as NetworkError {
+                throw error
+            } catch {
+                // Not a JSON error, continue with normal parsing
+            }
+
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
                 await logger.warning("Script explicitly reported FETCH_FAILED for enhanced \(symbol).")
@@ -249,8 +363,10 @@ class PythonNetworkService: NetworkService {
         
         let preMarketPrice = data["preMarketPrice"] as? Double
         let postMarketPrice = data["postMarketPrice"] as? Double
+        let preMarketTime = data["preMarketTime"] as? Int
+        let postMarketTime = data["postMarketTime"] as? Int
         let marketStateString = data["marketState"] as? String
-        
+
         // Parse market state
         let marketState: MarketState?
         if let stateString = marketStateString {
@@ -258,29 +374,29 @@ class PythonNetworkService: NetworkService {
         } else {
             marketState = nil
         }
-        
+
         // Calculate pre/post market changes if we have the data
         var preMarketChange: Double?
         var preMarketChangePercent: Double?
         var postMarketChange: Double?
         var postMarketChangePercent: Double?
-        
+
         if let prePrice = preMarketPrice {
             preMarketChange = prePrice - previousClose
             preMarketChangePercent = previousClose > 0 ? (preMarketChange! / previousClose) * 100 : 0
         }
-        
+
         if let postPrice = postMarketPrice {
             postMarketChange = postPrice - previousClose
             postMarketChangePercent = previousClose > 0 ? (postMarketChange! / previousClose) * 100 : 0
         }
-        
+
         // Detect currency and timezone
         let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
         let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
-        
-        Task { await logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil")") }
-        
+
+        Task { await logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil"), preMarketTime=\(preMarketTime?.description ?? "nil"), postMarketTime=\(postMarketTime?.description ?? "nil")") }
+
         return StockFetchResult(
             currency: detectedCurrency,
             symbol: symbol,
@@ -293,11 +409,11 @@ class PythonNetworkService: NetworkService {
             preMarketPrice: preMarketPrice,
             preMarketChange: preMarketChange,
             preMarketChangePercent: preMarketChangePercent,
-            preMarketTime: preMarketPrice != nil ? Int(timestamp) : nil,
+            preMarketTime: preMarketTime,  // Use specific pre-market timestamp
             postMarketPrice: postMarketPrice,
             postMarketChange: postMarketChange,
             postMarketChangePercent: postMarketChangePercent,
-            postMarketTime: postMarketPrice != nil ? Int(timestamp) : nil,
+            postMarketTime: postMarketTime,  // Use specific post-market timestamp
             marketState: marketState
         )
     }
@@ -455,7 +571,16 @@ class PythonNetworkService: NetworkService {
             }
             
             await logger.info("🐍 PYTHON SCRIPT: Raw output for \(symbol) (\(output.count) chars): \(String(output.prefix(200)))...")
-            
+
+            // Try to parse as JSON error first
+            do {
+                try parseError(from: output)
+            } catch let error as NetworkError {
+                throw error
+            } catch {
+                // Not a JSON error, continue with normal parsing
+            }
+
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
                 await logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")

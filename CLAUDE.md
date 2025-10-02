@@ -4,10 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build and Development Commands
 
+### Python Requirements
+
+**Minimum Python Version:** 3.8+
+**Tested with:** Python 3.9, 3.10, 3.11, 3.12
+
+**Required Dependencies:**
+```bash
+# Install from requirements.txt (recommended)
+pip3 install -r Stockbar/Resources/requirements.txt
+
+# Or install individually
+pip3 install yfinance>=0.2.0
+pip3 install requests>=2.25.0
+```
+
+**Dependency Verification:**
+- On first launch, Stockbar automatically checks if yfinance is installed
+- If missing, shows an alert with installation instructions
+- Offers to copy the install command or open Terminal
+- Check is performed once per installation
+
+**Manual Verification:**
+```bash
+# Test yfinance is installed
+python3 -c "import yfinance; print('OK')"
+
+# Update to latest version
+pip3 install --upgrade yfinance
+```
+
 ### Building the Application
 - **Build in Xcode**: Open `Stockbar.xcodeproj` and build the `Stockbar` target
-- **Required Python dependency**: `pip3 install yfinance` (required for the Python backend)
 - **Target Platform**: macOS 15.4+, Swift 6.0, Bundle ID: `com.fhl43211.Stockbar`
+- **Python Backend**: Ensure yfinance is installed (see Python Requirements above)
 
 ### Testing and Debugging
 - **Test single stock**: `python3 Stockbar/Resources/get_stock_data.py AAPL`

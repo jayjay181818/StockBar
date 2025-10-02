@@ -870,6 +870,8 @@ class HistoricalDataManager: ObservableObject {
             return 200 // Expect at least 200 data points for a year
         case .all:
             return 300 // Expect at least 300 data points for all time
+        case .custom:
+            return 60  // Default expectation for custom range (similar to month)
         }
     }
     
