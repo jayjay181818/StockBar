@@ -51,7 +51,8 @@ enum ChartTimeRange: String, CaseIterable {
     case sixMonths = "6M"
     case year = "1Y"
     case all = "All"
-    
+    case custom = "Custom"
+
     var description: String {
         switch self {
         case .day: return "1 Day"
@@ -61,9 +62,10 @@ enum ChartTimeRange: String, CaseIterable {
         case .sixMonths: return "6 Months"
         case .year: return "1 Year"
         case .all: return "All Time"
+        case .custom: return "Custom"
         }
     }
-    
+
     var timeInterval: TimeInterval {
         switch self {
         case .day: return 24 * 60 * 60
@@ -73,15 +75,19 @@ enum ChartTimeRange: String, CaseIterable {
         case .sixMonths: return 180 * 24 * 60 * 60
         case .year: return 365 * 24 * 60 * 60
         case .all: return TimeInterval.greatestFiniteMagnitude
+        case .custom: return 0 // Custom range handled separately
         }
     }
-    
+
     func startDate(from endDate: Date = Date()) -> Date {
         switch self {
         case .all:
             // Use a reasonable past date instead of distantPast to ensure all historical data is included
             // Go back 10 years which should cover any reasonable historical data
             return endDate.addingTimeInterval(-10 * 365 * 24 * 60 * 60)
+        case .custom:
+            // Custom range will be handled by customStartDate in PerformanceChartView
+            return endDate.addingTimeInterval(-30 * 24 * 60 * 60) // Default to 30 days
         default:
             return endDate.addingTimeInterval(-timeInterval)
         }

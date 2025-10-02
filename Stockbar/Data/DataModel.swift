@@ -45,14 +45,20 @@ class DataModel: ObservableObject {
     private let networkService: NetworkService = PythonNetworkService()
     // ------------------------
 
-    private let currencyConverter: CurrencyConverter // Keep as is
+    internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
-    public let historicalDataManager = HistoricalDataManager.shared
+    internal let historicalDataManager = HistoricalDataManager.shared
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let refreshCoordinator = RefreshCoordinator()
+
+    // MARK: - Service Layer
+    internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
+    private var refreshService: RefreshService!
+    private var portfolioCalculationService: PortfolioCalculationService!
+    private var historicalDataCoordinator: HistoricalDataCoordinator!
 
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
     @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
@@ -73,52 +79,20 @@ class DataModel: ObservableObject {
 
     private let logger = Logger.shared
 
-    private var refreshTimer: Timer?
-    private var currentSymbolIndex = 0
-    
     @Published var refreshInterval: TimeInterval = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
         didSet {
             UserDefaults.standard.set(refreshInterval, forKey: "refreshInterval")
+            // Update RefreshService interval when changed
+            Task { @MainActor in
+                refreshService?.refreshInterval = refreshInterval
+            }
         }
     }
     
     // MARK: - Historical Data Backfill State
-    private var isRunningComprehensiveCheck = false
-    private var isRunningStandardCheck = false
     private var hasRunStartupBackfill = false // Prevent duplicate startup tasks
-    private var lastComprehensiveCheckTime: Date = Date.distantPast
-    private let comprehensiveCheckCooldown: TimeInterval = 3600 * 2 // 2 hours minimum between comprehensive checks
     
-    // CRITICAL FIX: Simplify threading to prevent race conditions and memory leaks
-    // Since this is an @MainActor-bound ObservableObject, keep cache access simple
-    private var lastSuccessfulFetch: [String: Date] = [:]
-    private var lastFailedFetch: [String: Date] = [:]
-    
-    // Simplified cache operations without complex threading
-    private func setSuccessfulFetch(for symbol: String, at time: Date) {
-        lastSuccessfulFetch[symbol] = time
-        lastFailedFetch.removeValue(forKey: symbol)
-    }
-    
-    private func setFailedFetch(for symbol: String, at time: Date) {
-        lastFailedFetch[symbol] = time
-    }
-    
-    private func getLastSuccessfulFetch(for symbol: String) -> Date? {
-        return lastSuccessfulFetch[symbol]
-    }
-    
-    private func getLastFailedFetch(for symbol: String) -> Date? {
-        return lastFailedFetch[symbol]
-    }
-    
-    @Published var cacheInterval: TimeInterval = UserDefaults.standard.object(forKey: "cacheInterval") as? TimeInterval ?? 300 { // 5 minutes default
-        didSet {
-            UserDefaults.standard.set(cacheInterval, forKey: "cacheInterval")
-        }
-    }
-    private let retryInterval: TimeInterval = 300 // 5 minutes retry interval for failed fetches
-    private let maxCacheAge: TimeInterval = 3600 // 1 hour max cache age before forcing refresh
+    // Cache management now handled by CacheCoordinator service
     
     // MARK: - Memory Management
     private var memoryOptimizer: MemoryOptimizedDataModel?
@@ -160,13 +134,33 @@ class DataModel: ObservableObject {
 
         setupPublishers() // Keep as is
         Task { await logger.info("DataModel initialized, loading trades asynchronously...") }
-        
+
+        // Initialize services with dependencies (must be done after self is fully initialized)
+        Task { @MainActor in
+            self.refreshService = RefreshService(
+                networkService: networkService,
+                cacheCoordinator: cacheCoordinator,
+                refreshCoordinator: refreshCoordinator,
+                refreshInterval: refreshInterval
+            )
+            self.refreshService.setDataModel(self)
+            
+            self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
+            self.historicalDataCoordinator = HistoricalDataCoordinator(
+                networkService: networkService,
+                historicalDataManager: historicalDataManager
+            )
+
+            // Once core services are available, make sure any stale symbols are refreshed.
+            Task { await self.refreshCriticalSymbols(reason: "service-ready") }
+        }
+
         // Load trades asynchronously
         Task {
             await loadTradesAsync()
-            
+
             // Emergency recovery removed by user request
-            
+
             await MainActor.run {
                 self.startStaggeredRefresh()
             }
@@ -206,20 +200,9 @@ class DataModel: ObservableObject {
                 await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
             }
             
-            // AUTO-BACKFILL: Check for missing historical data and backfill automatically
-            await logger.info("🔍 STARTUP: Checking for missing historical data coverage")
-            await logger.info("🚀 AUTO-BACKFILL: Starting automatic historical data check")
-            
-            // Check if this looks like a first run or we have very little historical data
-            let totalHistoricalSnapshots = await historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
-            let symbolCount = realTimeTrades.count
-            
-            if totalHistoricalSnapshots < (symbolCount * 50) { // Less than ~50 data points per symbol suggests we need backfill
-                await logger.info("🔍 STARTUP: Detected minimal historical data (\(totalHistoricalSnapshots) snapshots for \(symbolCount) symbols). Forcing immediate comprehensive backfill.")
-                lastComprehensiveCheckTime = Date.distantPast // Reset cooldown for immediate execution
-            }
-            
-            await checkAndBackfill5YearHistoricalData()
+            // AUTO-BACKFILL: Delegate to HistoricalDataCoordinator for startup backfill
+            let symbols = realTimeTrades.map { $0.trade.name }
+            await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols)
         }
     }
 
@@ -284,11 +267,9 @@ class DataModel: ObservableObject {
             }
         }
         
-        // Clear old cache entries
-        let cutoffTime = Date().addingTimeInterval(-maxCacheAge)
-        lastSuccessfulFetch = lastSuccessfulFetch.filter { $0.value > cutoffTime }
-        lastFailedFetch = lastFailedFetch.filter { $0.value > cutoffTime }
-        
+        // Clear old cache entries (delegated to CacheCoordinator)
+        cacheCoordinator.clearOldCacheEntries()
+
         // Notify historical data manager to clean up
         await historicalDataManager.clearInconsistentData()
         
@@ -369,6 +350,9 @@ class DataModel: ObservableObject {
                 self.migrateCostCurrencyData()
                 self.migrateRealTimeTradesCurrency()
             }
+
+            // Kick off an immediate refresh for anything that isn't fresh yet
+            await refreshCriticalSymbols(reason: "initial-load")
             
         } catch {
             await logger.error("❌ Failed to load trades from Core Data: \(error)")
@@ -400,7 +384,7 @@ class DataModel: ObservableObject {
     }
     
     
-    private func saveTradingInfo() {
+    internal func saveTradingInfo() {
         let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades.map { ($0.trade.name, $0.realTimeInfo) })
         
         // Move saving to background queue to prevent UI blocking
@@ -419,370 +403,25 @@ class DataModel: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// Checks for missing historical data and triggers backfill if needed (legacy 1-month check)
+    /// Checks for missing historical data and triggers backfill if needed (legacy 1-month check) - delegates to HistoricalDataCoordinator
     @MainActor
     public func checkAndBackfillHistoricalData() async {
-        // Safety check: Don't run if already running
-        guard !isRunningStandardCheck else {
-            await logger.info("🔍 STANDARD: Skipping - standard check already in progress")
-            return
-        }
-        
-        // Don't run standard check if comprehensive check is running
-        guard !isRunningComprehensiveCheck else {
-            await logger.info("🔍 STANDARD: Skipping - comprehensive check in progress")
-            return
-        }
-        
-        isRunningStandardCheck = true
-        defer { isRunningStandardCheck = false }
-        
-        await logger.info("🔍 Checking for missing historical data gaps (1-month scope)")
-        
-        // Log to file
-        await logger.debug("🔍 HISTORICAL BACKFILL: Starting data coverage check at \(Date())")
-        
         let symbols = realTimeTrades.map { $0.trade.name }
-        let calendar = Calendar.current
-        let today = Date()
-        let oneMonthAgo = calendar.date(byAdding: .month, value: -1, to: today) ?? today
-        
-        var symbolsNeedingBackfill: [String] = []
-        
-        for symbol in symbols {
-            // Check if we have complete data for the past month
-            let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-            let recentSnapshots = existingSnapshots.filter { $0.timestamp >= oneMonthAgo }
-            
-            // Count unique days with data in the past month
-            let uniqueDays = Set(recentSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
-            
-            // Calculate business days in the past month (rough estimate)
-            let daysSinceOneMonth = calendar.dateComponents([.day], from: oneMonthAgo, to: today).day ?? 0
-            let estimatedBusinessDays = max(1, daysSinceOneMonth * 5 / 7) // Rough estimate
-            
-            // If we're missing more than 25% of business days, trigger backfill
-            if uniqueDays.count < estimatedBusinessDays * 3 / 4 {
-                symbolsNeedingBackfill.append(symbol)
-                await logger.info("Symbol \(symbol) needs backfill - only \(uniqueDays.count) days of data vs ~\(estimatedBusinessDays) expected business days (\(String(format: "%.1f", Double(uniqueDays.count) / Double(estimatedBusinessDays) * 100))% coverage)")
-            } else {
-                await logger.debug("Symbol \(symbol) has sufficient recent data - \(uniqueDays.count) days (\(String(format: "%.1f", Double(uniqueDays.count) / Double(estimatedBusinessDays) * 100))% coverage)")
-            }
-        }
-        
-        if !symbolsNeedingBackfill.isEmpty {
-            await logger.info("🚀 Starting historical data backfill for \(symbolsNeedingBackfill.count) symbols")
-            await backfillHistoricalData(for: symbolsNeedingBackfill)
-        } else {
-            await logger.info("No symbols need historical data backfill")
-        }
+        await historicalDataCoordinator.checkAndBackfillHistoricalData(symbols: symbols)
     }
     
-    /// Comprehensive 5-year historical data coverage check and automatic backfill
+    /// Comprehensive 5-year historical data coverage check and automatic backfill - delegates to HistoricalDataCoordinator
     @MainActor
     public func checkAndBackfill5YearHistoricalData() async {
-        // Safety check: Don't run if already running
-        guard !isRunningComprehensiveCheck else {
-            await logger.info("🔍 COMPREHENSIVE: Skipping - comprehensive check already in progress")
-            return
-        }
-        
-        // Safety check: Don't run too frequently
-        let timeSinceLastCheck = Date().timeIntervalSince(lastComprehensiveCheckTime)
-        guard timeSinceLastCheck >= comprehensiveCheckCooldown else {
-            await logger.info("🔍 COMPREHENSIVE: Skipping - last check was only \(Int(timeSinceLastCheck/3600)) hours ago (minimum \(Int(comprehensiveCheckCooldown/3600)) hours)")
-            return
-        }
-        
-        isRunningComprehensiveCheck = true
-        defer { 
-            isRunningComprehensiveCheck = false
-            lastComprehensiveCheckTime = Date()
-        }
-        
-        await logger.info("🔍 COMPREHENSIVE: Starting 5-year historical data coverage analysis")
-        
-        let symbols = realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
-        
-        guard !symbols.isEmpty else {
-            await logger.info("No symbols to analyze for 5-year coverage")
-            return
-        }
-        
-        await logger.info("🔍 COMPREHENSIVE: Analyzing \(symbols.count) symbols for 5-year coverage")
-        
-        var symbolsNeedingBackfill: [String] = []
-        let calendar = Calendar.current
-        let today = Date()
-        let fiveYearsAgo = calendar.date(byAdding: .year, value: -5, to: today) ?? today
-        
-        // Analyze each symbol individually to avoid blocking
-        for symbol in symbols {
-            await Task.yield() // Allow UI updates between symbols
-            
-            let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-            let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= fiveYearsAgo }
-            
-            // Count unique days with data in the past 5 years
-            let uniqueDays = Set(historicalSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
-            
-            // Calculate expected business days over 5 years
-            let daysIn5Years = calendar.dateComponents([.day], from: fiveYearsAgo, to: today).day ?? 0
-            let expectedBusinessDays = max(1, daysIn5Years * 5 / 7) // Rough estimate
-            
-            let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
-            
-            // If we have less than 50% coverage over 5 years, trigger backfill
-            if coverageRatio < 0.5 {
-                symbolsNeedingBackfill.append(symbol)
-                await logger.info("📊 COMPREHENSIVE: \(symbol) needs 5-year backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
-            } else {
-                await logger.debug("✅ COMPREHENSIVE: \(symbol) has good 5-year coverage - \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
-            }
-        }
-        
-        if !symbolsNeedingBackfill.isEmpty {
-            await logger.info("🚀 COMPREHENSIVE: Starting automatic 5-year backfill for \(symbolsNeedingBackfill.count) symbols")
-            await staggeredBackfillHistoricalData(for: symbolsNeedingBackfill)
-        } else {
-            await logger.info("✅ COMPREHENSIVE: All symbols have good 5-year historical coverage")
-        }
+        let symbols = realTimeTrades.map { $0.trade.name }
+        await historicalDataCoordinator.checkAndBackfill5YearHistoricalData(symbols: symbols)
     }
     
-    /// Staggered backfill that processes symbols with delays to prevent UI blocking
-    private func staggeredBackfillHistoricalData(for symbols: [String]) async {
-        await logger.info("⏱️ STAGGERED: Starting staggered 5-year backfill for \(symbols.count) symbols")
-        
-        for (index, symbol) in symbols.enumerated() {
-            await logger.info("⏱️ STAGGERED: Processing symbol \(index + 1)/\(symbols.count): \(symbol)")
-            
-            // Process each symbol individually with the chunked system
-            await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
-            
-            // Longer delay between symbols to respect API limits and prevent blocking
-            if index < symbols.count - 1 { // Don't delay after the last symbol
-                await logger.info("⏱️ STAGGERED: Waiting 10 seconds before next symbol...")
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 second delay between symbols
-            }
-        }
-        
-        await logger.info("🏁 STAGGERED: Completed staggered 5-year backfill for all symbols")
-    }
-    
-    /// Backfills historical data for specified symbols in chunks to avoid hanging
+    /// Backfills historical data for specified symbols in chunks to avoid hanging - delegates to HistoricalDataCoordinator
     public func backfillHistoricalData(for symbols: [String]) async {
-        await logger.info("🚀 CHUNKED BACKFILL: Starting 5-year chunked historical data backfill")
-        
-        for symbol in symbols {
-            await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
-            
-            // Add delay between symbols to respect rate limits
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 second delay between symbols
-        }
-        
-        await logger.info("🏁 CHUNKED BACKFILL: Completed 5-year chunked backfill for all symbols")
+        await historicalDataCoordinator.backfillHistoricalData(for: symbols)
     }
     
-    /// Backfills historical data for a single symbol in yearly chunks
-    @MainActor
-    private func backfillHistoricalDataForSymbol(_ symbol: String, yearsToFetch: Int) async {
-        let calendar = Calendar.current
-        let endDate = Date()
-        
-        await logger.info("🔄 CHUNKED BACKFILL: Starting \(yearsToFetch)-year backfill for \(symbol)")
-        
-        // Determine what data we already have
-        let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-        let existingDates = Set(existingSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
-        
-        var oldestExistingDate: Date?
-        var newestExistingDate: Date?
-        
-        if !existingSnapshots.isEmpty {
-            let sortedSnapshots = existingSnapshots.sorted { $0.timestamp < $1.timestamp }
-            oldestExistingDate = sortedSnapshots.first?.timestamp
-            newestExistingDate = sortedSnapshots.last?.timestamp
-            
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateStyle = .medium
-            
-            await logger.info("📊 CHUNKED BACKFILL: \(symbol) existing data: \(existingSnapshots.count) points from \(dateFormatter.string(from: oldestExistingDate!)) to \(dateFormatter.string(from: newestExistingDate!))")
-        } else {
-            await logger.info("📊 CHUNKED BACKFILL: \(symbol) has no existing historical data")
-        }
-        
-        // Fetch data in yearly chunks, working backwards from current date
-        for yearOffset in 1...yearsToFetch {
-            let chunkEndDate = calendar.date(byAdding: .year, value: -(yearOffset - 1), to: endDate) ?? endDate
-            let chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
-            
-            // Skip this chunk if we already have good coverage for this period
-            if let oldestExisting = oldestExistingDate, chunkEndDate <= oldestExisting {
-                await logger.info("⏭️ CHUNKED BACKFILL: Skipping year \(yearOffset) for \(symbol) - already have data for this period")
-                continue
-            }
-            
-            // Check if this chunk has significant gaps
-            let daysInChunk = calendar.dateComponents([.day], from: chunkStartDate, to: chunkEndDate).day ?? 0
-            let expectedBusinessDays = max(1, daysInChunk * 5 / 7) // Rough estimate
-            
-            let chunkExistingDates = existingDates.filter { date in
-                date >= chunkStartDate && date < chunkEndDate
-            }
-            
-            let coverageRatio = Double(chunkExistingDates.count) / Double(expectedBusinessDays)
-            
-            if coverageRatio > 0.8 { // If we have >80% coverage, skip this chunk
-                await logger.info("⏭️ CHUNKED BACKFILL: Skipping year \(yearOffset) for \(symbol) - good coverage (\(String(format: "%.1f", coverageRatio * 100))%)")
-                continue
-            }
-            
-            await logger.info("📅 CHUNKED BACKFILL: Fetching year \(yearOffset) for \(symbol) (\(chunkExistingDates.count)/\(expectedBusinessDays) days, \(String(format: "%.1f", coverageRatio * 100))% coverage)")
-            
-            await fetchHistoricalDataChunk(for: symbol, from: chunkStartDate, to: chunkEndDate, yearOffset: yearOffset)
-            
-            // Add delay between chunks to respect rate limits
-            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 second delay between chunks
-        }
-        
-        await logger.info("✅ CHUNKED BACKFILL: Completed \(yearsToFetch)-year backfill for \(symbol)")
-    }
-    
-    /// Fetches a single chunk of historical data
-    @MainActor
-    private func fetchHistoricalDataChunk(for symbol: String, from startDate: Date, to endDate: Date, yearOffset: Int) async {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        
-        do {
-            await logger.info("🔄 CHUNKED BACKFILL: Fetching chunk \(yearOffset) for \(symbol): \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
-            
-            let historicalData = try await networkService.fetchHistoricalData(for: symbol, from: startDate, to: endDate)
-            
-            await logger.info("📥 CHUNKED BACKFILL: Received \(historicalData.count) data points for \(symbol) chunk \(yearOffset)")
-            
-            if !historicalData.isEmpty {
-                // Filter out dates that already have data to avoid duplicates
-                let calendar = Calendar.current
-                let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-                let existingDates = Set(existingSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
-                
-                let newSnapshots = historicalData.filter { snapshot in
-                    let snapshotDay = calendar.startOfDay(for: snapshot.timestamp)
-                    return !existingDates.contains(snapshotDay)
-                }
-                
-                await logger.info("🔍 CHUNKED BACKFILL: After filtering, \(newSnapshots.count) new snapshots for \(symbol) chunk \(yearOffset)")
-                
-                if !newSnapshots.isEmpty {
-                    await addHistoricalSnapshots(newSnapshots, for: symbol)
-                    await logger.info("✅ CHUNKED BACKFILL: Added \(newSnapshots.count) new data points for \(symbol) chunk \(yearOffset)")
-                    
-                    // Log sample data for verification
-                    if let first = newSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).first,
-                       let last = newSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).last {
-                        await logger.info("📊 CHUNKED BACKFILL: \(symbol) chunk \(yearOffset) range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
-                    }
-                } else {
-                    await logger.info("ℹ️ CHUNKED BACKFILL: No new data needed for \(symbol) chunk \(yearOffset) - all dates already exist")
-                }
-            } else {
-                await logger.warning("⚠️ CHUNKED BACKFILL: No data received for \(symbol) chunk \(yearOffset)")
-            }
-            
-        } catch {
-            await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
-            
-            // Log to file for debugging
-            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
-        }
-    }
-    
-    /// Legacy backfill method - now calls the chunked version
-    @MainActor
-    public func backfillHistoricalDataLegacy(for symbols: [String]) async {
-        let calendar = Calendar.current
-        let endDate = Date()
-        // Start with 1 year instead of 5 years to test
-        let startDate = calendar.date(byAdding: .year, value: -1, to: endDate) ?? endDate
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .short
-        
-        await logger.info("🚀 HISTORICAL BACKFILL: Starting for \(symbols.count) symbols")
-        await logger.info("🚀 HISTORICAL BACKFILL: Date range \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
-        await logger.info("🚀 HISTORICAL BACKFILL: Calculated start date: \(startDate)")
-        await logger.info("🚀 HISTORICAL BACKFILL: End date: \(endDate)")
-        
-        // Log to file
-        await logger.debug("🚀 HISTORICAL BACKFILL: Starting for \(symbols.count) symbols at \(Date()). Symbols: \(symbols). Date range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
-        
-        for symbol in symbols {
-            do {
-                await logger.info("🔄 HISTORICAL BACKFILL: Starting fetch for \(symbol)")
-                
-                // Fetch historical data directly without timeout for now
-                let historicalData = try await networkService.fetchHistoricalData(for: symbol, from: startDate, to: endDate)
-                
-                await logger.info("📥 HISTORICAL BACKFILL: Received \(historicalData.count) data points for \(symbol)")
-                
-                if !historicalData.isEmpty {
-                    // Show sample of received data for debugging
-                    if historicalData.count > 0 {
-                        let sortedData = historicalData.sorted { $0.timestamp < $1.timestamp }
-                        if let first = sortedData.first, let last = sortedData.last {
-                            await logger.info("📊 HISTORICAL BACKFILL: \(symbol) data range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
-                        }
-                        
-                        // Show first few data points
-                        await logger.info("📊 HISTORICAL BACKFILL: First 3 data points for \(symbol):")
-                        for (index, snapshot) in sortedData.prefix(3).enumerated() {
-                            await logger.info("   \(index + 1): \(dateFormatter.string(from: snapshot.timestamp)) - Price: \(snapshot.price)")
-                        }
-                    }
-                    
-                    // Filter out dates that already have data to avoid duplicates
-                    let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-                    let existingDates = Set(existingSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
-                    
-                    await logger.info("🔍 HISTORICAL BACKFILL: \(symbol) has \(existingSnapshots.count) existing snapshots")
-                    
-                    let newSnapshots = historicalData.filter { snapshot in
-                        let snapshotDay = calendar.startOfDay(for: snapshot.timestamp)
-                        return !existingDates.contains(snapshotDay)
-                    }
-                    
-                    await logger.info("🔍 HISTORICAL BACKFILL: After filtering, \(newSnapshots.count) new snapshots for \(symbol)")
-                    
-                    if !newSnapshots.isEmpty {
-                        // Add the new snapshots to historical data manager
-                        await addHistoricalSnapshots(newSnapshots, for: symbol)
-                        await logger.info("✅ HISTORICAL BACKFILL: Added \(newSnapshots.count) new historical data points for \(symbol) (filtered from \(historicalData.count) total)")
-                        
-                        // Verify the data was actually stored
-                        let storedCount = historicalDataManager.priceSnapshots[symbol]?.count ?? 0
-                        await logger.info("📊 HISTORICAL BACKFILL: \(symbol) now has \(storedCount) total stored data points")
-                    } else {
-                        await logger.info("ℹ️ HISTORICAL BACKFILL: No new historical data points needed for \(symbol) - all dates already exist")
-                    }
-                } else {
-                    await logger.warning("⚠️ HISTORICAL BACKFILL: No historical data received for \(symbol)")
-                }
-                
-                // Add delay between requests to respect rate limits
-                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
-                
-            } catch {
-                await logger.error("❌ HISTORICAL BACKFILL: Failed to backfill historical data for \(symbol): \(error.localizedDescription)")
-                
-                // Log to file for debugging
-                await logger.error("❌ HISTORICAL BACKFILL ERROR for \(symbol) at \(Date()): \(error.localizedDescription)")
-            }
-        }
-        
-        await logger.info("🏁 HISTORICAL BACKFILL: Completed historical data backfill process")
-    }
     
     /// Adds historical snapshots to the data manager
     @MainActor
@@ -790,29 +429,16 @@ class DataModel: ObservableObject {
         historicalDataManager.addImportedSnapshots(snapshots, for: symbol)
     }
     
-    /// Manually triggers a 5-year chunked historical data backfill for all symbols
+    /// Manually triggers a 5-year chunked historical data backfill for all symbols - delegates to HistoricalDataCoordinator
     public func triggerFullHistoricalBackfill() async {
         let symbols = realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
-        
-        guard !symbols.isEmpty else {
-            await logger.info("No symbols to backfill")
-            return
-        }
-        
-        await logger.info("🚀 MANUAL TRIGGER: Starting full 5-year historical backfill for \(symbols.count) symbols")
-        await backfillHistoricalData(for: symbols)
-        await logger.info("🏁 MANUAL TRIGGER: Full 5-year historical backfill completed")
+        await historicalDataCoordinator.triggerFullHistoricalBackfill(symbols: symbols)
     }
     
-    /// Returns the current status of automatic historical data checking
+    /// Returns the current status of automatic historical data checking - delegates to HistoricalDataCoordinator
+    @MainActor
     public func getHistoricalDataStatus() -> (isRunningComprehensive: Bool, isRunningStandard: Bool, lastComprehensiveCheck: Date, nextComprehensiveCheck: Date) {
-        let nextCheck = lastComprehensiveCheckTime.addingTimeInterval(comprehensiveCheckCooldown)
-        return (
-            isRunningComprehensive: isRunningComprehensiveCheck,
-            isRunningStandard: isRunningStandardCheck,
-            lastComprehensiveCheck: lastComprehensiveCheckTime,
-            nextComprehensiveCheck: nextCheck
-        )
+        return historicalDataCoordinator.getHistoricalDataStatus()
     }
     
     /// Triggers comprehensive 5-year portfolio value calculation in monthly chunks
@@ -893,386 +519,115 @@ class DataModel: ObservableObject {
     
     /// Refreshes all stock data from the network using the configured networkService
     @objc func refreshAllTrades() async {
-        await refreshCoordinator.withLock { [weak self] in
-            guard let self else { return }
-            await self.performRefreshAllTrades()
-        }
+        await performRefreshAllTrades()
     }
-    
-    /// Internal method that performs the actual refresh work on the main actor
-    @MainActor
-    private func performRefreshAllTrades() async {
-        await logger.info("Starting refresh for all trades using PythonNetworkService")
 
-        guard !realTimeTrades.isEmpty else {
-            await logger.info("No trades to refresh.")
+    /// Triggers an immediate refresh for the provided symbols, bypassing the
+    /// staggered rotation. Symbols are matched case-insensitively against the
+    /// current portfolio.
+    func refreshSymbolsImmediately(_ symbols: [String], reason: String) async {
+        let uniqueTargets = Array(Set(symbols.map { $0.uppercased() }))
+        guard !uniqueTargets.isEmpty else { return }
+
+        guard refreshService != nil else {
+            await Logger.shared.warning("Immediate refresh (\(reason)) skipped – refresh service not ready yet")
             return
         }
 
-        let allSymbols = realTimeTrades.map { $0.trade.name }
+        await Logger.shared.info("🔄 Immediate refresh (\(reason)): \(uniqueTargets.count) symbols queued")
+
+        let resolvedSymbols = realTimeTrades
+            .map { $0.trade.name }
+            .filter { uniqueTargets.contains($0.uppercased()) }
+
+        guard !resolvedSymbols.isEmpty else {
+            await Logger.shared.warning("Immediate refresh (\(reason)) resolved to 0 active symbols - skipping")
+            return
+        }
+
+        await performRefreshAllTrades(limitedTo: resolvedSymbols)
+    }
+
+    /// Convenience helper that inspects cache status and refreshes any symbol
+    /// that is not currently fresh.
+    func refreshCriticalSymbols(reason: String) async {
         let now = Date()
-
-        let symbolsToRefresh = allSymbols.filter { symbol in
-            if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
-                let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
-                if timeSinceSuccess < cacheInterval {
-                    Task { await logger.debug("Symbol \(symbol) successfully cached for \(Int(timeSinceSuccess))s, skipping refresh") }
-                    return false
-                }
+        let needsRefresh = realTimeTrades.compactMap { trade -> String? in
+            let status = cacheCoordinator.getCacheStatus(for: trade.trade.name, at: now)
+            switch status {
+            case .fresh:
+                return nil
+            default:
+                return trade.trade.name
             }
-
-            if let lastFailure = getLastFailedFetch(for: symbol) {
-                let timeSinceFailure = now.timeIntervalSince(lastFailure)
-                if timeSinceFailure < retryInterval {
-                    Task { await logger.debug("Symbol \(symbol) failed \(Int(timeSinceFailure))s ago, waiting for retry interval") }
-                    return false
-                }
-            }
-
-            Task { await logger.debug("Symbol \(symbol) needs refresh") }
-            return true
         }
 
-        let symbolsToForceRefresh = allSymbols.filter { symbol in
-            guard let lastSuccess = getLastSuccessfulFetch(for: symbol) else { return true }
-            let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
-            return timeSinceSuccess >= maxCacheAge
-        }
-
-        let finalSymbolsToRefresh = Array(Set(symbolsToRefresh + symbolsToForceRefresh))
-
-        if finalSymbolsToRefresh.isEmpty {
-            await logger.info("All \(allSymbols.count) symbols are cached or in retry cooldown, skipping network refresh")
+        guard !needsRefresh.isEmpty else {
+            await Logger.shared.debug("No critical symbols detected for immediate refresh (reason: \(reason))")
             return
         }
 
-        await logger.info("About to refresh \(finalSymbolsToRefresh.count) of \(allSymbols.count) trades: \(finalSymbolsToRefresh)")
-
-        do {
-            let results = try await networkService.fetchBatchQuotes(for: finalSymbolsToRefresh)
-
-            guard !results.isEmpty else {
-                await logger.warning("Refresh completed but received no results from network service.")
-                return
-            }
-
-            var anySuccessfulUpdate = false
-            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol, $0) })
-
-            for idx in realTimeTrades.indices {
-                let symbol = realTimeTrades[idx].trade.name
-                if let res = resultDict[symbol] {
-                    let wasSuccessful = realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
-
-                    if wasSuccessful {
-                        setSuccessfulFetch(for: symbol, at: now)
-                        await logger.debug("Updated cache for \(symbol) - successful fetch")
-                        anySuccessfulUpdate = true
-                    } else {
-                        setFailedFetch(for: symbol, at: now)
-                        await logger.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
-                    }
-
-                    await logger.debug("Updated trade \(symbol) from refresh result.")
-                } else {
-                    setFailedFetch(for: symbol, at: now)
-                    await logger.warning("No result returned for symbol \(symbol), treating as failure.")
-                }
-            }
-
-            if anySuccessfulUpdate {
-                saveTradingInfo()
-                Task { await historicalDataManager.recordSnapshot(from: self) }
-
-                let randomCheck = Int.random(in: 1...100)
-
-                if randomCheck == 1 {
-                    if !isRunningComprehensiveCheck && !isRunningStandardCheck {
-                        Task {
-                            await logger.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
-                            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
-                        }
-                    }
-                } else if randomCheck <= 2 {
-                    if results.count > 0 && !isRunningComprehensiveCheck {
-                        Task {
-                            await logger.info("🔍 PERIODIC: Triggering comprehensive 5-year gap check")
-                            await checkAndBackfill5YearHistoricalData()
-                        }
-                    }
-                } else if randomCheck <= 4 {
-                    if results.count > 0 && !isRunningStandardCheck {
-                        Task {
-                            await logger.info("🔍 PERIODIC: Triggering standard 1-month gap check")
-                            await checkAndBackfillHistoricalData()
-                        }
-                    }
-                }
-            }
-
-            await logger.info("Successfully processed \(results.count) trades of \(finalSymbolsToRefresh.count) requested.")
-        } catch {
-            for symbol in finalSymbolsToRefresh {
-                setFailedFetch(for: symbol, at: now)
-            }
-
-            if let networkError = error as? NetworkError {
-                await logger.error("Failed to refresh trades: \(networkError.localizedDescription)")
-            } else {
-                await logger.error("Failed to refresh trades (unknown error): \(error.localizedDescription)")
-            }
+        guard refreshService != nil else {
+            await Logger.shared.debug("Refresh service not ready; deferring critical refresh (reason: \(reason))")
+            return
         }
+
+        await refreshSymbolsImmediately(needsRefresh, reason: reason)
     }
 
-    /// Memory-efficient calculation of portfolio metrics
+    /// Internal method that delegates refresh work to the RefreshService once it is ready.
+    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil) async {
+        guard let refreshService else {
+            await Logger.shared.warning("performRefreshAllTrades called before refreshService initialized")
+            return
+        }
+
+        await refreshService.performRefreshAllTrades(limitedTo: symbols)
+    }
+
+    /// Memory-efficient calculation of portfolio metrics - delegates to PortfolioCalculationService
     func calculatePortfolioMetricsEfficiently() -> (gains: Double, value: Double, currency: String) {
-        guard isMemoryOptimizationEnabled, let optimizer = memoryOptimizer else {
-            // Fallback to original methods
-            let gains = calculateNetGains()
-            let value = calculateNetValue()
-            return (gains.amount, value.amount, preferredCurrency)
+        guard let service = portfolioCalculationService else {
+            // Fallback if service not initialized yet
+            return (0.0, 0.0, preferredCurrency)
         }
-        
-        let metrics = optimizer.calculatePortfolioMetricsEfficiently(trades: realTimeTrades)
-        
-        // Convert to preferred currency
-        var finalGains = metrics.totalGains
-        var finalValue = metrics.totalValue
-        
-        if preferredCurrency != "USD" {
-            finalGains = currencyConverter.convert(amount: metrics.totalGains, from: "USD", to: preferredCurrency)
-            finalValue = currencyConverter.convert(amount: metrics.totalValue, from: "USD", to: preferredCurrency)
-        }
-        
-        return (finalGains, finalValue, preferredCurrency)
+        return service.calculatePortfolioMetricsEfficiently(
+            trades: realTimeTrades,
+            preferredCurrency: preferredCurrency,
+            memoryOptimizer: isMemoryOptimizationEnabled ? memoryOptimizer : nil
+        )
     }
 
-    /// Calculates the total net gains across all trades
+    /// Calculates the total net gains across all trades - delegates to PortfolioCalculationService
     func calculateNetGains() -> (amount: Double, currency: String) {
-        Task { await logger.debug("Calculating net gains in \(preferredCurrency)") }
-        var totalGainsUSD = 0.0
-
-        for realTimeTradeItem in realTimeTrades {
-            // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
-                Task { await logger.debug("Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
-                continue
-            }
-
-            // Get normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: realTimeTradeItem.trade.name)
-            guard !adjustedCost.isNaN, adjustedCost > 0 else {
-                Task { await logger.debug("Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid cost.") }
-                continue
-            }
-
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
-            let units = realTimeTradeItem.trade.position.unitSize
-            let currency = realTimeTradeItem.realTimeInfo.currency
-            let symbol = realTimeTradeItem.trade.name
-            
-            Task { await logger.debug("Using normalized cost for \(symbol): \(adjustedCost) (from \(realTimeTradeItem.trade.position.positionAvgCostString) \(realTimeTradeItem.trade.position.costCurrency ?? "auto-detected"))") }
-
-            // Calculate gains in the stock's currency (currentPrice and adjustedCost are now in same currency)
-            let rawGains = (currentPrice - adjustedCost) * units
-
-            // Convert to USD for aggregation
-            var gainsInUSD = rawGains
-            if let knownCurrency = currency {
-                if knownCurrency == "GBP" {
-                    gainsInUSD = currencyConverter.convert(amount: rawGains, from: "GBP", to: "USD")
-                } else if knownCurrency != "USD" {
-                    gainsInUSD = currencyConverter.convert(amount: rawGains, from: knownCurrency, to: "USD")
-                }
-                // If knownCurrency is USD, gainsInUSD remains rawGains
-            } else {
-                // Assume USD if currency is nil
-                Task { await logger.warning("Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for gain calculation.") }
-                // gainsInUSD remains rawGains
-            }
-
-            Task { await logger.debug("Gain calculation for \(symbol): currentPrice=\(currentPrice), adjustedCost=\(adjustedCost), units=\(units), currency=\(currency ?? "nil"), rawGains=\(rawGains), gainsInUSD=\(gainsInUSD)") }
-            totalGainsUSD += gainsInUSD
+        guard let service = portfolioCalculationService else {
+            // Fallback if service not initialized yet
+            return (0.0, preferredCurrency)
         }
-
-        // Convert final total to preferred currency - Keep as is
-        var finalAmount = totalGainsUSD
-         if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-             let gbpAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: "GBP")
-             finalAmount = gbpAmount * 100.0 // Convert GBP to GBX
-         } else if preferredCurrency != "USD" { // Only convert if not already USD
-             finalAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: preferredCurrency)
-         }
-        // If preferredCurrency is USD, finalAmount remains totalGainsUSD
-
-        Task { await logger.debug("Net gains calculated: \(finalAmount) \(preferredCurrency)") }
-        return (finalAmount, preferredCurrency)
+        return service.calculateNetGains(trades: realTimeTrades, preferredCurrency: preferredCurrency)
     }
 
-    /// Calculates the total portfolio value (market value) in the preferred currency
+    /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
     func calculateNetValue() -> (amount: Double, currency: String) {
-        Task { await logger.debug("Calculating net value in \(preferredCurrency)") }
-        var totalValueUSD = 0.0
-
-        for realTimeTradeItem in realTimeTrades {
-            // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
-                Task { await logger.debug("Skipping net value calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
-                continue
-            }
-
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
-            let units = realTimeTradeItem.trade.position.unitSize
-            let currency = realTimeTradeItem.realTimeInfo.currency
-            let symbol = realTimeTradeItem.trade.name
-            
-            // Calculate market value in the stock's currency
-            let marketValueInStockCurrency = currentPrice * units
-
-            // Convert to USD for aggregation
-            var marketValueInUSD = marketValueInStockCurrency
-            if let knownCurrency = currency {
-                if knownCurrency == "GBP" {
-                    marketValueInUSD = currencyConverter.convert(amount: marketValueInStockCurrency, from: "GBP", to: "USD")
-                } else if knownCurrency != "USD" {
-                    marketValueInUSD = currencyConverter.convert(amount: marketValueInStockCurrency, from: knownCurrency, to: "USD")
-                }
-                // If knownCurrency is USD, marketValueInUSD remains marketValueInStockCurrency
-            } else {
-                // Assume USD if currency is nil
-                Task { await logger.warning("Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for value calculation.") }
-                // marketValueInUSD remains marketValueInStockCurrency
-            }
-
-            Task { await logger.debug("Value calculation for \(symbol): currentPrice=\(currentPrice), units=\(units), currency=\(currency ?? "nil"), marketValueInStockCurrency=\(marketValueInStockCurrency), marketValueInUSD=\(marketValueInUSD)") }
-            totalValueUSD += marketValueInUSD
+        guard let service = portfolioCalculationService else {
+            // Fallback if service not initialized yet
+            return (0.0, preferredCurrency)
         }
-
-        // Convert final total to preferred currency
-        var finalAmount = totalValueUSD
-        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-            let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
-            finalAmount = gbpAmount * 100.0 // Convert GBP to GBX
-        } else if preferredCurrency != "USD" { // Only convert if not already USD
-            finalAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
-        }
-        // If preferredCurrency is USD, finalAmount remains totalValueUSD
-
-        Task { await logger.debug("Net value calculated: \(finalAmount) \(preferredCurrency)") }
-        return (finalAmount, preferredCurrency)
+        return service.calculateNetValue(trades: realTimeTrades, preferredCurrency: preferredCurrency)
     }
 
     func startStaggeredRefresh() {
-        refreshTimer?.invalidate()
-        currentSymbolIndex = 0
-        let count = max(1, realTimeTrades.count)
-        let interval = max(60.0, refreshInterval / Double(count)) // Minimum 60 seconds between individual refreshes
-        
-        print("🔄 [DataModel] Starting staggered refresh: \(count) symbols, interval=\(interval)s")
-        
-        // Reduced file logging frequency to improve performance
-        // let debugInfo = "Starting refresh: \(count) symbols, interval=\(interval)s at \(Date())\n"
-        // if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-        //     let debugFile = documentsPath.appendingPathComponent("stockbar_debug.log")
-        //     try? debugInfo.appendToFile(url: debugFile)
-        // }
-        
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.refreshNextSymbol()
+        // Delegate to RefreshService
+        Task { @MainActor in
+            refreshService?.startStaggeredRefresh()
         }
     }
 
-    private func refreshNextSymbol() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.refreshCoordinator.withLock {
-                await self.performRefreshNextSymbol()
-            }
+    func stopStaggeredRefresh() {
+        // Delegate to RefreshService
+        Task { @MainActor in
+            refreshService?.stopStaggeredRefresh()
         }
-    }
-
-    @MainActor
-    private func performRefreshNextSymbol() async {
-        guard !realTimeTrades.isEmpty else {
-            print("🔄 [DataModel] No trades to refresh")
-            return
-        }
-
-        if currentSymbolIndex >= realTimeTrades.count {
-            currentSymbolIndex = 0
-        }
-
-        let symbol = realTimeTrades[currentSymbolIndex].trade.name
-        print("🔄 [DataModel] Refreshing symbol: \(symbol) (index \(currentSymbolIndex)/\(realTimeTrades.count))")
-
-        let now = Date()
-
-        if let lastSuccess = getLastSuccessfulFetch(for: symbol) {
-            let timeSinceSuccess = now.timeIntervalSince(lastSuccess)
-            if timeSinceSuccess < cacheInterval {
-                Task { await logger.debug("Skipping individual refresh for \(symbol) - successfully cached for \(Int(timeSinceSuccess))s") }
-                currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
-                return
-            }
-        }
-
-        if let lastFailure = getLastFailedFetch(for: symbol) {
-            let timeSinceFailure = now.timeIntervalSince(lastFailure)
-            if timeSinceFailure < retryInterval {
-                Task { await logger.debug("Skipping individual refresh for \(symbol) - failed \(Int(timeSinceFailure))s ago, waiting for retry") }
-                currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
-                return
-            }
-        }
-
-        do {
-            let result: StockFetchResult
-            if let pythonService = networkService as? PythonNetworkService {
-                result = try await pythonService.fetchEnhancedQuote(for: symbol)
-            } else {
-                result = try await networkService.fetchQuote(for: symbol)
-            }
-
-            if let index = realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
-                let wasSuccessful = realTimeTrades[index].updateWithResult(result, retainOnFailure: true)
-
-                if wasSuccessful {
-                    setSuccessfulFetch(for: symbol, at: now)
-                    Task { await logger.debug("Updated individual cache for \(symbol) - successful fetch") }
-                    saveTradingInfo()
-
-                    if Int.random(in: 1...10) == 1 {
-                        Task.detached(priority: .utility) { [logger] in
-                            await logger.debug("✅ SUCCESS: Updated \(symbol) at \(Date()). Triggering snapshot after successful update for \(symbol) at \(Date())")
-                        }
-                    }
-
-                    Task { await historicalDataManager.recordSnapshot(from: self) }
-                } else {
-                    setFailedFetch(for: symbol, at: now)
-                    Task { await logger.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data") }
-
-                    if Int.random(in: 1...5) == 1 {
-                        Task.detached(priority: .utility) { [logger] in
-                            await logger.warning("❌ FAILED: Update failed for \(symbol) at \(Date())")
-                        }
-                    }
-                }
-            }
-        } catch {
-            setFailedFetch(for: symbol, at: now)
-            Task { await logger.debug("Individual refresh failed for \(symbol): \(error.localizedDescription)") }
-
-            if Int.random(in: 1...3) == 1 {
-                Task.detached(priority: .utility) { [logger] in
-                    await logger.error("🚨 ERROR: Network error for \(symbol) at \(Date()): \(error.localizedDescription)")
-                }
-            }
-        }
-
-        currentSymbolIndex = (currentSymbolIndex + 1) % max(realTimeTrades.count, 1)
     }
 
     // MARK: - Private Methods
@@ -1560,24 +915,113 @@ class DataModel: ObservableObject {
 // MARK: - RealTimeTrade Extension
 
 extension RealTimeTrade {
+    /// Infers market state based on current time and symbol timezone
+    private func inferMarketState(for symbol: String) -> String? {
+        let now = Date()
+        let calendar = Calendar.current
+
+        // Determine timezone based on symbol
+        let timeZone: TimeZone
+        if symbol.uppercased().hasSuffix(".L") {
+            // London Stock Exchange
+            timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone.current
+        } else {
+            // US markets (assume NYSE/NASDAQ)
+            timeZone = TimeZone(identifier: "America/New_York") ?? TimeZone.current
+        }
+
+        var components = calendar.dateComponents(in: timeZone, from: now)
+        let hour = components.hour ?? 12
+        let minute = components.minute ?? 0
+        let weekday = components.weekday ?? 1 // 1 = Sunday, 7 = Saturday
+
+        // Check if weekend
+        if weekday == 1 || weekday == 7 {
+            return "CLOSED"
+        }
+
+        if symbol.uppercased().hasSuffix(".L") {
+            // LSE hours (London time)
+            // Pre-market: 7:00-8:00
+            // Regular: 8:00-16:30
+            // Post-market: 16:30-17:30
+            // Closed: 17:30-7:00
+            if hour >= 7 && hour < 8 {
+                return "PRE"
+            } else if hour >= 8 && (hour < 16 || (hour == 16 && minute < 30)) {
+                return "REGULAR"
+            } else if (hour == 16 && minute >= 30) || (hour == 17 && minute < 30) {
+                return "POST"
+            } else {
+                return "CLOSED"
+            }
+        } else {
+            // US market hours (Eastern time)
+            // Pre-market: 4:00-9:30
+            // Regular: 9:30-16:00
+            // Post-market: 16:00-20:00
+            // Closed: 20:00-4:00
+            if hour >= 4 && (hour < 9 || (hour == 9 && minute < 30)) {
+                return "PRE"
+            } else if (hour == 9 && minute >= 30) || (hour >= 10 && hour < 16) {
+                return "REGULAR"
+            } else if hour >= 16 && hour < 20 {
+                return "POST"
+            } else {
+                return "CLOSED"
+            }
+        }
+    }
+
     /// Updates the trade with new data from the network service
     /// Returns true if the update was successful (non-NaN data), false if it failed and old data was retained
     func updateWithResult(_ result: StockFetchResult, retainOnFailure: Bool = true) -> Bool {
+        let validator = DataValidationService.shared
+
         // Use separate prices for different purposes
         let regularPrice = result.regularMarketPrice  // For day calculations
         let displayPrice = result.displayPrice        // For market value and display
         let prevClose = result.regularMarketPreviousClose
-        
-        // Check if this is a failed fetch (NaN values)
-        let isFetchFailure = regularPrice.isNaN || prevClose.isNaN
+
+        // Sanitize price data using validation service
+        let (sanitizedRegularPrice, sanitizedPrevClose) = validator.sanitizeStockData(
+            price: regularPrice,
+            previousClose: prevClose
+        )
+
+        // Check if this is a failed fetch (NaN values or invalid prices)
+        let isFetchFailure = sanitizedRegularPrice == nil || sanitizedPrevClose == nil
         
         if isFetchFailure {
             Task { await Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)") }
-            
+
             if retainOnFailure {
-                // Don't update the price data, but we can update the timestamp to show when we last tried
+                // Don't update the price data, but DO update the timestamp to show when we last tried
                 // Keep existing currentPrice, previousClose, prevClosePrice, currency
                 Task { await Logger.shared.info("Retaining last successful data for \(result.symbol)") }
+
+                // CRITICAL: Update timestamp and metadata even on failure so UI shows fresh "last updated" time
+                self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+                self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+                self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? self.realTimeInfo.exchangeTimezoneName
+                self.realTimeInfo.shortName = result.shortName ?? self.realTimeInfo.shortName
+
+                // Market state handling: if result provides a state, use it; otherwise infer from current time
+                if let newMarketState = result.marketState?.rawValue {
+                    self.realTimeInfo.marketState = newMarketState
+                } else {
+                    // When FMP fallback is used (no market state), infer based on current time
+                    self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
+                }
+
+                // Also update pre/post market times if available
+                if let preTime = result.preMarketTime {
+                    self.realTimeInfo.preMarketTime = preTime
+                }
+                if let postTime = result.postMarketTime {
+                    self.realTimeInfo.postMarketTime = postTime
+                }
+
                 return false // Indicate failure
             } else {
                 // Old behavior - update with NaN values
@@ -1590,9 +1034,10 @@ extension RealTimeTrade {
         
         // IMPORTANT: Our Python script already converts pence to pounds for .L stocks
         // So we should NOT do any additional conversion here
-        var finalRegularPrice = regularPrice
-        var finalDisplayPrice = displayPrice
-        var finalPrevClose = prevClose
+        // Use sanitized values if validation passed, otherwise use originals
+        var finalRegularPrice = sanitizedRegularPrice ?? regularPrice
+        var finalDisplayPrice = displayPrice  // Display price not currently sanitized
+        var finalPrevClose = sanitizedPrevClose ?? prevClose
         
         // Set default currency if not specified
         if currency == nil {
@@ -1619,26 +1064,35 @@ extension RealTimeTrade {
             self.realTimeInfo.postMarketChange = result.postMarketChange
             self.realTimeInfo.postMarketChangePercent = result.postMarketChangePercent
             self.realTimeInfo.postMarketTime = result.postMarketTime
-            self.realTimeInfo.marketState = result.marketState?.rawValue
         }
         
-        // Always update metadata (but not the last update time if we're retaining old data)
-        if !isFetchFailure || !retainOnFailure {
-            self.realTimeInfo.lastUpdateTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970) // Fallback to current time if nil
-            self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970) // Set the field that getTimeInfo() reads
+        // ALWAYS update timestamp, metadata, and market state - even if we retained old price data
+        // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
+        self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+        self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+        self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
+        self.realTimeInfo.shortName = result.shortName ?? self.trade.name
+
+        // Market state handling: if result provides a state, use it; otherwise infer from current time
+        if let newMarketState = result.marketState?.rawValue {
+            self.realTimeInfo.marketState = newMarketState
+        } else {
+            // When FMP fallback is used (no market state), infer based on current time
+            self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
         }
-        
-        self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT" // Set a default timezone
-        self.realTimeInfo.shortName = result.shortName ?? self.trade.name // Use symbol if name nil
 
         let logger = Logger.shared // Already defined in DataModel, but ok for local scope too
-        
+
         if isFetchFailure && retainOnFailure {
             Task { await logger.info("Retained old data for \(self.trade.name): Price \(self.realTimeInfo.currentPrice) Currency: \(self.realTimeInfo.currency ?? "N/A") (fetch failed)") }
         } else {
             Task { await logger.info("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) prevClosePrice: \(self.realTimeInfo.prevClosePrice) Currency: \(self.realTimeInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
         }
-        
+
+        // CRITICAL: Manually trigger objectWillChange since we modified struct properties
+        // @Published doesn't detect changes to properties WITHIN a struct, only replacement of the entire struct
+        objectWillChange.send()
+
         return !isFetchFailure // Return true if successful, false if failed
     }
 }

@@ -137,7 +137,10 @@ class PortfolioManager {
 struct PreferenceRow: View {
     @ObservedObject var realTimeTrade: RealTimeTrade
     @State private var showCurrencyPicker = false
-    
+    @State private var validationError: String? = nil
+
+    private let validator = DataValidationService.shared
+
     private var detectedCurrency: String {
         if let costCurrency = realTimeTrade.trade.position.costCurrency {
             return costCurrency
@@ -145,7 +148,7 @@ struct PreferenceRow: View {
         // Auto-detect based on symbol
         return realTimeTrade.trade.name.uppercased().hasSuffix(".L") ? "GBX" : "USD"
     }
-    
+
     private var availableCurrencies: [String] {
         if realTimeTrade.trade.name.uppercased().hasSuffix(".L") {
             return ["GBX", "GBP"]
@@ -153,21 +156,74 @@ struct PreferenceRow: View {
             return ["USD", "GBP", "EUR"]
         }
     }
-    
+
+    // Validation state
+    private var symbolIsValid: Bool {
+        validator.validateSymbol(realTimeTrade.trade.name).isValid
+    }
+
+    private var unitsIsValid: Bool {
+        if let units = Double(realTimeTrade.trade.position.unitSizeString) {
+            return validator.validateUnits(units).isValid
+        }
+        return false
+    }
+
+    private var costIsValid: Bool {
+        if let cost = Double(realTimeTrade.trade.position.positionAvgCostString) {
+            return validator.validateCost(cost).isValid
+        }
+        return false
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
-            // Symbol field - flexible width
-            TextField("symbol", text: self.$realTimeTrade.trade.name)
-                .frame(minWidth: 60, idealWidth: 80, maxWidth: 120)
-            
-            // Units field - moderate width
-            TextField("Units", text: self.$realTimeTrade.trade.position.unitSizeString)
-                .frame(minWidth: 50, idealWidth: 70, maxWidth: 100)
-            
-            // Cost and currency field - expandable
-            HStack(spacing: 4) {
-                TextField("average position cost", text: self.$realTimeTrade.trade.position.positionAvgCostString)
-                    .frame(minWidth: 80, idealWidth: 120)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                // Symbol field - flexible width with validation indicator
+                HStack(spacing: 2) {
+                    TextField("symbol", text: self.$realTimeTrade.trade.name)
+                        .frame(minWidth: 60, idealWidth: 80, maxWidth: 120)
+                        .onChange(of: realTimeTrade.trade.name) { _ in
+                            validateInput()
+                        }
+                    if !symbolIsValid && !realTimeTrade.trade.name.isEmpty {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption2)
+                            .help("Invalid symbol format")
+                    }
+                }
+
+                // Units field - moderate width with validation
+                HStack(spacing: 2) {
+                    TextField("Units", text: self.$realTimeTrade.trade.position.unitSizeString)
+                        .frame(minWidth: 50, idealWidth: 70, maxWidth: 100)
+                        .onChange(of: realTimeTrade.trade.position.unitSizeString) { _ in
+                            validateInput()
+                        }
+                    if !unitsIsValid && !realTimeTrade.trade.position.unitSizeString.isEmpty {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption2)
+                            .help("Invalid units value")
+                    }
+                }
+
+                // Cost and currency field - expandable with validation
+                HStack(spacing: 4) {
+                    HStack(spacing: 2) {
+                        TextField("average position cost", text: self.$realTimeTrade.trade.position.positionAvgCostString)
+                            .frame(minWidth: 80, idealWidth: 120)
+                            .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _ in
+                                validateInput()
+                            }
+                        if !costIsValid && !realTimeTrade.trade.position.positionAvgCostString.isEmpty {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .font(.caption2)
+                                .help("Invalid cost value")
+                        }
+                    }
                 
                 Button(action: {
                     showCurrencyPicker.toggle()
@@ -217,9 +273,52 @@ struct PreferenceRow: View {
                     .padding()
                     .frame(width: 200)
                 }
+                }  // Close HStack(spacing: 4) from line 213
+
+                Spacer()
+
+                // Watchlist toggle
+                Button(action: {
+                    realTimeTrade.trade.isWatchlistOnly.toggle()
+                }) {
+                    Image(systemName: realTimeTrade.trade.isWatchlistOnly ? "eye.fill" : "eye")
+                        .foregroundColor(realTimeTrade.trade.isWatchlistOnly ? .secondary : .blue)
+                        .font(.body)
+                        .help(realTimeTrade.trade.isWatchlistOnly ? "Watchlist only (not included in portfolio calculations)" : "Portfolio stock (click to make watchlist-only)")
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }  // Close HStack(spacing: 8) from line 181
+
+            // Validation error message
+            if let error = validationError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading) // Fill available width efficiently
+    }
+
+    private func validateInput() {
+        var errors: [String] = []
+
+        // Validate symbol
+        if !realTimeTrade.trade.name.isEmpty && !symbolIsValid {
+            errors.append("Invalid symbol")
+        }
+
+        // Validate units
+        if !realTimeTrade.trade.position.unitSizeString.isEmpty && !unitsIsValid {
+            errors.append("Invalid units")
+        }
+
+        // Validate cost
+        if !realTimeTrade.trade.position.positionAvgCostString.isEmpty && !costIsValid {
+            errors.append("Invalid cost")
+        }
+
+        validationError = errors.isEmpty ? nil : errors.joined(separator: ", ")
     }
 }
 
@@ -234,7 +333,18 @@ struct PreferenceView: View {
     @State private var isAPIKeyVisible = false
     @State private var isBackfillingData = false
     @State private var backfillStatus = ""
-    
+
+    // Bulk edit mode state
+    @State private var bulkEditMode: Bool = false
+    @State private var selectedSymbols: Set<String> = []
+    @State private var showingBulkCurrencyPicker = false
+    @State private var bulkCurrency: String = "USD"
+
+    // Backfill configuration
+    @AppStorage("backfillSchedule") private var backfillSchedule: String = "startup"
+    @AppStorage("backfillCooldownHours") private var backfillCooldownHours: Int = 2
+    @AppStorage("backfillNotifications") private var backfillNotifications: Bool = true
+
     // Portfolio Export/Import state variables
     @State private var showingExportSheet = false
     @State private var showingImportSheet = false
@@ -242,11 +352,25 @@ struct PreferenceView: View {
     @State private var showingImportAlert = false
     @State private var importAlertMessage = ""
     @State private var importResult: (success: Bool, message: String) = (false, "")
-    
+
+    // Backup state variables
+    @State private var showingRestoreSheet = false
+    @State private var selectedBackup: BackupInfo?
+    @State private var showingRestoreConfirmation = false
+    @State private var showingBackupAlert = false
+    @State private var backupAlertMessage = ""
+
     // Debug control state variables
     @State private var currentRefreshInterval: TimeInterval = 900
-    @State private var currentCacheInterval: TimeInterval = 900
     @State private var currentSnapshotInterval: TimeInterval = 30
+
+    // Advanced debug tools state
+    @State private var simulateMarketClosed: Bool = false
+    @State private var debugReportStatus: String = ""
+
+    // Appearance preference
+    @AppStorage("appearanceMode") private var appearanceMode: String = "system"
+    @Environment(\.colorScheme) private var systemColorScheme
 
     private var formattedTimestamp: String {
         let formatter = DateFormatter()
@@ -297,6 +421,19 @@ struct PreferenceView: View {
         .frame(minWidth: 650, idealWidth: 1000, maxWidth: 1200,
                minHeight: 500, idealHeight: 700, maxHeight: 900)
         .fixedSize(horizontal: false, vertical: false) // Allow both horizontal and vertical resizing
+        .preferredColorScheme(preferredColorScheme)
+    }
+
+    /// Computed property to determine the effective color scheme based on user preference
+    private var preferredColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default: // "system"
+            return nil
+        }
     }
     
     private var portfolioView: some View {
@@ -323,7 +460,19 @@ struct PreferenceView: View {
                 .frame(width: 100)
                 Spacer()
             }
-            
+
+            HStack {
+                Text("Appearance:")
+                Picker("", selection: $appearanceMode) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .frame(width: 120)
+                .help("Override system appearance settings")
+                Spacer()
+            }
+
             // API Key management section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -463,15 +612,58 @@ struct PreferenceView: View {
             .cornerRadius(8)
             .padding(.bottom, 10)
 
-            HStack {
-                Text("Exchange Rates Updated:")
-                Text(formattedTimestamp)
-                Button(action: {
-                    currencyConverter.refreshRates()
-                }) {
-                    Image(systemName: "arrow.clockwise")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Exchange Rates")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: {
+                        currencyConverter.refreshRates()
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Refresh exchange rates")
+                }
+
+                HStack {
+                    Text("Last Updated:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(currencyConverter.getTimeSinceRefresh())
+                        .font(.caption)
+                        .foregroundColor(currencyConverter.lastRefreshSuccess ? .secondary : .orange)
+                    if !currencyConverter.lastRefreshSuccess && currencyConverter.lastRefreshTime != Date.distantPast {
+                        Text("(using fallback rates)")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
+
+                // Show current exchange rates for common currencies
+                if !currencyConverter.exchangeRates.isEmpty {
+                    Divider()
+                    Text("Current Rates (from USD):")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 12) {
+                        ForEach(["GBP", "EUR", "JPY"], id: \.self) { currency in
+                            if let rate = currencyConverter.exchangeRates[currency] {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(currency)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text(String(format: "%.4f", rate))
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            .padding(10)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .cornerRadius(8)
             .padding(.bottom, 10)
 
             // Display total net gains
@@ -513,11 +705,110 @@ struct PreferenceView: View {
                     Text("+")
                 }
             }
-            
+
+            // Bulk edit mode toggle and toolbar
+            HStack {
+                Button(action: {
+                    bulkEditMode.toggle()
+                    if !bulkEditMode {
+                        selectedSymbols.removeAll()
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: bulkEditMode ? "checkmark.square" : "square")
+                        Text(bulkEditMode ? "Exit Bulk Edit" : "Bulk Edit")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .help("Toggle bulk selection mode for multiple stocks")
+
+                if bulkEditMode {
+                    Divider()
+                        .frame(height: 20)
+
+                    Button("Select All") {
+                        selectedSymbols = Set(userdata.realTimeTrades.map { $0.trade.name })
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selectedSymbols.count == userdata.realTimeTrades.count)
+
+                    Button("Deselect All") {
+                        selectedSymbols.removeAll()
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selectedSymbols.isEmpty)
+
+                    Divider()
+                        .frame(height: 20)
+
+                    Text("\(selectedSymbols.count) selected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    // Bulk actions
+                    Button(action: {
+                        showingBulkCurrencyPicker = true
+                    }) {
+                        HStack {
+                            Image(systemName: "coloncurrencysign.circle")
+                            Text("Change Currency")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedSymbols.isEmpty)
+                    .popover(isPresented: $showingBulkCurrencyPicker) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Change Currency for Selected Stocks")
+                                .font(.headline)
+                                .padding(.bottom, 4)
+
+                            ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
+                                Button(action: {
+                                    applyBulkCurrency(currency)
+                                    showingBulkCurrencyPicker = false
+                                }) {
+                                    Text(currency)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        .padding()
+                        .frame(width: 200)
+                    }
+
+                    Button(action: {
+                        deleteSelectedStocks()
+                    }) {
+                        HStack {
+                            Image(systemName: "trash")
+                            Text("Delete")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
+                    .disabled(selectedSymbols.isEmpty)
+                }
+            }
+            .padding(.vertical, 8)
+
             // List for drag-and-drop functionality
             List {
                 ForEach(userdata.realTimeTrades) { item in
                     HStack {
+                        // Show checkbox in bulk edit mode
+                        if bulkEditMode {
+                            Button(action: {
+                                toggleSelection(for: item.trade.name)
+                            }) {
+                                Image(systemName: selectedSymbols.contains(item.trade.name) ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(selectedSymbols.contains(item.trade.name) ? .blue : .secondary)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
                         // Drag handle icon
                         Image(systemName: "line.3.horizontal")
                             .foregroundColor(.secondary)
@@ -593,6 +884,119 @@ struct PreferenceView: View {
             .padding()
             .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
             .cornerRadius(8)
+
+            // Backup Management Section
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Automatic Backups")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+
+                // Backup status
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let lastBackup = BackupService.shared.lastBackupDate {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Last backup: \(formattedBackupDate(lastBackup))")
+                                    .font(.caption)
+                            }
+                        } else {
+                            HStack {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.blue)
+                                Text("No backup performed yet")
+                                    .font(.caption)
+                            }
+                        }
+
+                        Text("Automatic daily backups saved to Application Support folder")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.bottom, 8)
+
+                // Backup actions
+                HStack(spacing: 16) {
+                    Button(action: {
+                        performManualBackup()
+                    }) {
+                        HStack {
+                            Image(systemName: "clock.arrow.circlepath")
+                            Text("Backup Now")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                    .help("Manually create a backup of your portfolio")
+
+                    Button(action: {
+                        showingRestoreSheet = true
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Restore from Backup...")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .help("Restore portfolio from a backup file")
+                    .disabled(BackupService.shared.listAvailableBackups().isEmpty)
+
+                    Button(action: {
+                        BackupService.shared.openBackupDirectory()
+                    }) {
+                        HStack {
+                            Image(systemName: "folder")
+                            Text("View Backups")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Open backup folder in Finder")
+
+                    Spacer()
+                }
+
+                // Retention settings
+                HStack {
+                    Text("Keep backups for:")
+                    Picker("", selection: Binding(
+                        get: { BackupService.shared.retentionDays },
+                        set: { BackupService.shared.retentionDays = $0 }
+                    )) {
+                        Text("7 days").tag(7)
+                        Text("14 days").tag(14)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                    }
+                    .frame(width: 120)
+                    .help("Old backups will be automatically deleted")
+                    Spacer()
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .cornerRadius(8)
+
+            // MARK: - Price Alerts Section
+            Divider()
+                .padding(.vertical, 8)
+
+            PriceAlertManagementView(dataModel: userdata)
+                .padding()
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(8)
             }
         }
         .padding(.horizontal, 16)
@@ -627,6 +1031,17 @@ struct PreferenceView: View {
         } message: {
             Text(importAlertMessage)
         }
+        .alert("Backup", isPresented: $showingBackupAlert) {
+            Button("OK") { }
+        } message: {
+            Text(backupAlertMessage)
+        }
+        .sheet(isPresented: $showingRestoreSheet) {
+            RestoreBackupView(
+                isPresented: $showingRestoreSheet,
+                dataModel: userdata
+            )
+        }
     }
     
     private var chartsView: some View {
@@ -652,14 +1067,12 @@ struct PreferenceView: View {
         .onAppear {
             // Initialize state variables with current values
             currentRefreshInterval = userdata.refreshInterval
-            currentCacheInterval = userdata.cacheInterval
             currentSnapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
         }
         .onChange(of: selectedTab) { _, newTab in
             // Sync state variables when debug tab is selected
             if newTab == .debug {
                 currentRefreshInterval = userdata.refreshInterval
-                currentCacheInterval = userdata.cacheInterval
                 currentSnapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
             }
         }
@@ -694,29 +1107,8 @@ struct PreferenceView: View {
                 }
             }
             
-            // Cache Interval
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Cache Duration:")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                HStack {
-                    Picker("", selection: $currentCacheInterval) {
-                        ForEach(cacheIntervalOptions, id: \.1) { option in
-                            Text(option.0).tag(option.1)
-                        }
-                    }
-                    .onChange(of: currentCacheInterval) { _, newValue in
-                        setCacheInterval(newValue)
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                    .frame(width: 150)
-                    
-                    Text("(how long to keep data before re-fetching)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
+            // Cache interval removed - now managed internally by CacheCoordinator (fixed at 15 minutes)
+
             // Snapshot Interval
             VStack(alignment: .leading, spacing: 4) {
                 Text("Chart Data Collection Interval:")
@@ -764,8 +1156,185 @@ struct PreferenceView: View {
                     .buttonStyle(.bordered)
                     .help("Shows status of automatic historical data checking")
                 }
-                
+            }
+
+            // Log Management Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Log File Management")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                HStack {
+                    Text("Total log size:")
+                    Text(String(format: "%.2f MB", Logger.shared.getTotalLogSize()))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .font(.caption)
+
+                Text("Log files are automatically rotated when they exceed 10MB. Up to 3 files are kept: stockbar.log, stockbar.1.log, stockbar.2.log")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 HStack(spacing: 12) {
+                    Button("Clear Old Logs") {
+                        clearOldLogs()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .help("Delete all log files to free up space")
+                }
+            }
+
+            // Historical Data Backfill Configuration
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Historical Data Backfill")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                // Schedule selector
+                HStack {
+                    Text("Auto-backfill schedule:")
+                        .font(.caption)
+                    Picker("", selection: $backfillSchedule) {
+                        Text("On Startup").tag("startup")
+                        Text("Manual Only").tag("manual")
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+                    Spacer()
+                }
+
+                // Cooldown period
+                HStack {
+                    Text("Cooldown between checks:")
+                        .font(.caption)
+                    Picker("", selection: $backfillCooldownHours) {
+                        Text("30 minutes").tag(0)
+                        Text("1 hour").tag(1)
+                        Text("2 hours (default)").tag(2)
+                        Text("6 hours").tag(6)
+                        Text("12 hours").tag(12)
+                        Text("24 hours").tag(24)
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
+                    Spacer()
+                }
+
+                // Notifications toggle
+                Toggle("Show notifications for backfill progress", isOn: $backfillNotifications)
+                    .font(.caption)
+
+                Text("Backfill automatically checks for and fetches missing 5-year historical data. Adjust cooldown to control frequency.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Manual trigger button
+                HStack(spacing: 12) {
+                    Button(isBackfillingData ? "Backfilling..." : "Trigger Manual Backfill") {
+                        triggerManualBackfill()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isBackfillingData)
+                    .help("Manually trigger a full 5-year historical data backfill for all symbols")
+
+                    if !backfillStatus.isEmpty {
+                        Text(backfillStatus)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            // Cache Inspector Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Cache Inspector")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                if userdata.realTimeTrades.isEmpty {
+                    Text("No stocks in portfolio to inspect")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(userdata.realTimeTrades.prefix(10)) { trade in
+                                cacheInspectorRow(for: trade.trade.name)
+                            }
+
+                            if userdata.realTimeTrades.count > 10 {
+                                Text("...and \(userdata.realTimeTrades.count - 10) more")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 4)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 200)
+                    .padding(8)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .cornerRadius(6)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Clear All Caches") {
+                        clearAllCaches()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .help("Clear all cached data and force fresh fetch")
+
+                    Button("Refresh Cache View") {
+                        // Force view update
+                        Task { @MainActor in
+                            self.userdata.objectWillChange.send()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Refresh cache status display")
+                }
+            }
+
+            // Advanced Debug Tools Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Advanced Debug Tools")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                // Simulate Market Closed toggle
+                Toggle("Simulate Market Closed Mode", isOn: $simulateMarketClosed)
+                    .font(.caption)
+                    .help("Override market status detection for testing")
+
+                if simulateMarketClosed {
+                    Text("⚠️ Market will appear closed even if actually open")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .padding(.leading, 20)
+                }
+
+                // Export Debug Report button
+                HStack(spacing: 12) {
+                    Button("Export Debug Report") {
+                        exportDebugReport()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                    .help("Bundle logs, config, and portfolio summary for troubleshooting")
+
+                    if !debugReportStatus.isEmpty {
+                        Text(debugReportStatus)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }
@@ -820,11 +1389,6 @@ struct PreferenceView: View {
         NotificationCenter.default.post(name: .refreshIntervalChanged, object: interval)
     }
     
-    private func setCacheInterval(_ interval: TimeInterval) {
-        userdata.cacheInterval = interval
-        Task { await Logger.shared.info("🔧 Debug: Cache interval changed to \(interval) seconds") }
-    }
-    
     private func setSnapshotInterval(_ interval: TimeInterval) {
         HistoricalDataManager.shared.setSnapshotInterval(interval)
         Task { await Logger.shared.info("🔧 Debug: Snapshot interval changed to \(interval) seconds") }
@@ -850,12 +1414,10 @@ struct PreferenceView: View {
     
     private func resetToDefaults() {
         userdata.refreshInterval = 300  // 5 minutes
-        userdata.cacheInterval = 300    // 5 minutes
         HistoricalDataManager.shared.setSnapshotInterval(300)  // 5 minutes
-        
+
         // Update state variables to reflect the reset
         currentRefreshInterval = 300
-        currentCacheInterval = 300
         currentSnapshotInterval = 300
         
         Task { await Logger.shared.info("🔧 Debug: Reset all intervals to defaults") }
@@ -949,7 +1511,41 @@ struct PreferenceView: View {
     private func deleteStocks(at offsets: IndexSet) {
         userdata.realTimeTrades.remove(atOffsets: offsets)
     }
-    
+
+    // MARK: - Bulk Edit Functions
+
+    private func toggleSelection(for symbol: String) {
+        if selectedSymbols.contains(symbol) {
+            selectedSymbols.remove(symbol)
+        } else {
+            selectedSymbols.insert(symbol)
+        }
+    }
+
+    private func applyBulkCurrency(_ currency: String) {
+        for symbol in selectedSymbols {
+            if let index = userdata.realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
+                userdata.realTimeTrades[index].trade.position.costCurrency = currency
+            }
+        }
+        Task { await Logger.shared.info("💱 [BulkEdit] Changed currency to \(currency) for \(selectedSymbols.count) stocks") }
+    }
+
+    private func deleteSelectedStocks() {
+        // Get indices of selected stocks
+        let indicesToRemove = userdata.realTimeTrades.indices.filter { index in
+            selectedSymbols.contains(userdata.realTimeTrades[index].trade.name)
+        }
+
+        // Remove in reverse order to avoid index shifting issues
+        for index in indicesToRemove.reversed() {
+            userdata.realTimeTrades.remove(at: index)
+        }
+
+        Task { await Logger.shared.info("🗑️ [BulkEdit] Deleted \(selectedSymbols.count) stocks") }
+        selectedSymbols.removeAll()
+    }
+
     private func showCurrentDataStatus() {
         var statusMessage = "Current Historical Data Status:\n\n"
         
@@ -1112,27 +1708,74 @@ struct PreferenceView: View {
         }
     }
     
+    private func triggerManualBackfill() {
+        guard !isBackfillingData else { return }
+
+        isBackfillingData = true
+        backfillStatus = "🚀 Starting..."
+
+        // Send notification if enabled
+        if backfillNotifications {
+            sendNotification(title: "Historical Data Backfill", message: "Starting 5-year data fetch for all symbols...")
+        }
+
+        Task {
+            await userdata.triggerFullHistoricalBackfill()
+
+            await MainActor.run {
+                backfillStatus = "✅ Completed"
+                isBackfillingData = false
+
+                // Send completion notification if enabled
+                if backfillNotifications {
+                    sendNotification(title: "Historical Data Backfill Complete", message: "5-year historical data fetch finished successfully")
+                }
+            }
+
+            // Clear status after 5 seconds
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            await MainActor.run {
+                backfillStatus = ""
+            }
+        }
+    }
+
+    private func sendNotification(title: String, message: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = message
+        notification.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    private func clearOldLogs() {
+        Task {
+            await Logger.shared.clearAllLogs()
+            await Logger.shared.info("Debug: User cleared all log files from Debug tab")
+        }
+    }
+
     private func showAutomaticCheckStatus() {
         let status = userdata.getHistoricalDataStatus()
-        
+
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
-        
+
         var statusMessage = "Automatic Historical Data Check Status:\n\n"
-        
+
         if status.isRunningComprehensive {
             statusMessage += "🔍 RUNNING: Comprehensive 5-year coverage analysis in progress\n\n"
         } else {
             statusMessage += "✅ IDLE: No comprehensive check running\n\n"
         }
-        
+
         if status.isRunningStandard {
             statusMessage += "🔍 RUNNING: Standard 1-month gap check in progress\n\n"
         } else {
             statusMessage += "✅ IDLE: No standard check running\n\n"
         }
-        
+
         if status.lastComprehensiveCheck != Date.distantPast {
             statusMessage += "Last comprehensive check: \(formatter.string(from: status.lastComprehensiveCheck))\n"
         } else {
@@ -1179,11 +1822,34 @@ struct PreferenceView: View {
     }
     
     // MARK: - Portfolio Export/Import Functions
-    
+
     private func exportPortfolio() {
         let csvContent = PortfolioManager.exportToCSV(trades: self.userdata.realTimeTrades)
         self.exportDocument = CSVDocument(text: csvContent)
         self.showingExportSheet = true
+    }
+
+    // MARK: - Backup Functions
+
+    private func formattedBackupDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func performManualBackup() {
+        Task {
+            let success = await BackupService.shared.performManualBackup(trades: userdata.realTimeTrades)
+            await MainActor.run {
+                if success {
+                    backupAlertMessage = "Backup completed successfully"
+                } else {
+                    backupAlertMessage = "Backup failed. Check logs for details."
+                }
+                showingBackupAlert = true
+            }
+        }
     }
     
     private func importPortfolio(result: Result<[URL], Error>) {
@@ -1240,6 +1906,162 @@ struct PreferenceView: View {
         case .failure(let error):
             self.importAlertMessage = "Import failed: \(error.localizedDescription)"
             self.showingImportAlert = true
+        }
+    }
+
+    // MARK: - Advanced Debug Tools Helper Functions
+
+    /// Display cache status row for a single symbol
+    @ViewBuilder
+    private func cacheInspectorRow(for symbol: String) -> some View {
+        let cacheStatus = userdata.cacheCoordinator.getCacheStatus(for: symbol, at: Date())
+
+        HStack {
+            Text(symbol)
+                .font(.caption)
+                .fontWeight(.medium)
+                .frame(width: 80, alignment: .leading)
+
+            Text(cacheStatus.description)
+                .font(.caption2)
+                .foregroundColor(cacheStatusColor(for: cacheStatus))
+
+            Spacer()
+
+            // Show retry button for suspended or failed symbols
+            if case .suspended = cacheStatus {
+                Button("Retry Now") {
+                    userdata.cacheCoordinator.clearSuspension(for: symbol)
+                    Task {
+                        await userdata.refreshSymbolsImmediately([symbol], reason: "manual-retry")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Get color for cache status display
+    private func cacheStatusColor(for status: CacheStatus) -> Color {
+        switch status {
+        case .fresh:
+            return .green
+        case .stale:
+            return .orange
+        case .expired:
+            return .red
+        case .failedRecently, .readyToRetry:
+            return .orange
+        case .suspended:
+            return .red
+        case .neverFetched:
+            return .secondary
+        }
+    }
+
+    /// Clear all cached data and force refresh
+    private func clearAllCaches() {
+        Task {
+            await Logger.shared.info("🗑️ [Debug] Clearing all caches (user requested)")
+
+            // Clear cache coordinator
+            userdata.cacheCoordinator.clearAllCache()
+
+            // Clear historical data manager cache if needed
+            // userdata.historicalDataManager.clearCaches() // Uncomment if available
+
+            // Force immediate refresh of anything now uncached
+            await userdata.refreshCriticalSymbols(reason: "cache-reset")
+
+            await Logger.shared.info("✅ [Debug] All caches cleared and data refreshed")
+        }
+    }
+
+    /// Export comprehensive debug report
+    private func exportDebugReport() {
+        Task {
+            debugReportStatus = "Generating report..."
+            await Logger.shared.info("📋 [Debug] Generating debug report")
+
+            do {
+                // Create export directory
+                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                let exportFolder = documentsPath.appendingPathComponent("Stockbar_Debug_\(Int(Date().timeIntervalSince1970))")
+                try FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
+
+                // 1. Export current configuration
+                let configText = """
+                === Stockbar Debug Report ===
+                Generated: \(Date())
+
+                === Configuration ===
+                Preferred Currency: \(userdata.preferredCurrency)
+                Refresh Interval: \(userdata.refreshInterval)s
+                Color Coding: \(userdata.showColorCoding ? "Enabled" : "Disabled")
+                Portfolio Size: \(userdata.realTimeTrades.count) stocks
+
+                === Cache Statistics ===
+                \(userdata.cacheCoordinator.getCacheStatistics().description)
+
+                === Stock Details ===
+                \(userdata.realTimeTrades.map { trade in
+                    let status = userdata.cacheCoordinator.getCacheStatus(for: trade.trade.name, at: Date())
+                    return "\(trade.trade.name): \(status.description)"
+                }.joined(separator: "\n"))
+
+                === Portfolio Summary ===
+                Total Stocks: \(userdata.realTimeTrades.count)
+                Net Gains: \(userdata.calculateNetGains().currency) \(String(format: "%.2f", userdata.calculateNetGains().amount))
+                Total Value: \(userdata.calculateNetValue().currency) \(String(format: "%.2f", userdata.calculateNetValue().amount))
+                """
+
+                let configFile = exportFolder.appendingPathComponent("configuration.txt")
+                try configText.write(to: configFile, atomically: true, encoding: .utf8)
+
+                // 2. Copy log file if it exists
+                let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/stockbar.log")
+                if FileManager.default.fileExists(atPath: logPath.path) {
+                    let logDestination = exportFolder.appendingPathComponent("stockbar.log")
+                    try FileManager.default.copyItem(at: logPath, to: logDestination)
+                }
+
+                // 3. Export portfolio data as JSON
+                let portfolioData = userdata.realTimeTrades.map { trade -> [String: Any] in
+                    let units = trade.trade.position.unitSize
+                    let avgCost = trade.trade.position.positionAvgCost
+                    let currency = trade.trade.position.currency ?? "USD"
+                    let currentPrice = trade.realTimeInfo.currentPrice
+
+                    return [
+                        "symbol": trade.trade.name,
+                        "units": units,
+                        "avgCost": avgCost,
+                        "currency": currency,
+                        "currentPrice": currentPrice
+                    ]
+                }
+
+                let jsonData = try JSONSerialization.data(withJSONObject: portfolioData, options: .prettyPrinted)
+                let jsonFile = exportFolder.appendingPathComponent("portfolio.json")
+                try jsonData.write(to: jsonFile)
+
+                // Open the folder in Finder
+                NSWorkspace.shared.open(exportFolder)
+
+                await MainActor.run {
+                    debugReportStatus = "✅ Exported to: \(exportFolder.lastPathComponent)"
+                }
+
+                await Logger.shared.info("✅ [Debug] Debug report exported to: \(exportFolder.path)")
+
+            } catch {
+                await MainActor.run {
+                    debugReportStatus = "❌ Export failed: \(error.localizedDescription)"
+                }
+                await Logger.shared.error("❌ [Debug] Failed to export debug report: \(error)")
+            }
         }
     }
 }
@@ -1426,6 +2248,205 @@ struct DebugLogView: View {
     private func stopAutoRefreshTimer() {
         timerCancellable?.cancel()
         timerCancellable = nil
+    }
+}
+
+// MARK: - Restore Backup View
+
+struct RestoreBackupView: View {
+    @Binding var isPresented: Bool
+    @ObservedObject var dataModel: DataModel
+    @State private var availableBackups: [BackupInfo] = []
+    @State private var selectedBackup: BackupInfo?
+    @State private var previewData: [PortfolioExportData] = []
+    @State private var showingPreview = false
+    @State private var showingConfirmation = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Restore from Backup")
+                    .font(.headline)
+                Spacer()
+                Button("Close") {
+                    isPresented = false
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+
+            Divider()
+
+            // Backup list
+            if availableBackups.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No backups available")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                    Text("Backups will appear here after you create them")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(availableBackups) { backup in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(backup.filename)
+                                .font(.body)
+                            Text(backup.formattedDate)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(backup.formattedSize)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Button("Preview") {
+                            previewBackup(backup)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Restore") {
+                            selectedBackup = backup
+                            showingConfirmation = true
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .frame(width: 600, height: 400)
+        .onAppear {
+            loadAvailableBackups()
+        }
+        .sheet(isPresented: $showingPreview) {
+            if !previewData.isEmpty {
+                BackupPreviewView(stocks: previewData, isPresented: $showingPreview)
+            }
+        }
+        .alert("Confirm Restore", isPresented: $showingConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Restore", role: .destructive) {
+                performRestore()
+            }
+        } message: {
+            Text("This will replace your current portfolio with the backup. This action cannot be undone. Current portfolio will be backed up first.")
+        }
+        .alert("Error", isPresented: $showingError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
+        }
+    }
+
+    private func loadAvailableBackups() {
+        availableBackups = BackupService.shared.listAvailableBackups()
+    }
+
+    private func previewBackup(_ backup: BackupInfo) {
+        do {
+            previewData = try BackupService.shared.previewBackup(backupURL: backup.url)
+            showingPreview = true
+        } catch {
+            errorMessage = "Failed to preview backup: \(error.localizedDescription)"
+            showingError = true
+        }
+    }
+
+    private func performRestore() {
+        guard let backup = selectedBackup else { return }
+
+        Task {
+            do {
+                // Backup current portfolio first
+                _ = await BackupService.shared.performManualBackup(trades: dataModel.realTimeTrades)
+
+                // Restore from backup
+                let restoredTrades = try await BackupService.shared.restoreFromBackup(backupURL: backup.url)
+
+                await MainActor.run {
+                    // Clear existing trades
+                    dataModel.realTimeTrades.removeAll()
+
+                    // Add restored trades
+                    for trade in restoredTrades {
+                        let emptyTradingInfo = TradingInfo()
+                        let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
+                        dataModel.realTimeTrades.append(realTimeTrade)
+                    }
+
+                    // Close the sheet
+                    isPresented = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to restore backup: \(error.localizedDescription)"
+                    showingError = true
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Backup Preview View
+
+struct BackupPreviewView: View {
+    let stocks: [PortfolioExportData]
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Backup Preview")
+                    .font(.headline)
+                Spacer()
+                Button("Close") {
+                    isPresented = false
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+
+            Divider()
+
+            // Stock list
+            List(stocks, id: \.symbol) { stock in
+                HStack {
+                    Text(stock.symbol)
+                        .frame(width: 100, alignment: .leading)
+                    Text("\(String(format: "%.2f", stock.units)) units")
+                        .frame(width: 120, alignment: .leading)
+                    Text("@ \(stock.costCurrency ?? "USD") \(String(format: "%.2f", stock.avgPositionCost))")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+            .listStyle(.plain)
+
+            Divider()
+
+            // Footer
+            HStack {
+                Text("\(stocks.count) stocks in this backup")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding()
+        }
+        .frame(width: 500, height: 400)
     }
 }
 

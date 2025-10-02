@@ -15,6 +15,7 @@ public func formatPrice(price: Double, currency: String?) -> String {
 struct Trade: Codable, Equatable {
     var name: String
     var position: Position
+    var isWatchlistOnly: Bool = false  // If true, this is a watch-only stock (no position calculations)
 }
 
 struct Position: Codable, Equatable {
@@ -93,7 +94,7 @@ struct TradingInfo: Codable {
     var regularMarketTime: Int = 0
     var exchangeTimezoneName: String = ""
     var shortName: String = ""
-    
+
     // Pre-market and post-market data
     var preMarketPrice: Double?
     var preMarketChange: Double?
@@ -104,6 +105,9 @@ struct TradingInfo: Codable {
     var postMarketChangePercent: Double?
     var postMarketTime: Int?
     var marketState: String? // PRE, REGULAR, POST, CLOSED
+
+    // Error information
+    var errorMessage: String?
 
     func getPrice() -> String {
         return formatPrice(price: currentPrice, currency: currency)
@@ -125,17 +129,67 @@ struct TradingInfo: Codable {
     }
 
     func getTimeInfo() -> String {
-        // Handle case where regularMarketTime is 0 or invalid
-        guard regularMarketTime > 0 else {
-            return "–"
+        // During pre/post market hours, use those specific timestamps
+        // During regular hours, use regularMarketTime
+
+        // Determine which timestamp to use based on market state
+        var displayTimestamp: Int = regularMarketTime
+
+        // Use pre/post market times when in those states and available
+        if let state = marketState {
+            switch state {
+            case "PRE":
+                if let preTime = preMarketTime, preTime > 0 {
+                    displayTimestamp = preTime
+                }
+            case "POST":
+                if let postTime = postMarketTime, postTime > 0 {
+                    displayTimestamp = postTime
+                }
+            default:
+                // Use regularMarketTime for REGULAR and CLOSED states
+                break
+            }
         }
-        
-        let date = Date(timeIntervalSince1970: TimeInterval(regularMarketTime))
-        let tradeTimeZone = TimeZone(identifier: exchangeTimezoneName) ?? TimeZone.current
+
+        guard displayTimestamp > 0 else { return "–" }
+
+        // UI timestamp: exchange-reported time for the current quote (pre/post/regular)
+        let exchangeDate = Date(timeIntervalSince1970: TimeInterval(displayTimestamp))
+
+        // Time-ago: when we actually refreshed locally
+        let refreshDate: Date
+        if let lastUpdateTime, lastUpdateTime > 0 {
+            refreshDate = Date(timeIntervalSince1970: TimeInterval(lastUpdateTime))
+        } else {
+            refreshDate = exchangeDate
+        }
+
+        // Format in user's local timezone
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm zzz"
-        dateFormatter.timeZone = tradeTimeZone
-        return dateFormatter.string(from: date)
+        dateFormatter.timeZone = TimeZone.current
+
+        let timeAgo = formatTimeAgo(from: refreshDate)
+        return "\(dateFormatter.string(from: exchangeDate)) (\(timeAgo))"
+    }
+    
+    private func formatTimeAgo(from date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+        
+        if interval < 60 {
+            return "just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
     }
     
     // MARK: - Pre/Post Market Helper Functions

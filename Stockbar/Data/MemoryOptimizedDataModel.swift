@@ -217,24 +217,27 @@ class MemoryOptimizedDataModel: ObservableObject {
         // Use streaming calculations to avoid large intermediate arrays
         var totalValue = 0.0
         var totalGains = 0.0
-        
+
         for trade in trades {
+            // Skip watchlist-only stocks from portfolio calculations
+            guard !trade.trade.isWatchlistOnly else { continue }
+
             guard !trade.realTimeInfo.currentPrice.isNaN,
                   trade.realTimeInfo.currentPrice > 0 else { continue }
-            
+
             let currentPrice = trade.realTimeInfo.currentPrice
             let units = trade.trade.position.unitSize
             let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
-            
+
             guard !adjustedCost.isNaN, adjustedCost > 0 else { continue }
-            
+
             let marketValue = currentPrice * units
             let gains = (currentPrice - adjustedCost) * units
-            
+
             totalValue += marketValue
             totalGains += gains
         }
-        
+
         return (totalValue, totalGains)
     }
 }

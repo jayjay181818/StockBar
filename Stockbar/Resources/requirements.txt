@@ -1,0 +1,11 @@
+# Python Dependencies for Stockbar
+# Install with: pip3 install -r requirements.txt
+
+# Stock data fetching
+yfinance>=0.2.0
+
+# HTTP requests (dependency of yfinance)
+requests>=2.25.0
+
+# Minimum Python version: 3.8+
+# Tested with: Python 3.9, 3.10, 3.11, 3.12
