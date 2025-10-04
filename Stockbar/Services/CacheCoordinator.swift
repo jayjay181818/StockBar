@@ -209,7 +209,7 @@ class CacheCoordinator {
         var staleCount = 0
         var expiredCount = 0
 
-        for (symbol, lastFetch) in lastSuccessfulFetch {
+        for (_, lastFetch) in lastSuccessfulFetch {
             let age = now.timeIntervalSince(lastFetch)
             if age < cacheInterval {
                 freshCount += 1

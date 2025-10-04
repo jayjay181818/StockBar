@@ -11,7 +11,8 @@ struct TradingData {
     let avgCost: Double
     let units: Double
     let timeInfo: String
-    
+    let lastUpdateTime: Int?
+
     // Pre/post market data
     let preMarketPrice: Double?
     let preMarketChange: Double?
@@ -62,11 +63,17 @@ class StockStatusBar {
     init(dataModel: DataModel) {
         self.dataModel = dataModel
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        // CRITICAL: Ensure the status item is visible
+        mainStatusItem?.isVisible = true
         mainStatusItem?.button?.title = "StockBar"
+
+        print("🔧 MENU BAR: Main status item created, visible: \(mainStatusItem?.isVisible ?? false), button: \(mainStatusItem?.button != nil)")
 
         dataModel.$realTimeTrades
             .receive(on: DispatchQueue.main)
             .sink { [weak self] trades in
+                print("🔧 MENU BAR: realTimeTrades changed, count: \(trades.count)")
                 self?.updateMainStatusItem(with: trades)
             }
             .store(in: &cancellables)
@@ -88,8 +95,10 @@ class StockStatusBar {
     }
     
     func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
+        print("🔧 MENU BAR: Creating symbol item for \(realTimeTrade.trade.name)")
         let controller = StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel)
         symbolStatusItems.append(controller)
+        print("🔧 MENU BAR: Symbol item created for \(realTimeTrade.trade.name), total items: \(symbolStatusItems.count), item visible: \(controller.item.isVisible)")
     }
     
     func mainItem() -> NSStatusItem? {
@@ -107,13 +116,22 @@ class StockStatusItemController {
     private let dataModel: DataModel
     let item: NSStatusItem
     private var cancellables = Set<AnyCancellable>()
+    private let formattingService = MenuBarFormattingService()
     
     // MARK: - Initialization
     init(realTimeTrade: RealTimeTrade, dataModel: DataModel) {
         self.dataModel = dataModel
         self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        // CRITICAL: Ensure the status item is visible
+        self.item.isVisible = true
+
+        print("🔧 ITEM: Initializing status item for \(realTimeTrade.trade.name), button: \(self.item.button != nil)")
+
         setupInitialState(with: realTimeTrade)
         setupDataBinding(for: realTimeTrade)
+
+        print("🔧 ITEM: Status item configured for \(realTimeTrade.trade.name), visible: \(self.item.isVisible), title: \(self.item.button?.title ?? "nil")")
     }
     
     // MARK: - Private Methods
@@ -131,12 +149,21 @@ class StockStatusItemController {
                 self?.updateDisplay(trade: realTimeTrade.trade, trading: trading)
             }
             .store(in: &cancellables)
-        
+
         // Listen to changes in market indicator setting
         dataModel.$showMarketIndicators
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 // Re-update display when setting changes
+                self?.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+            }
+            .store(in: &cancellables)
+
+        // Listen to changes in menu bar display settings
+        dataModel.$menuBarDisplaySettings
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                // Re-update display when formatting settings change
                 self?.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
             }
             .store(in: &cancellables)
@@ -146,7 +173,7 @@ class StockStatusItemController {
         // Use normalized average cost (handles GBX to GBP conversion automatically)
         let avgCost = trade.position.getNormalizedAvgCost(for: trade.name)
         let currency = trading.currency ?? "USD"
-        
+
         let data = TradingData(
             currentPrice: trading.currentPrice,
             previousPrice: trading.prevClosePrice,
@@ -154,6 +181,7 @@ class StockStatusItemController {
             avgCost: avgCost,
             units: trade.position.unitSize,
             timeInfo: trading.getTimeInfo(),
+            lastUpdateTime: trading.lastUpdateTime,
             preMarketPrice: trading.preMarketPrice,
             preMarketChange: trading.preMarketChange,
             preMarketChangePercent: trading.preMarketChangePercent,
@@ -162,7 +190,7 @@ class StockStatusItemController {
             postMarketChangePercent: trading.postMarketChangePercent,
             marketState: trading.marketState
         )
-        
+
         updateTitle(trade: trade, data: data)
         updateMenu(trade: trade, data: data)
     }
@@ -171,43 +199,45 @@ class StockStatusItemController {
         // Use display price (current, pre-market, or post-market) vs yesterday's close for day P&L
         let safeDisplay = data.displayPrice.isFinite ? data.displayPrice : 0
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
-        let safeUnits = data.units.isFinite ? data.units : 0
-        var pnl: Double? = nil
+        let _ = data.units.isFinite ? data.units : 0 // safeUnits not used in this function
 
-        // Calculate day P&L using the current display price (which includes pre/post market) vs yesterday's close
-        // Skip P&L calculation for watchlist stocks
-        if !trade.isWatchlistOnly && !data.displayPrice.isNaN && !data.previousPrice.isNaN && safePrev != 0 && safeUnits != 0 && safeDisplay > 0 {
-            pnl = (safeDisplay - safePrev) * safeUnits
+        // Calculate change and change percentage
+        let change = safeDisplay - safePrev
+        let changePct = safePrev > 0 ? (change / safePrev) * 100 : 0
+
+        // Use formatting service for title generation
+        let settings = dataModel.menuBarDisplaySettings
+
+        Task { @MainActor in
+            let formatted = await formattingService.formatStockTitle(
+                symbol: trade.name,
+                price: safeDisplay,
+                change: change,
+                changePct: changePct,
+                currency: data.currency,
+                settings: settings,
+                useColorCoding: dataModel.showColorCoding
+            )
+
+            // Add watchlist indicator prefix if needed
+            if trade.isWatchlistOnly {
+                let watchlistPrefix = NSAttributedString(
+                    string: "👁 ",
+                    attributes: [
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                        .font: NSFont.menuBarFont(ofSize: 0)
+                    ]
+                )
+                let combined = NSMutableAttributedString()
+                combined.append(watchlistPrefix)
+                combined.append(formatted)
+                item.button?.attributedTitle = combined
+            } else {
+                item.button?.attributedTitle = formatted
+            }
+
+            item.button?.alternateTitle = trade.name
         }
-
-        // Include market state indicator in title for pre/post market hours
-        let marketIndicator = dataModel.showMarketIndicators ? data.marketStateIndicator(useEmoji: true) : ""
-        let watchlistIndicator = trade.isWatchlistOnly ? "👁 " : ""
-        let titleBase = marketIndicator.isEmpty ? "\(watchlistIndicator)\(trade.name)" : "\(watchlistIndicator)\(trade.name) \(marketIndicator)"
-
-        let title: String
-        if let pnl = pnl, pnl.isFinite {
-            title = "\(titleBase) \(String(format: "%+.2f", pnl))"
-        } else {
-            title = titleBase
-        }
-        item.button?.title = title
-        item.button?.alternateTitle = trade.name
-
-        // For watchlist stocks, use secondary color; for portfolio stocks, use P&L-based coloring
-        let color: NSColor
-        if trade.isWatchlistOnly {
-            color = NSColor.secondaryLabelColor
-        } else {
-            color = dataModel.showColorCoding ?
-                ((pnl ?? 0) >= 0 ? NSColor.systemGreen : NSColor.systemRed) :
-                NSColor.labelColor
-        }
-
-        item.button?.attributedTitle = NSAttributedString(
-            string: title,
-            attributes: [.foregroundColor: color]
-        )
     }
     
     private func updateMenu(trade: Trade, data: TradingData) {
@@ -318,8 +348,8 @@ class StockStatusItemController {
         let chartMenuItem = NSMenuItem()
         chartMenuItem.view = chartHostingView
 
-        // Set menu item size explicitly
-        chartMenuItem.representedObject = NSValue(size: NSSize(width: 260, height: 180))
+        // Set menu item size explicitly to match the full width
+        chartMenuItem.representedObject = NSValue(size: NSSize(width: 312, height: 232))
 
         menu.addItem(chartMenuItem)
 
@@ -406,8 +436,59 @@ class StockStatusItemController {
             ])
         }
         
-        menuItems.forEach { title, value in
-            menu.addItem(withTitle: "\(title): \(value)", action: nil, keyEquivalent: "")
+        // Add menu items with color coding based on profit/loss and recency
+        for (title, value) in menuItems {
+            let menuItem = NSMenuItem()
+
+            // Determine line color based on title and conditions
+            var lineColor = NSColor.labelColor
+
+            // Strip market state emoji from price label for comparison
+            let cleanTitle = title.replacingOccurrences(of: " 🔔", with: "")
+                .replacingOccurrences(of: " 🌙", with: "")
+                .replacingOccurrences(of: " 📊", with: "")
+
+            if cleanTitle.hasPrefix("Price") {
+                // Green if in profit overall, red if at loss
+                lineColor = totalPL > 0 ? NSColor.systemGreen : (totalPL < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Day Gain" {
+                // Green if gain for the day, red if loss
+                lineColor = dayGain > 0 ? NSColor.systemGreen : (dayGain < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Market Value" {
+                // Green if in profit, red if at loss
+                lineColor = totalPL > 0 ? NSColor.systemGreen : (totalPL < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Total P&L" {
+                // Green if in profit, red if at loss
+                lineColor = totalPL > 0 ? NSColor.systemGreen : (totalPL < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Day P&L" {
+                // Green if profit for the day, red if loss
+                lineColor = dayPL > 0 ? NSColor.systemGreen : (dayPL < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Avg Cost" {
+                // Green if in profit overall, red if at loss
+                lineColor = totalPL > 0 ? NSColor.systemGreen : (totalPL < 0 ? NSColor.systemRed : NSColor.labelColor)
+            } else if title == "Last Update" {
+                // Green if updated within last 60 minutes, red if older
+                if let lastUpdate = data.lastUpdateTime {
+                    let lastUpdateDate = Date(timeIntervalSince1970: TimeInterval(lastUpdate))
+                    let minutesSinceUpdate = Date().timeIntervalSince(lastUpdateDate) / 60
+                    lineColor = minutesSinceUpdate <= 60 ? NSColor.systemGreen : NSColor.systemRed
+                } else {
+                    lineColor = NSColor.systemRed // No timestamp = red
+                }
+            }
+
+            // Create attributed string with full line colored
+            let attributedString = NSMutableAttributedString(
+                string: "\(title): \(value)",
+                attributes: [
+                    .font: NSFont.menuFont(ofSize: 14),
+                    .foregroundColor: lineColor
+                ]
+            )
+
+            menuItem.attributedTitle = attributedString
+            menuItem.isEnabled = false
+            menu.addItem(menuItem)
         }
 
         // Add exchange rate information if currency conversion is active
@@ -423,20 +504,25 @@ class StockStatusItemController {
                     rateString = String(format: "1 %@ = %.4f %@ (updated %@)", data.currency, rateInfo.rate, dataModel.preferredCurrency, timeSinceRefresh)
                 }
 
+                // Determine color based on last refresh time
+                let lastRefresh = dataModel.currencyConverter.lastRefreshTime
+                let minutesSinceRefresh = Date().timeIntervalSince(lastRefresh) / 60
+                let rateColor = minutesSinceRefresh <= 60 ? NSColor.systemGreen : NSColor.systemRed
+
                 let rateItem = NSMenuItem()
                 let rateText = NSMutableAttributedString()
                 rateText.append(NSAttributedString(
                     string: "💱 Exchange Rate\n",
                     attributes: [
                         .font: NSFont.boldSystemFont(ofSize: 11),
-                        .foregroundColor: NSColor.secondaryLabelColor
+                        .foregroundColor: rateColor
                     ]
                 ))
                 rateText.append(NSAttributedString(
                     string: rateString,
                     attributes: [
                         .font: NSFont.systemFont(ofSize: 10),
-                        .foregroundColor: NSColor.tertiaryLabelColor
+                        .foregroundColor: rateColor
                     ]
                 ))
                 rateItem.attributedTitle = rateText

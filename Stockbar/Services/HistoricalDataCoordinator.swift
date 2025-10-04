@@ -67,7 +67,7 @@ class HistoricalDataCoordinator {
         await logger.info("🚀 AUTO-BACKFILL: Starting automatic historical data check")
         
         // Check if this looks like a first run or we have very little historical data
-        let totalHistoricalSnapshots = await historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
+        let totalHistoricalSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
         let symbolCount = symbols.count
         
         if totalHistoricalSnapshots < (symbolCount * 50) {

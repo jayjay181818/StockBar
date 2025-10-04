@@ -79,6 +79,34 @@ enum ChartTimeRange: String, CaseIterable {
         }
     }
 
+    /// yfinance period parameter
+    var yfinancePeriod: String {
+        switch self {
+        case .day: return "1d"
+        case .week: return "5d"
+        case .month: return "1mo"
+        case .threeMonths: return "3mo"
+        case .sixMonths: return "6mo"
+        case .year: return "1y"
+        case .all: return "max"
+        case .custom: return "1mo" // Default for custom
+        }
+    }
+
+    /// Suggested interval for this time range
+    var suggestedInterval: String {
+        switch self {
+        case .day: return "5m"
+        case .week: return "15m"
+        case .month: return "1h"
+        case .threeMonths: return "1d"
+        case .sixMonths: return "1d"
+        case .year: return "1wk"
+        case .all: return "1wk"
+        case .custom: return "1d"
+        }
+    }
+
     func startDate(from endDate: Date = Date()) -> Date {
         switch self {
         case .all:

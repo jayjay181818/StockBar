@@ -49,6 +49,9 @@ class RefreshService {
     func performRefreshAllTrades(limitedTo targetSymbols: [String]? = nil) async {
         guard let dataModel = dataModel else { return }
 
+        // Capture main-actor isolated properties before entering sendable closure
+        let localCacheCoordinator = self.cacheCoordinator
+
         await refreshCoordinator.withLock {
             let now = Date()
             var symbolsToRefresh: [String] = []
@@ -70,9 +73,9 @@ class RefreshService {
             }
 
             for symbol in candidateSymbols {
-                if cacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
+                if localCacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
                     symbolsToRefresh.append(symbol)
-                } else if cacheCoordinator.shouldRetry(symbol: symbol, at: now) {
+                } else if localCacheCoordinator.shouldRetry(symbol: symbol, at: now) {
                     symbolsToForceRefresh.append(symbol)
                 }
             }
@@ -109,7 +112,7 @@ class RefreshService {
                         let wasSuccessful = dataModel.realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
 
                         if wasSuccessful {
-                            cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+                            localCacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
                             await Logger.shared.debug("Updated cache for \(symbol) - successful fetch")
                             anySuccessfulUpdate = true
 
@@ -124,13 +127,13 @@ class RefreshService {
                                 currency: currency
                             )
                         } else {
-                            cacheCoordinator.setFailedFetch(for: symbol, at: now)
+                            localCacheCoordinator.setFailedFetch(for: symbol, at: now)
                             await Logger.shared.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
                         }
 
                         await Logger.shared.debug("Updated trade \(symbol) from refresh result.")
                     } else {
-                        cacheCoordinator.setFailedFetch(for: symbol, at: now)
+                        localCacheCoordinator.setFailedFetch(for: symbol, at: now)
                         await Logger.shared.warning("No result returned for symbol \(symbol), treating as failure.")
                     }
                 }
@@ -235,7 +238,7 @@ class RefreshService {
                         }
                     }
 
-                    Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
+                    await dataModel.historicalDataManager.recordSnapshot(from: dataModel)
 
                     // Check price alerts after successful individual update
                     let newPrice = dataModel.realTimeTrades[index].realTimeInfo.currentPrice

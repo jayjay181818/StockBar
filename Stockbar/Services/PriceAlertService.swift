@@ -191,7 +191,7 @@ class PriceAlertService: ObservableObject {
                 
                 // Update in-memory alerts array
                 if let index = alerts.firstIndex(where: { $0.id == id }) {
-                    var alert = alerts[index]
+                    let alert = alerts[index]
                     alerts[index] = PriceAlert(
                         symbol: alert.symbol,
                         alertType: alert.alertType,
@@ -308,16 +308,16 @@ class PriceAlertService: ObservableObject {
         do {
             let alertEntities = try viewContext.fetch(fetchRequest)
             alerts = alertEntities.compactMap { entity -> PriceAlert? in
-                guard let id = entity.id,
+                guard let _ = entity.id,
                       let conditionString = entity.condition,
                       let condition = AlertCondition(rawValue: conditionString),
                       let alertTypeString = entity.alertType,
                       let alertType = AlertType(rawValue: alertTypeString),
-                      let createdAt = entity.createdAt else {
+                      let _ = entity.createdAt else {
                     return nil
                 }
                 
-                var alert = PriceAlert(
+                let alert = PriceAlert(
                     symbol: entity.symbol,
                     alertType: alertType,
                     condition: condition,
@@ -392,7 +392,7 @@ class PriceAlertService: ObservableObject {
                 
                 // Update in-memory alerts array
                 if let index = alerts.firstIndex(where: { $0.id == alertId }) {
-                    var alert = alerts[index]
+                    let alert = alerts[index]
                     var mutableAlert = PriceAlert(
                         symbol: alert.symbol,
                         alertType: alert.alertType,

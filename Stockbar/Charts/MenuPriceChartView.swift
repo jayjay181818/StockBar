@@ -145,18 +145,17 @@ struct MenuPriceChartView: View {
         VStack(spacing: 8) {
             // Header with symbol and current price
             headerView
-            
+                .padding(.horizontal, 16)
+
             // Time range picker
             timeRangePickerView
-            
-            // Chart content
+                .padding(.horizontal, 16)
+
+            // Chart content - full width, no horizontal padding
             chartContentView
         }
-        .frame(width: 280, height: 200, alignment: .center)
-        .fixedSize() // Prevent SwiftUI from changing the size
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .layoutPriority(1000) // High layout priority
+        .padding(.vertical, 16)
+        .frame(width: 312, height: 232) // Full menu width
         .onAppear {
             // Ensure proper initialization when view appears
             viewModel.loadChartData()
@@ -256,7 +255,7 @@ struct MenuPriceChartView: View {
             )
             .foregroundStyle(chartColor)
             .lineStyle(StrokeStyle(lineWidth: 2.0))
-            
+
             if let hoveredPoint = hoveredPoint, hoveredPoint.id == dataPoint.id {
                 PointMark(
                     x: .value("Time", dataPoint.date),
@@ -299,13 +298,13 @@ struct MenuPriceChartView: View {
             plotArea
                 .background(.clear)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .padding(.vertical, 4)
         .onTapGesture { location in
             // Simple tap gesture for point selection
-            let chartWidth: CGFloat = 264 // Adjusted for padding (280 - 16)
+            let chartWidth: CGFloat = 280 // Full width minus padding (312 - 32)
             let relativeProgress = location.x / chartWidth
-            
+
             if relativeProgress >= 0 && relativeProgress <= 1 {
                 let dataIndex = Int(relativeProgress * Double(viewModel.chartData.count - 1))
                 if dataIndex >= 0 && dataIndex < viewModel.chartData.count {
@@ -374,8 +373,7 @@ struct MenuPriceChartView: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .padding(.horizontal, 16)
     }
     
     private func errorView(_ message: String) -> some View {
@@ -390,8 +388,7 @@ struct MenuPriceChartView: View {
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .padding(.horizontal, 16)
     }
     
     private var emptyDataView: some View {
@@ -399,7 +396,7 @@ struct MenuPriceChartView: View {
             Image(systemName: "chart.xyaxis.line")
                 .foregroundColor(.secondary)
                 .font(.title3)
-            
+
             if !currentPrice.isFinite || currentPrice <= 0 {
                 Text("Price data unavailable")
                     .font(.caption2)
@@ -411,8 +408,7 @@ struct MenuPriceChartView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .padding(.horizontal, 16)
     }
     
     private func formatDate(_ date: Date) -> String {
@@ -449,8 +445,8 @@ struct MenuPriceChartView: View {
 // MARK: - NSHostingView Wrapper for Menu Integration
 
 class MenuPriceChartHostingView: NSHostingView<MenuPriceChartView> {
-    private let fixedSize = NSSize(width: 280, height: 200)
-    
+    private let fixedSize = NSSize(width: 312, height: 232)
+
     init(symbol: String, currentPrice: Double, currency: String) {
         let chartView = MenuPriceChartView(
             symbol: symbol,
@@ -458,46 +454,44 @@ class MenuPriceChartHostingView: NSHostingView<MenuPriceChartView> {
             currency: currency
         )
         super.init(rootView: chartView)
-        
+
         // Configure the hosting view for menu integration
         self.translatesAutoresizingMaskIntoConstraints = false
-        
+
         // Set fixed frame to prevent sizing issues
         self.frame = NSRect(origin: .zero, size: fixedSize)
-        
+
         // Add constraints to ensure consistent sizing
         self.widthAnchor.constraint(equalToConstant: fixedSize.width).isActive = true
         self.heightAnchor.constraint(equalToConstant: fixedSize.height).isActive = true
-        
-        // Apply rounded corners at the AppKit level
-        self.wantsLayer = true
-        self.layer?.cornerRadius = 32
-        self.layer?.masksToBounds = true
-        
+
+        // NO background or layer styling - let SwiftUI handle it
+        // This ensures the menu items below remain translucent/frosted
+
         // Ensure the view invalidates intrinsic content size properly
         self.invalidateIntrinsicContentSize()
     }
-    
+
     required init(rootView: MenuPriceChartView) {
         super.init(rootView: rootView)
         self.frame = NSRect(origin: .zero, size: fixedSize)
     }
-    
+
     @MainActor required dynamic init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     override var intrinsicContentSize: NSSize {
         return fixedSize
     }
-    
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         // Force layout when added to superview
         self.needsLayout = true
         self.layoutSubtreeIfNeeded()
     }
-    
+
     override var fittingSize: NSSize {
         return fixedSize
     }

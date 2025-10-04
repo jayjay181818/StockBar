@@ -8,7 +8,7 @@ class SparklineHostingView: NSView {
     init(symbol: String, timeRange: SparklineTimeRange = .week) {
         let sparklineContent = SparklineMenuContent(symbol: symbol, timeRange: timeRange)
         self.hostingView = NSHostingView(rootView: AnyView(sparklineContent))
-        super.init(frame: NSRect(x: 0, y: 0, width: 260, height: 40))
+        super.init(frame: NSRect(x: 0, y: 0, width: 312, height: 50))
 
         hostingView.frame = bounds
         hostingView.autoresizingMask = [.width, .height]
@@ -77,9 +77,9 @@ struct SparklineMenuContent: View {
             SparklineView(snapshots: snapshots, showArea: true)
                 .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.controlBackgroundColor))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(width: 312) // Full menu width to match chart
         .onAppear {
             loadData()
         }
