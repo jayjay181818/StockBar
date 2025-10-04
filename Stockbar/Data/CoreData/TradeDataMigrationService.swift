@@ -177,11 +177,10 @@ class TradeDataMigrationService {
         }
         
         // Backup other user data
-        if let userDataDict = UserDefaults.standard.dictionaryRepresentation() as? [String: Any] {
-            let userDataBackupURL = documentDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
-            (userDataDict as NSDictionary).write(to: userDataBackupURL, atomically: true)
-            Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
-        }
+        let userDataDict = UserDefaults.standard.dictionaryRepresentation()
+        let userDataBackupURL = documentDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
+        (userDataDict as NSDictionary).write(to: userDataBackupURL, atomically: true)
+        Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
     }
     
     private func cleanupUserDefaultsData() {

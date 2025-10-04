@@ -353,7 +353,7 @@ class DataMigrationService {
         let portfolioCount = try await coreDataService.getPortfolioSnapshotCount()
         
         // Get count of price snapshots for all symbols
-        var totalPriceSnapshots = 0
+        let totalPriceSnapshots = 0
         // This is a simplified check - in a real implementation you'd want to check specific symbols
         
         // Check trade data migration

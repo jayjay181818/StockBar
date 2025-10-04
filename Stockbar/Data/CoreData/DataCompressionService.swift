@@ -242,7 +242,7 @@ actor DataCompressionService {
     }
     
     /// Aggregates data into weekly summaries for a specific symbol (sync version)
-    private func aggregateWeeklyDataForSymbolSync(_ symbol: String, before date: Date, context: NSManagedObjectContext) {
+    private nonisolated func aggregateWeeklyDataForSymbolSync(_ symbol: String, before date: Date, context: NSManagedObjectContext) {
         do {
             let request: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
             request.predicate = NSPredicate(format: "symbol == %@ AND timestamp < %@", symbol, date as NSDate)
@@ -290,7 +290,7 @@ actor DataCompressionService {
     }
     
     /// Compresses data for a specific symbol by reducing density (sync version)
-    private func compressDataForSymbolSync(_ symbol: String, before date: Date, context: NSManagedObjectContext) -> Int {
+    private nonisolated func compressDataForSymbolSync(_ symbol: String, before date: Date, context: NSManagedObjectContext) -> Int {
         do {
             let request: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
             request.predicate = NSPredicate(format: "symbol == %@ AND timestamp < %@", symbol, date as NSDate)
@@ -331,7 +331,7 @@ actor DataCompressionService {
     }
     
     /// Removes duplicate entries (sync version)
-    private func removeDuplicateEntriesSync(context: NSManagedObjectContext) {
+    private nonisolated func removeDuplicateEntriesSync(context: NSManagedObjectContext) {
         do {
             // Remove duplicate price snapshots (same symbol + timestamp)
             let priceRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()

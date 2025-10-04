@@ -2,6 +2,20 @@ import SwiftUI
 import Charts
 import AppKit
 
+// MARK: - Chart Visualization Style
+
+enum ChartVisualizationStyle: String, CaseIterable {
+    case line = "Line"
+    case candlestick = "Candlestick"
+
+    var icon: String {
+        switch self {
+        case .line: return "chart.xyaxis.line"
+        case .candlestick: return "chart.bar"
+        }
+    }
+}
+
 struct PerformanceChartView: View {
     @ObservedObject private var historicalDataManager = HistoricalDataManager.shared
     @ObservedObject private var calculationManager = BackgroundCalculationManager.shared
@@ -34,9 +48,16 @@ struct PerformanceChartView: View {
     @State private var showGridLines: Bool = false
     @State private var useGradientFill: Bool = true
 
+    // Chart visualization style
+    @State private var chartVisualizationStyle: ChartVisualizationStyle = .line
+    @State private var candlestickSettings = CandlestickChartSettings.load()
+    @State private var ohlcData: [OHLCDataPoint] = []
+    @State private var isLoadingOHLC = false
+
     let availableSymbols: [String]
     let dataModel: DataModel?
     private let exportManager = ExportManager.shared
+    private let ohlcFetchService = OHLCFetchService.shared
     
     init(availableSymbols: [String] = [], dataModel: DataModel? = nil) {
         self.availableSymbols = availableSymbols
@@ -457,6 +478,18 @@ struct PerformanceChartView: View {
 
     private var visualStylingControls: some View {
         HStack(spacing: 16) {
+            // Chart Style Picker (only for individual stocks)
+            if case .individualStock = selectedChartType {
+                Picker("Style", selection: $chartVisualizationStyle) {
+                    ForEach(ChartVisualizationStyle.allCases, id: \.self) { style in
+                        Label(style.rawValue, systemImage: style.icon)
+                            .tag(style)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .frame(width: 180)
+            }
+
             HStack(spacing: 6) {
                 Text("Line:")
                     .font(.caption)
@@ -468,6 +501,7 @@ struct PerformanceChartView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 25)
             }
+            .opacity(chartVisualizationStyle == .line ? 1.0 : 0.3)
 
             Toggle("Grid", isOn: $showGridLines)
                 .toggleStyle(SwitchToggleStyle())
@@ -476,6 +510,7 @@ struct PerformanceChartView: View {
             Toggle("Gradient", isOn: $useGradientFill)
                 .toggleStyle(SwitchToggleStyle())
                 .font(.caption)
+                .opacity(chartVisualizationStyle == .line ? 1.0 : 0.3)
 
             Spacer()
         }
@@ -537,26 +572,92 @@ struct PerformanceChartView: View {
             }
         }
     }
-    
+
+    private func loadOHLCData() async {
+        guard case .individualStock(let symbol) = selectedChartType else {
+            return
+        }
+
+        isLoadingOHLC = true
+
+        do {
+            // Map time range to yfinance period
+            let period = selectedTimeRange.yfinancePeriod
+            let interval = selectedTimeRange.suggestedInterval
+
+            // Try to load from cache first
+            let cachedData = try await ohlcFetchService.getCachedOHLCData(symbol: symbol)
+
+            if !cachedData.isEmpty {
+                await MainActor.run {
+                    ohlcData = cachedData
+                    isLoadingOHLC = false
+                }
+                await Logger.shared.info("Loaded \(cachedData.count) cached OHLC data points for \(symbol)")
+                return
+            }
+
+            // Fetch fresh data from yfinance
+            let snapshots = try await ohlcFetchService.fetchOHLCData(
+                symbol: symbol,
+                period: period,
+                interval: interval
+            )
+
+            // Convert to OHLCDataPoint
+            let dataPoints = snapshots.map { snapshot in
+                OHLCDataPoint(
+                    timestamp: snapshot.timestamp,
+                    open: snapshot.open,
+                    high: snapshot.high,
+                    low: snapshot.low,
+                    close: snapshot.close,
+                    volume: snapshot.volume
+                )
+            }
+
+            await MainActor.run {
+                ohlcData = dataPoints
+                isLoadingOHLC = false
+            }
+
+            await Logger.shared.info("Loaded \(dataPoints.count) OHLC data points for \(symbol)")
+
+        } catch {
+            await MainActor.run {
+                isLoadingOHLC = false
+                ohlcData = []
+            }
+            await Logger.shared.error("Failed to load OHLC data: \(error)")
+        }
+    }
+
     // CRITICAL FIX: Move filtering and processing to background task
     private func processChartData(_ data: [ChartDataPoint]) async -> [ChartDataPoint] {
+        // Capture main-actor properties before entering detached task
+        let threshold = valueThreshold
+        let timeRange = selectedTimeRange
+        let filterEnabled = dateFilterEnabled
+        let startDate = customStartDate
+        let endDate = customEndDate
+
         return await Task.detached {
             var filtered = data
 
             // Apply value threshold filter
-            if valueThreshold > 0 {
-                filtered = filtered.filter { abs($0.value) >= valueThreshold }
+            if threshold > 0 {
+                filtered = filtered.filter { abs($0.value) >= threshold }
             }
 
             // Apply custom date range filter when custom time range is selected
-            if selectedTimeRange == .custom {
+            if timeRange == .custom {
                 filtered = filtered.filter { dataPoint in
-                    dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+                    dataPoint.date >= startDate && dataPoint.date <= endDate
                 }
-            } else if dateFilterEnabled {
+            } else if filterEnabled {
                 // Apply additional date filter if enabled
                 filtered = filtered.filter { dataPoint in
-                    dataPoint.date >= customStartDate && dataPoint.date <= customEndDate
+                    dataPoint.date >= startDate && dataPoint.date <= endDate
                 }
             }
 
@@ -607,8 +708,11 @@ struct PerformanceChartView: View {
             } else if comparisonMode && !selectedComparisonSymbols.isEmpty {
                 // COMPARISON MODE: Multi-series chart
                 comparisonChartContent
+            } else if chartVisualizationStyle == .candlestick {
+                // CANDLESTICK CHART: Requires OHLC data
+                candlestickChartPlaceholder
             } else {
-                // SINGLE SERIES: Standard chart
+                // SINGLE SERIES: Standard line chart
                 Chart(displayableChartData) { dataPoint in
                         LineMark(
                             x: .value("Date", dataPoint.date),
@@ -742,6 +846,73 @@ struct PerformanceChartView: View {
                 .foregroundColor(.secondary)
         }
         .frame(height: 250)
+    }
+
+    private var candlestickChartPlaceholder: some View {
+        Group {
+            if isLoadingOHLC {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading OHLC data...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(height: 300)
+            } else if ohlcData.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "chart.bar")
+                        .font(.system(size: 48))
+                        .foregroundColor(.accentColor)
+
+                    Text("Candlestick Chart")
+                        .font(.headline)
+
+                    Text("Fetching OHLC data...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    Button(action: {
+                        Task {
+                            await loadOHLCData()
+                        }
+                    }) {
+                        Label("Load Candlestick Data", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 8)
+
+                    Button(action: {
+                        chartVisualizationStyle = .line
+                    }) {
+                        Label("Switch to Line Chart", systemImage: "chart.xyaxis.line")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(height: 300)
+            } else {
+                CandlestickChartView(
+                    data: ohlcData,
+                    currency: getDisplayCurrency(),
+                    settings: candlestickSettings
+                )
+                .frame(height: 400)
+            }
+        }
+        .onChange(of: selectedChartType) { _ in
+            if chartVisualizationStyle == .candlestick {
+                Task {
+                    await loadOHLCData()
+                }
+            }
+        }
+        .onChange(of: selectedTimeRange) { _ in
+            if chartVisualizationStyle == .candlestick {
+                Task {
+                    await loadOHLCData()
+                }
+            }
+        }
     }
 
     // MARK: - Comparison Chart Content

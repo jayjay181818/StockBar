@@ -606,16 +606,146 @@ def output_error(error_code, message, symbol=None, retry_after=None):
 
     print(json.dumps(error_obj))
 
+def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
+    """
+    Fetch OHLC (Open, High, Low, Close, Volume) data using yfinance
+
+    Args:
+        symbol: Stock symbol
+        period: Valid periods: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+        interval: Valid intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+
+    Returns:
+        List of OHLC data points with timestamps
+    """
+    if not YFINANCE_AVAILABLE:
+        return None
+
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period=period, interval=interval, auto_adjust=False)
+
+        if hist.empty:
+            return None
+
+        ohlc_data = []
+        for date, row in hist.iterrows():
+            # Extract OHLCV data
+            open_price = float(row['Open'])
+            high_price = float(row['High'])
+            low_price = float(row['Low'])
+            close_price = float(row['Close'])
+            volume = int(row['Volume'])
+
+            # Handle LSE stocks - convert pence to pounds
+            if symbol.upper().endswith('.L'):
+                open_price /= 100.0
+                high_price /= 100.0
+                low_price /= 100.0
+                close_price /= 100.0
+
+            ohlc_data.append({
+                'timestamp': int(date.timestamp()),
+                'symbol': symbol,
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': volume
+            })
+
+        print(f"yfinance retrieved {len(ohlc_data)} OHLC data points for {symbol} (period={period}, interval={interval})", file=sys.stderr)
+        return ohlc_data
+
+    except Exception as e:
+        print(f"yfinance OHLC fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def fetch_ohlc_data(symbol, period='1mo', interval='1d'):
+    """Fetch OHLC data using yfinance (FMP doesn't provide intraday OHLC easily)"""
+    if YFINANCE_AVAILABLE:
+        result = fetch_ohlc_data_yfinance(symbol, period, interval)
+        if result:
+            print(f"Using yfinance for OHLC data: {symbol}", file=sys.stderr)
+            return result
+        else:
+            print(f"yfinance OHLC failed for {symbol}", file=sys.stderr)
+
+    return None
+
+def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
+    """Fetch OHLC data for multiple symbols"""
+    results = {}
+
+    for symbol in symbols:
+        try:
+            ohlc_data = fetch_ohlc_data(symbol, period, interval)
+            if ohlc_data:
+                results[symbol] = ohlc_data
+            else:
+                print(f"Failed to fetch OHLC data for {symbol}", file=sys.stderr)
+                results[symbol] = None
+
+            # Add delay to respect rate limits
+            time.sleep(1.0)
+
+        except Exception as e:
+            print(f"Error fetching OHLC for {symbol}: {e}", file=sys.stderr)
+            results[symbol] = None
+
+    return results
+
 def main():
-    parser = argparse.ArgumentParser(description='Fetch stock data using Financial Modeling Prep API')
-    parser.add_argument('--historical', action='store_true', help='Fetch historical data')
+    parser = argparse.ArgumentParser(description='Fetch stock data using Financial Modeling Prep API and yfinance')
+    parser.add_argument('--historical', action='store_true', help='Fetch historical price data')
+    parser.add_argument('--ohlc', action='store_true', help='Fetch OHLC (candlestick) data')
+    parser.add_argument('--batch-ohlc', action='store_true', help='Fetch OHLC data for multiple symbols')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
+    parser.add_argument('--period', default='1mo', help='Period for OHLC data (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)')
+    parser.add_argument('--interval', default='1d', help='Interval for OHLC data (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)')
 
     args = parser.parse_args()
 
-    if args.historical:
+    if args.ohlc or args.batch_ohlc:
+        # OHLC data mode
+        if not args.symbols:
+            print("Error: OHLC mode requires at least one symbol", file=sys.stderr)
+            output_error('INVALID_REQUEST', 'OHLC mode requires at least one symbol')
+            sys.exit(1)
+
+        symbols = [s.upper() for s in args.symbols]
+
+        try:
+            if args.batch_ohlc and len(symbols) > 1:
+                # Batch OHLC fetch
+                ohlc_results = fetch_batch_ohlc(symbols, period=args.period, interval=args.interval)
+                # Output as JSON object with symbol keys
+                output_data = {}
+                for symbol, data in ohlc_results.items():
+                    if data:
+                        output_data[symbol] = data
+                print(json.dumps(output_data))
+            else:
+                # Single symbol OHLC fetch
+                symbol = symbols[0]
+                ohlc_data = fetch_ohlc_data(symbol, period=args.period, interval=args.interval)
+                if ohlc_data:
+                    print(json.dumps(ohlc_data))
+                else:
+                    output_error('NO_DATA', f'No OHLC data available for {symbol}', symbol=symbol)
+        except Exception as e:
+            error_str = str(e)
+            if 'timeout' in error_str.lower():
+                output_error('TIMEOUT', f'Request timed out')
+            elif 'rate limit' in error_str.lower():
+                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', retry_after=60)
+            else:
+                output_error('UNKNOWN', f'Unexpected error: {str(e)}')
+            sys.exit(1)
+
+    elif args.historical:
         # Historical data mode
         if not args.symbols or not args.start_date or not args.end_date:
             print("Error: Historical mode requires symbol, start-date, and end-date", file=sys.stderr)

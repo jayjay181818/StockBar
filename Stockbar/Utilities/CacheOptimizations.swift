@@ -42,7 +42,7 @@ extension CacheManager {
     // MARK: - LRU Memory Cache Cleanup
     
     private func cleanMemoryCacheLRU(maxItems: Int) async -> Int {
-        return await memoryCacheQueue.sync {
+        return memoryCacheQueue.sync {
             let sortedEntries = memoryCache.sorted { entry1, entry2 in
                 // Sort by access count and last accessed time (LRU)
                 if entry1.value.accessCount != entry2.value.accessCount {
@@ -66,7 +66,7 @@ extension CacheManager {
     // MARK: - Disk Cache Age-Based Cleanup
     
     private func cleanDiskCacheByAge(maxAge: TimeInterval) async -> Int {
-        return await diskCacheQueue.sync {
+        return diskCacheQueue.sync {
             let fileManager = FileManager.default
             let cutoffDate = Date().addingTimeInterval(-maxAge)
             var bytesFreed = 0
@@ -98,8 +98,8 @@ extension CacheManager {
         await Logger.shared.debug("🗜️ Compressing old data to archive cache")
         
         // Move old disk cache items to archive with compression
-        await diskCacheQueue.async { [weak self] in
-            guard let self = self else { return }
+        diskCacheQueue.async { [weak self] in
+            guard let self else { return }
             
             let fileManager = FileManager.default
             let cutoffDate = Date().addingTimeInterval(-age)
