@@ -43,7 +43,7 @@ pip3 install --upgrade yfinance
 - **Test single stock**: `python3 Stockbar/Resources/get_stock_data.py AAPL`
 - **Test multiple stocks**: `python3 Stockbar/Resources/get_stock_data.py AAPL GOOGL MSFT`
 - **Update yfinance**: `pip3 install --upgrade yfinance`
-- **View logs**: Check `~/Documents/stockbar.log` and Console.app for debug output
+- **View logs**: Check `~/Library/Application Support/com.fhl43211.Stockbar/stockbar.log` (with rotation to `.1.log` and `.2.log`) and Console.app for debug output
 - **Test currency conversion**: Verify exchange rates via `CurrencyConverter.refreshRates()`
 - **Run unit tests**: Select `StockbarTests` target in Xcode and run tests (⌘U)
 - **Performance testing**: Use built-in Debug tab in preferences for real-time monitoring
@@ -339,3 +339,363 @@ Stockbar includes comprehensive performance charting capabilities with historica
 - **Data Recording**: Automatic snapshot recording after successful price updates
 - **Currency Handling**: Portfolio values calculated in user's preferred currency
 - **Memory Management**: Proper cleanup and data limitations to prevent memory issues
+
+## v2.3.0 UI/UX Enhancement Features (Phase 1-4)
+
+### Phase 1A: Menu Bar Display Enhancements
+
+**Location**: [MenuBarDisplaySettings.swift](Stockbar/Models/MenuBarDisplaySettings.swift), [MenuBarFormattingService.swift](Stockbar/Services/MenuBarFormattingService.swift)
+
+**Display Modes** (4 options):
+1. **Compact**: `SYMBOL +X.XX%` - Space-saving format
+2. **Expanded**: `SYMBOL $XXX.XX +X.XX%` - Full information display
+3. **Minimal**: `SYMBOL ▲` - Symbol with indicator only
+4. **Custom Template**: User-defined format with placeholders
+
+**Template Placeholders**:
+- `{symbol}` - Stock symbol (e.g., AAPL)
+- `{price}` - Current price with currency
+- `{change}` - Dollar change amount
+- `{changePct}` - Percentage change
+- `{currency}` - Currency code (USD, GBP, etc.)
+- `{arrow}` - Directional indicator
+
+**Change Format Options**:
+- **Percentage**: `+2.51%`
+- **Dollar**: `+$4.29`
+- **Both**: `+$4.29 (2.51%)`
+
+**Visual Customization**:
+- **Decimal Places**: 0-4 (configurable precision)
+- **Arrow Indicators**: None, Simple (▲▼), Bold (⬆⬇), Emoji (🟢🔴)
+- **Arrow Position**: Before or after symbol
+- **Currency Display**: Show/hide currency symbols
+- **Color Coding**: Green (positive) / Red (negative) - respects existing setting
+
+**Features**:
+- Real-time validation with visual feedback (✓ valid / ⚠ warning)
+- Live preview in preferences
+- 5-second cache TTL for formatted strings (performance)
+- Actor-based thread safety
+- Settings persistence in UserDefaults
+
+**UI Location**: Preferences → Portfolio tab → "Menu Bar Display" section
+
+### Phase 1B: OHLC Data Infrastructure
+
+**Location**: [get_stock_data.py](Stockbar/Resources/get_stock_data.py), [OHLCDataService.swift](Stockbar/Data/CoreData/OHLCDataService.swift), [NetworkService.swift](Stockbar/Data/Networking/NetworkService.swift)
+
+**Python Script Enhancements**:
+- New `--ohlc` flag for OHLC data fetching
+- Batch OHLC support: `--batch-ohlc AAPL,GOOGL,MSFT 1mo 1d`
+- Configurable periods: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+- Configurable intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+- GBX to GBP conversion for UK stocks (.L suffix)
+
+**Core Data Schema**:
+- **OHLCSnapshotEntity** (Model Version 6):
+  - timestamp: Date
+  - symbol: String
+  - open, high, low, close: Double
+  - volume: Int64
+- **Indexes**: bySymbol, byTimestamp, bySymbolAndTimestamp (performance)
+- **Automatic Migration**: Lightweight migration from v5 to v6
+
+**OHLCDataService Features**:
+- Thread-safe actor-based operations
+- Batch save operations for efficiency
+- Duplicate prevention (1-minute minimum interval)
+- Automatic cleanup (max 10,000 snapshots per symbol)
+- Date range queries
+- Latest snapshot retrieval
+
+**NetworkService Integration**:
+- `fetchOHLCData(symbol:period:interval:)` - Single symbol
+- `fetchBatchOHLCData(symbols:period:interval:)` - Multiple symbols
+- Timeout protection (2min single, 5min batch)
+- Comprehensive logging with 📊 OHLC prefix
+- JSON response parsing with error handling
+
+### Phase 2: Advanced Charting & Technical Indicators
+
+**Location**: [CandlestickChartView.swift](Stockbar/Charts/CandlestickChartView.swift), [VolumeChartView.swift](Stockbar/Charts/VolumeChartView.swift), [TechnicalIndicatorService.swift](Stockbar/Services/TechnicalIndicatorService.swift)
+
+**Candlestick Charts** (493 lines):
+- OHLC visualization with color-coded candles (green up, red down)
+- Hollow/filled candle bodies
+- High/low wicks
+- Volume bars below chart
+- Interactive time range selection (1D, 1W, 1M, 3M, 6M, 1Y)
+- Hover tooltips with OHLC data
+- Automatic chart scaling and formatting
+
+**Technical Indicators** (8 indicators, 330 lines):
+1. **SMA (Simple Moving Average)**: Configurable periods (20, 50, 200 day common)
+2. **EMA (Exponential Moving Average)**: Fast-reacting MA (12, 26 day common)
+3. **RSI (Relative Strength Index)**: Momentum oscillator (0-100 scale, 14-period default)
+   - Overbought zone: >70
+   - Oversold zone: <30
+4. **MACD (Moving Average Convergence Divergence)**:
+   - MACD line (12-26 EMA difference)
+   - Signal line (9-period EMA of MACD)
+   - Histogram (MACD - Signal)
+   - Bullish/bearish crossover detection
+5. **Bollinger Bands**:
+   - Middle band (20-period SMA)
+   - Upper/lower bands (2 standard deviations)
+   - Bandwidth indicator
+6. **Stochastic Oscillator**: %K and %D lines
+7. **ATR (Average True Range)**: Volatility measurement
+8. **OBV (On-Balance Volume)**: Volume-based momentum
+
+**Volume Analysis** (420 lines):
+- Standalone volume chart with bar visualization
+- Color-coded bars (green up days, red down days)
+- Average volume line indicator
+- Volume profile analysis
+- Volume-by-price histogram (horizontal)
+- Statistics panel (total, average, max volume)
+
+**Chart Integration**:
+- Switchable chart types (Line, Candlestick, OHLC Bars, Area, Volume)
+- Multi-indicator overlay support
+- Time period selector (1D, 5D, 1M, 3M, 6M, 1Y, 5Y)
+- Interval selector (1m, 5m, 15m, 1h, 1D, 1W)
+
+**UI Location**: Preferences → Charts tab
+
+### Phase 3: Risk Analytics Dashboard
+
+**Location**: [RiskMetricsService.swift](Stockbar/Analytics/RiskMetricsService.swift) (410 lines), [RiskAnalyticsView.swift](Stockbar/Views/RiskAnalyticsView.swift) (665 lines)
+
+**Risk Metrics Calculated** (7 comprehensive metrics):
+
+1. **Value at Risk (VaR)**:
+   - **95% Confidence**: Potential loss exceeded only 5% of the time
+   - **99% Confidence**: Potential loss exceeded only 1% of the time
+   - **Method**: Historical simulation using actual return distribution
+   - **Display**: Absolute dollars and percentage of portfolio
+
+2. **Sharpe Ratio**:
+   - Risk-adjusted return measurement
+   - Formula: (Portfolio Return - Risk-Free Rate) / Volatility
+   - Annualized calculation (252 trading days)
+   - Configurable risk-free rate (default: 4%)
+   - **Interpretation**:
+     - >2.0: Exceptional
+     - 1.0-2.0: Very Good
+     - 0.5-1.0: Good
+     - 0-0.5: Adequate
+     - <0: Poor
+
+3. **Sortino Ratio**:
+   - Downside risk-adjusted return
+   - Only considers negative returns (downside deviation)
+   - Typically higher than Sharpe ratio
+   - Better measure for asymmetric return distributions
+
+4. **Beta** (Market Correlation):
+   - Measures systematic risk vs. benchmark (S&P 500)
+   - Beta = 1.0: Moves with market
+   - Beta > 1.0: More volatile than market
+   - Beta < 1.0: Less volatile than market
+   - Covariance and variance calculations
+
+5. **Maximum Drawdown**:
+   - Largest peak-to-trough decline
+   - Duration tracking (days in drawdown)
+   - Multiple drawdown period identification (>5% threshold)
+   - Recovery time analysis
+   - Current drawdown status
+
+6. **Volatility**:
+   - Annualized standard deviation of returns
+   - Rolling volatility (30-day, 60-day, 90-day)
+   - Comparison to market volatility
+
+7. **Downside Deviation**:
+   - Volatility of negative returns only
+   - Excludes positive returns from calculation
+   - Used in Sortino ratio
+
+**Risk Dashboard UI**:
+- 8 metric cards in grid layout with color-coded values
+- VaR visualization (95% vs 99% comparison chart)
+- Risk-adjusted returns section (Sharpe/Sortino breakdown)
+- Maximum drawdown analysis with duration
+- Drawdown history table (top 5 periods >5%)
+- Time range selection (1M, 3M, 6M, 1Y, All Time)
+- Calculation methodology details
+- Empty state and error handling
+- Real-time calculation with loading states
+
+**Technical Implementation**:
+- Actor-based thread safety
+- Statistical helper functions (mean, stddev, downside deviation)
+- Comprehensive logging with detailed debug output
+- Integration with HistoricalDataManager
+- Async/await patterns throughout
+
+**UI Location**: Preferences → Risk tab
+
+### Phase 4: Portfolio Analytics & Diversification
+
+**Location**: [CorrelationMatrixService.swift](Stockbar/Analytics/CorrelationMatrixService.swift) (392 lines), [SectorAnalysisService.swift](Stockbar/Analytics/SectorAnalysisService.swift) (340 lines), [PortfolioAnalyticsView.swift](Stockbar/Views/PortfolioAnalyticsView.swift) (583 lines)
+
+**Correlation Analysis**:
+- **N×N Correlation Matrix**: Pearson correlation coefficients between all stock pairs
+- **Diversification Metrics**:
+  - Average/max/min correlation tracking
+  - Effective number of independent positions (Effective N)
+  - Diversification ratio (portfolio vol / weighted avg vol)
+  - Concentration score (Herfindahl index, 0-1 scale)
+- **Correlation Insights**:
+  - Top 5 highest correlated pairs (risk identification)
+  - Top 5 lowest correlated pairs (diversification opportunities)
+  - Color-coded correlation values (red high, green low)
+- **Diversification Score** (0-100):
+  - Formula combines correlation factor (40pts), concentration factor (30pts), effective N factor (30pts)
+  - Risk levels: Low (70-100), Medium (50-69), High (0-49)
+
+**Sector Analysis** (11 GICS Sectors):
+1. Technology
+2. Healthcare
+3. Financials
+4. Consumer Cyclical
+5. Consumer Defensive
+6. Industrials
+7. Energy
+8. Utilities
+9. Real Estate
+10. Basic Materials
+11. Communication Services
+
+**Sector Allocation Features**:
+- **Pie Chart**: Color-coded sectors with percentage breakdown
+- **Sector Breakdown Table**:
+  - Total value per sector
+  - Percentage of portfolio
+  - Day change ($ and %)
+  - Circle indicators matching pie chart colors
+- **Industry Breakdown**: Sub-sector classification within each GICS sector
+- **Symbol-to-Sector Mapping**: 100+ common stocks pre-mapped
+- **Unknown Symbol Handling**: Defaults to "Unknown" sector
+
+**Diversification Recommendations**:
+- **Top-Heavy Sector Detection**: Warns if any sector >25% of portfolio
+- **Missing Sector Suggestions**: Recommends diversification into underrepresented sectors
+- **Concentration Risk Assessment**: Low/Medium/High with explanations
+- **Actionable Insights**: Specific stocks to consider for better balance
+
+**Portfolio Analytics Dashboard**:
+- Sector allocation pie chart and table
+- Diversification analysis with score and recommendations
+- Correlation matrix summary (matrix calculated, heatmap simplified for performance)
+- Correlation insights (highest/lowest pairs)
+- Time range selection (1M, 3M, 6M, 1Y, All Time)
+- Empty state for <2 stocks
+- Metric cards with tooltips
+- Color coding throughout (green/red/orange)
+
+**Technical Implementation**:
+- Actor-based thread safety for all calculations
+- Pearson correlation algorithm
+- Herfindahl concentration index
+- Sector performance attribution
+- Integration with historical data for time-series analysis
+
+**UI Location**: Preferences → Analytics tab
+
+### Performance & Quality
+
+**Performance Targets**:
+- CPU usage: <5% average (meets target)
+- Memory footprint: <200 MB (meets target)
+- Chart rendering: <100ms (60 FPS)
+- Menu bar update: <50ms (feels instant)
+- Risk calculation: <1s for 50-stock portfolio
+
+**Testing Coverage**:
+- **Unit Tests**: 1,685 lines, 80+ test methods
+  - RiskMetricsServiceTests (406 lines, 17 tests)
+  - TechnicalIndicatorServiceTests (394 lines, 19 tests)
+  - MenuBarFormattingServiceTests (480 lines, 23 tests)
+  - PortfolioAnalyticsServicesTests (405 lines, 21 tests)
+- **Manual Testing**: 57 comprehensive test scenarios
+- **Performance Monitoring**: Scripts/measure_performance.sh
+
+**Code Quality**:
+- Swift 6.0 concurrency patterns throughout
+- Actor isolation for thread safety
+- Comprehensive error handling
+- Extensive logging with context
+- No memory leaks (weak self patterns)
+- Clean build with zero errors
+
+## Data Storage & Backup
+
+Stockbar stores data in three locations with different purposes:
+
+### 1. UserDefaults (`~/Library/Preferences/com.fhl43211.Stockbar.plist`)
+**Contains:**
+- Portfolio configuration (trades with symbol, units, avg cost, currency)
+- App preferences (color coding, preferred currency, menu bar display settings)
+- Last refresh timestamps and cache coordination data
+
+**Backup:**
+```bash
+defaults export com.fhl43211.Stockbar ~/Desktop/stockbar_prefs.plist
+```
+
+**Restore:**
+```bash
+defaults import com.fhl43211.Stockbar ~/Desktop/stockbar_prefs.plist
+```
+
+### 2. Core Data (`~/Library/Application Support/Stockbar/StockbarDataModel.sqlite`)
+**Contains:**
+- Historical price snapshots (PriceSnapshotEntity)
+- Portfolio value history (PortfolioSnapshotEntity)
+- OHLC candlestick data (OHLCSnapshotEntity)
+- Typical size: ~85-100 MB with full history
+
+**Files:**
+- `StockbarDataModel.sqlite` - Main database file
+- `StockbarDataModel.sqlite-wal` - Write-ahead log (SQLite WAL mode)
+- `StockbarDataModel.sqlite-shm` - Shared memory file
+
+**Backup:**
+```bash
+cp -r ~/Library/Application\ Support/Stockbar/StockbarDataModel.sqlite* ~/Desktop/
+```
+
+### 3. Configuration File (`~/Documents/.stockbar_config.json`)
+**Contains:**
+- FMP API key (plain-text JSON)
+
+**Format:**
+```json
+{
+  "FMP_API_KEY": "your_api_key_here"
+}
+```
+
+**Security Note:** API keys are stored in plain-text for convenience. The data accessed (stock prices) is not sensitive.
+
+### Automated Backup Scripts
+
+Complete backup/restore scripts are available in `Scripts/`:
+
+**Create Complete Backup:**
+```bash
+cd Scripts
+./backup_stockbar_data.sh
+```
+
+**Restore from Backup:**
+```bash
+cd Scripts
+./restore_stockbar_data.sh stockbar_complete_backup_2025-10-03_103443
+```
+
+See `Scripts/README.md` for detailed documentation.

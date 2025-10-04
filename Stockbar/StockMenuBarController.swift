@@ -22,7 +22,7 @@ class StockMenuBarController {
             NSMenuItem.separator(),
             NSMenuItem(title: "Refresh", action: #selector(refreshButtonClicked(_:)), keyEquivalent: ""),
             NSMenuItem.separator(),
-            NSMenuItem(title: "Preferences", action: #selector(showPreferences), keyEquivalent: ","),
+            NSMenuItem(title: "Preferences", action: #selector(showPreferences(_:)), keyEquivalent: ","),
             NSMenuItem(title: "Exit", action: #selector(quitApp), keyEquivalent: "q")
         ]
     }()
@@ -64,10 +64,15 @@ class StockMenuBarController {
     }
     
     private func updateSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
+        print("🔧 CONTROLLER: Updating symbol items, count: \(realTimeTrades.count)")
+        print("🔧 CONTROLLER: Symbols: \(realTimeTrades.map { $0.trade.name }.joined(separator: ", "))")
+
         statusBar.removeAllSymbolItems()
         for trade in realTimeTrades {
             statusBar.constructSymbolItem(from: trade, dataModel: data)
         }
+
+        print("🔧 CONTROLLER: Finished creating \(realTimeTrades.count) symbol items")
     }
 
     private func updatePortfolioSummary() {

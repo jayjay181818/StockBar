@@ -9,6 +9,8 @@ protocol NetworkService {
     func fetchQuote(for symbol: String) async throws -> StockFetchResult
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult]
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
+    func fetchOHLCData(for symbol: String, period: String, interval: String) async throws -> [OHLCSnapshot]
+    func fetchBatchOHLCData(for symbols: [String], period: String, interval: String) async throws -> [String: [OHLCSnapshot]]
 }
 
 // MARK: - Network Error Enum (Extended for script execution)
@@ -513,25 +515,6 @@ class PythonNetworkService: NetworkService {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
         
-        // Improve buffer handling for large outputs
-        var outputData = Data()
-        var errorData = Data()
-        
-        // Set up data handlers to read incrementally and avoid buffer overflow
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                outputData.append(data)
-            }
-        }
-        
-        errorPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                errorData.append(data)
-            }
-        }
-        
         do {
             await logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
             try process.run()
@@ -545,18 +528,47 @@ class PythonNetworkService: NetworkService {
                 }
             }
             
+            // Read data incrementally to avoid pipe buffer overflow (65KB limit)
+            // Use readability handler approach for reliable streaming
+            var outputData = Data()
+            var errorData = Data()
+            let outputLock = NSLock()
+            let errorLock = NSLock()
+
+            outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if !chunk.isEmpty {
+                    outputLock.lock()
+                    outputData.append(chunk)
+                    outputLock.unlock()
+                }
+            }
+
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if !chunk.isEmpty {
+                    errorLock.lock()
+                    errorData.append(chunk)
+                    errorLock.unlock()
+                }
+            }
+
             process.waitUntilExit()
             timeoutTask.cancel() // Cancel timeout if process finishes normally
-            
-            // Clean up the handlers
+
+            // Clear handlers and read any final data
             outputPipe.fileHandleForReading.readabilityHandler = nil
             errorPipe.fileHandleForReading.readabilityHandler = nil
-            
-            // Read any remaining data
-            let remainingOutputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let remainingErrorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            outputData.append(remainingOutputData)
-            errorData.append(remainingErrorData)
+
+            // Read any remaining buffered data
+            let remainingOutput = outputPipe.fileHandleForReading.availableData
+            if !remainingOutput.isEmpty {
+                outputData.append(remainingOutput)
+            }
+            let remainingError = errorPipe.fileHandleForReading.availableData
+            if !remainingError.isEmpty {
+                errorData.append(remainingError)
+            }
             
             let exitCode = process.terminationStatus
             await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
@@ -644,6 +656,255 @@ class PythonNetworkService: NetworkService {
             throw netErr
         } catch {
             await logger.error("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
+            throw NetworkError.scriptExecutionError(error.localizedDescription)
+        }
+    }
+
+    // MARK: - OHLC Data Fetching (v2.3.0 UI Enhancement)
+
+    /// Fetch OHLC (candlestick) data for a single symbol
+    /// - Parameters:
+    ///   - symbol: Stock symbol (e.g., "AAPL", "TSLA")
+    ///   - period: Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+    ///   - interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+    /// - Returns: Array of OHLC snapshots
+    func fetchOHLCData(for symbol: String, period: String = "1mo", interval: String = "1d") async throws -> [OHLCSnapshot] {
+        await logger.info("📊 OHLC: Starting fetch for \(symbol) (period: \(period), interval: \(interval))")
+
+        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
+            await logger.error("Script '\(scriptName)' not found in bundle.")
+            throw NetworkError.scriptNotFound(scriptName)
+        }
+
+        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
+            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
+
+        await logger.info("📊 OHLC: Command: \(pythonInterpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+
+            // Add timeout protection (2 minutes for OHLC data)
+            let timeoutTask = Task {
+                try await Task.sleep(nanoseconds: 120_000_000_000) // 2 minutes
+                if process.isRunning {
+                    await logger.warning("📊 OHLC: Timeout reached for \(symbol), terminating process")
+                    process.terminate()
+                }
+            }
+
+            process.waitUntilExit()
+            timeoutTask.cancel()
+
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await logger.info("📊 OHLC: Debug output for \(symbol): \(err)")
+            }
+
+            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+                await logger.warning("📊 OHLC: stdout for \(symbol) is empty.")
+                throw NetworkError.noData("Empty OHLC output from script for \(symbol)")
+            }
+
+            await logger.info("📊 OHLC: Raw output for \(symbol) (\(output.count) chars)")
+
+            // Try to parse as JSON error first
+            do {
+                try parseError(from: output)
+            } catch let error as NetworkError {
+                throw error
+            } catch {
+                // Not a JSON error, continue with normal parsing
+            }
+
+            // Parse JSON array response
+            guard let jsonData = output.data(using: .utf8) else {
+                throw NetworkError.invalidResponse("Could not convert OHLC output to data")
+            }
+
+            do {
+                let ohlcArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] ?? []
+
+                var snapshots: [OHLCSnapshot] = []
+
+                for item in ohlcArray {
+                    guard let timestamp = item["timestamp"] as? TimeInterval,
+                          let symbolValue = item["symbol"] as? String,
+                          let open = item["open"] as? Double,
+                          let high = item["high"] as? Double,
+                          let low = item["low"] as? Double,
+                          let close = item["close"] as? Double,
+                          let volume = item["volume"] as? Int64 else {
+                        await logger.warning("📊 OHLC: Skipping invalid OHLC data item: \(item)")
+                        continue
+                    }
+
+                    let snapshot = OHLCSnapshot(
+                        symbol: symbolValue,
+                        timestamp: Date(timeIntervalSince1970: timestamp),
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                        volume: volume
+                    )
+                    snapshots.append(snapshot)
+                }
+
+                await logger.info("📊 OHLC: Successfully parsed \(snapshots.count) candlesticks for \(symbol)")
+                return snapshots
+
+            } catch {
+                await logger.error("📊 OHLC: Failed to parse JSON: \(error.localizedDescription)")
+                throw NetworkError.invalidResponse("Could not parse OHLC JSON: \(error.localizedDescription)")
+            }
+
+        } catch let netErr as NetworkError {
+            throw netErr
+        } catch {
+            await logger.error("📊 OHLC: Failed to run Python script for \(symbol): \(error.localizedDescription)")
+            throw NetworkError.scriptExecutionError(error.localizedDescription)
+        }
+    }
+
+    /// Fetch OHLC data for multiple symbols (batch operation)
+    /// - Parameters:
+    ///   - symbols: Array of stock symbols
+    ///   - period: Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+    ///   - interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+    /// - Returns: Dictionary mapping symbol to array of OHLC snapshots
+    func fetchBatchOHLCData(for symbols: [String], period: String = "1mo", interval: String = "1d") async throws -> [String: [OHLCSnapshot]] {
+        await logger.info("📊 OHLC BATCH: Starting fetch for \(symbols.count) symbols (period: \(period), interval: \(interval))")
+
+        guard !symbols.isEmpty else { return [:] }
+
+        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
+            await logger.error("Script '\(scriptName)' not found in bundle.")
+            throw NetworkError.scriptNotFound(scriptName)
+        }
+
+        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
+            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
+        args.append(contentsOf: symbols)
+        process.arguments = args
+
+        await logger.info("📊 OHLC BATCH: Command: \(pythonInterpreterPath) \(args.joined(separator: " "))")
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+
+            // Add timeout protection (5 minutes for batch OHLC data)
+            let timeoutTask = Task {
+                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
+                if process.isRunning {
+                    await logger.warning("📊 OHLC BATCH: Timeout reached, terminating process")
+                    process.terminate()
+                }
+            }
+
+            process.waitUntilExit()
+            timeoutTask.cancel()
+
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await logger.info("📊 OHLC BATCH: Debug output: \(err)")
+            }
+
+            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+                await logger.warning("📊 OHLC BATCH: stdout is empty.")
+                throw NetworkError.noData("Empty OHLC batch output from script")
+            }
+
+            await logger.info("📊 OHLC BATCH: Raw output (\(output.count) chars)")
+
+            // Try to parse as JSON error first
+            do {
+                try parseError(from: output)
+            } catch let error as NetworkError {
+                throw error
+            } catch {
+                // Not a JSON error, continue with normal parsing
+            }
+
+            // Parse JSON dictionary response
+            guard let jsonData = output.data(using: .utf8) else {
+                throw NetworkError.invalidResponse("Could not convert OHLC batch output to data")
+            }
+
+            do {
+                let batchData = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: [[String: Any]]] ?? [:]
+
+                var result: [String: [OHLCSnapshot]] = [:]
+
+                for (symbol, ohlcArray) in batchData {
+                    var snapshots: [OHLCSnapshot] = []
+
+                    for item in ohlcArray {
+                        guard let timestamp = item["timestamp"] as? TimeInterval,
+                              let symbolValue = item["symbol"] as? String,
+                              let open = item["open"] as? Double,
+                              let high = item["high"] as? Double,
+                              let low = item["low"] as? Double,
+                              let close = item["close"] as? Double,
+                              let volume = item["volume"] as? Int64 else {
+                            await logger.warning("📊 OHLC BATCH: Skipping invalid OHLC data item for \(symbol): \(item)")
+                            continue
+                        }
+
+                        let snapshot = OHLCSnapshot(
+                            symbol: symbolValue,
+                            timestamp: Date(timeIntervalSince1970: timestamp),
+                            open: open,
+                            high: high,
+                            low: low,
+                            close: close,
+                            volume: volume
+                        )
+                        snapshots.append(snapshot)
+                    }
+
+                    result[symbol] = snapshots
+                    await logger.info("📊 OHLC BATCH: Successfully parsed \(snapshots.count) candlesticks for \(symbol)")
+                }
+
+                await logger.info("📊 OHLC BATCH: Successfully parsed data for \(result.count) symbols")
+                return result
+
+            } catch {
+                await logger.error("📊 OHLC BATCH: Failed to parse JSON: \(error.localizedDescription)")
+                throw NetworkError.invalidResponse("Could not parse OHLC batch JSON: \(error.localizedDescription)")
+            }
+
+        } catch let netErr as NetworkError {
+            throw netErr
+        } catch {
+            await logger.error("📊 OHLC BATCH: Failed to run Python script: \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }

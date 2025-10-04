@@ -391,6 +391,8 @@ struct PreferenceView: View {
                 Picker("Preference Tab", selection: $selectedTab) {
                     Text("Portfolio").tag(PreferenceTab.portfolio)
                     Text("Charts").tag(PreferenceTab.charts)
+                    Text("Risk").tag(PreferenceTab.risk)
+                    Text("Analytics").tag(PreferenceTab.analytics)
                     Text("Debug").tag(PreferenceTab.debug)
                 }
                 .pickerStyle(SegmentedPickerStyle())
@@ -411,6 +413,12 @@ struct PreferenceView: View {
                     portfolioView
                 case .charts:
                     chartsView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .risk:
+                    riskView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .analytics:
+                    analyticsView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .debug:
                     debugView
@@ -472,6 +480,150 @@ struct PreferenceView: View {
                 .help("Override system appearance settings")
                 Spacer()
             }
+
+            Divider()
+                .padding(.vertical, 8)
+
+            // Menu Bar Display Settings (UI Enhancement v2.3.0)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Menu Bar Display")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                // Display Mode
+                HStack {
+                    Text("Display Mode:")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("", selection: $userdata.menuBarDisplaySettings.displayMode) {
+                        ForEach(MenuBarDisplaySettings.DisplayMode.allCases, id: \.self) { mode in
+                            Text(mode.description).tag(mode)
+                        }
+                    }
+                    .frame(width: 220)
+                    .help("Choose how stock information appears in the menu bar")
+                    Spacer()
+                }
+
+                // Change Format
+                HStack {
+                    Text("Change Format:")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("", selection: $userdata.menuBarDisplaySettings.changeFormat) {
+                        ForEach(MenuBarDisplaySettings.ChangeFormat.allCases, id: \.self) { format in
+                            Text(format.description).tag(format)
+                        }
+                    }
+                    .frame(width: 220)
+                    .help("Show price changes as percentage, dollar amount, or both")
+                    Spacer()
+                }
+
+                // Custom Template (only shown when custom mode is selected)
+                if userdata.menuBarDisplaySettings.displayMode == .custom {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Custom Template:")
+                                .frame(width: 120, alignment: .leading)
+                            TextField("e.g., {symbol}: {changePct}", text: Binding(
+                                get: { userdata.menuBarDisplaySettings.customTemplate ?? "" },
+                                set: { userdata.menuBarDisplaySettings.customTemplate = $0.isEmpty ? nil : $0 }
+                            ))
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .help("Use placeholders: {symbol}, {price}, {change}, {changePct}, {currency}, {arrow}")
+                        }
+
+                        // Template validation message
+                        if let template = userdata.menuBarDisplaySettings.customTemplate {
+                            let validation = MenuBarDisplaySettings.validateTemplate(template)
+                            if !validation.isValid {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                    Text(validation.errorMessage ?? "Invalid template")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                }
+                                .padding(.leading, 120)
+                            } else {
+                                HStack {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                    Text("Template is valid")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                }
+                                .padding(.leading, 120)
+                            }
+                        }
+                    }
+                }
+
+                // Arrow Style
+                HStack {
+                    Text("Arrow Indicators:")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("", selection: $userdata.menuBarDisplaySettings.arrowStyle) {
+                        ForEach(MenuBarDisplaySettings.ArrowStyle.allCases, id: \.self) { style in
+                            Text(style.description).tag(style)
+                        }
+                    }
+                    .frame(width: 220)
+                    .help("Add visual arrow indicators for price movement")
+                    Spacer()
+                }
+
+                // Arrow Position (only shown if arrows are enabled)
+                if userdata.menuBarDisplaySettings.arrowStyle != .none {
+                    HStack {
+                        Text("")
+                            .frame(width: 120, alignment: .leading)
+                        Toggle("Show arrow before symbol", isOn: $userdata.menuBarDisplaySettings.showArrowBeforeSymbol)
+                            .help("Place arrow indicator before or after the stock symbol")
+                        Spacer()
+                    }
+                }
+
+                // Decimal Places
+                HStack {
+                    Text("Decimal Places:")
+                        .frame(width: 120, alignment: .leading)
+                    Stepper(value: $userdata.menuBarDisplaySettings.decimalPlaces, in: 0...4) {
+                        Text("\(userdata.menuBarDisplaySettings.decimalPlaces)")
+                            .frame(width: 30)
+                    }
+                    .help("Number of decimal places for prices and changes")
+                    Spacer()
+                }
+
+                // Show Currency
+                HStack {
+                    Text("")
+                        .frame(width: 120, alignment: .leading)
+                    Toggle("Show currency symbols", isOn: $userdata.menuBarDisplaySettings.showCurrency)
+                        .help("Display currency symbols (e.g., $, £) with prices")
+                    Spacer()
+                }
+
+                // Live Preview
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Preview:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(userdata.menuBarDisplaySettings.samplePreview())
+                        .font(.system(.body, design: .monospaced))
+                        .padding(8)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(4)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .cornerRadius(8)
+
+            Divider()
+                .padding(.vertical, 8)
 
             // API Key management section
             VStack(alignment: .leading, spacing: 8) {
@@ -550,17 +702,23 @@ struct PreferenceView: View {
                         Text("Historical Data Backfill:")
                             .font(.headline)
                         Spacer()
-                        Button(isBackfillingData ? "Backfilling..." : "Check & Fill Missing Data") {
+                        Button(isBackfillingData ? "Backfilling..." : "Force 5-Year Backfill") {
+                            force5YearBackfill()
+                        }
+                        .disabled(isBackfillingData)
+                        .help("Forces comprehensive 5-year historical data backfill for all stocks")
+
+                        Button("Check & Fill Missing Data") {
                             manualBackfillHistoricalData()
                         }
                         .disabled(isBackfillingData || (configManager.getFMPAPIKey()?.isEmpty ?? true))
                         .help("Checks for missing historical data and fetches only missing days")
-                        
+
                         Button("Clean Anomalous Data") {
                             cleanAnomalousData()
                         }
                         .help("Removes anomalous price data points that may cause chart dips")
-                        
+
                         Button("Clear All Historical Data") {
                             clearAllHistoricalData()
                         }
@@ -1049,7 +1207,15 @@ struct PreferenceView: View {
             PerformanceChartView(availableSymbols: availableSymbols, dataModel: userdata)
         }
     }
-    
+
+    private var riskView: some View {
+        RiskAnalyticsView(dataModel: userdata)
+    }
+
+    private var analyticsView: some View {
+        PortfolioAnalyticsView(dataModel: userdata)
+    }
+
     private var debugView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -1575,15 +1741,50 @@ struct PreferenceView: View {
             await MainActor.run {
                 backfillStatus = "🔧 Optimizing data storage..."
             }
-            
+
             userdata.historicalDataManager.optimizeAllDataStorage()
-            
+
             await MainActor.run {
                 backfillStatus = "✅ Data storage optimization completed"
             }
         }
     }
-    
+
+    private func force5YearBackfill() {
+        guard !isBackfillingData else { return }
+
+        isBackfillingData = true
+        backfillStatus = "🚀 Starting comprehensive 5-year backfill..."
+
+        Task {
+            let symbols = userdata.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
+
+            if symbols.isEmpty {
+                await MainActor.run {
+                    backfillStatus = "❌ No symbols to backfill"
+                    isBackfillingData = false
+                }
+                return
+            }
+
+            await Logger.shared.info("🔄 MANUAL: User initiated forced 5-year backfill for \(symbols.count) symbols")
+
+            await MainActor.run {
+                backfillStatus = "📊 Backfilling 5 years of data for \(symbols.count) symbols... (this may take several minutes)"
+            }
+
+            // Force comprehensive 5-year backfill
+            await userdata.checkAndBackfill5YearHistoricalData()
+
+            await MainActor.run {
+                backfillStatus = "✅ 5-year backfill completed! Check Charts tab to view historical data."
+                isBackfillingData = false
+            }
+
+            await Logger.shared.info("✅ MANUAL: 5-year backfill completed successfully")
+        }
+    }
+
     private func manualBackfillHistoricalData() {
         guard !isBackfillingData else { return }
         guard let apiKey = configManager.getFMPAPIKey(), !apiKey.isEmpty else {
@@ -2069,6 +2270,8 @@ struct PreferenceView: View {
 enum PreferenceTab {
     case portfolio
     case charts
+    case risk
+    case analytics
     case debug
 }
 

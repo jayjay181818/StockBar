@@ -399,7 +399,7 @@ class CacheManager: ObservableObject {
     
     private func determineOptimalCacheLevel(for key: String) -> CacheLevel {
         // Simple heuristic: recent data goes to memory, older data to disk/archive
-        let now = Date()
+        _ = Date()
         
         // Extract date information from key if possible
         if key.contains("recent") || key.contains("current") {

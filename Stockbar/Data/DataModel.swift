@@ -77,6 +77,13 @@ class DataModel: ObservableObject {
         }
     }
 
+    // MARK: - Menu Bar Display Settings (UI Enhancement v2.3.0)
+    @Published var menuBarDisplaySettings: MenuBarDisplaySettings = MenuBarDisplaySettings.load() {
+        didSet {
+            menuBarDisplaySettings.save()
+        }
+    }
+
     private let logger = Logger.shared
 
     @Published var refreshInterval: TimeInterval = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
@@ -345,7 +352,8 @@ class DataModel: ObservableObject {
                 // Apply saved order to the loaded trades
                 self.realTimeTrades = self.applyUserOrderToTrades(realTimeTrades)
                 Task { await logger.info("✅ Loaded \(realTimeTrades.count) trades successfully from Core Data with user order") }
-                
+                Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(self.realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
+
                 // Apply migrations after loading
                 self.migrateCostCurrencyData()
                 self.migrateRealTimeTradesCurrency()
