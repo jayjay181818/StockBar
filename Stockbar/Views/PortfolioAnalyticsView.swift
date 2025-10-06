@@ -20,6 +20,7 @@ struct PortfolioAnalyticsView: View {
     @State private var diversificationAnalysis: SectorAnalysisService.DiversificationAnalysis?
     @State private var topCorrelations: [CorrelationMatrixService.CorrelationPair] = []
     @State private var bottomCorrelations: [CorrelationMatrixService.CorrelationPair] = []
+    @State private var showAttributionSheet = false
 
     private let correlationService = CorrelationMatrixService()
     private let sectorService = SectorAnalysisService()
@@ -72,9 +73,17 @@ struct PortfolioAnalyticsView: View {
 
                     // Correlation Insights Section
                     correlationInsightsSection
+
+                    Divider()
+
+                    // Attribution Analysis Section (v2.3.1)
+                    attributionAnalysisSection
                 }
             }
             .padding()
+        }
+        .sheet(isPresented: $showAttributionSheet) {
+            AttributionAnalysisView(dataModel: dataModel)
         }
         .onAppear {
             Task {
@@ -539,6 +548,87 @@ struct PortfolioAnalyticsView: View {
         // This would fetch from HistoricalDataManager in production
         // For now, return nil to avoid errors until integrated
         return nil
+    }
+
+    // MARK: - Attribution Analysis Section (v2.3.1)
+
+    private var attributionAnalysisSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Performance Attribution")
+                    .font(.headline)
+
+                Spacer()
+
+                Button(action: {
+                    showAttributionSheet = true
+                }) {
+                    HStack {
+                        Text("View Details")
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
+
+            Text("Analyze individual stock and sector contributions to portfolio performance")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            // Attribution summary cards - clickable
+            HStack(spacing: 12) {
+                Button(action: {
+                    showAttributionSheet = true
+                }) {
+                    summaryCard(
+                        title: "Top Contributor",
+                        value: "View Analysis",
+                        color: .green
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    showAttributionSheet = true
+                }) {
+                    summaryCard(
+                        title: "Sector Attribution",
+                        value: "View Breakdown",
+                        color: .blue
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    showAttributionSheet = true
+                }) {
+                    summaryCard(
+                        title: "TWR vs MWR",
+                        value: "Compare Returns",
+                        color: .orange
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func summaryCard(title: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text(value)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
     }
 }
 

@@ -19,6 +19,7 @@ actor MenuBarFormattingService {
         let price: Double
         let change: Double
         let changePct: Double
+        let dayPL: Double
         let settingsHash: Int
     }
 
@@ -45,8 +46,9 @@ actor MenuBarFormattingService {
     /// - Parameters:
     ///   - symbol: Stock symbol
     ///   - price: Current price
-    ///   - change: Dollar change
+    ///   - change: Dollar change per share
     ///   - changePct: Percentage change
+    ///   - dayPL: Day P&L for entire position
     ///   - currency: Currency code
     ///   - settings: Display settings
     ///   - useColorCoding: Whether to apply color coding
@@ -56,6 +58,7 @@ actor MenuBarFormattingService {
         price: Double,
         change: Double,
         changePct: Double,
+        dayPL: Double,
         currency: String,
         settings: MenuBarDisplaySettings,
         useColorCoding: Bool
@@ -66,6 +69,7 @@ actor MenuBarFormattingService {
             price: price,
             change: change,
             changePct: changePct,
+            dayPL: dayPL,
             settingsHash: settings.hashValue
         )
 
@@ -80,6 +84,7 @@ actor MenuBarFormattingService {
             price: price,
             change: change,
             changePct: changePct,
+            dayPL: dayPL,
             currency: currency,
             settings: settings,
             useColorCoding: useColorCoding
@@ -109,6 +114,7 @@ actor MenuBarFormattingService {
         price: Double,
         change: Double,
         changePct: Double,
+        dayPL: Double,
         currency: String,
         settings: MenuBarDisplaySettings,
         useColorCoding: Bool
@@ -123,6 +129,7 @@ actor MenuBarFormattingService {
         let formattedPrice = formatPrice(price, currency: currency, settings: settings)
         let formattedChange = formatChange(change, currency: currency, settings: settings)
         let formattedChangePct = formatChangePercent(changePct, settings: settings)
+        let formattedDayPL = formatChange(dayPL, currency: currency, settings: settings)
         let arrow = isPositive ? settings.arrowStyle.upArrow() :
                     isNegative ? settings.arrowStyle.downArrow() : ""
 
@@ -131,6 +138,7 @@ actor MenuBarFormattingService {
         template = template.replacingOccurrences(of: "{price}", with: formattedPrice)
         template = template.replacingOccurrences(of: "{change}", with: formattedChange)
         template = template.replacingOccurrences(of: "{changePct}", with: formattedChangePct)
+        template = template.replacingOccurrences(of: "{dayPL}", with: formattedDayPL)
         template = template.replacingOccurrences(of: "{currency}", with: currency)
         template = template.replacingOccurrences(of: "{arrow}", with: arrow)
 

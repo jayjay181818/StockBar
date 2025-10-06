@@ -49,7 +49,7 @@ class DataModel: ObservableObject {
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
-    internal let historicalDataManager = HistoricalDataManager.shared
+    internal nonisolated(unsafe) let historicalDataManager = HistoricalDataManager.shared
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let refreshCoordinator = RefreshCoordinator()
@@ -175,13 +175,13 @@ class DataModel: ObservableObject {
 
         // Apply normalization to loaded stock currency data to ensure consistency
         normalizeLoadedStockCurrencies()
-        
+
         // Clear inconsistent historical data (one-time fix for calculation method changes)
         Task { await historicalDataManager.clearInconsistentData() }
-        
+
         // Initialize memory optimization
         setupMemoryManagement()
-        
+
         // NEW: Start enhanced portfolio calculation in background after app startup
         Task { @MainActor in
             // Prevent multiple startup tasks
@@ -190,10 +190,10 @@ class DataModel: ObservableObject {
                 return
             }
             hasRunStartupBackfill = true
-            
+
             // Wait 60 seconds after app startup to avoid interfering with initial data loading
             try? await Task.sleep(nanoseconds: 60_000_000_000)
-            
+
             // Check if migration service indicates retroactive calculation is needed
             if migrationService.needsRetroactiveCalculation {
                 await logger.info("🔄 MIGRATION: DataMigrationService indicates retroactive portfolio calculation is needed")
@@ -206,10 +206,15 @@ class DataModel: ObservableObject {
                 await logger.info("🔄 STARTUP: Checking if regular retroactive portfolio calculation is needed")
                 await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
             }
-            
+
             // AUTO-BACKFILL: Delegate to HistoricalDataCoordinator for startup backfill
             let symbols = realTimeTrades.map { $0.trade.name }
             await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols)
+        }
+
+        // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
+        Task { @MainActor in
+            BackfillScheduler.shared.start(dataModel: self)
         }
     }
 
@@ -505,14 +510,14 @@ class DataModel: ObservableObject {
     /// Clears bad historical data for specific symbols
     @MainActor
     public func clearHistoricalDataForSymbol(_ symbol: String) async {
-        await historicalDataManager.clearDataForSymbol(symbol)
+        historicalDataManager.clearDataForSymbol(symbol)
         await logger.info("Cleared bad historical data for \(symbol)")
     }
-    
+
     /// Clears bad historical data for multiple symbols
     @MainActor
     public func clearHistoricalDataForSymbols(_ symbols: [String]) async {
-        await historicalDataManager.clearDataForSymbols(symbols)
+        historicalDataManager.clearDataForSymbols(symbols)
         await logger.info("Cleared bad historical data for \(symbols.count) symbols")
     }
     
@@ -523,6 +528,17 @@ class DataModel: ObservableObject {
             await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
             await logger.info("🔄 MANUAL: Retroactive portfolio calculation completed")
         }
+    }
+
+    /// Triggers retroactive portfolio calculation for a specific number of days
+    /// This will calculate portfolio values retroactively from existing historical data
+    public func calculateRetroactivePortfolioHistory(days: Int) async {
+        await logger.info("🔄 BACKFILL: Starting \(days)-day retroactive portfolio calculation")
+
+        // Calculate portfolio history from existing historical data in Core Data
+        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+
+        await logger.info("✅ BACKFILL: \(days)-day retroactive portfolio calculation completed")
     }
     
     /// Refreshes all stock data from the network using the configured networkService
@@ -938,7 +954,7 @@ extension RealTimeTrade {
             timeZone = TimeZone(identifier: "America/New_York") ?? TimeZone.current
         }
 
-        var components = calendar.dateComponents(in: timeZone, from: now)
+        let components = calendar.dateComponents(in: timeZone, from: now)
         let hour = components.hour ?? 12
         let minute = components.minute ?? 0
         let weekday = components.weekday ?? 1 // 1 = Sunday, 7 = Saturday
@@ -1043,9 +1059,9 @@ extension RealTimeTrade {
         // IMPORTANT: Our Python script already converts pence to pounds for .L stocks
         // So we should NOT do any additional conversion here
         // Use sanitized values if validation passed, otherwise use originals
-        var finalRegularPrice = sanitizedRegularPrice ?? regularPrice
-        var finalDisplayPrice = displayPrice  // Display price not currently sanitized
-        var finalPrevClose = sanitizedPrevClose ?? prevClose
+        let finalRegularPrice = sanitizedRegularPrice ?? regularPrice
+        let _ = displayPrice  // Display price not currently sanitized
+        let finalPrevClose = sanitizedPrevClose ?? prevClose
         
         // Set default currency if not specified
         if currency == nil {

@@ -3,7 +3,7 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var stockMenuBarController: StockMenuBarController?
     private let dataModel = DataModel()
-    
+
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // Perform legacy cleanup on first launch
         LegacyCleanupService.shared.performCleanupIfNeeded()
@@ -29,6 +29,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await scheduleAutomaticBackup()
         }
+    }
+
+    // Handle dock icon clicks - reopen preferences window
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            // No visible windows, show preferences
+            stockMenuBarController?.showPreferences(nil)
+        } else {
+            // Windows exist, bring them to front
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return true
     }
 
     /// Performs automatic backup if needed (once per day)
