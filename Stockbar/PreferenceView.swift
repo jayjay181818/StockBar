@@ -1468,6 +1468,121 @@ struct PreferenceView: View {
                 }
             }
 
+            // Portfolio Data Debug Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Portfolio Data Debug")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                HStack(spacing: 12) {
+                    Button("Reload Portfolio Snapshots") {
+                        Task {
+                            await HistoricalDataManager.shared.reloadPortfolioSnapshotsFromCoreData()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                    .help("Reload portfolio snapshots from Core Data (use if charts show no data)")
+
+                    Text("Snapshots in memory: \(HistoricalDataManager.shared.historicalPortfolioSnapshots.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Backfill Past Week Portfolio Data") {
+                        Task {
+                            await Logger.shared.info("🔄 Starting 1-week portfolio backfill...")
+                            await userdata.calculateRetroactivePortfolioHistory(days: 7)
+                            await HistoricalDataManager.shared.reloadPortfolioSnapshotsFromCoreData()
+                            await Logger.shared.info("✅ 1-week portfolio backfill completed")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                    .help("Fetch hourly price data for past week and calculate portfolio values retroactively")
+                }
+            }
+
+            // Automatic Backfill Scheduler Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Automatic Backfill Scheduler")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .padding(.top, 8)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundColor(.blue)
+                        Text("Schedule:")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text("20 min after startup, then daily at 15:00")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    HStack {
+                        Image(systemName: "checkmark.circle")
+                            .foregroundColor(.green)
+                        Text("Gap Detection:")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text("Validates existing data before API calls")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if let lastBackfill = BackfillScheduler.shared.getLastBackfillDate() {
+                        HStack {
+                            Image(systemName: "calendar.badge.clock")
+                                .foregroundColor(.orange)
+                            Text("Last Run:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text(lastBackfill)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack {
+                            Image(systemName: "calendar.badge.clock")
+                                .foregroundColor(.gray)
+                            Text("Last Run:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("Never")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
+                HStack(spacing: 12) {
+                    Button("Run Backfill Check Now") {
+                        Task {
+                            await Logger.shared.info("📅 Manual backfill check triggered from UI")
+                            let didRun = await BackfillScheduler.shared.checkAndRunBackfillIfNeeded(dataModel: userdata)
+                            if didRun {
+                                await Logger.shared.info("✅ Manual backfill check completed - backfill was executed")
+                            } else {
+                                await Logger.shared.info("ℹ️ Manual backfill check completed - no backfill needed")
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.purple)
+                    .help("Manually trigger gap detection and backfill if needed")
+
+                    Text("Checks for gaps before running")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             // Advanced Debug Tools Section
             VStack(alignment: .leading, spacing: 8) {
                 Text("Advanced Debug Tools")

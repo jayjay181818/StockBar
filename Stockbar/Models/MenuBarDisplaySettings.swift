@@ -51,9 +51,11 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
     /// Format for displaying price changes
     enum ChangeFormat: String, Codable, CaseIterable {
-        case percentage // Show as percentage (e.g., "+2.45%")
-        case dollar     // Show as dollar amount (e.g., "+$4.29")
-        case both       // Show both (e.g., "+$4.29 (2.45%)")
+        case percentage     // Show as percentage (e.g., "+2.45%")
+        case dollar         // Show per-share change (e.g., "+$4.29")
+        case both           // Show both (e.g., "+$4.29 (2.45%)")
+        case positionPL     // Show position P&L + per-share change (e.g., "+$429.00 (+$4.29)")
+        case positionPLPct  // Show position P&L + percentage (e.g., "+$429.00 (+2.45%)")
 
         var description: String {
             switch self {
@@ -63,6 +65,10 @@ struct MenuBarDisplaySettings: Codable, Equatable {
                 return "Dollar ($)"
             case .both:
                 return "Both ($ and %)"
+            case .positionPL:
+                return "Position P&L + $ per share"
+            case .positionPLPct:
+                return "Position P&L + % gain"
             }
         }
 
@@ -74,6 +80,10 @@ struct MenuBarDisplaySettings: Codable, Equatable {
                 return "+$4.29"
             case .both:
                 return "+$4.29 (2.45%)"
+            case .positionPL:
+                return "+$429.00 (+$4.29)"
+            case .positionPLPct:
+                return "+$429.00 (+2.45%)"
             }
         }
     }
@@ -158,7 +168,8 @@ struct MenuBarDisplaySettings: Codable, Equatable {
         "{change}",
         "{changePct}",
         "{currency}",
-        "{arrow}"
+        "{arrow}",
+        "{dayPL}"
     ]
 
     /// Validates a custom template string
@@ -201,11 +212,26 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
     /// Returns the effective template based on display mode
     var effectiveTemplate: String {
+        // Determine change placeholder based on changeFormat setting
+        let changePlaceholder: String
+        switch changeFormat {
+        case .percentage:
+            changePlaceholder = "{changePct}"
+        case .dollar:
+            changePlaceholder = "{change}"
+        case .both:
+            changePlaceholder = "{change} ({changePct})"
+        case .positionPL:
+            changePlaceholder = "{dayPL} ({change})"
+        case .positionPLPct:
+            changePlaceholder = "{dayPL} ({changePct})"
+        }
+
         switch displayMode {
         case .compact:
-            return "{symbol} {changePct}"
+            return "{symbol} \(changePlaceholder)"
         case .expanded:
-            return "{symbol} {price} {changePct}"
+            return "{symbol} {price} \(changePlaceholder)"
         case .minimal:
             return "{symbol} {arrow}"
         case .custom:
@@ -282,6 +308,8 @@ extension MenuBarDisplaySettings {
         let samplePrice = 175.23
         let sampleChange = 4.29
         let sampleChangePct = 2.45
+        let sampleUnits = 100.0
+        let sampleDayPL = sampleChange * sampleUnits  // 429.00
         let sampleCurrency = "USD"
         let isPositive = sampleChange > 0
 
@@ -292,6 +320,7 @@ extension MenuBarDisplaySettings {
         result = result.replacingOccurrences(of: "{price}", with: formatPrice(samplePrice, currency: sampleCurrency))
         result = result.replacingOccurrences(of: "{change}", with: formatChange(sampleChange, currency: sampleCurrency))
         result = result.replacingOccurrences(of: "{changePct}", with: formatChangePercent(sampleChangePct))
+        result = result.replacingOccurrences(of: "{dayPL}", with: formatChange(sampleDayPL, currency: sampleCurrency))
         result = result.replacingOccurrences(of: "{currency}", with: sampleCurrency)
         result = result.replacingOccurrences(of: "{arrow}", with: isPositive ? arrowStyle.upArrow() : arrowStyle.downArrow())
 

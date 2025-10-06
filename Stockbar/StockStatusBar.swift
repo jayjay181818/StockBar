@@ -199,11 +199,14 @@ class StockStatusItemController {
         // Use display price (current, pre-market, or post-market) vs yesterday's close for day P&L
         let safeDisplay = data.displayPrice.isFinite ? data.displayPrice : 0
         let safePrev = data.previousPrice.isFinite ? data.previousPrice : 0
-        let _ = data.units.isFinite ? data.units : 0 // safeUnits not used in this function
+        let safeUnits = data.units.isFinite ? data.units : 0
 
         // Calculate change and change percentage
         let change = safeDisplay - safePrev
         let changePct = safePrev > 0 ? (change / safePrev) * 100 : 0
+
+        // Calculate day P&L for entire position
+        let dayPL = change * safeUnits
 
         // Use formatting service for title generation
         let settings = dataModel.menuBarDisplaySettings
@@ -214,6 +217,7 @@ class StockStatusItemController {
                 price: safeDisplay,
                 change: change,
                 changePct: changePct,
+                dayPL: dayPL,
                 currency: data.currency,
                 settings: settings,
                 useColorCoding: dataModel.showColorCoding

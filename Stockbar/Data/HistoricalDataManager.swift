@@ -174,11 +174,71 @@ class HistoricalDataManager: ObservableObject {
         do {
             let startDate = timeRange.startDate()
             let endDate = Date()
+            await logger.info("📈 Loading portfolio snapshots from Core Data: startDate=\(startDate), endDate=\(endDate)")
             let snapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
-            await logger.debug("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data") 
+            await logger.info("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
             return snapshots
         } catch {
-            await logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)") 
+            await logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            return []
+        }
+    }
+
+    /// Force reload portfolio snapshots from Core Data (for debugging/refresh)
+    func reloadPortfolioSnapshotsFromCoreData() async {
+        await logger.info("🔄 Force reloading portfolio snapshots from Core Data...")
+        let snapshots = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+        let count = snapshots.count
+        await MainActor.run {
+            self.historicalPortfolioSnapshots = snapshots
+        }
+        await logger.info("🔄 Reloaded \(count) portfolio snapshots into memory")
+    }
+
+    /// Fetch historical portfolio snapshots for attribution analysis (preferred method - has position data)
+    func fetchHistoricalPortfolioSnapshots(from startDate: Date, to endDate: Date) async -> [HistoricalPortfolioSnapshot] {
+        do {
+            let historicalSnapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
+            await logger.debug("📊 Fetched \(historicalSnapshots.count) historical portfolio snapshots for attribution analysis")
+            return historicalSnapshots
+        } catch {
+            await logger.error("❌ Failed to fetch historical portfolio snapshots: \(error)")
+            return []
+        }
+    }
+
+    /// Fetch portfolio snapshots for a specific date range (legacy converted format)
+    func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async -> [PortfolioSnapshot] {
+        do {
+            // Fetch from Core Data
+            let historicalSnapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
+
+            // Convert HistoricalPortfolioSnapshot to PortfolioSnapshot format
+            let portfolioSnapshots: [PortfolioSnapshot] = historicalSnapshots.map { historical in
+                // Convert PositionSnapshot dictionary to PriceSnapshot array
+                let priceSnapshots = historical.portfolioComposition.map { (symbol, position) -> PriceSnapshot in
+                    PriceSnapshot(
+                        timestamp: historical.date,
+                        price: position.priceAtDate,
+                        previousClose: position.priceAtDate, // We don't have previous close in PositionSnapshot
+                        volume: nil,
+                        symbol: symbol
+                    )
+                }
+
+                return PortfolioSnapshot(
+                    timestamp: historical.date,
+                    totalValue: historical.totalValue,
+                    totalGains: historical.totalGains,
+                    currency: historical.currency,
+                    priceSnapshots: priceSnapshots
+                )
+            }
+
+            await logger.debug("📊 Fetched \(portfolioSnapshots.count) portfolio snapshots (legacy format)")
+            return portfolioSnapshots
+        } catch {
+            await logger.error("❌ Failed to fetch portfolio snapshots: \(error)")
             return []
         }
     }
@@ -1234,24 +1294,19 @@ class HistoricalDataManager: ObservableObject {
         let coreDataMasterVersion = 3
 
         if migrationService.migrationVersionStored >= coreDataMasterVersion {
-            Task { await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).") }
-            // Load price snapshots from Core Data
             Task {
-                // This is a conceptual loading. In reality, we might not load ALL price snapshots
-                // into memory if the dataset is huge. Instead, OptimizedChartDataService
-                // would query Core Data directly. For now, let's assume we populate
-                // the in-memory cache for active symbols or recent data.
-                // This part needs careful thought on what `priceSnapshots` in memory represents.
-                // If it's a cache, it should be populated on demand or by OptimizedChartDataService.
-                // For simplicity in this draft, we'll clear it and assume it's populated as needed.
-                await MainActor.run { self.priceSnapshots = [:] } // Empties, relies on on-demand loading
-                Task { await logger.info("HistoricalDataManager: In-memory priceSnapshots map cleared; will load from Core Data on demand.") }
+                await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).")
 
-                let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all) // .all might be too much for memory
+                // Clear in-memory price snapshots - will load from Core Data on demand
+                await MainActor.run { self.priceSnapshots = [:] }
+                await logger.info("HistoricalDataManager: In-memory priceSnapshots map cleared; will load from Core Data on demand.")
+
+                // Load portfolio snapshots from Core Data
+                let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
                 await MainActor.run {
                     self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
-                    Task { await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.") }
                 }
+                await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.")
             }
         } else {
             Task { await logger.info("HistoricalDataManager: Falling back to CacheManager/UserDefaults for snapshots (migration version \(migrationService.migrationVersionStored)).") }
@@ -2855,11 +2910,16 @@ class HistoricalDataManager: ObservableObject {
     /// Gets stored portfolio values for chart display
     func getStoredPortfolioValues(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
         let startDate = timeRange.startDate()
-        
+
+        // Debug logging
+        Task { await logger.debug("📊 GET PORTFOLIO VALUES: totalSnapshots=\(historicalPortfolioSnapshots.count), startDate=\(startDate), timeRange=\(timeRange.rawValue)") }
+
         let filteredSnapshots = historicalPortfolioSnapshots
             .filter { $0.date >= startDate }
             .sorted { $0.date < $1.date }
-        
+
+        Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(filteredSnapshots.count)") }
+
         return filteredSnapshots.map { snapshot in
             ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
         }
