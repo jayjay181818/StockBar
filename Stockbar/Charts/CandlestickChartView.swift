@@ -25,6 +25,11 @@ struct CandlestickChartView: View {
     @State private var showRSI: Bool = false
     @State private var showMACD: Bool = false
 
+    // Interaction features (v2.3.1)
+    @StateObject private var interactionManager = ChartInteractionManager()
+    @StateObject private var annotationManager = AnnotationManager()
+    @State private var showAnnotationEditor = false
+
     private let indicatorService = TechnicalIndicatorService.shared
 
     var body: some View {
@@ -243,12 +248,55 @@ struct CandlestickChartView: View {
                                 selectedCandle = nil
                             }
                     )
+                    .onAppear {
+                        interactionManager.updateChartBounds(geometry.frame(in: .local))
+                    }
             }
         }
         .overlay(alignment: .topLeading) {
             if let selected = selectedCandle {
                 candleInfoOverlay(selected)
                     .padding(8)
+            }
+        }
+        .overlay {
+            // Crosshair overlay (v2.3.1)
+            if let position = interactionManager.crosshairPosition {
+                CrosshairOverlay(position: position, chartBounds: .zero)
+            }
+        }
+        .overlay {
+            // Annotations overlay (v2.3.1)
+            AnnotationsOverlay(annotationManager: annotationManager, showEditor: $showAnnotationEditor)
+        }
+        .chartGestures(interactionManager: interactionManager)
+        .contextMenu {
+            Button("Add Annotation") {
+                if let position = interactionManager.crosshairPosition {
+                    let annotation = ChartAnnotation(
+                        type: .text,
+                        position: position,
+                        text: "New Note"
+                    )
+                    annotationManager.addAnnotation(annotation)
+                }
+            }
+            Button("Clear Annotations") {
+                annotationManager.clearAnnotations()
+            }
+            Button("Reset Zoom") {
+                interactionManager.resetZoom()
+            }
+        }
+        .sheet(isPresented: $showAnnotationEditor) {
+            if let selected = annotationManager.selectedAnnotation {
+                AnnotationEditorView(
+                    annotation: .init(
+                        get: { selected },
+                        set: { annotationManager.updateAnnotation($0) }
+                    ),
+                    isPresented: $showAnnotationEditor
+                )
             }
         }
     }

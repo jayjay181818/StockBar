@@ -54,6 +54,9 @@ struct PerformanceChartView: View {
     @State private var ohlcData: [OHLCDataPoint] = []
     @State private var isLoadingOHLC = false
 
+    // Interaction features (v2.3.1)
+    @StateObject private var interactionManager = ChartInteractionManager()
+
     let availableSymbols: [String]
     let dataModel: DataModel?
     private let exportManager = ExportManager.shared

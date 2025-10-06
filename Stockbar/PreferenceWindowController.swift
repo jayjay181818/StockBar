@@ -30,7 +30,7 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
         
         // Create a resizable window that can auto-resize and be manually adjusted
         let window = NSWindow(contentViewController: hostingController)
-        window.styleMask = [.titled, .closable, .resizable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.title = "StockBar Preferences"
         window.isReleasedWhenClosed = false
         
