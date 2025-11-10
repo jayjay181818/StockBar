@@ -73,9 +73,9 @@ class RefreshService {
             }
 
             for symbol in candidateSymbols {
-                if localCacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
+                if await localCacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
                     symbolsToRefresh.append(symbol)
-                } else if localCacheCoordinator.shouldRetry(symbol: symbol, at: now) {
+                } else if await localCacheCoordinator.shouldRetry(symbol: symbol, at: now) {
                     symbolsToForceRefresh.append(symbol)
                 }
             }
@@ -112,7 +112,7 @@ class RefreshService {
                         let wasSuccessful = dataModel.realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
 
                         if wasSuccessful {
-                            localCacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+                            await localCacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
                             await Logger.shared.debug("Updated cache for \(symbol) - successful fetch")
                             anySuccessfulUpdate = true
 
@@ -127,13 +127,13 @@ class RefreshService {
                                 currency: currency
                             )
                         } else {
-                            localCacheCoordinator.setFailedFetch(for: symbol, at: now)
+                            await localCacheCoordinator.setFailedFetch(for: symbol, at: now)
                             await Logger.shared.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
                         }
 
                         await Logger.shared.debug("Updated trade \(symbol) from refresh result.")
                     } else {
-                        localCacheCoordinator.setFailedFetch(for: symbol, at: now)
+                        await localCacheCoordinator.setFailedFetch(for: symbol, at: now)
                         await Logger.shared.warning("No result returned for symbol \(symbol), treating as failure.")
                     }
                 }
@@ -205,9 +205,11 @@ class RefreshService {
             return
         }
 
-        if !cacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
+        if !(await cacheCoordinator.shouldRefresh(symbol: symbol, at: now)) {
             if Int.random(in: 1...20) == 1 {
-                let timeRemaining = cacheCoordinator.cacheInterval - now.timeIntervalSince(cacheCoordinator.getLastSuccessfulFetch(for: symbol) ?? Date.distantPast)
+                let cacheInterval = await cacheCoordinator.cacheInterval
+                let lastFetch = await cacheCoordinator.getLastSuccessfulFetch(for: symbol) ?? Date.distantPast
+                let timeRemaining = cacheInterval - now.timeIntervalSince(lastFetch)
                 Task.detached(priority: .utility) {
                     await Logger.shared.debug("Skipping \(symbol) - still cached (refresh in \(Int(timeRemaining))s)")
                 }
@@ -228,7 +230,7 @@ class RefreshService {
                 let wasSuccessful = dataModel.realTimeTrades[index].updateWithResult(result, retainOnFailure: true)
 
                 if wasSuccessful {
-                    cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+                    await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
                     Task { await Logger.shared.debug("Updated individual cache for \(symbol) - successful fetch") }
                     dataModel.saveTradingInfo()
 
@@ -251,7 +253,7 @@ class RefreshService {
                         currency: currency
                     )
                 } else {
-                    cacheCoordinator.setFailedFetch(for: symbol, at: now)
+                    await cacheCoordinator.setFailedFetch(for: symbol, at: now)
                     Task { await Logger.shared.debug("Updated individual failure cache for \(symbol) - failed fetch, retaining old data") }
 
                     if Int.random(in: 1...5) == 1 {
@@ -262,7 +264,7 @@ class RefreshService {
                 }
             }
         } catch {
-            cacheCoordinator.setFailedFetch(for: symbol, at: now)
+            await cacheCoordinator.setFailedFetch(for: symbol, at: now)
             Task { await Logger.shared.debug("Individual refresh failed for \(symbol): \(error.localizedDescription)") }
 
             if Int.random(in: 1...3) == 1 {

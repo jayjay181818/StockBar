@@ -69,12 +69,14 @@ class HistoricalDataCoordinator {
         // Check if this looks like a first run or we have very little historical data
         let totalHistoricalSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
         let symbolCount = symbols.count
-        
-        if totalHistoricalSnapshots < (symbolCount * 50) {
-            await logger.info("🔍 STARTUP: Detected minimal historical data (\(totalHistoricalSnapshots) snapshots for \(symbolCount) symbols). Forcing immediate comprehensive backfill.")
+
+        // More aggressive check: if we have less than 100 snapshots per symbol (about 4-5 months of data)
+        // force immediate backfill bypassing cooldown
+        if totalHistoricalSnapshots < (symbolCount * 100) {
+            await logger.warning("🔍 STARTUP: Detected minimal historical data (\(totalHistoricalSnapshots) snapshots for \(symbolCount) symbols, avg \(totalHistoricalSnapshots/max(1,symbolCount)) per symbol). Forcing immediate comprehensive backfill bypassing cooldown.")
             lastComprehensiveCheckTime = Date.distantPast
         }
-        
+
         await checkAndBackfill5YearHistoricalData(symbols: symbols)
     }
     
@@ -117,9 +119,9 @@ class HistoricalDataCoordinator {
             // Calculate business days in the past month (rough estimate)
             let daysSinceOneMonth = calendar.dateComponents([.day], from: oneMonthAgo, to: today).day ?? 0
             let estimatedBusinessDays = max(1, daysSinceOneMonth * 5 / 7)
-            
-            // If we're missing more than 25% of business days, trigger backfill
-            if uniqueDays.count < estimatedBusinessDays * 3 / 4 {
+
+            // If we're missing more than 90% of business days, trigger backfill (lowered from 25% threshold)
+            if uniqueDays.count < estimatedBusinessDays / 10 {
                 symbolsNeedingBackfill.append(symbol)
                 await logger.info("Symbol \(symbol) needs backfill - only \(uniqueDays.count) days of data vs ~\(estimatedBusinessDays) expected business days (\(String(format: "%.1f", Double(uniqueDays.count) / Double(estimatedBusinessDays) * 100))% coverage)")
             } else {
@@ -188,9 +190,9 @@ class HistoricalDataCoordinator {
             let expectedBusinessDays = max(1, daysIn5Years * 5 / 7)
             
             let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
-            
-            // If we have less than 50% coverage over 5 years, trigger backfill
-            if coverageRatio < 0.5 {
+
+            // If we have less than 10% coverage over 5 years, trigger backfill (lowered from 50% for better detection)
+            if coverageRatio < 0.10 {
                 symbolsNeedingBackfill.append(symbol)
                 await logger.info("📊 COMPREHENSIVE: \(symbol) needs 5-year backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
             } else {
@@ -202,13 +204,15 @@ class HistoricalDataCoordinator {
             if backfillNotifications {
                 sendBackfillNotification(title: "Historical Data Backfill", message: "Starting 5-year backfill for \(symbolsNeedingBackfill.count) symbols...")
             }
-            
-            await logger.info("🚀 COMPREHENSIVE: Starting automatic 5-year backfill for \(symbolsNeedingBackfill.count) symbols")
+
+            await logger.info("🚀 COMPREHENSIVE: Starting automatic 5-year backfill for \(symbolsNeedingBackfill.count) symbols: \(symbolsNeedingBackfill.joined(separator: ", "))")
+            await logger.info("⏱️ COMPREHENSIVE: Estimated time: \(symbolsNeedingBackfill.count * 5) minutes (5 years × \(symbolsNeedingBackfill.count) symbols with delays)")
             await staggeredBackfillHistoricalData(for: symbolsNeedingBackfill)
-            
+
             if backfillNotifications {
                 sendBackfillNotification(title: "Historical Data Backfill Complete", message: "Successfully backfilled \(symbolsNeedingBackfill.count) symbols")
             }
+            await logger.info("✅ COMPREHENSIVE: Backfill completed for all \(symbolsNeedingBackfill.count) symbols")
         } else {
             await logger.info("✅ COMPREHENSIVE: All symbols have good 5-year historical coverage")
         }
@@ -219,19 +223,28 @@ class HistoricalDataCoordinator {
     /// Staggered backfill that processes symbols with delays to prevent UI blocking
     private func staggeredBackfillHistoricalData(for symbols: [String]) async {
         await logger.info("⏱️ STAGGERED: Starting staggered 5-year backfill for \(symbols.count) symbols")
-        
+        let startTime = Date()
+
         for (index, symbol) in symbols.enumerated() {
-            await logger.info("⏱️ STAGGERED: Processing symbol \(index + 1)/\(symbols.count): \(symbol)")
-            
+            let progress = "\(index + 1)/\(symbols.count)"
+            await logger.info("⏱️ STAGGERED: [\(progress)] Processing \(symbol)...")
+
             await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
-            
+
+            // Log progress update
+            let elapsed = Date().timeIntervalSince(startTime)
+            let avgTimePerSymbol = elapsed / Double(index + 1)
+            let remaining = Int(avgTimePerSymbol * Double(symbols.count - index - 1) / 60)
+            await logger.info("✅ STAGGERED: [\(progress)] Completed \(symbol). Estimated time remaining: ~\(remaining) minutes")
+
             if index < symbols.count - 1 {
-                await logger.info("⏱️ STAGGERED: Waiting 10 seconds before next symbol...")
+                await logger.debug("⏱️ STAGGERED: Waiting 10 seconds before next symbol...")
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
-        
-        await logger.info("🏁 STAGGERED: Completed staggered 5-year backfill for all symbols")
+
+        let totalTime = Int(Date().timeIntervalSince(startTime) / 60)
+        await logger.info("🏁 STAGGERED: Completed staggered 5-year backfill for all \(symbols.count) symbols in \(totalTime) minutes")
     }
     
     /// Backfills historical data for specified symbols in chunks to avoid hanging
@@ -277,25 +290,20 @@ class HistoricalDataCoordinator {
         for yearOffset in 1...yearsToFetch {
             let chunkEndDate = calendar.date(byAdding: .year, value: -(yearOffset - 1), to: endDate) ?? endDate
             let chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
-            
-            // Skip this chunk if we already have good coverage for this period
-            if let oldestExisting = oldestExistingDate, chunkEndDate <= oldestExisting {
-                await logger.info("⏭️ CHUNKED BACKFILL: Skipping year \(yearOffset) for \(symbol) - already have data for this period")
-                continue
-            }
-            
+
             // Check if this chunk has significant gaps
             let daysInChunk = calendar.dateComponents([.day], from: chunkStartDate, to: chunkEndDate).day ?? 0
             let expectedBusinessDays = max(1, daysInChunk * 5 / 7)
-            
+
             let chunkExistingDates = existingDates.filter { date in
                 date >= chunkStartDate && date < chunkEndDate
             }
-            
+
             let coverageRatio = Double(chunkExistingDates.count) / Double(expectedBusinessDays)
-            
-            if coverageRatio > 0.8 {
-                await logger.info("⏭️ CHUNKED BACKFILL: Skipping year \(yearOffset) for \(symbol) - good coverage (\(String(format: "%.1f", coverageRatio * 100))%)")
+
+            // Only skip if we have excellent coverage (>90%, lowered from 80%)
+            if coverageRatio > 0.90 {
+                await logger.info("⏭️ CHUNKED BACKFILL: Skipping year \(yearOffset) for \(symbol) - excellent coverage (\(String(format: "%.1f", coverageRatio * 100))%)")
                 continue
             }
             

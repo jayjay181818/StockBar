@@ -133,6 +133,12 @@ class StockStatusItemController {
 
         print("🔧 ITEM: Status item configured for \(realTimeTrade.trade.name), visible: \(self.item.isVisible), title: \(self.item.button?.title ?? "nil")")
     }
+
+    deinit {
+        // Cleanup cancellables to prevent memory leaks
+        cancellables.removeAll()
+        // Note: Status item removal is handled by StockStatusBar.removeAllSymbolItems()
+    }
     
     // MARK: - Private Methods
     private func setupInitialState(with trade: RealTimeTrade) {
@@ -145,31 +151,37 @@ class StockStatusItemController {
         // Listen to changes in trading info
         realTimeTrade.$realTimeInfo
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] trading in
-                self?.updateDisplay(trade: realTimeTrade.trade, trading: trading)
+            .sink { [weak self, weak realTimeTrade] trading in
+                guard let self = self, let realTimeTrade = realTimeTrade else { return }
+                self.updateDisplay(trade: realTimeTrade.trade, trading: trading)
             }
             .store(in: &cancellables)
 
         // Listen to changes in market indicator setting
         dataModel.$showMarketIndicators
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self, weak realTimeTrade] _ in
+                guard let self = self, let realTimeTrade = realTimeTrade else { return }
                 // Re-update display when setting changes
-                self?.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
             }
             .store(in: &cancellables)
 
         // Listen to changes in menu bar display settings
         dataModel.$menuBarDisplaySettings
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self, weak realTimeTrade] _ in
+                guard let self = self, let realTimeTrade = realTimeTrade else { return }
                 // Re-update display when formatting settings change
-                self?.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
             }
             .store(in: &cancellables)
     }
     
     private func updateDisplay(trade: Trade, trading: TradingInfo) {
+        // Defensive check in case called after deallocation
+        guard item.button != nil else { return }
+
         // Use normalized average cost (handles GBX to GBP conversion automatically)
         let avgCost = trade.position.getNormalizedAvgCost(for: trade.name)
         let currency = trading.currency ?? "USD"
@@ -192,7 +204,11 @@ class StockStatusItemController {
         )
 
         updateTitle(trade: trade, data: data)
-        updateMenu(trade: trade, data: data)
+
+        // Update menu asynchronously since it accesses the actor
+        Task { @MainActor in
+            await updateMenu(trade: trade, data: data)
+        }
     }
     
     private func updateTitle(trade: Trade, data: TradingData) {
@@ -244,7 +260,8 @@ class StockStatusItemController {
         }
     }
     
-    private func updateMenu(trade: Trade, data: TradingData) {
+    @MainActor
+    private func updateMenu(trade: Trade, data: TradingData) async {
         let menu = NSMenu()
 
         // Add watchlist indicator at the top if this is a watchlist-only stock
@@ -296,7 +313,7 @@ class StockStatusItemController {
         }
 
         // Check if symbol is suspended (circuit breaker)
-        let cacheStatus = dataModel.cacheCoordinator.getCacheStatus(for: trade.name, at: Date())
+        let cacheStatus = await dataModel.cacheCoordinator.getCacheStatus(for: trade.name, at: Date())
         if case .suspended(let failures, let resumeIn) = cacheStatus {
             let suspendedItem = NSMenuItem()
             let suspendedText = NSMutableAttributedString()
@@ -553,13 +570,13 @@ class StockStatusItemController {
     @objc private func retrySymbol(_ sender: NSMenuItem) {
         guard let symbol = sender.representedObject as? String else { return }
 
-        Task { await Logger.shared.info("🔄 [StockStatusBar] Manually retrying suspended symbol: \(symbol)") }
-
-        // Clear suspension state
-        dataModel.cacheCoordinator.clearSuspension(for: symbol)
-
-        // Trigger immediate refresh
         Task {
+            await Logger.shared.info("🔄 [StockStatusBar] Manually retrying suspended symbol: \(symbol)")
+
+            // Clear suspension state
+            await dataModel.cacheCoordinator.clearSuspension(for: symbol)
+
+            // Trigger immediate refresh
             await dataModel.refreshAllTrades()
         }
     }
