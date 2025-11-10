@@ -2230,33 +2230,7 @@ struct PreferenceView: View {
     /// Display cache status row for a single symbol
     @ViewBuilder
     private func cacheInspectorRow(for symbol: String) -> some View {
-        let cacheStatus = userdata.cacheCoordinator.getCacheStatus(for: symbol, at: Date())
-
-        HStack {
-            Text(symbol)
-                .font(.caption)
-                .fontWeight(.medium)
-                .frame(width: 80, alignment: .leading)
-
-            Text(cacheStatus.description)
-                .font(.caption2)
-                .foregroundColor(cacheStatusColor(for: cacheStatus))
-
-            Spacer()
-
-            // Show retry button for suspended or failed symbols
-            if case .suspended = cacheStatus {
-                Button("Retry Now") {
-                    userdata.cacheCoordinator.clearSuspension(for: symbol)
-                    Task {
-                        await userdata.refreshSymbolsImmediately([symbol], reason: "manual-retry")
-                    }
-                }
-                .buttonStyle(.borderless)
-                .font(.caption2)
-            }
-        }
-        .padding(.vertical, 2)
+        CacheInspectorRowAsync(userdata: userdata, symbol: symbol)
     }
 
     /// Get color for cache status display
@@ -2283,7 +2257,7 @@ struct PreferenceView: View {
             await Logger.shared.info("🗑️ [Debug] Clearing all caches (user requested)")
 
             // Clear cache coordinator
-            userdata.cacheCoordinator.clearAllCache()
+            await userdata.cacheCoordinator.clearAllCache()
 
             // Clear historical data manager cache if needed
             // userdata.historicalDataManager.clearCaches() // Uncomment if available
@@ -2308,6 +2282,14 @@ struct PreferenceView: View {
                 try FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
 
                 // 1. Export current configuration
+                // Get cache statistics and stock details asynchronously
+                let cacheStats = await userdata.cacheCoordinator.getCacheStatistics()
+                var stockDetails: [String] = []
+                for trade in userdata.realTimeTrades {
+                    let status = await userdata.cacheCoordinator.getCacheStatus(for: trade.trade.name, at: Date())
+                    stockDetails.append("\(trade.trade.name): \(status.description)")
+                }
+
                 let configText = """
                 === Stockbar Debug Report ===
                 Generated: \(Date())
@@ -2319,13 +2301,10 @@ struct PreferenceView: View {
                 Portfolio Size: \(userdata.realTimeTrades.count) stocks
 
                 === Cache Statistics ===
-                \(userdata.cacheCoordinator.getCacheStatistics().description)
+                \(cacheStats.description)
 
                 === Stock Details ===
-                \(userdata.realTimeTrades.map { trade in
-                    let status = userdata.cacheCoordinator.getCacheStatus(for: trade.trade.name, at: Date())
-                    return "\(trade.trade.name): \(status.description)"
-                }.joined(separator: "\n"))
+                \(stockDetails.joined(separator: "\n"))
 
                 === Portfolio Summary ===
                 Total Stocks: \(userdata.realTimeTrades.count)
@@ -2343,41 +2322,91 @@ struct PreferenceView: View {
                     try FileManager.default.copyItem(at: logPath, to: logDestination)
                 }
 
-                // 3. Export portfolio data as JSON
-                let portfolioData = userdata.realTimeTrades.map { trade -> [String: Any] in
-                    let units = trade.trade.position.unitSize
-                    let avgCost = trade.trade.position.positionAvgCost
-                    let currency = trade.trade.position.currency ?? "USD"
-                    let currentPrice = trade.realTimeInfo.currentPrice
-
-                    return [
-                        "symbol": trade.trade.name,
-                        "units": units,
-                        "avgCost": avgCost,
-                        "currency": currency,
-                        "currentPrice": currentPrice
-                    ]
+                // 3. Export portfolio data
+                if let tradesData = try? JSONEncoder().encode(userdata.realTimeTrades.map { $0.trade }) {
+                    let portfolioFile = exportFolder.appendingPathComponent("portfolio.json")
+                    try tradesData.write(to: portfolioFile)
                 }
 
-                let jsonData = try JSONSerialization.data(withJSONObject: portfolioData, options: .prettyPrinted)
-                let jsonFile = exportFolder.appendingPathComponent("portfolio.json")
-                try jsonData.write(to: jsonFile)
+                debugReportStatus = "✅ Exported to: \(exportFolder.lastPathComponent)"
+                await Logger.shared.info("✅ [Debug] Debug report exported successfully")
 
-                // Open the folder in Finder
+                // Open the export folder in Finder
                 NSWorkspace.shared.open(exportFolder)
 
-                await MainActor.run {
-                    debugReportStatus = "✅ Exported to: \(exportFolder.lastPathComponent)"
-                }
-
-                await Logger.shared.info("✅ [Debug] Debug report exported to: \(exportFolder.path)")
-
             } catch {
-                await MainActor.run {
-                    debugReportStatus = "❌ Export failed: \(error.localizedDescription)"
-                }
-                await Logger.shared.error("❌ [Debug] Failed to export debug report: \(error)")
+                debugReportStatus = "❌ Export failed: \(error.localizedDescription)"
+                await Logger.shared.error("❌ [Debug] Debug report export failed: \(error)")
             }
+        }
+    }
+}
+
+/// Helper view to handle async cache status fetching
+private struct CacheInspectorRowAsync: View {
+    let userdata: DataModel
+    let symbol: String
+    @State private var cacheStatus: CacheStatus?
+
+    var body: some View {
+        Group {
+            if let cacheStatus = cacheStatus {
+                cacheInspectorRowContent(cacheStatus: cacheStatus)
+            } else {
+                ProgressView()
+                    .onAppear {
+                        Task {
+                            cacheStatus = await userdata.cacheCoordinator.getCacheStatus(for: symbol, at: Date())
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cacheInspectorRowContent(cacheStatus: CacheStatus) -> some View {
+
+        HStack {
+            Text(symbol)
+                .font(.caption)
+                .fontWeight(.medium)
+                .frame(width: 80, alignment: .leading)
+
+            Text(cacheStatus.description)
+                .font(.caption2)
+                .foregroundColor(cacheStatusColor(for: cacheStatus))
+
+            Spacer()
+
+            // Show retry button for suspended or failed symbols
+            if case .suspended = cacheStatus {
+                Button("Retry Now") {
+                    Task {
+                        await userdata.cacheCoordinator.clearSuspension(for: symbol)
+                        await userdata.refreshSymbolsImmediately([symbol], reason: "manual-retry")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func cacheStatusColor(for status: CacheStatus) -> Color {
+        switch status {
+        case .fresh:
+            return .green
+        case .stale:
+            return .orange
+        case .expired:
+            return .red
+        case .failedRecently, .readyToRetry:
+            return .orange
+        case .suspended:
+            return .red
+        case .neverFetched:
+            return .secondary
         }
     }
 }

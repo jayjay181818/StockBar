@@ -280,7 +280,7 @@ class DataModel: ObservableObject {
         }
         
         // Clear old cache entries (delegated to CacheCoordinator)
-        cacheCoordinator.clearOldCacheEntries()
+        await cacheCoordinator.clearOldCacheEntries()
 
         // Notify historical data manager to clean up
         await historicalDataManager.clearInconsistentData()
@@ -576,13 +576,14 @@ class DataModel: ObservableObject {
     /// that is not currently fresh.
     func refreshCriticalSymbols(reason: String) async {
         let now = Date()
-        let needsRefresh = realTimeTrades.compactMap { trade -> String? in
-            let status = cacheCoordinator.getCacheStatus(for: trade.trade.name, at: now)
+        var needsRefresh: [String] = []
+        for trade in realTimeTrades {
+            let status = await cacheCoordinator.getCacheStatus(for: trade.trade.name, at: now)
             switch status {
             case .fresh:
-                return nil
+                continue
             default:
-                return trade.trade.name
+                needsRefresh.append(trade.trade.name)
             }
         }
 

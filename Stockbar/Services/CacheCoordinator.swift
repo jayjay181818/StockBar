@@ -9,7 +9,7 @@
 import Foundation
 
 /// Coordinates caching strategy for stock price data with exponential backoff and circuit breaker
-class CacheCoordinator {
+actor CacheCoordinator {
     // MARK: - Cache Configuration
     let cacheInterval: TimeInterval = 900  // 15 minutes for successful fetches
     private let maxCacheAge: TimeInterval = 3600  // 1 hour before forcing refresh
