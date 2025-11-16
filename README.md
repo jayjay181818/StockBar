@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.2.9** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.3.2** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 
@@ -209,25 +209,45 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📋 Release History
 
-### Version 2.2.9 (Current) - Reliability & Memory Efficiency
-- **🧭 Quick Status Menu Actions**: Added Preferences and Quit commands to every status menu with keyboard shortcuts
-- **📈 Chart Picker Enhancements**: Replaced segmented control with scrollable horizontal chip buttons for large watchlists
-- **🔄 Safer Refresh Pipeline**: Actor-backed RefreshCoordinator for thread-safe, non-overlapping updates
-- **🧠 Memory-Aware Caching**: 512KB cache entry limits with automatic disk promotion for larger payloads
-- **🐍 Python Backend Improvements**: urllib fallback when requests package unavailable for enhanced reliability
-- **🐛 Bug Fixes**: Staggered refresh scheduling, historical snapshot generation, log compaction improvements
+### Version 2.3.2 (Current) - Critical Stability Fix
+- **🔒 macOS 15.1+ Crash Fix**: Resolved EXC_BAD_ACCESS crashes in menu bar display system
+- **🧠 Memory Management**: Added weak reference captures in Combine subscriptions
+- **🛡️ Defensive Programming**: Implemented proper cleanup and nil checks
+- **⚡ Swift 6 Compliance**: Maintained full concurrency safety throughout
+- **Zero Regressions**: All v2.3.1 features continue working perfectly
+
+### Version 2.3.1 - Intelligent Backfill & Analytics Enhancements
+- **📅 Automatic Backfill Scheduler**: Intelligent gap detection with minimal API usage
+- **🎯 Performance Attribution**: Individual stock and sector contribution analysis
+- **📊 Chart Interaction Infrastructure**: Annotation system and crosshair tool
+- **🎨 Dock Icon Improvements**: Always visible with proper window management
+- **🔧 Menu Bar Enhancements**: Position P&L format options
+
+### Version 2.3.0 - Major Feature Release
+- **🔐 Security Enhancement**: Migrated API keys to macOS Keychain
+- **📊 Advanced Analytics**: Risk metrics, correlation analysis, diversification scoring
+- **📈 Technical Indicators**: 8 indicators including RSI, MACD, Bollinger Bands
+- **🕯️ Candlestick Charts**: OHLC visualization with volume analysis
+- **🎨 Menu Bar Customization**: 4 display modes with custom templates
+
+### Version 2.2.10 - Major Feature & Quality Release
+- **Performance & reliability improvements**
+- **Enhanced data management**
+- See [Changelogs/release_notes_v2.2.10.md](./Changelogs/release_notes_v2.2.10.md)
+
+### Version 2.2.9 - Reliability & Memory Efficiency
+- **🧭 Quick Status Menu Actions**: Preferences and Quit in every status menu
+- **📈 Chart Picker Enhancements**: Scrollable horizontal chip buttons
+- **🔄 Safer Refresh Pipeline**: Actor-backed RefreshCoordinator
+- **🧠 Memory-Aware Caching**: 512KB limits with disk promotion
 
 ### Version 2.2.8 - Interactive Menu Bar Charts
-- **📊 Interactive Menu Bar Price Charts**: Real-time charts with 1D/1W/1M views directly in stock menu dropdowns
-- **📈 Enhanced Data Visualization**: Smart Y-axis scaling, color-coded charts, hover interactions
-- **🔧 Data Management**: Real data priority with intelligent fallback, price validation, memory-efficient structures
-- **🖥️ Visual Design**: Professional rounded corners, centered content, adaptive colors matching macOS design
+- **📊 Menu Bar Price Charts**: Real-time charts in stock dropdowns
+- **📈 Enhanced Visualization**: Smart Y-axis scaling, color-coded charts
 
 ### Version 2.2.6 - Performance & Feature Enhancements
-- **🚀 Major Performance Improvements**: Fixed infinite loops, reduced CPU usage from 100% to <5%
-- **✨ New Features**: Drag-and-drop stock reordering, retroactive portfolio calculations
-- **🔧 Technical Improvements**: Core Data Model V2, Swift 6 compliance, enhanced error handling
-- **🐛 Bug Fixes**: Preferences window issues, hanging processes, memory leaks
+- **🚀 Performance Improvements**: CPU usage reduced from 100% to <5%
+- **✨ New Features**: Drag-and-drop reordering, retroactive calculations
 
 ### Previous Versions
 - See [Changelogs/](./Changelogs/) for detailed release notes
@@ -264,7 +284,7 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📊 Performance Metrics
 
-StockBar v2.2.9 delivers professional-grade performance:
+StockBar v2.3.2 delivers professional-grade performance:
 
 - **CPU Usage**: <5% during normal operation (down from 100%)
 - **Memory Footprint**: <50MB with automatic cleanup under pressure and smart cache promotion
@@ -289,4 +309,4 @@ StockBar v2.2.9 delivers professional-grade performance:
 
 **Built with ❤️ using Swift 6.0 and modern macOS technologies**
 
-*Last updated: September 30, 2025 - Version 2.2.9*
+*Last updated: November 10, 2025 - Version 2.3.2*
