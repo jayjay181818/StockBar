@@ -131,4 +131,16 @@ venv.bak/
 
 # Release artifacts
 Stockbar-v*.app
-Stockbar-v*.zip 
+Stockbar-v*.zip
+
+# Development and planning files
+Draft_Plans/
+cline_docs/
+GAP_RESOLUTION_PROGRESS.md
+QWEN.md
+SECURITY_IMPROVEMENTS.md
+test_unh_refresh.py
+CLAUDE_v2.3.2_UPDATES.md
+PROJECT_REVIEW_*.md
+findings_and_recommendations.md
+v2.3.2_RELEASE_INSTRUCTIONS.md 
