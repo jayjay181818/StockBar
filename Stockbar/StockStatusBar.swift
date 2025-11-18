@@ -52,6 +52,7 @@ struct TradingData {
     }
 }
 
+@MainActor
 class StockStatusBar {
     // MARK: - Properties
     private let dataModel: DataModel
@@ -111,6 +112,7 @@ class StockStatusBar {
     }
 }
 
+@MainActor
 class StockStatusItemController {
     // MARK: - Properties
     private let dataModel: DataModel

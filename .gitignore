@@ -143,4 +143,5 @@ test_unh_refresh.py
 CLAUDE_v2.3.2_UPDATES.md
 PROJECT_REVIEW_*.md
 findings_and_recommendations.md
-v2.3.2_RELEASE_INSTRUCTIONS.md 
+v2.3.2_RELEASE_INSTRUCTIONS.md
+GITHUB_RELEASE_*.md 

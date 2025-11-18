@@ -121,7 +121,7 @@ class TechnicalIndicatorService {
 
         // Calculate MACD line (fast EMA - slow EMA)
         var macdLine: [(Date, Double)] = []
-        let startIndex = slowPeriod - 1
+        let _ = slowPeriod - 1 // Fix unused warning
 
         for i in 0..<slowEMA.count {
             let fastIndex = i + (fastPeriod - 1)

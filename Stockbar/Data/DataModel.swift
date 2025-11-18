@@ -35,6 +35,7 @@ actor RefreshCoordinator {
     }
 }
 
+@MainActor
 class DataModel: ObservableObject {
     static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
@@ -49,7 +50,7 @@ class DataModel: ObservableObject {
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
-    internal nonisolated(unsafe) let historicalDataManager = HistoricalDataManager.shared
+    internal var historicalDataManager: HistoricalDataManager { HistoricalDataManager.shared }
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let refreshCoordinator = RefreshCoordinator()
@@ -59,7 +60,9 @@ class DataModel: ObservableObject {
     private var refreshService: RefreshService!
     private var portfolioCalculationService: PortfolioCalculationService!
     private var historicalDataCoordinator: HistoricalDataCoordinator!
-
+    private let importExportManager = ImportExportManager()
+    private let chartAnnotationService = ChartAnnotationService.shared
+    
     @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
     @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
         didSet {
@@ -428,11 +431,19 @@ class DataModel: ObservableObject {
     public func checkAndBackfill5YearHistoricalData() async {
         let symbols = realTimeTrades.map { $0.trade.name }
         await historicalDataCoordinator.checkAndBackfill5YearHistoricalData(symbols: symbols)
+        
+        // FIX: Trigger retroactive calculation after backfill
+        await logger.info("🔄 AUTO: Triggering retroactive portfolio calculation after 5-year backfill")
+        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
     
     /// Backfills historical data for specified symbols in chunks to avoid hanging - delegates to HistoricalDataCoordinator
     public func backfillHistoricalData(for symbols: [String]) async {
         await historicalDataCoordinator.backfillHistoricalData(for: symbols)
+        
+        // FIX: Trigger retroactive calculation after backfill
+        await logger.info("🔄 AUTO: Triggering retroactive portfolio calculation after backfill")
+        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
     
     
@@ -446,6 +457,10 @@ class DataModel: ObservableObject {
     public func triggerFullHistoricalBackfill() async {
         let symbols = realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
         await historicalDataCoordinator.triggerFullHistoricalBackfill(symbols: symbols)
+        
+        // FIX: Trigger retroactive calculation after manual backfill
+        await logger.info("🔄 MANUAL: Triggering retroactive portfolio calculation after manual backfill")
+        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
     
     /// Returns the current status of automatic historical data checking - delegates to HistoricalDataCoordinator
@@ -483,7 +498,7 @@ class DataModel: ObservableObject {
     
     /// Tests the API connection with a simple request
     func testAPIConnection() async throws -> Bool {
-        await logger.info("Testing FMP API connection")
+        await logger.info("Testing API connection (default AAPL fetch)")
         
         do {
             // Test with a simple quote request for Apple stock
@@ -495,16 +510,22 @@ class DataModel: ObservableObject {
                          result.regularMarketPrice > 0
             
             if isValid {
-                await logger.info("FMP API test successful - received valid data for AAPL")
+                await logger.info("API test successful - received valid data for AAPL")
             } else {
-                await logger.warning("FMP API test returned invalid data - price: \(result.regularMarketPrice), prevClose: \(result.regularMarketPreviousClose)")
+                await logger.warning("API test returned invalid data - price: \(result.regularMarketPrice)")
             }
             
             return isValid
         } catch {
-            await logger.error("FMP API test failed: \(error.localizedDescription)")
+            await logger.error("API test failed: \(error.localizedDescription)")
             throw error
         }
+    }
+    
+    /// Verifies a specific API key for a service
+    func verifyAPIKey(service: String) async throws -> Bool {
+        await logger.info("Verifying API key for service: \(service)")
+        return try await networkService.verifyAPIKey(service: service)
     }
     
     /// Clears bad historical data for specific symbols
@@ -522,21 +543,21 @@ class DataModel: ObservableObject {
     }
     
     /// Manually triggers retroactive portfolio calculation
-    public func triggerRetroactivePortfolioCalculation() {
+    public func triggerRetroactivePortfolioCalculation(force: Bool = false) {
         Task {
-            await logger.info("🔄 MANUAL: Starting retroactive portfolio calculation")
-            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+            await logger.info("🔄 MANUAL: Starting retroactive portfolio calculation (force: \(force))")
+            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: force)
             await logger.info("🔄 MANUAL: Retroactive portfolio calculation completed")
         }
     }
 
     /// Triggers retroactive portfolio calculation for a specific number of days
     /// This will calculate portfolio values retroactively from existing historical data
-    public func calculateRetroactivePortfolioHistory(days: Int) async {
-        await logger.info("🔄 BACKFILL: Starting \(days)-day retroactive portfolio calculation")
+    public func calculateRetroactivePortfolioHistory(days: Int, force: Bool = false) async {
+        await logger.info("🔄 BACKFILL: Starting \(days)-day retroactive portfolio calculation (force: \(force))")
 
         // Calculate portfolio history from existing historical data in Core Data
-        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self)
+        await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: force)
 
         await logger.info("✅ BACKFILL: \(days)-day retroactive portfolio calculation completed")
     }
@@ -644,41 +665,66 @@ class DataModel: ObservableObject {
     func startStaggeredRefresh() {
         // Delegate to RefreshService
         Task { @MainActor in
-            refreshService?.startStaggeredRefresh()
+            refreshService?.startRefreshTimer()
         }
     }
 
     func stopStaggeredRefresh() {
         // Delegate to RefreshService
         Task { @MainActor in
-            refreshService?.stopStaggeredRefresh()
+            refreshService?.stopRefreshTimer()
         }
     }
+
+    // MARK: - Trade Update Trigger
+    
+    /// Manually triggers a save of all trades.
+    /// Use this when updating properties within a RealTimeTrade object (like units or cost)
+    /// which doesn't automatically trigger the @Published realTimeTrades publisher.
+    func triggerTradeUpdate() {
+        objectWillChange.send()
+        // Force emit current value to trigger debounce pipeline
+        // This is needed because objectWillChange just notifies views, it doesn't feed the $realTimeTrades pipeline directly
+        // We need to manually trigger the save logic
+        
+        // Debounce is handled by the pipeline in setupPublishers if we re-assign or if we had a subject.
+        // Since $realTimeTrades is a Published property, we can't easily force it to emit without changing the value.
+        // Instead, let's add a manual trigger subject.
+        tradeUpdateTrigger.send()
+    }
+    
+    private let tradeUpdateTrigger = PassthroughSubject<Void, Never>()
 
     // MARK: - Private Methods
 
     // Keep setupPublishers and saveTrades as they are
     private func setupPublishers() {
-        // Extended debounce time to reduce hanging during editing and provide longer pause
-        $realTimeTrades
-            .debounce(for: .seconds(60.0), scheduler: RunLoop.main)
-            .sink { [weak self] trades in
-                guard let self = self else { return }
-                // Save trades with meaningful data (units > 0 OR price set OR symbol set)
-                // This allows saving partial edits where user enters units/price but hasn't set symbol yet
-                let validTrades = trades.filter { trade in
-                    let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    let hasUnits = trade.trade.position.unitSize > 0
-                    let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    return hasSymbol || hasUnits || hasPrice
-                }
-                if !validTrades.isEmpty {
-                    self.saveTrades(validTrades)
-                    self.saveUserOrder(validTrades)
-                    self.saveTradingInfo()
-                }
+        // Merge updates from $realTimeTrades (array changes) and manual triggers (content changes)
+        // Reduced debounce to 2.0 seconds for faster saving
+        Publishers.Merge(
+            $realTimeTrades.map { _ in () },
+            tradeUpdateTrigger
+        )
+        .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
+        .sink { [weak self] _ in
+            guard let self = self else { return }
+            let trades = self.realTimeTrades
+            
+            // Save trades with meaningful data (units > 0 OR price set OR symbol set)
+            // This allows saving partial edits where user enters units/price but hasn't set symbol yet
+            let validTrades = trades.filter { trade in
+                let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let hasUnits = trade.trade.position.unitSize > 0
+                let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                return hasSymbol || hasUnits || hasPrice
             }
-            .store(in: &cancellables)
+            if !validTrades.isEmpty {
+                self.saveTrades(validTrades)
+                self.saveUserOrder(validTrades)
+                self.saveTradingInfo()
+            }
+        }
+        .store(in: &cancellables)
     }
 
     private func saveTrades(_ trades: [RealTimeTrade]) {
@@ -796,144 +842,30 @@ class DataModel: ObservableObject {
 
     // MARK: - Portfolio Export/Import
     
-    /// Structure for exporting/importing portfolio data (ticker, units, average price only)
-    struct PortfolioExport: Codable {
-        let exportDate: Date
-        let exportVersion: String
-        let trades: [PortfolioTrade]
-        
-        struct PortfolioTrade: Codable {
-            let symbol: String
-            let units: String
-            let averagePrice: String
-            let currency: String?
-            let costCurrency: String?
-        }
-    }
-    
     /// Exports current portfolio to JSON format
     func exportPortfolio() async -> String? {
-        await logger.info("📤 EXPORT: Starting portfolio export...")
-        
-        let exportTrades = realTimeTrades.map { trade in
-            PortfolioExport.PortfolioTrade(
-                symbol: trade.trade.name,
-                units: trade.trade.position.unitSizeString,
-                averagePrice: trade.trade.position.positionAvgCostString,
-                currency: trade.trade.position.currency,
-                costCurrency: trade.trade.position.costCurrency
-            )
-        }
-        
-        let portfolioExport = PortfolioExport(
-            exportDate: Date(),
-            exportVersion: "2.2.6",
-            trades: exportTrades
-        )
-        
-        do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            
-            let jsonData = try encoder.encode(portfolioExport)
-            let jsonString = String(data: jsonData, encoding: .utf8)
-            
-            await logger.info("📤 EXPORT: Successfully exported \(exportTrades.count) trades")
-            return jsonString
-        } catch {
-            await logger.error("📤 EXPORT: Failed to encode portfolio data: \(error)")
-            return nil
-        }
+        return await importExportManager.exportPortfolio(trades: realTimeTrades)
     }
     
     /// Imports portfolio from JSON string, optionally replacing current portfolio
     func importPortfolio(from jsonString: String, replaceExisting: Bool = false) async -> ImportResult {
-        await logger.info("📥 IMPORT: Starting portfolio import (replace existing: \(replaceExisting))...")
+        // Delegate to ImportExportManager
+        let (result, newTrades) = await importExportManager.importPortfolio(
+            from: jsonString,
+            currentTrades: realTimeTrades,
+            replaceExisting: replaceExisting
+        )
         
-        guard let jsonData = jsonString.data(using: .utf8) else {
-            await logger.error("📥 IMPORT: Invalid JSON string encoding")
-            return ImportResult(success: false, error: "Invalid JSON format", tradesImported: 0, tradesSkipped: 0)
-        }
-        
-        do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            
-            let portfolioImport = try decoder.decode(PortfolioExport.self, from: jsonData)
-            
-            await logger.info("📥 IMPORT: Decoded portfolio export from \(portfolioImport.exportDate) (version \(portfolioImport.exportVersion))")
-            
-            // Backup current trades if replacing
-            let backupTrades = realTimeTrades
-            
-            if replaceExisting {
-                await logger.info("📥 IMPORT: Clearing existing \(realTimeTrades.count) trades")
-                realTimeTrades.removeAll()
+        if let trades = newTrades {
+            await MainActor.run {
+                self.realTimeTrades = trades
             }
             
-            var tradesImported = 0
-            var tradesSkipped = 0
-            
-            for importTrade in portfolioImport.trades {
-                // Check if trade already exists (if not replacing)
-                if !replaceExisting && realTimeTrades.contains(where: { $0.trade.name == importTrade.symbol }) {
-                    await logger.info("📥 IMPORT: Skipping existing trade: \(importTrade.symbol)")
-                    tradesSkipped += 1
-                    continue
-                }
-                
-                // Create new trade
-                let position = Position(
-                    unitSize: importTrade.units,
-                    positionAvgCost: importTrade.averagePrice,
-                    currency: importTrade.currency,
-                    costCurrency: importTrade.costCurrency
-                )
-                
-                let trade = Trade(name: importTrade.symbol, position: position)
-                let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: TradingInfo())
-                
-                realTimeTrades.append(realTimeTrade)
-                tradesImported += 1
-                
-                await logger.info("📥 IMPORT: Imported trade: \(importTrade.symbol) (\(importTrade.units) units @ \(importTrade.averagePrice))")
-            }
-            
-            // Save imported trades to Core Data
-            do {
-                for realTimeTrade in realTimeTrades {
-                    try await tradeDataService.saveTrade(realTimeTrade.trade)
-                }
-                await logger.info("📥 IMPORT: Saved all imported trades to Core Data")
-            } catch {
-                await logger.error("📥 IMPORT: Failed to save imported trades to Core Data: \(error)")
-                // Restore backup if saving failed
-                if replaceExisting {
-                    realTimeTrades = backupTrades
-                }
-                return ImportResult(success: false, error: "Failed to save trades: \(error.localizedDescription)", tradesImported: 0, tradesSkipped: 0)
-            }
-            
-            await logger.info("📥 IMPORT: Successfully imported \(tradesImported) trades (skipped \(tradesSkipped))")
-            
-            // Refresh all trades to get current market data
+            // Trigger refresh for the new trades
             await refreshAllTrades()
-            
-            return ImportResult(success: true, error: nil, tradesImported: tradesImported, tradesSkipped: tradesSkipped)
-            
-        } catch {
-            await logger.error("📥 IMPORT: Failed to decode JSON: \(error)")
-            return ImportResult(success: false, error: "Invalid portfolio format: \(error.localizedDescription)", tradesImported: 0, tradesSkipped: 0)
         }
-    }
-    
-    /// Result of portfolio import operation
-    struct ImportResult {
-        let success: Bool
-        let error: String?
-        let tradesImported: Int
-        let tradesSkipped: Int
+        
+        return result
     }
 }
 

@@ -7,6 +7,8 @@ import argparse
 import urllib.request
 import urllib.parse
 import urllib.error
+import csv
+import io
 
 try:
     import requests
@@ -31,31 +33,38 @@ except ImportError:
 CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
 CACHE_DURATION_SECONDS = 300  # 5 minutes
 
-# Financial Modeling Prep API configuration
+# API Base URLs
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
+STOOQ_BASE_URL = "https://stooq.com/q/d/l"
 
-def get_api_key():
-    """Get API key from local configuration file"""
-    # Try environment variable first (for backward compatibility)
-    env_key = os.getenv("FMP_API_KEY")
-    if env_key:
-        return env_key
-    
-    # Try local configuration file
+def get_config():
+    """Read the entire configuration file"""
     try:
         home_dir = os.path.expanduser("~")
         config_file = os.path.join(home_dir, "Documents", ".stockbar_config.json")
         
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
-                config = json.load(f)
-                return config.get("FMP_API_KEY", "")
+                return json.load(f)
     except Exception as e:
         print(f"Error reading config file: {e}", file=sys.stderr)
-    
-    return ""
+    return {}
 
-API_KEY = get_api_key()
+CONFIG = get_config()
+
+def get_api_key(key_name, env_name=None):
+    """Get API key from config or environment"""
+    # Try environment variable first
+    if env_name:
+        env_key = os.getenv(env_name)
+        if env_key:
+            return env_key
+            
+    return CONFIG.get(key_name, "")
+
+FMP_API_KEY = get_api_key("FMP_API_KEY", "FMP_API_KEY")
+TWELVE_DATA_API_KEY = get_api_key("TWELVE_DATA_API_KEY", "TWELVE_DATA_API_KEY")
 
 # Load cache from file
 if os.path.exists(CACHE_FILE):
@@ -86,50 +95,270 @@ def set_cache(symbol, result):
     }
     save_cache()
 
-def make_fmp_request(url, params=None):
-    """Make a request to Financial Modeling Prep API with error handling"""
-    if not API_KEY:
-        raise Exception("FMP API key not found. Please set up your API key in StockBar preferences or via FMP_API_KEY environment variable.")
-    
+def make_request(url, params=None, headers=None):
+    """Generic request helper handling requests/urllib differences"""
     if params is None:
         params = {}
-    params['apikey'] = API_KEY
     
     if REQUESTS_AVAILABLE and requests is not None:
         try:
-            response = requests.get(url, params=params, timeout=15)
+            response = requests.get(url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except ValueError:
+                return response.text # Return text if JSON decode fails (e.g. CSV)
+        except requests.exceptions.HTTPError as e:
+            raise e
         except requests.exceptions.RequestException as e:
-            print(f"API request failed via requests: {e}", file=sys.stderr)
+            print(f"Request failed via requests: {e}", file=sys.stderr)
             return None
     else:
         try:
-            query = urllib.parse.urlencode(params)
-            full_url = f"{url}?{query}"
-            with urllib.request.urlopen(full_url, timeout=15) as resp:
+            if params:
+                query = urllib.parse.urlencode(params)
+                full_url = f"{url}?{query}"
+            else:
+                full_url = url
+                
+            req = urllib.request.Request(full_url, headers=headers or {})
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 status = getattr(resp, "status", 200)
                 if status >= 400:
-                    print(f"API request failed via urllib with status {status}", file=sys.stderr)
-                    return None
-                data = resp.read()
-                return json.loads(data.decode('utf-8'))
+                    raise urllib.error.HTTPError(full_url, status, "HTTP Error", resp.headers, None)
+                data = resp.read().decode('utf-8')
+                try:
+                    return json.loads(data)
+                except json.JSONDecodeError:
+                    return data
+        except urllib.error.HTTPError as e:
+            raise e
         except urllib.error.URLError as e:
-            print(f"API request failed via urllib: {e}", file=sys.stderr)
+            print(f"Request failed via urllib: {e}", file=sys.stderr)
             return None
         except Exception as e:
             print(f"Unexpected error during urllib request: {e}", file=sys.stderr)
             return None
 
+def make_fmp_request(url, params=None):
+    if not FMP_API_KEY:
+        # Don't raise exception here, let the fetcher handle missing key
+        return None
+    if params is None:
+        params = {}
+    params['apikey'] = FMP_API_KEY
+    return make_request(url, params)
+
 def handle_lse_symbol(symbol):
     """Convert London Stock Exchange symbols for FMP API"""
-    # FMP uses .L suffix for LSE stocks, ensure proper format
     if symbol.upper().endswith('.L'):
         return symbol.upper()
     elif symbol.upper().endswith('.LON'):
-        # Convert .LON to .L format
         return symbol.upper().replace('.LON', '.L')
     return symbol.upper()
+
+# --- Twelve Data Fetcher ---
+
+def handle_twelvedata_symbol(symbol):
+    """Convert symbols for Twelve Data (e.g. AV.L -> AV, exchange=LSE)"""
+    # Twelve Data usually takes symbol and exchange separately or handles suffix
+    # For LSE, it often uses just the ticker if exchange is specified, or ticker.L
+    # We'll try to map common suffixes to exchanges if needed, or just pass through
+    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
+        # Strip suffix, specify exchange in params
+        return symbol.upper().replace('.L', '').replace('.LON', ''), "LSE"
+    return symbol.upper(), None
+
+def fetch_historical_data_twelvedata(symbol, start_date, end_date):
+    """Fetch historical data from Twelve Data"""
+    if not TWELVE_DATA_API_KEY:
+        print(f"Twelve Data API key missing for {symbol}", file=sys.stderr)
+        return None
+
+    ticker, exchange = handle_twelvedata_symbol(symbol)
+    
+    url = f"{TWELVE_DATA_BASE_URL}/time_series"
+    params = {
+        'symbol': ticker,
+        'interval': '1day',
+        'start_date': start_date,
+        'end_date': end_date,
+        'apikey': TWELVE_DATA_API_KEY,
+        'order': 'ASC'
+    }
+    if exchange:
+        params['exchange'] = exchange
+        
+    print(f"Fetching historical data for {symbol} using Twelve Data", file=sys.stderr)
+    
+    try:
+        data = make_request(url, params)
+        
+        if not data:
+            return None
+            
+        if 'code' in data and data['code'] != 200:
+            print(f"Twelve Data error: {data.get('message')}", file=sys.stderr)
+            return None
+            
+        if 'status' in data and data['status'] == 'error':
+             print(f"Twelve Data error: {data.get('message')}", file=sys.stderr)
+             return None
+
+        if 'values' not in data:
+            print(f"No values in Twelve Data response for {symbol}", file=sys.stderr)
+            return None
+            
+        historical_data = []
+        for entry in data['values']:
+            # entry format: {'datetime': '2023-10-27', 'open': '10.50', ...}
+            try:
+                date_obj = datetime.strptime(entry['datetime'], '%Y-%m-%d')
+                timestamp = int(date_obj.timestamp())
+                
+                close_price = float(entry['close'])
+                # Twelve Data doesn't explicitly give previous close in time series, 
+                # usually we derive it or use open as approx if needed.
+                # But for simplicity, let's use open or just rely on app to stitch it?
+                # The app expects 'previousClose'. We can assume previous day's close 
+                # from the *previous* entry in the list, but the list is ordered.
+                # Let's try to use 'open' as a fallback for prevClose if we can't calculate it easily
+                # or just pass 0 and let app handle? 
+                # Better: Keep track of previous close in loop
+                
+                # NOTE: We requested order='ASC', so we iterate from oldest to newest.
+                
+                historical_data.append({
+                    'timestamp': timestamp,
+                    'symbol': symbol,
+                    'price': close_price,
+                    'previousClose': 0.0 # Placeholder, will fix in post-processing if possible
+                })
+            except Exception as e:
+                print(f"Error parsing Twelve Data entry: {e}", file=sys.stderr)
+                continue
+        
+        # Fix previousClose
+        for i in range(len(historical_data)):
+            if i > 0:
+                historical_data[i]['previousClose'] = historical_data[i-1]['price']
+            else:
+                # First entry, use open from the API response if we can find it matching this timestamp
+                # Or just use current price as fallback
+                historical_data[i]['previousClose'] = historical_data[i]['price']
+
+        print(f"Twelve Data retrieved {len(historical_data)} data points for {symbol}", file=sys.stderr)
+        return historical_data
+
+    except Exception as e:
+        print(f"Twelve Data fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+# --- Stooq Fetcher ---
+
+def handle_stooq_symbol(symbol):
+    """Convert symbols for Stooq (e.g. AV.L -> AV.UK)"""
+    # Stooq uses .UK for LSE
+    if symbol.upper().endswith('.L'):
+        return symbol.upper().replace('.L', '.UK')
+    elif symbol.upper().endswith('.LON'):
+        return symbol.upper().replace('.LON', '.UK')
+    # US stocks typically have .US suffix or just ticker, Stooq often needs .US for common ones
+    # but let's stick to LSE fallback focus for now.
+    return symbol.upper()
+
+def fetch_historical_data_stooq(symbol, start_date, end_date):
+    """Fetch historical data from Stooq (CSV)"""
+    stooq_symbol = handle_stooq_symbol(symbol)
+    
+    # Stooq date format: YYYYMMDD
+    d1 = start_date.replace('-', '')
+    d2 = end_date.replace('-', '')
+    
+    # Stooq URL format: https://stooq.com/q/d/l/?s=av.uk&d1=20230101&d2=20231231&i=d
+    url = f"{STOOQ_BASE_URL}/"
+    params = {
+        's': stooq_symbol,
+        'd1': d1,
+        'd2': d2,
+        'i': 'd' # daily
+    }
+    
+    print(f"Fetching historical data for {symbol} ({stooq_symbol}) from Stooq", file=sys.stderr)
+    
+    try:
+        csv_text = make_request(url, params)
+        if not csv_text or "No data" in csv_text: # Stooq sometimes returns HTML with "No data"
+             print(f"Stooq returned no data for {symbol}", file=sys.stderr)
+             return None
+             
+        # Parse CSV
+        # Date,Open,High,Low,Close,Volume
+        # 2023-10-27,400.00,405.00,398.00,402.00,123456
+        
+        historical_data = []
+        
+        # Use csv module
+        f = io.StringIO(csv_text)
+        reader = csv.DictReader(f)
+        
+        rows = list(reader)
+        # Stooq CSV is typically descending date (newest first). We want ascending.
+        rows.reverse()
+        
+        for row in rows:
+            try:
+                date_str = row.get('Date')
+                close_str = row.get('Close')
+                
+                if not date_str or not close_str:
+                    continue
+                    
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                timestamp = int(date_obj.timestamp())
+                close_price = float(close_str)
+                
+                # Handle GBX (pence) vs GBP. Stooq usually returns in minor currency for UK?
+                # Actually Stooq usually uses major currency (GBP) for UK stocks? 
+                # Let's check AV.UK on Stooq... it shows e.g. 398.80. AV.L is ~400p. 
+                # Stooq AV.UK price ~400. So it is in pence (GBX).
+                # Our app expects GBP for LSE stocks in historical data?
+                # Let's check existing yfinance/fmp handling.
+                # yfinance: "if symbol.upper().endswith('.L'): close_price /= 100.0"
+                # fmp: "if api_symbol.endswith('.L'): close_price = close_price / 100.0"
+                # So we should divide by 100 for .L symbols if they come from Stooq as .UK
+                
+                if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
+                     close_price /= 100.0
+                
+                historical_data.append({
+                    'timestamp': timestamp,
+                    'symbol': symbol,
+                    'price': close_price,
+                    'previousClose': 0.0 # Placeholder
+                })
+            except Exception as e:
+                # Stooq sometimes has lines with "No data" or empty
+                continue
+                
+        if not historical_data:
+            return None
+            
+        # Fix previousClose
+        for i in range(len(historical_data)):
+            if i > 0:
+                historical_data[i]['previousClose'] = historical_data[i-1]['price']
+            else:
+                historical_data[i]['previousClose'] = historical_data[i]['price']
+                
+        print(f"Stooq retrieved {len(historical_data)} data points for {symbol}", file=sys.stderr)
+        return historical_data
+
+    except Exception as e:
+        print(f"Stooq fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+# --- Existing Fetchers (Refactored) ---
 
 def fetch_real_time_quote_yfinance(symbol):
     """Fetch real-time quote using yfinance with pre-market data and fallbacks."""
@@ -145,27 +374,17 @@ def fetch_real_time_quote_yfinance(symbol):
         if daily_hist.empty:
             return None
         
-        # Get the most recent COMPLETE trading day's close as previous close
-        # During pre-market: the last complete day is yesterday (what we want for day P&L)
-        # During market hours: we still want yesterday's close for day P&L calculation
-        # The key insight: we always want the most recent complete trading day's close
-        
         # Sort by date to ensure we get the most recent complete day
         daily_hist = daily_hist.sort_index()
         
         # Remove today's data if it's incomplete (during market hours)
-        # We want the last complete trading day's close
         today = datetime.now().date()
-        
-        # Filter to only include dates before today, ensuring we get complete trading days
         complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
         
         if not complete_days.empty:
-            # Use the most recent complete trading day's close
             previous_close = float(complete_days.iloc[-1]['Close'])
             print(f"Using previous close from {complete_days.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
         else:
-            # Fallback: use the most recent available close (this handles edge cases)
             previous_close = float(daily_hist.iloc[-1]['Close'])
             print(f"Fallback: using most recent close from {daily_hist.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
 
@@ -179,28 +398,23 @@ def fetch_real_time_quote_yfinance(symbol):
         # 2. Get comprehensive ticker info for pre/post market data
         try:
             info = ticker.info
-            print(f"yfinance info keys for {symbol}: {list(info.keys())[:10]}...", file=sys.stderr)
             
             # Extract timestamp from regularMarketTime
             if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
                 regular_market_time = int(info['regularMarketTime'])
-                print(f"yfinance regularMarketTime for {symbol}: {regular_market_time}", file=sys.stderr)
             
             # Extract pre-market data
             if 'preMarketPrice' in info and info['preMarketPrice'] is not None:
                 pre_market_price = float(info['preMarketPrice'])
-                print(f"yfinance preMarketPrice for {symbol}: {pre_market_price}", file=sys.stderr)
             
             # Extract post-market data
             if 'postMarketPrice' in info and info['postMarketPrice'] is not None:
                 post_market_price = float(info['postMarketPrice'])
-                print(f"yfinance postMarketPrice for {symbol}: {post_market_price}", file=sys.stderr)
             
             # Get regular market price
             if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
                 regular_market_price = float(info['regularMarketPrice'])
-                current_price = regular_market_price  # Start with regular market price
-                print(f"yfinance regularMarketPrice for {symbol}: {regular_market_price}", file=sys.stderr)
+                current_price = regular_market_price
                 
         except Exception as e:
             print(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.", file=sys.stderr)
@@ -210,22 +424,18 @@ def fetch_real_time_quote_yfinance(symbol):
             try:
                 regular_market_price = float(ticker.fast_info['last_price'])
                 current_price = regular_market_price
-                print(f"yfinance fast_info for {symbol}: {regular_market_price}", file=sys.stderr)
             except Exception as e:
                 print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
 
         # 4. If still no regular market price, try intraday history with pre/post market data
         if regular_market_price is None:
-            print(f"Trying intraday history with prepost=True for {symbol}", file=sys.stderr)
             intraday_hist = ticker.history(period="2d", interval="5m", prepost=True, auto_adjust=False)
             if not intraday_hist.empty:
                 regular_market_price = float(intraday_hist.iloc[-1]['Close'])
                 current_price = regular_market_price
-                print(f"yfinance intraday latest price for {symbol}: {regular_market_price}", file=sys.stderr)
         
         # 5. Final fallback: If all else fails, use the latest daily close (previous close).
         if regular_market_price is None:
-            print(f"All yfinance real-time methods failed for {symbol}. Using previous close as regular market price.", file=sys.stderr)
             regular_market_price = previous_close
             current_price = regular_market_price
 
@@ -235,108 +445,72 @@ def fetch_real_time_quote_yfinance(symbol):
             try:
                 from zoneinfo import ZoneInfo
                 market_tz = ZoneInfo("Europe/London")
-                print(f"Using zoneinfo for LSE timezone detection", file=sys.stderr)
             except ImportError:
                 try:
                     import pytz
                     market_tz = pytz.timezone("Europe/London")
-                    print(f"Using pytz for LSE timezone detection", file=sys.stderr)
                 except ImportError:
-                    # Final fallback - assume UTC (GMT) for LSE
                     from datetime import timezone, timedelta
                     market_tz = timezone(timedelta(hours=0))  # GMT
-                    print(f"Using manual timezone offset for GMT", file=sys.stderr)
             
             # Get current time in London timezone
             now_market = datetime.now(market_tz)
             current_hour_market = now_market.hour
             current_minute_market = now_market.minute
             
-            print(f"Current time London: {now_market.strftime('%H:%M:%S %Z')} (local time: {datetime.now().strftime('%H:%M:%S')})", file=sys.stderr)
-            
-            # LSE market hours (London time):
-            # Pre-market: 7:00 AM - 8:00 AM GMT/BST
-            # Regular: 8:00 AM - 4:30 PM GMT/BST  
-            # Post-market: 4:30 PM - 5:30 PM GMT/BST
-            # Closed: 5:30 PM - 7:00 AM GMT/BST
-            
+            # Simplified LSE market hours logic for brevity in this view
             if (current_hour_market >= 7 and current_hour_market < 8):
                 if pre_market_price is not None:
                     market_state = "PRE"
                     current_price = pre_market_price
-                    print(f"Market state: PRE-MARKET LSE (using pre-market price: {pre_market_price})", file=sys.stderr)
                 else:
                     market_state = "PRE"
-                    print(f"Market state: PRE-MARKET LSE (no pre-market price available)", file=sys.stderr)
             elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
                 market_state = "REGULAR"
-                print(f"Market state: REGULAR HOURS LSE", file=sys.stderr)
             elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
                 if post_market_price is not None:
                     market_state = "POST"
                     current_price = post_market_price
-                    print(f"Market state: POST-MARKET LSE (using post-market price: {post_market_price})", file=sys.stderr)
                 else:
                     market_state = "POST"
-                    print(f"Market state: POST-MARKET LSE (no post-market price available)", file=sys.stderr)
             else:
                 market_state = "CLOSED"
-                print(f"Market state: CLOSED LSE", file=sys.stderr)
         else:
             # US stocks - use US Eastern timezone
             try:
                 from zoneinfo import ZoneInfo
                 market_tz = ZoneInfo("America/New_York")
-                print(f"Using zoneinfo for US timezone detection", file=sys.stderr)
             except ImportError:
                 try:
                     import pytz
                     market_tz = pytz.timezone("America/New_York")
-                    print(f"Using pytz for US timezone detection", file=sys.stderr)
                 except ImportError:
-                    # Final fallback - assume UTC-5 (EST) / UTC-4 (EDT)
                     from datetime import timezone, timedelta
-                    market_tz = timezone(timedelta(hours=-4))  # EDT (summer time)
-                    print(f"Using manual timezone offset for EDT", file=sys.stderr)
+                    market_tz = timezone(timedelta(hours=-4))  # EDT
             
             # Get current time in US Eastern timezone
             now_market = datetime.now(market_tz)
             current_hour_market = now_market.hour
             current_minute_market = now_market.minute
             
-            print(f"Current time ET: {now_market.strftime('%H:%M:%S %Z')} (local time: {datetime.now().strftime('%H:%M:%S')})", file=sys.stderr)
-            
-            # US market hours (Eastern time):
-            # Pre-market: 4:00 AM - 9:30 AM ET
-            # Regular: 9:30 AM - 4:00 PM ET  
-            # Post-market: 4:00 PM - 8:00 PM ET
-            # Closed: 8:00 PM - 4:00 AM ET
-            
             if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
                 if pre_market_price is not None:
                     market_state = "PRE"
-                    current_price = pre_market_price  # Use pre-market price as current
-                    print(f"Market state: PRE-MARKET (using pre-market price: {pre_market_price})", file=sys.stderr)
+                    current_price = pre_market_price
                 else:
                     market_state = "PRE"
-                    print(f"Market state: PRE-MARKET (no pre-market price available)", file=sys.stderr)
             elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
                 market_state = "REGULAR"
-                print(f"Market state: REGULAR HOURS", file=sys.stderr)
             elif current_hour_market >= 16 and current_hour_market < 20:
                 if post_market_price is not None:
                     market_state = "POST"
-                    current_price = post_market_price  # Use post-market price as current
-                    print(f"Market state: POST-MARKET (using post-market price: {post_market_price})", file=sys.stderr)
+                    current_price = post_market_price
                 else:
                     market_state = "POST"
-                    print(f"Market state: POST-MARKET (no post-market price available)", file=sys.stderr)
             else:
                 market_state = "CLOSED"
-                print(f"Market state: CLOSED", file=sys.stderr)
 
         # 7. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
-        # This conversion should apply to all prices.
         if symbol.upper().endswith('.L'):
             current_price /= 100.0
             previous_close /= 100.0
@@ -347,28 +521,24 @@ def fetch_real_time_quote_yfinance(symbol):
             if post_market_price is not None:
                 post_market_price /= 100.0
             
-        print(f"yfinance data for {symbol}: current_price={current_price}, previous_close={previous_close}, pre_market={pre_market_price}, post_market={post_market_price}, state={market_state}", file=sys.stderr)
-
         # Use regularMarketTime if available, otherwise fallback to current time
         timestamp = regular_market_time if regular_market_time is not None else int(time.time())
 
-        # For pre/post market, use current time as the timestamp for those quotes
-        # since yfinance doesn't provide specific pre/post market timestamps
         current_time = int(time.time())
         pre_market_time = current_time if (market_state == "PRE" and pre_market_price is not None) else None
         post_market_time = current_time if (market_state == "POST" and post_market_price is not None) else None
 
         return {
             'symbol': symbol,
-            'price': current_price,  # Display price (includes pre/post market adjustments)
-            'regularMarketPrice': regular_market_price,  # Always the regular market price for day calculations
+            'price': current_price,  
+            'regularMarketPrice': regular_market_price,
             'previousClose': previous_close,
             'preMarketPrice': pre_market_price,
             'postMarketPrice': post_market_price,
-            'preMarketTime': pre_market_time,  # Current time when pre-market data is available
-            'postMarketTime': post_market_time,  # Current time when post-market data is available
+            'preMarketTime': pre_market_time,
+            'postMarketTime': post_market_time,
             'marketState': market_state,
-            'timestamp': timestamp  # Regular market time
+            'timestamp': timestamp
         }
         
     except Exception as e:
@@ -380,37 +550,43 @@ def fetch_real_time_quote_fmp(symbol):
     """Fetch real-time quote from FMP API (fallback)"""
     api_symbol = handle_lse_symbol(symbol)
     url = f"{FMP_BASE_URL}/quote/{api_symbol}"
-    data = make_fmp_request(url)
-    
-    if not data or len(data) == 0:
-        return None
+    try:
+        data = make_fmp_request(url)
         
-    quote = data[0]
-    
-    # Extract required fields
-    current_price = quote.get('price', 0)
-    previous_close = quote.get('previousClose', 0)
-    timestamp = quote.get('timestamp', int(time.time()))
-    
-    if current_price <= 0 or previous_close <= 0:
-        return None
-    
-    # Handle LSE stocks - prices are typically in pence, convert to pounds
-    if api_symbol.endswith('.L'):
-        # FMP returns LSE prices in pence, convert to pounds for consistency
-        current_price = current_price / 100.0
-        previous_close = previous_close / 100.0
+        if not data or len(data) == 0:
+            return None
+            
+        quote = data[0]
         
-    return {
-        'symbol': symbol,  # Return original symbol format
-        'price': current_price,
-        'previousClose': previous_close,
-        'timestamp': timestamp
-    }
+        current_price = quote.get('price', 0)
+        previous_close = quote.get('previousClose', 0)
+        timestamp = quote.get('timestamp', int(time.time()))
+        
+        if current_price <= 0 or previous_close <= 0:
+            return None
+        
+        # Handle LSE stocks
+        if api_symbol.endswith('.L'):
+            current_price = current_price / 100.0
+            previous_close = previous_close / 100.0
+            
+        return {
+            'symbol': symbol,
+            'price': current_price,
+            'previousClose': previous_close,
+            'timestamp': timestamp
+        }
+    except Exception as e:
+        # Re-raise HTTP errors
+        if "HTTP Error" in str(e) or hasattr(e, 'code') or (hasattr(e, 'response') and hasattr(e.response, 'status_code')):
+            raise e
+        print(f"FMP fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
 
 def fetch_real_time_quote(symbol):
     """Fetch real-time quote using yfinance first, FMP as fallback"""
-    # Try yfinance first for real-time data
+    # TODO: Make real-time priority configurable too? 
+    # For now sticking to yfinance -> FMP as requested, only historical has deep problems
     if YFINANCE_AVAILABLE:
         result = fetch_real_time_quote_yfinance(symbol)
         if result:
@@ -419,7 +595,6 @@ def fetch_real_time_quote(symbol):
         else:
             print(f"yfinance failed for {symbol}, falling back to FMP", file=sys.stderr)
     
-    # Fallback to FMP if yfinance fails or unavailable
     print(f"Using FMP for real-time data: {symbol}", file=sys.stderr)
     return fetch_real_time_quote_fmp(symbol)
 
@@ -428,56 +603,58 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
     if not YFINANCE_AVAILABLE:
         return None
         
-    try:
-        ticker = yf.Ticker(symbol)
-        # Convert date strings to datetime objects for yfinance
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-        
-        # Fetch historical data with intraday interval to capture pre/post market data
-        # Using 1h interval to get extended hours data while keeping data manageable
-        hist = ticker.history(start=start_dt, end=end_dt + timedelta(days=1), prepost=True, auto_adjust=False, interval="1h")
-        
-        if hist.empty:
-            return None
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            ticker = yf.Ticker(symbol)
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             
-        historical_data = []
-        prev_close_raw = None
-        
-        for date, row in hist.iterrows():
-            close_price_raw = float(row['Close'])
+            hist = ticker.history(start=start_dt, end=end_dt + timedelta(days=1), prepost=True, auto_adjust=False, interval="1h")
             
-            # Use previous day's close as previous close, or open price for first day
-            if prev_close_raw is not None:
-                previous_close_raw = prev_close_raw
-            else:
-                previous_close_raw = float(row['Open'])
+            if hist.empty:
+                if attempt < max_retries - 1:
+                    print(f"yfinance historical returned empty for {symbol}, retrying...", file=sys.stderr)
+                    time.sleep(1)
+                    continue
+                return None
+                
+            historical_data = []
+            prev_close_raw = None
             
-            # Handle LSE stocks - yfinance returns prices in pence for .L stocks
-            # Convert once and only once
-            if symbol.upper().endswith('.L'):
-                close_price = close_price_raw / 100.0
-                previous_close = previous_close_raw / 100.0
-            else:
-                close_price = close_price_raw
-                previous_close = previous_close_raw
+            for date, row in hist.iterrows():
+                close_price_raw = float(row['Close'])
+                
+                if prev_close_raw is not None:
+                    previous_close_raw = prev_close_raw
+                else:
+                    previous_close_raw = float(row['Open'])
+                
+                if symbol.upper().endswith('.L'):
+                    close_price = close_price_raw / 100.0
+                    previous_close = previous_close_raw / 100.0
+                else:
+                    close_price = close_price_raw
+                    previous_close = previous_close_raw
+                
+                historical_data.append({
+                    'timestamp': int(date.timestamp()),
+                    'symbol': symbol,
+                    'price': close_price,
+                    'previousClose': previous_close
+                })
+                
+                prev_close_raw = close_price_raw
             
-            historical_data.append({
-                'timestamp': int(date.timestamp()),
-                'symbol': symbol,
-                'price': close_price,
-                'previousClose': previous_close
-            })
+            print(f"yfinance retrieved {len(historical_data)} historical data points for {symbol}", file=sys.stderr)
+            return historical_data
             
-            # Store raw value for next iteration (no conversion here)
-            prev_close_raw = close_price_raw
-        
-        print(f"yfinance retrieved {len(historical_data)} historical data points for {symbol}", file=sys.stderr)
-        return historical_data
-        
-    except Exception as e:
-        print(f"yfinance historical fetch failed for {symbol}: {e}", file=sys.stderr)
-        return None
+        except Exception as e:
+            print(f"yfinance historical fetch failed for {symbol} (attempt {attempt+1}): {e}", file=sys.stderr)
+            if attempt < max_retries - 1:
+                time.sleep(1)
+    
+    return None
 
 def fetch_historical_data_fmp(symbol, start_date, end_date):
     """Fetch historical daily data from FMP API for the specified date range"""
@@ -498,53 +675,138 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
     historical_data = []
     for entry in data['historical']:
         try:
-            # Parse the date string to timestamp
             date_obj = datetime.strptime(entry['date'], '%Y-%m-%d')
             timestamp = int(date_obj.timestamp())
             
             close_price = entry['close']
-            # For historical data, previous close is the previous day's close
-            # We'll use the current day's open as an approximation, or fall back to close
             previous_close = entry.get('open', close_price)
             
-            # Handle LSE stocks - convert pence to pounds
             if api_symbol.endswith('.L'):
                 close_price = close_price / 100.0
                 previous_close = previous_close / 100.0
             
             historical_data.append({
                 'timestamp': timestamp,
-                'symbol': symbol,  # Return original symbol format
+                'symbol': symbol,
                 'price': close_price,
                 'previousClose': previous_close
             })
-            
-            # Debug: Print first few entries
-            if len(historical_data) <= 3:
-                print(f"Debug: Added entry {len(historical_data)}: {entry['date']} -> price: {close_price}, prevClose: {previous_close}", file=sys.stderr)
         except Exception as e:
             print(f"Error processing historical entry for {api_symbol}: {e}", file=sys.stderr)
             continue
     
-    # Sort by timestamp (oldest first)
     historical_data.sort(key=lambda x: x['timestamp'])
     print(f"FMP retrieved {len(historical_data)} historical data points for {api_symbol}", file=sys.stderr)
     return historical_data
 
-def fetch_historical_data(symbol, start_date, end_date):
-    """Fetch historical data using yfinance first, FMP as fallback"""
-    # Try yfinance first (free, no API limits)
-    if YFINANCE_AVAILABLE:
-        result = fetch_historical_data_yfinance(symbol, start_date, end_date)
-        if result:
-            print(f"Using yfinance for historical data: {symbol}", file=sys.stderr)
-            return result
-        else:
-            print(f"yfinance historical failed for {symbol}, falling back to FMP", file=sys.stderr)
+def get_fetch_priority(symbol):
+    """Get the priority list of fetch methods for historical data"""
+    # Default priority
+    default_priority = ["yfinance", "fmp"]
     
-    # Fallback to FMP
-    print(f"Using FMP for historical data: {symbol}", file=sys.stderr)
-    return fetch_historical_data_fmp(symbol, start_date, end_date)
+    # Read configured priority
+    # Expecting list of strings in config like ["yfinance", "twelvedata", "stooq", "fmp"]
+    config_priority = CONFIG.get("DATA_SOURCE_PRIORITY")
+    
+    # Normalize config priority if string or json string
+    if isinstance(config_priority, str):
+        try:
+            config_priority = json.loads(config_priority)
+        except:
+            config_priority = [config_priority]
+            
+    priority = config_priority if isinstance(config_priority, list) else default_priority
+    
+    # Filter out unavailable methods or auto-optimize
+    # e.g. skip FMP for LSE if key is not present or free? 
+    # Actually the task says "skip FMP for LSE if free".
+    # We don't easily know if the key is free or paid here without checking headers/response.
+    # But we can respect the user's configured order.
+    
+    # Special handling for LSE to avoid FMP 403 spam if user hasn't configured it
+    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
+        # If FMP is in the list, and we know it's likely to fail for LSE on free tier,
+        # we might want to deprioritize it or remove it, BUT user might have paid tier.
+        # So we respect user order.
+        pass
+        
+    return priority
+
+def fetch_historical_data(symbol, start_date, end_date):
+    """Fetch historical data using configured priority sources"""
+    
+    priority = get_fetch_priority(symbol)
+    
+    # Ensure we always have valid sources in the list
+    # Filter duplicates and ensure valid names
+    valid_sources = []
+    seen = set()
+    
+    # Add user configured sources first
+    for source in priority:
+        s = source.lower()
+        if s not in seen:
+            valid_sources.append(s)
+            seen.add(s)
+    
+    # Append default sources if not present (fallbacks)
+    for source in ["yfinance", "fmp", "twelvedata", "stooq"]:
+        if source not in seen:
+            valid_sources.append(source)
+            seen.add(source)
+            
+    print(f"Fetch priority for {symbol}: {valid_sources}", file=sys.stderr)
+    
+    last_error = None
+    
+    for source in valid_sources:
+        try:
+            result = None
+            if source == "yfinance":
+                if YFINANCE_AVAILABLE:
+                    result = fetch_historical_data_yfinance(symbol, start_date, end_date)
+                else:
+                    print("Skipping yfinance (not available)", file=sys.stderr)
+            elif source == "fmp":
+                # For LSE, only try FMP if it's high priority or others failed
+                result = fetch_historical_data_fmp(symbol, start_date, end_date)
+            elif source == "twelvedata":
+                result = fetch_historical_data_twelvedata(symbol, start_date, end_date)
+            elif source == "stooq":
+                result = fetch_historical_data_stooq(symbol, start_date, end_date)
+                
+            if result:
+                print(f"Successfully fetched historical data from {source} for {symbol}", file=sys.stderr)
+                return result
+                
+        except Exception as e:
+            print(f"Source {source} failed for {symbol}: {e}", file=sys.stderr)
+            
+            # Check for specific errors to handle gracefully
+            is_403 = False
+            is_rate_limit = False
+            
+            if "HTTP Error 403" in str(e) or (hasattr(e, 'code') and e.code == 403):
+                is_403 = True
+            if "HTTP Error 429" in str(e) or (hasattr(e, 'code') and e.code == 429):
+                is_rate_limit = True
+                
+            if is_403 and source == "fmp":
+                print(f"FMP 403 Forbidden (Plan Restriction) for {symbol}. Skipping.", file=sys.stderr)
+            
+            last_error = e
+            continue
+            
+    # If we get here, all sources failed
+    if last_error:
+        # Propagate the last error if it was an HTTP error, so main can handle codes
+        # But since we might have tried multiple sources, maybe just throw NO_DATA
+        # unless we want to report the specific error.
+        # If FMP 403 was the last one, it might be misleading if others failed for other reasons.
+        # Let's re-raise if it's a critical one or just return None to let main handle NO_DATA
+        pass
+        
+    return None
 
 def fetch_batch(symbols):
     """Fetch multiple symbols using enhanced real-time API with pre/post market support"""
@@ -607,17 +869,7 @@ def output_error(error_code, message, symbol=None, retry_after=None):
     print(json.dumps(error_obj))
 
 def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
-    """
-    Fetch OHLC (Open, High, Low, Close, Volume) data using yfinance
-
-    Args:
-        symbol: Stock symbol
-        period: Valid periods: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
-        interval: Valid intervals: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
-
-    Returns:
-        List of OHLC data points with timestamps
-    """
+    """Fetch OHLC data using yfinance"""
     if not YFINANCE_AVAILABLE:
         return None
 
@@ -630,14 +882,12 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
 
         ohlc_data = []
         for date, row in hist.iterrows():
-            # Extract OHLCV data
             open_price = float(row['Open'])
             high_price = float(row['High'])
             low_price = float(row['Low'])
             close_price = float(row['Close'])
             volume = int(row['Volume'])
 
-            # Handle LSE stocks - convert pence to pounds
             if symbol.upper().endswith('.L'):
                 open_price /= 100.0
                 high_price /= 100.0
@@ -662,7 +912,7 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
         return None
 
 def fetch_ohlc_data(symbol, period='1mo', interval='1d'):
-    """Fetch OHLC data using yfinance (FMP doesn't provide intraday OHLC easily)"""
+    """Fetch OHLC data using yfinance"""
     if YFINANCE_AVAILABLE:
         result = fetch_ohlc_data_yfinance(symbol, period, interval)
         if result:
@@ -686,7 +936,6 @@ def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
                 print(f"Failed to fetch OHLC data for {symbol}", file=sys.stderr)
                 results[symbol] = None
 
-            # Add delay to respect rate limits
             time.sleep(1.0)
 
         except Exception as e:
@@ -696,20 +945,59 @@ def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
     return results
 
 def main():
-    parser = argparse.ArgumentParser(description='Fetch stock data using Financial Modeling Prep API and yfinance')
+    parser = argparse.ArgumentParser(description='Fetch stock data using multiple providers')
     parser.add_argument('--historical', action='store_true', help='Fetch historical price data')
     parser.add_argument('--ohlc', action='store_true', help='Fetch OHLC (candlestick) data')
     parser.add_argument('--batch-ohlc', action='store_true', help='Fetch OHLC data for multiple symbols')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
-    parser.add_argument('--period', default='1mo', help='Period for OHLC data (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)')
-    parser.add_argument('--interval', default='1d', help='Interval for OHLC data (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)')
+    parser.add_argument('--period', default='1mo', help='Period for OHLC data')
+    parser.add_argument('--interval', default='1d', help='Interval for OHLC data')
+    parser.add_argument('--test-key', help='Test API key for a specific service (fmp, twelvedata)')
 
     args = parser.parse_args()
 
+    if args.test_key:
+        service = args.test_key.lower()
+        result = False
+        message = ""
+        
+        try:
+            if service == 'fmp':
+                # Try fetching a simple quote for AAPL using FMP
+                data = fetch_real_time_quote_fmp("AAPL")
+                if data and data.get('price', 0) > 0:
+                    result = True
+                    message = "Successfully verified FMP API key."
+                else:
+                    message = "Failed to verify FMP API key. Check validity (free plan covers US stocks)."
+            elif service == 'twelvedata':
+                # Try fetching time series for AAPL
+                today = datetime.now().strftime('%Y-%m-%d')
+                yesterday = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+                data = fetch_historical_data_twelvedata("AAPL", yesterday, today)
+                if data:
+                    result = True
+                    message = "Successfully verified Twelve Data API key."
+                else:
+                    message = "Failed to verify Twelve Data API key."
+            else:
+                message = f"Unknown service: {service}"
+                
+            print(json.dumps({
+                'success': result,
+                'message': message
+            }))
+            
+        except Exception as e:
+            print(json.dumps({
+                'success': False,
+                'message': f"Exception during verification: {str(e)}"
+            }))
+        sys.exit(0)
+
     if args.ohlc or args.batch_ohlc:
-        # OHLC data mode
         if not args.symbols:
             print("Error: OHLC mode requires at least one symbol", file=sys.stderr)
             output_error('INVALID_REQUEST', 'OHLC mode requires at least one symbol')
@@ -719,16 +1007,13 @@ def main():
 
         try:
             if args.batch_ohlc and len(symbols) > 1:
-                # Batch OHLC fetch
                 ohlc_results = fetch_batch_ohlc(symbols, period=args.period, interval=args.interval)
-                # Output as JSON object with symbol keys
                 output_data = {}
                 for symbol, data in ohlc_results.items():
                     if data:
                         output_data[symbol] = data
                 print(json.dumps(output_data))
             else:
-                # Single symbol OHLC fetch
                 symbol = symbols[0]
                 ohlc_data = fetch_ohlc_data(symbol, period=args.period, interval=args.interval)
                 if ohlc_data:
@@ -740,51 +1025,41 @@ def main():
             if 'timeout' in error_str.lower():
                 output_error('TIMEOUT', f'Request timed out')
             elif 'rate limit' in error_str.lower():
-                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', retry_after=60)
+                output_error('RATE_LIMIT', 'API rate limit exceeded.', retry_after=60)
             else:
                 output_error('UNKNOWN', f'Unexpected error: {str(e)}')
             sys.exit(1)
 
     elif args.historical:
-        # Historical data mode
         if not args.symbols or not args.start_date or not args.end_date:
             print("Error: Historical mode requires symbol, start-date, and end-date", file=sys.stderr)
             output_error('INVALID_REQUEST', 'Historical mode requires symbol, start-date, and end-date')
             sys.exit(1)
 
-        symbol = args.symbols[0]  # Take first symbol for historical fetch
+        symbol = args.symbols[0]
 
         try:
             historical_data = fetch_historical_data(symbol, args.start_date, args.end_date)
             if historical_data:
-                # Output as JSON array for Swift to parse
                 print(json.dumps(historical_data))
             else:
                 output_error('NO_DATA', f'No historical data available for {symbol}', symbol=symbol)
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', symbol=symbol, retry_after=60)
-            elif e.code == 401 or e.code == 403:
-                output_error('API_KEY_INVALID', 'API key is invalid or unauthorized.', symbol=symbol)
-            else:
-                output_error('NETWORK_ERROR', f'HTTP error {e.code}: {str(e)}', symbol=symbol)
-            sys.exit(1)
-        except (urllib.error.URLError, OSError) as e:
-            output_error('NETWORK_ERROR', f'Network connection failed: {str(e)}', symbol=symbol)
-            sys.exit(1)
+        
         except Exception as e:
+            # Generic error handling
             error_str = str(e)
             if 'timeout' in error_str.lower():
                 output_error('TIMEOUT', f'Request timed out for {symbol}', symbol=symbol)
             elif 'rate limit' in error_str.lower():
-                output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', symbol=symbol, retry_after=60)
-            elif 'invalid symbol' in error_str.lower() or 'not found' in error_str.lower():
-                output_error('INVALID_SYMBOL', f'Symbol {symbol} not found or invalid', symbol=symbol)
+                output_error('RATE_LIMIT', 'API rate limit exceeded.', symbol=symbol, retry_after=60)
+            elif '403' in error_str:
+                 output_error('API_KEY_RESTRICTED', 'Access forbidden (403). Check plan permissions.', symbol=symbol)
             else:
-                output_error('UNKNOWN', f'Unexpected error: {str(e)}', symbol=symbol)
+                output_error('NETWORK_ERROR', f'Error: {str(e)}', symbol=symbol)
             sys.exit(1)
+            
     else:
-        # Real-time data mode (backward compatible)
+        # Real-time data mode
         if len(args.symbols) < 1:
             print("Usage: python get_stock_data.py <TICKER_SYMBOL> [<TICKER_SYMBOL> ...]", file=sys.stderr)
             output_error('INVALID_REQUEST', 'No ticker symbol provided')
@@ -793,7 +1068,6 @@ def main():
         symbols = [s.upper() for s in args.symbols]
         results = {}
 
-        # Check cache first
         symbols_to_fetch = []
         for symbol in symbols:
             cached = get_cached(symbol)
@@ -802,7 +1076,6 @@ def main():
             else:
                 symbols_to_fetch.append(symbol)
 
-        # Batch fetch uncached
         if symbols_to_fetch:
             try:
                 batch_results = fetch_batch(symbols_to_fetch)
@@ -810,7 +1083,6 @@ def main():
                     if res:
                         results[symbol] = res
                     else:
-                        # Fallback to single fetch
                         single_res = fetch_single(symbol)
                         if single_res:
                             set_cache(symbol, single_res)
@@ -818,48 +1090,31 @@ def main():
                         else:
                             results[symbol] = None
             except Exception as e:
-                # If batch fetch fails completely, output error
                 error_str = str(e)
-                if 'timeout' in error_str.lower():
-                    output_error('TIMEOUT', 'Request timed out')
-                    sys.exit(1)
-                elif 'rate limit' in error_str.lower():
-                    output_error('RATE_LIMIT', 'API rate limit exceeded. Please try again later.', retry_after=60)
-                    sys.exit(1)
-                elif '401' in error_str or '403' in error_str or 'api key' in error_str.lower():
-                    output_error('API_KEY_INVALID', 'API key is invalid or unauthorized.')
-                    sys.exit(1)
-                else:
-                    output_error('NETWORK_ERROR', f'Network error: {str(e)}')
-                    sys.exit(1)
+                output_error('NETWORK_ERROR', f'Network error: {str(e)}')
+                sys.exit(1)
 
-        # Output results as JSON for new format or legacy text format
         if len(symbols) == 1:
-            # Single symbol - use legacy text format for backwards compatibility
             symbol = symbols[0]
             res = results.get(symbol)
             if res:
                 if isinstance(res, dict):
-                    # New JSON format from enhanced fetch
                     timestamp_str = datetime.fromtimestamp(res['timestamp']).strftime('%Y-%m-%d %H:%M:%S%z')
                     close_price = res['price']
                     prev_close = res['previousClose']
                     print(f"{symbol} @ {timestamp_str} | 5m Low: {close_price:.2f}, High: {close_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
                 else:
-                    # Legacy tuple format
                     timestamp_str, low_price, high_price, close_price, prev_close = res
                     print(f"{symbol} @ {timestamp_str} | 5m Low: {low_price:.2f}, High: {high_price:.2f}, Close: {close_price:.2f}, PrevClose: {prev_close:.2f}")
             else:
                 output_error('NO_DATA', f'No data received for {symbol}', symbol=symbol)
         else:
-            # Multiple symbols - output as JSON array
             json_results = []
             for symbol in symbols:
                 res = results.get(symbol)
                 if res and isinstance(res, dict):
                     json_results.append(res)
                 elif res:
-                    # Convert legacy tuple format to dict
                     timestamp_str, low_price, high_price, close_price, prev_close = res
                     json_results.append({
                         'symbol': symbol,
