@@ -269,7 +269,7 @@ actor OptimizedChartDataService {
     
     // MARK: - Advanced Sampling Algorithm
     
-    private func performIntelligentSampling<T: NSManagedObject>(
+    nonisolated private func performIntelligentSampling<T: NSManagedObject>(
         request: NSFetchRequest<T>,
         context: NSManagedObjectContext,
         samplingRatio: Int,
@@ -299,7 +299,7 @@ actor OptimizedChartDataService {
         return performAdaptiveSampling(entities: entities, maxPoints: maxPoints, transform: transform)
     }
     
-    private func performOffsetSampling<T: NSManagedObject>(
+    nonisolated private func performOffsetSampling<T: NSManagedObject>(
         request: NSFetchRequest<T>,
         context: NSManagedObjectContext,
         samplingRatio: Int,
@@ -333,7 +333,7 @@ actor OptimizedChartDataService {
         return results
     }
     
-    private func performAdaptiveSampling<T>(
+    nonisolated private func performAdaptiveSampling<T>(
         entities: [T],
         maxPoints: Int,
         transform: (T) -> ChartDataPoint

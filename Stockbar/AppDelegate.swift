@@ -1,10 +1,13 @@
 import Cocoa
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var stockMenuBarController: StockMenuBarController?
-    private let dataModel = DataModel()
+    private var dataModel: DataModel!
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        dataModel = DataModel()
+
         // Perform legacy cleanup on first launch
         LegacyCleanupService.shared.performCleanupIfNeeded()
 
