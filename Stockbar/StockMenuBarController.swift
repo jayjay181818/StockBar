@@ -2,14 +2,16 @@ import Foundation
 import Combine
 import Cocoa
 
+@MainActor
 class StockMenuBarController {
     // MARK: - Properties
     private var cancellables: AnyCancellable?
     private let statusBar: StockStatusBar
     private let data: DataModel
     private var preferenceWindowController: PreferenceWindowController?
-    private lazy var timer = Timer()
     private var portfolioSummaryItem: NSMenuItem?
+    
+    private let logger = Logger.shared
 
     private lazy var mainMenuItems: [NSMenuItem] = {
         // Create portfolio summary item
@@ -32,20 +34,12 @@ class StockMenuBarController {
         self.data = data
         self.statusBar = StockStatusBar(dataModel: data)
         constructMainItem()
-        setupTimer()
+        // Timer management is now handled by DataModel/RefreshService
         setupDataBinding()
         setupNotifications()
     }
     
     // MARK: - Private Methods
-    private func setupTimer() {
-        Task { await data.refreshAllTrades() } // initial fetch
-        self.timer = Timer.scheduledTimer(withTimeInterval: data.refreshInterval, repeats: true) { [weak self] _ in
-            Task {
-                await self?.data.refreshAllTrades()
-            }
-        }
-    }
     
     private func setupDataBinding() {
         self.cancellables = self.data.$realTimeTrades
@@ -64,15 +58,15 @@ class StockMenuBarController {
     }
     
     private func updateSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
-        print("🔧 CONTROLLER: Updating symbol items, count: \(realTimeTrades.count)")
-        print("🔧 CONTROLLER: Symbols: \(realTimeTrades.map { $0.trade.name }.joined(separator: ", "))")
+        Task { await logger.debug("🔧 CONTROLLER: Updating symbol items, count: \(realTimeTrades.count)") }
+        Task { await logger.debug("🔧 CONTROLLER: Symbols: \(realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
 
         statusBar.removeAllSymbolItems()
         for trade in realTimeTrades {
             statusBar.constructSymbolItem(from: trade, dataModel: data)
         }
 
-        print("🔧 CONTROLLER: Finished creating \(realTimeTrades.count) symbol items")
+        Task { await logger.debug("🔧 CONTROLLER: Finished creating \(realTimeTrades.count) symbol items") }
     }
 
     private func updatePortfolioSummary() {
@@ -174,17 +168,8 @@ class StockMenuBarController {
     }
     
     @objc private func refreshIntervalChanged(_ notification: Notification) {
-        guard let newInterval = notification.object as? TimeInterval else { return }
-        
-        // Restart timer with new interval
-        timer.invalidate()
-        self.timer = Timer.scheduledTimer(withTimeInterval: newInterval, repeats: true) { [weak self] _ in
-            Task {
-                await self?.data.refreshAllTrades()
-            }
-        }
-        
-        Task { await Logger.shared.info("🔧 MenuBar: Restarted timer with \(newInterval) second interval") }
+        // RefreshService in DataModel handles the timer update automatically via property observer
+        Task { await logger.info("🔧 MenuBar: Refresh interval changed notification received") }
     }
     
     deinit {

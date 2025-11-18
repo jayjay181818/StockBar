@@ -4,7 +4,7 @@
 //
 //  Price alert monitoring and notification service
 //  Tracks user-defined price thresholds and sends notifications
-//  Now uses Core Data for persistence
+//  Now uses Core Data for persistence via CoreDataStack
 //
 
 import Foundation
@@ -106,22 +106,15 @@ class PriceAlertService: ObservableObject {
     static let shared = PriceAlertService()
 
     @Published private(set) var alerts: [PriceAlert] = []
-    private let persistentContainer: NSPersistentContainer
-    private var viewContext: NSManagedObjectContext { persistentContainer.viewContext }
+    
+    private let coreDataStack = CoreDataStack.shared
+    private var viewContext: NSManagedObjectContext { coreDataStack.viewContext }
 
     // Track last known prices to detect threshold crossings
     private var lastKnownPrices: [String: Double] = [:]
     private var lastKnownPortfolioValue: Double = 0.0
 
     private init() {
-        // Use the shared persistent container from DataModel
-        persistentContainer = NSPersistentContainer(name: "StockbarDataModel")
-        persistentContainer.loadPersistentStores { _, error in
-            if let error = error {
-                fatalError("Failed to load Core Data: \(error)")
-            }
-        }
-        
         // Migrate from UserDefaults to Core Data if needed
         migrateLegacyAlerts()
         
@@ -143,16 +136,10 @@ class PriceAlertService: ObservableObject {
         alertEntity.createdAt = alert.createdAt
         alertEntity.lastTriggered = alert.lastTriggered
         
-        do {
-            try viewContext.save()
-            alerts.append(alert)
-            Task {
-                await Logger.shared.info("✅ Added alert: \(alert.alertType.displayName) for \(alert.symbol ?? "portfolio")")
-            }
-        } catch {
-            Task {
-                await Logger.shared.error("❌ Failed to save alert: \(error.localizedDescription)")
-            }
+        coreDataStack.save(context: viewContext)
+        alerts.append(alert)
+        Task {
+            await Logger.shared.info("✅ Added alert: \(alert.alertType.displayName) for \(alert.symbol ?? "portfolio")")
         }
     }
 
@@ -166,7 +153,7 @@ class PriceAlertService: ObservableObject {
             for alert in results {
                 viewContext.delete(alert)
             }
-            try viewContext.save()
+            coreDataStack.save(context: viewContext)
             
             alerts.removeAll { $0.id == id }
             Task {
@@ -187,7 +174,7 @@ class PriceAlertService: ObservableObject {
             let results = try viewContext.fetch(fetchRequest)
             if let alertEntity = results.first {
                 alertEntity.isEnabled.toggle()
-                try viewContext.save()
+                coreDataStack.save(context: viewContext)
                 
                 // Update in-memory alerts array
                 if let index = alerts.firstIndex(where: { $0.id == id }) {
@@ -388,7 +375,7 @@ class PriceAlertService: ObservableObject {
             let results = try viewContext.fetch(fetchRequest)
             if let alertEntity = results.first {
                 alertEntity.lastTriggered = Date()
-                try viewContext.save()
+                coreDataStack.save(context: viewContext)
                 
                 // Update in-memory alerts array
                 if let index = alerts.firstIndex(where: { $0.id == alertId }) {

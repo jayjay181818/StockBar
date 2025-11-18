@@ -15,6 +15,7 @@ struct CandlestickChartView: View {
     let data: [OHLCDataPoint]
     let currency: String
     let settings: CandlestickChartSettings
+    let symbol: String?
 
     @State private var selectedCandle: OHLCDataPoint?
     @State private var showVolume: Bool = true
@@ -27,10 +28,20 @@ struct CandlestickChartView: View {
 
     // Interaction features (v2.3.1)
     @StateObject private var interactionManager = ChartInteractionManager()
-    @StateObject private var annotationManager = AnnotationManager()
+    @ObservedObject private var annotationService = ChartAnnotationService.shared
+    
     @State private var showAnnotationEditor = false
+    @State private var selectedAnnotation: ChartAnnotation?
 
     private let indicatorService = TechnicalIndicatorService.shared
+
+    // Initializer to allow symbol to be optional
+    init(data: [OHLCDataPoint], currency: String, settings: CandlestickChartSettings, symbol: String? = nil) {
+        self.data = data
+        self.currency = currency
+        self.settings = settings
+        self.symbol = symbol
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,6 +145,27 @@ struct CandlestickChartView: View {
                     RuleMark(x: .value("Time", candle.timestamp))
                         .foregroundStyle(.secondary.opacity(0.5))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                }
+            }
+            
+            // Annotations
+            if let currentSymbol = symbol {
+                ForEach(annotationService.getAnnotations(for: currentSymbol)) { annotation in
+                    PointMark(
+                        x: .value("Time", annotation.date),
+                        y: .value("Price", annotation.price)
+                    )
+                    .symbol {
+                        AnnotationMarkView(annotation: annotation)
+                    }
+                    .annotation(position: .top) {
+                        Text(annotation.text)
+                            .font(.caption2)
+                            .foregroundColor(annotation.color)
+                            .padding(2)
+                            .background(Color(.windowBackgroundColor).opacity(0.7))
+                            .cornerRadius(4)
+                    }
                 }
             }
 
@@ -265,35 +297,48 @@ struct CandlestickChartView: View {
                 CrosshairOverlay(position: position, chartBounds: .zero)
             }
         }
-        .overlay {
-            // Annotations overlay (v2.3.1)
-            AnnotationsOverlay(annotationManager: annotationManager, showEditor: $showAnnotationEditor)
-        }
         .chartGestures(interactionManager: interactionManager)
         .contextMenu {
             Button("Add Annotation") {
-                if let position = interactionManager.crosshairPosition {
-                    let annotation = ChartAnnotation(
-                        type: .text,
-                        position: position,
-                        text: "New Note"
-                    )
-                    annotationManager.addAnnotation(annotation)
+                if let position = interactionManager.crosshairPosition,
+                   let currentSymbol = symbol {
+                    // We need to convert position to Date/Price.
+                    // InteractionManager should ideally have mapped this, 
+                    // or we need ChartProxy here.
+                    // Without ChartProxy access in context menu action, it's hard.
+                    // BUT interactionManager tracks crosshairPosition. 
+                    // We can use selectedCandle if available as the anchor.
+                    
+                    if let candle = selectedCandle {
+                        let annotation = ChartAnnotation(
+                            type: .text,
+                            date: candle.timestamp,
+                            price: candle.close, // or high/low
+                            text: "New Note",
+                            symbol: currentSymbol
+                        )
+                        annotationService.addAnnotation(annotation)
+                    }
                 }
             }
             Button("Clear Annotations") {
-                annotationManager.clearAnnotations()
+                if let currentSymbol = symbol {
+                    annotationService.clearAnnotations(for: currentSymbol)
+                }
             }
             Button("Reset Zoom") {
                 interactionManager.resetZoom()
             }
         }
         .sheet(isPresented: $showAnnotationEditor) {
-            if let selected = annotationManager.selectedAnnotation {
+            if let selected = selectedAnnotation {
                 AnnotationEditorView(
-                    annotation: .init(
+                    annotation: Binding(
                         get: { selected },
-                        set: { annotationManager.updateAnnotation($0) }
+                        set: { updated in
+                            annotationService.updateAnnotation(updated)
+                            selectedAnnotation = updated
+                        }
                     ),
                     isPresented: $showAnnotationEditor
                 )
@@ -566,6 +611,29 @@ struct CandlestickChartView: View {
     }
 }
 
+// MARK: - Annotation Mark View
+struct AnnotationMarkView: View {
+    let annotation: ChartAnnotation
+    
+    var body: some View {
+        Group {
+            switch annotation.type {
+            case .text:
+                Image(systemName: "text.bubble.fill")
+            case .earningsMarker:
+                Image(systemName: "dollarsign.circle.fill")
+            case .note:
+                Image(systemName: "note.text")
+            case .buyMarker:
+                Image(systemName: "arrow.up.circle.fill")
+            case .sellMarker:
+                Image(systemName: "arrow.down.circle.fill")
+            }
+        }
+        .foregroundColor(annotation.color)
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
@@ -589,7 +657,8 @@ struct CandlestickChartView: View {
     return CandlestickChartView(
         data: sampleData,
         currency: "USD",
-        settings: CandlestickChartSettings()
+        settings: CandlestickChartSettings(),
+        symbol: "AAPL"
     )
     .frame(height: 500)
     .padding()

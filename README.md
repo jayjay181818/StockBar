@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.3.2** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.3.3** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 
@@ -209,7 +209,17 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📋 Release History
 
-### Version 2.3.2 (Current) - Critical Stability Fix
+### Version 2.3.3 (Current) - Infrastructure & Stability Hardening
+- **🧵 Swift 6 Concurrency**: Full MainActor enforcement for UI components, thread-safe data coordination
+- **🔧 Application Lifecycle**: Restored manual entry point with `main.swift` for reliable menu bar initialization
+- **🐍 Python Bridge Robustness**: Buffer overflow protection with incremental output reading via `SafeDataBuffer`
+- **🔄 Refresh Serialization**: `RefreshCoordinator` actor prevents race conditions during simultaneous updates
+- **⚡ Performance Optimizations**: Intelligent chart sampling based on dataset size, refresh guard to prevent overlapping cycles
+- **🌐 Data Source Configuration**: New Data tab for API key management (FMP, Twelve Data), configurable fetch priority with fallbacks (Yahoo Finance, FMP, Twelve Data, Stooq)
+- **🔌 New Data Providers**: Integrated Twelve Data and Stooq historical fetchers with GBX→GBP normalization
+- **🐛 Bug Fixes**: Type safety improvements, compiler warning resolution, actor isolation corrections
+
+### Version 2.3.2 - Critical Stability Fix
 - **🔒 macOS 15.1+ Crash Fix**: Resolved EXC_BAD_ACCESS crashes in menu bar display system
 - **🧠 Memory Management**: Added weak reference captures in Combine subscriptions
 - **🛡️ Defensive Programming**: Implemented proper cleanup and nil checks
@@ -309,4 +319,4 @@ StockBar v2.3.2 delivers professional-grade performance:
 
 **Built with ❤️ using Swift 6.0 and modern macOS technologies**
 
-*Last updated: November 10, 2025 - Version 2.3.2*
+*Last updated: November 18, 2025 - Version 2.3.3*

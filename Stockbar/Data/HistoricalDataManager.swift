@@ -2312,7 +2312,7 @@ class HistoricalDataManager: ObservableObject {
     // MARK: - Enhanced Retroactive Portfolio Calculation
     
     /// Main method to trigger retroactive portfolio calculation
-    func calculateRetroactivePortfolioHistory(using dataModel: DataModel) async {
+    func calculateRetroactivePortfolioHistory(using dataModel: DataModel, force: Bool = false) async {
         // CRITICAL FIX: Prevent concurrent calculation overlaps
         guard !isCalculationInProgress else {
             await logger.warning("🔄 RETROACTIVE: Calculation already in progress, skipping duplicate request") 
@@ -2325,7 +2325,7 @@ class HistoricalDataManager: ObservableObject {
             isCalculationInProgress = false
         }
         
-        await logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation") 
+        await logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation (force: \(force))") 
         
         // Initialize progress tracking
         let calculationManager = await BackgroundCalculationManager.shared
@@ -2338,10 +2338,16 @@ class HistoricalDataManager: ObservableObject {
             
             // Check if portfolio composition has changed
             await calculationManager.updateProgress(completed: 20, status: "Checking for portfolio changes")
-            let needsFullRecalculation = hasPortfolioCompositionChanged(newComposition)
+            let compositionChanged = hasPortfolioCompositionChanged(newComposition)
+            let needsFullRecalculation = force || compositionChanged
             
             if needsFullRecalculation {
-                await logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed") 
+                if force {
+                    await logger.info("🔄 RETROACTIVE: Forced full recalculation requested")
+                } else {
+                    await logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
+                }
+                
                 await calculationManager.updateProgress(completed: 30, status: "Starting full recalculation")
                 await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
             } else {

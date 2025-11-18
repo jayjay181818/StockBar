@@ -19,7 +19,7 @@ final class BackfillScheduler {
     // MARK: - Properties
 
     private let logger = Logger.shared
-    private nonisolated let historicalDataManager = HistoricalDataManager.shared
+    private var historicalDataManager: HistoricalDataManager { HistoricalDataManager.shared }
 
     private var startupTimer: Timer?
     private var dailyCheckTimer: Timer?

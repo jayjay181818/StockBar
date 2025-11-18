@@ -11,6 +11,7 @@ protocol NetworkService {
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
     func fetchOHLCData(for symbol: String, period: String, interval: String) async throws -> [OHLCSnapshot]
     func fetchBatchOHLCData(for symbols: [String], period: String, interval: String) async throws -> [String: [OHLCSnapshot]]
+    func verifyAPIKey(service: String) async throws -> Bool
 }
 
 // MARK: - Network Error Enum (Extended for script execution)
@@ -26,6 +27,7 @@ enum NetworkError: LocalizedError {
     case invalidSymbol(String)
     case networkError(String)
     case apiKeyInvalid
+    case apiKeyRestricted
     case timeout(String)
     case unknownError(String)
 
@@ -56,6 +58,8 @@ enum NetworkError: LocalizedError {
             return "Network error: \(details)"
         case .apiKeyInvalid:
             return "API key is invalid or unauthorized. Please check your configuration."
+        case .apiKeyRestricted:
+            return "API key valid but plan restricted. This data requires a higher tier FMP plan (e.g. for international exchanges)."
         case .timeout(let details):
             return "Request timed out: \(details)"
         case .unknownError(let details):
@@ -90,6 +94,8 @@ enum NetworkError: LocalizedError {
             return "Network connection error. Check your internet connection."
         case .apiKeyInvalid:
             return "API key invalid. Please update in Preferences."
+        case .apiKeyRestricted:
+            return "Plan restriction. Upgrade FMP plan for this data."
         case .timeout:
             return "Request timed out. Try again or check your connection."
         case .unknownError:
@@ -101,9 +107,8 @@ enum NetworkError: LocalizedError {
 // MARK: - Python Script Service
 class PythonNetworkService: NetworkService {
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
-    // Default interpreter path; adjust if necessary
-    private let pythonInterpreterPath = "/usr/bin/python3"
     private let scriptName = "get_stock_data.py"
+    private let config = PythonConfiguration.load()
 
     /// Parse JSON error from Python script output
     private func parseError(from output: String) throws {
@@ -131,6 +136,8 @@ class PythonNetworkService: NetworkService {
                     throw NetworkError.networkError(message)
                 case "API_KEY_INVALID":
                     throw NetworkError.apiKeyInvalid
+                case "API_KEY_RESTRICTED":
+                    throw NetworkError.apiKeyRestricted
                 case "TIMEOUT":
                     throw NetworkError.timeout(message)
                 case "NO_DATA":
@@ -155,13 +162,13 @@ class PythonNetworkService: NetworkService {
         }
         await logger.debug("Found script at path: \(scriptPath)")
 
-        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = [scriptPath, symbol]
 
         let outputPipe = Pipe()
@@ -217,7 +224,7 @@ class PythonNetworkService: NetworkService {
             // Try to parse the single line success output (legacy format)
             // Example: "AAPL @ 2023-10-27 15:55:00-04:00 | 5m Low: 167.01, High: 167.09, Close: 167.02, PrevClose: 165.50"
             // CRITICAL FIX: Replace force unwrap with safe optional binding
-            guard let regex = try? NSRegularExpression(pattern: "Close: (\\\\d+\\\\.\\\\d+), PrevClose: (\\\\d+\\\\.\\\\d+)") else {
+            guard let regex = try? NSRegularExpression(pattern: "Close: (\\d+\\.\\d+), PrevClose: (\\d+\\.\\d+)") else {
                 await logger.error("Failed to create regex pattern for parsing script output for \(symbol)")
                 throw NetworkError.invalidResponse("Unable to create regex pattern for parsing")
             }
@@ -265,13 +272,13 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.scriptNotFound(scriptName)
         }
 
-        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         // Use multiple symbols to trigger JSON output format
         process.arguments = [scriptPath, symbol, symbol] // Duplicate symbol to trigger batch mode
 
@@ -478,6 +485,26 @@ class PythonNetworkService: NetworkService {
         return results
     }
     
+    // MARK: - Helper Classes
+    
+    /// Thread-safe buffer for capturing process output
+    final class SafeDataBuffer: @unchecked Sendable {
+        private var data = Data()
+        private let lock = NSLock()
+        
+        func append(_ newData: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            data.append(newData)
+        }
+        
+        var contents: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
+    }
+
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] {
         await logger.info("🐍 PYTHON SCRIPT: Starting historical data fetch for \(symbol)")
         
@@ -491,9 +518,9 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.scriptNotFound(scriptName)
         }
         
-        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
         
         // Format dates for Python script (YYYY-MM-DD)
@@ -505,10 +532,10 @@ class PythonNetworkService: NetworkService {
         await logger.info("🐍 PYTHON SCRIPT: Formatted dates - start: \(startDateString), end: \(endDateString)")
         
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
         
-        await logger.info("🐍 PYTHON SCRIPT: Command: \(pythonInterpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
+        await logger.info("🐍 PYTHON SCRIPT: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
         
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -530,26 +557,20 @@ class PythonNetworkService: NetworkService {
             
             // Read data incrementally to avoid pipe buffer overflow (65KB limit)
             // Use readability handler approach for reliable streaming
-            var outputData = Data()
-            var errorData = Data()
-            let outputLock = NSLock()
-            let errorLock = NSLock()
+            let outputBuffer = SafeDataBuffer()
+            let errorBuffer = SafeDataBuffer()
 
             outputPipe.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if !chunk.isEmpty {
-                    outputLock.lock()
-                    outputData.append(chunk)
-                    outputLock.unlock()
+                    outputBuffer.append(chunk)
                 }
             }
 
             errorPipe.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if !chunk.isEmpty {
-                    errorLock.lock()
-                    errorData.append(chunk)
-                    errorLock.unlock()
+                    errorBuffer.append(chunk)
                 }
             }
 
@@ -563,20 +584,22 @@ class PythonNetworkService: NetworkService {
             // Read any remaining buffered data
             let remainingOutput = outputPipe.fileHandleForReading.availableData
             if !remainingOutput.isEmpty {
-                outputData.append(remainingOutput)
+                outputBuffer.append(remainingOutput)
             }
             let remainingError = errorPipe.fileHandleForReading.availableData
             if !remainingError.isEmpty {
-                errorData.append(remainingError)
+                errorBuffer.append(remainingError)
             }
             
             let exitCode = process.terminationStatus
             await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
             
+            let errorData = errorBuffer.contents
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("🐍 PYTHON SCRIPT: Debug output for \(symbol): \(err)")
             }
             
+            let outputData = outputBuffer.contents
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
                 await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
@@ -676,16 +699,16 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.scriptNotFound(scriptName)
         }
 
-        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
 
-        await logger.info("📊 OHLC: Command: \(pythonInterpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
+        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -796,18 +819,18 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.scriptNotFound(scriptName)
         }
 
-        guard FileManager.default.fileExists(atPath: pythonInterpreterPath) else {
-            await logger.error("Python interpreter not found at \(pythonInterpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(pythonInterpreterPath)
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonInterpreterPath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
         args.append(contentsOf: symbols)
         process.arguments = args
 
-        await logger.info("📊 OHLC BATCH: Command: \(pythonInterpreterPath) \(args.joined(separator: " "))")
+        await logger.info("📊 OHLC BATCH: Command: \(config.interpreterPath) \(args.joined(separator: " "))")
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -905,6 +928,76 @@ class PythonNetworkService: NetworkService {
             throw netErr
         } catch {
             await logger.error("📊 OHLC BATCH: Failed to run Python script: \(error.localizedDescription)")
+            throw NetworkError.scriptExecutionError(error.localizedDescription)
+        }
+    }
+    
+    /// Verifies the API key for a specific service by running a test fetch
+    /// - Parameter service: Service identifier (e.g., "fmp", "twelvedata")
+    /// - Returns: Boolean indicating if the key is valid
+    func verifyAPIKey(service: String) async throws -> Bool {
+        await logger.info("🔑 VERIFY: Starting verification for \(service)")
+        
+        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
+            await logger.error("Script '\(scriptName)' not found in bundle.")
+            throw NetworkError.scriptNotFound(scriptName)
+        }
+        
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            await logger.error("Python interpreter not found at \(config.interpreterPath)")
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+        }
+        
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
+        process.arguments = [scriptPath, "--test-key", service]
+        
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        
+        do {
+            try process.run()
+            
+            // Timeout protection (30 seconds)
+            let timeoutTask = Task {
+                try await Task.sleep(for: .seconds(30))
+                if process.isRunning {
+                    await logger.warning("🔑 VERIFY: Timeout reached, terminating process")
+                    process.terminate()
+                }
+            }
+            
+            process.waitUntilExit()
+            timeoutTask.cancel()
+            
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            
+            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+                await logger.warning("🔑 VERIFY: stdout is empty.")
+                throw NetworkError.noData("Empty output from verification script")
+            }
+            
+            await logger.info("🔑 VERIFY: Output: \(output)")
+            
+            // Parse JSON result
+            guard let jsonData = output.data(using: .utf8) else {
+                throw NetworkError.invalidResponse("Could not convert verification output to data")
+            }
+            
+            if let result = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+               let success = result["success"] as? Bool {
+                if let message = result["message"] as? String {
+                    await logger.info("🔑 VERIFY: Result message: \(message)")
+                }
+                return success
+            }
+            
+            return false
+            
+        } catch {
+            await logger.error("🔑 VERIFY: Failed to run script: \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }

@@ -136,6 +136,8 @@ class PortfolioManager {
 
 struct PreferenceRow: View {
     @ObservedObject var realTimeTrade: RealTimeTrade
+    // Add DataModel dependency to trigger saves
+    @ObservedObject var dataModel: DataModel
     @State private var showCurrencyPicker = false
     @State private var validationError: String? = nil
 
@@ -185,6 +187,8 @@ struct PreferenceRow: View {
                         .frame(minWidth: 60, idealWidth: 80, maxWidth: 120)
                         .onChange(of: realTimeTrade.trade.name) { _ in
                             validateInput()
+                            // Trigger save on change
+                            dataModel.triggerTradeUpdate()
                         }
                     if !symbolIsValid && !realTimeTrade.trade.name.isEmpty {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -200,6 +204,8 @@ struct PreferenceRow: View {
                         .frame(minWidth: 50, idealWidth: 70, maxWidth: 100)
                         .onChange(of: realTimeTrade.trade.position.unitSizeString) { _ in
                             validateInput()
+                            // Trigger save on change
+                            dataModel.triggerTradeUpdate()
                         }
                     if !unitsIsValid && !realTimeTrade.trade.position.unitSizeString.isEmpty {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -216,6 +222,8 @@ struct PreferenceRow: View {
                             .frame(minWidth: 80, idealWidth: 120)
                             .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _ in
                                 validateInput()
+                                // Trigger save on change
+                                dataModel.triggerTradeUpdate()
                             }
                         if !costIsValid && !realTimeTrade.trade.position.positionAvgCostString.isEmpty {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -248,6 +256,8 @@ struct PreferenceRow: View {
                             Button(action: {
                                 realTimeTrade.trade.position.costCurrency = currency
                                 showCurrencyPicker = false
+                                // Trigger save on change
+                                dataModel.triggerTradeUpdate()
                             }) {
                                 HStack {
                                     Text(currency)
@@ -280,6 +290,8 @@ struct PreferenceRow: View {
                 // Watchlist toggle
                 Button(action: {
                     realTimeTrade.trade.isWatchlistOnly.toggle()
+                    // Trigger save on change
+                    dataModel.triggerTradeUpdate()
                 }) {
                     Image(systemName: realTimeTrade.trade.isWatchlistOnly ? "eye.fill" : "eye")
                         .foregroundColor(realTimeTrade.trade.isWatchlistOnly ? .secondary : .blue)
@@ -393,6 +405,7 @@ struct PreferenceView: View {
                     Text("Charts").tag(PreferenceTab.charts)
                     Text("Risk").tag(PreferenceTab.risk)
                     Text("Analytics").tag(PreferenceTab.analytics)
+                    Text("Data").tag(PreferenceTab.dataSources)
                     Text("Debug").tag(PreferenceTab.debug)
                 }
                 .pickerStyle(SegmentedPickerStyle())
@@ -420,6 +433,8 @@ struct PreferenceView: View {
                 case .analytics:
                     analyticsView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .dataSources:
+                    dataSourcesView
                 case .debug:
                     debugView
                 }
@@ -628,73 +643,21 @@ struct PreferenceView: View {
             // API Key management section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Financial Modeling Prep API Key:")
-                        .font(.headline)
-                    Spacer()
-                    Button("Get Free API Key") {
-                        NSWorkspace.shared.open(URL(string: "https://financialmodelingprep.com/")!)
-                    }
-                    .foregroundColor(.blue)
-                }
-                
-                HStack {
-                    Group {
-                        if isAPIKeyVisible {
-                            TextField("Enter your FMP API key", text: $apiKey)
-                        } else {
-                            SecureField("Enter your FMP API key", text: $apiKey)
-                        }
-                    }
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onAppear {
-                        apiKey = configManager.getFMPAPIKey() ?? ""
-                    }
-                    .help("Paste your FMP API key here. It will be stored securely in your Documents folder.")
-                    
-                    Button(action: {
-                        isAPIKeyVisible.toggle()
-                    }) {
-                        Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
-                    }
-                    .help(isAPIKeyVisible ? "Hide API key" : "Show API key")
-                    .buttonStyle(BorderlessButtonStyle())
-                    
-                    Button("Save & Test") {
-                        saveAndTestAPIKey()
-                    }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("Save API key and test its validity")
-                    
-                    Button("Clear") {
-                        clearAPIKey()
-                    }
-                    .foregroundColor(.red)
-                }
-                
-                // API key status
-                HStack {
-                    if let storedKey = configManager.getFMPAPIKey(), !storedKey.isEmpty {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text("API key configured")
+                    VStack(alignment: .leading) {
+                        Text("Data Sources & API Keys")
+                            .font(.headline)
+                        Text("Manage API keys and fetch priorities in the Data tab.")
                             .font(.caption)
-                            .foregroundColor(.green)
-                    } else {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("API key required for historical data")
-                            .font(.caption)
-                            .foregroundColor(.orange)
+                            .foregroundColor(.secondary)
                     }
                     Spacer()
-                    
-                    if configManager.configFileExists() {
-                        Button("Show Config File") {
-                            showConfigFile()
-                        }
-                        .font(.caption)
+                    Button("Go to Data Settings") {
+                        selectedTab = .dataSources
                     }
                 }
+                .padding(.vertical, 4)
+                
+                Divider()
                 
                 // Historical data backfill section
                 VStack(alignment: .leading, spacing: 8) {
@@ -979,7 +942,7 @@ struct PreferenceView: View {
                         }) {
                             Text("-")
                         }
-                        PreferenceRow(realTimeTrade: item)
+                        PreferenceRow(realTimeTrade: item, dataModel: userdata)
                         Button(action: {
                             let emptyTrade = emptyRealTimeTrade()
                             if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
@@ -1214,6 +1177,10 @@ struct PreferenceView: View {
 
     private var analyticsView: some View {
         PortfolioAnalyticsView(dataModel: userdata)
+    }
+
+    private var dataSourcesView: some View {
+        DataSourcesSettingsView(dataModel: userdata)
     }
 
     private var debugView: some View {
@@ -2417,6 +2384,7 @@ enum PreferenceTab {
     case risk
     case analytics
     case debug
+    case dataSources
 }
 
 struct DebugLogView: View {

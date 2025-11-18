@@ -16,82 +16,92 @@ public class ConfigurationManager {
         return documentsPath.appendingPathComponent(".stockbar_config.json")
     }
 
-    // MARK: - Public API
+    // MARK: - Generic Helper
 
-    /// Gets the FMP API key from configuration file
-    public func getFMPAPIKey() -> String? {
+    private func getConfig() -> [String: Any] {
         guard let configFileURL = getConfigFileURL(),
               fileManager.fileExists(atPath: configFileURL.path) else {
-            return nil
+            return [:]
         }
 
         do {
             let data = try Data(contentsOf: configFileURL)
-            let config = try JSONSerialization.jsonObject(with: data, options: []) as? [String: String] ?? [:]
-            return config["FMP_API_KEY"]
+            return try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] ?? [:]
         } catch {
             Task { await Logger.shared.error("Failed to load configuration: \(error.localizedDescription)") }
-            return nil
+            return [:]
         }
     }
 
-    /// Sets the FMP API key in configuration file
-    public func setFMPAPIKey(_ apiKey: String) {
-        guard let configFileURL = getConfigFileURL() else {
-            Task { await Logger.shared.error("Failed to get configuration file URL") }
-            return
-        }
+    private func saveConfig(_ config: [String: Any]) {
+        guard let configFileURL = getConfigFileURL() else { return }
 
-        // Load existing config or create new one
-        var config: [String: String] = [:]
-        if fileManager.fileExists(atPath: configFileURL.path) {
-            do {
-                let data = try Data(contentsOf: configFileURL)
-                config = try JSONSerialization.jsonObject(with: data, options: []) as? [String: String] ?? [:]
-            } catch {
-                Task { await Logger.shared.warning("Failed to load existing config, creating new: \(error.localizedDescription)") }
-            }
-        }
-
-        // Update API key
-        config["FMP_API_KEY"] = apiKey
-
-        // Save config
         do {
-            let data = try JSONSerialization.data(withJSONObject: config, options: .prettyPrinted)
+            let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: configFileURL, options: .atomic)
-            Task { await Logger.shared.info("FMP API key updated successfully") }
+            Task { await Logger.shared.info("Configuration updated successfully") }
         } catch {
             Task { await Logger.shared.error("Failed to save configuration: \(error.localizedDescription)") }
         }
     }
+    
+    // MARK: - FMP API Key
+
+    /// Gets the FMP API key from configuration file
+    public func getFMPAPIKey() -> String? {
+        return getConfig()["FMP_API_KEY"] as? String
+    }
+
+    /// Sets the FMP API key in configuration file
+    public func setFMPAPIKey(_ apiKey: String) {
+        var config = getConfig()
+        config["FMP_API_KEY"] = apiKey
+        saveConfig(config)
+    }
 
     /// Removes the FMP API key from configuration file
     public func removeFMPAPIKey() {
-        guard let configFileURL = getConfigFileURL(),
-              fileManager.fileExists(atPath: configFileURL.path) else {
-            return
-        }
-
-        do {
-            let data = try Data(contentsOf: configFileURL)
-            var config = try JSONSerialization.jsonObject(with: data, options: []) as? [String: String] ?? [:]
-            config.removeValue(forKey: "FMP_API_KEY")
-
-            if config.isEmpty {
-                // Remove file if empty
-                try fileManager.removeItem(at: configFileURL)
-                Task { await Logger.shared.info("Configuration file removed (was empty)") }
-            } else {
-                // Save updated config
-                let newData = try JSONSerialization.data(withJSONObject: config, options: .prettyPrinted)
-                try newData.write(to: configFileURL, options: .atomic)
-                Task { await Logger.shared.info("FMP API key removed") }
-            }
-        } catch {
-            Task { await Logger.shared.error("Failed to remove API key: \(error.localizedDescription)") }
-        }
+        var config = getConfig()
+        config.removeValue(forKey: "FMP_API_KEY")
+        saveConfig(config)
     }
+    
+    // MARK: - Twelve Data API Key
+    
+    /// Gets the Twelve Data API key from configuration file
+    public func getTwelveDataAPIKey() -> String? {
+        return getConfig()["TWELVE_DATA_API_KEY"] as? String
+    }
+
+    /// Sets the Twelve Data API key in configuration file
+    public func setTwelveDataAPIKey(_ apiKey: String) {
+        var config = getConfig()
+        config["TWELVE_DATA_API_KEY"] = apiKey
+        saveConfig(config)
+    }
+    
+    /// Removes the Twelve Data API key from configuration file
+    public func removeTwelveDataAPIKey() {
+        var config = getConfig()
+        config.removeValue(forKey: "TWELVE_DATA_API_KEY")
+        saveConfig(config)
+    }
+    
+    // MARK: - Data Source Priority
+    
+    /// Gets the data source priority list
+    public func getDataSourcePriority() -> [String]? {
+        return getConfig()["DATA_SOURCE_PRIORITY"] as? [String]
+    }
+    
+    /// Sets the data source priority list
+    public func setDataSourcePriority(_ priority: [String]) {
+        var config = getConfig()
+        config["DATA_SOURCE_PRIORITY"] = priority
+        saveConfig(config)
+    }
+
+    // MARK: - File Management
 
     /// Gets the configuration file path for display
     public func getConfigFilePath() -> String? {
@@ -111,17 +121,14 @@ public class ConfigurationManager {
             return
         }
 
-        let sampleConfig: [String: String] = [
-            "FMP_API_KEY": "your_api_key_here",
-            "_comment": "Replace 'your_api_key_here' with your actual Financial Modeling Prep API key"
+        let sampleConfig: [String: Any] = [
+            "FMP_API_KEY": "your_fmp_api_key_here",
+            "TWELVE_DATA_API_KEY": "your_twelve_data_api_key_here",
+            "DATA_SOURCE_PRIORITY": ["yfinance", "fmp", "twelvedata", "stooq"],
+            "_comment": "Replace 'your_api_key_here' with your actual API keys. DATA_SOURCE_PRIORITY determines the order of fetch attempts."
         ]
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: sampleConfig, options: .prettyPrinted)
-            try data.write(to: configFileURL, options: .atomic)
-            Task { await Logger.shared.info("Sample configuration file created at: \(configFileURL.path)") }
-        } catch {
-            Task { await Logger.shared.error("Failed to create sample configuration file: \(error.localizedDescription)") }
-        }
+        saveConfig(sampleConfig)
+        Task { await Logger.shared.info("Sample configuration file created at: \(configFileURL.path)") }
     }
 }

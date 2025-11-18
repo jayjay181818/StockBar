@@ -894,10 +894,16 @@ struct PerformanceChartView: View {
                 }
                 .frame(height: 300)
             } else {
-                CandlestickChartView(
+                    CandlestickChartView(
                     data: ohlcData,
                     currency: getDisplayCurrency(),
-                    settings: candlestickSettings
+                    settings: candlestickSettings,
+                    symbol: {
+                        if case .individualStock(let symbol) = selectedChartType {
+                            return symbol
+                        }
+                        return nil
+                    }()
                 )
                 .frame(height: 400)
             }
