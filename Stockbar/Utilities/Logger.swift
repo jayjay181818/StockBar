@@ -285,11 +285,12 @@ public actor Logger {
                 }
             }
 
-            // Also check line count as a secondary measure
-            let content = try String(contentsOf: logFileURL, encoding: .utf8)
-            let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+            let data = try Data(contentsOf: logFileURL)
+            let newlineCount = data.reduce(0) { count, byte in
+                byte == 10 ? count + 1 : count
+            }
 
-            if lines.count > 10000 {
+            if newlineCount > 10000 {
                 rotateLogFiles(currentLogURL: logFileURL)
             }
         } catch {

@@ -194,16 +194,6 @@ class RefreshService {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
         }
 
-        // Filter out symbols that were already refreshed in batch to avoid duplicate alerts
-        let remainingProbeTargets = probeTargets.filter { !successfullyRefreshedSymbols.contains($0.uppercased()) }
-
-        if !remainingProbeTargets.isEmpty {
-            let probeSuccess = await performProbeRefresh(for: remainingProbeTargets, dataModel: dataModel)
-            if probeSuccess {
-                anySuccessfulUpdate = true
-            }
-        }
-
         if anySuccessfulUpdate {
             dataModel.saveTradingInfo()
             Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
