@@ -16,6 +16,7 @@ struct Trade: Codable, Equatable {
     var name: String
     var position: Position
     var isWatchlistOnly: Bool = false  // If true, this is a watch-only stock (no position calculations)
+    var showInMenuBar: Bool = true     // If false, hide from menu bar but keep in portfolio
 }
 
 struct Position: Codable, Equatable {

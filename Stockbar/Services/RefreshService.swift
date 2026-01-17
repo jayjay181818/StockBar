@@ -126,6 +126,9 @@ class RefreshService {
             "About to refresh \(finalSymbolsToRefresh.count) of \(candidateSymbols.count) targeted trades: \(finalSymbolsToRefresh)"
         )
 
+        var anySuccessfulUpdate = false
+        var successfullyRefreshedSymbols: Set<String> = []
+
         do {
             let results = try await networkService.fetchBatchQuotes(for: finalSymbolsToRefresh)
 
@@ -134,7 +137,6 @@ class RefreshService {
                 return
             }
 
-            var anySuccessfulUpdate = false
             let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol.uppercased(), $0) })
 
             let targetedSet = Set(finalSymbolsToRefresh.map { $0.uppercased() })
@@ -150,6 +152,7 @@ class RefreshService {
                         await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
                         await Logger.shared.debug("Updated cache for \(symbol) - successful fetch")
                         anySuccessfulUpdate = true
+                        successfullyRefreshedSymbols.insert(symbol.uppercased())
 
                         // Check price alerts after successful update
                         let newPrice = dataModel.realTimeTrades[idx].realTimeInfo.currentPrice
@@ -189,6 +192,31 @@ class RefreshService {
             }
         } catch {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
+        }
+
+        // Filter out symbols that were already refreshed in batch to avoid duplicate alerts
+        let remainingProbeTargets = probeTargets.filter { !successfullyRefreshedSymbols.contains($0.uppercased()) }
+
+        if !remainingProbeTargets.isEmpty {
+            let probeSuccess = await performProbeRefresh(for: remainingProbeTargets, dataModel: dataModel)
+            if probeSuccess {
+                anySuccessfulUpdate = true
+            }
+        }
+
+        if anySuccessfulUpdate {
+            dataModel.saveTradingInfo()
+            Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
+
+            let randomCheck = Int.random(in: 1...100)
+
+            if randomCheck == 1 {
+                // 1% chance trigger retroactive calculation
+                Task {
+                    await Logger.shared.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
+                    await dataModel.historicalDataManager.calculateRetroactivePortfolioHistory(using: dataModel)
+                }
+            }
         }
     }
 
