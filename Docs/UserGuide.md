@@ -1,7 +1,7 @@
 # Stockbar User Guide
 
-**Version:** 2.2.10
-**Last Updated:** October 2025
+**Version:** 2.3.4
+**Last Updated:** January 17, 2026
 
 ---
 
@@ -83,6 +83,20 @@ AAPL: $1,700.00 (+$200.00)
   - 🟢 **Green:** Positive gains
   - 🔴 **Red:** Negative losses
 
+### Portfolio Total Item
+
+Stockbar can also show a portfolio total item in the menu bar:
+
+```
+Portfolio $123,456.78 +$890.12
+```
+
+**Format:** `Portfolio Total (Day Gain/Loss)`
+
+- **Portfolio Total:** Sum of all position values in the selected currency
+- **Day Gain/Loss:** Daily change shown as either currency or percentage (configurable)
+- Configure currency and day-gain format in **Preferences → Portfolio → Portfolio Menu Bar**
+
 ### Dropdown Menu Details
 
 Click any stock item to see detailed information:
@@ -93,6 +107,27 @@ Click any stock item to see detailed information:
 - **Total Gains:** Overall profit/loss since purchase (current value - cost basis)
 - **Day Change:** Today's price movement ($ and %)
 - **Last Updated:** Timestamp of last price update
+- **Connection Status:** If a symbol is suspended, the menu shows retry timing and the last method attempted
+
+The portfolio dropdown also includes a summary line plus a 7-day trend and chart.
+
+### Custom Templates
+
+In **Preferences → Portfolio**, you can now choose **Custom** mode to design your own status bar item using these tokens:
+
+- `{symbol}`: Stock ticker symbol (e.g., AAPL)
+- `{price}`: Current trading price
+- `{change}`: Today's change in value
+- `{changePct}`: Today's percentage change
+- `{currency}`: Currency symbol (e.g., $)
+- `{arrow}`: Up/Down arrow indicating trend
+- `{dayPL}`: Daily Profit/Loss for your position
+- `{totalPL}`: Total Profit/Loss for your position
+- `{marketValue}`: Current market value of your position
+- `{units}`: Number of shares held
+- `{avgCost}`: Your average cost basis
+
+**Example**: `{symbol}: {price} ({dayPL})` -> `AAPL: $150.00 (+$250.00)`
 
 ---
 
@@ -149,6 +184,15 @@ Charts display:
 - **Total Return:** Absolute gain/loss amount and percentage
 - **Value Range:** Min/max portfolio values for period
 - **Volatility:** Risk measure (higher = more price swings)
+
+### Comparison Mode
+
+Compare multiple stocks on the same chart:
+
+1. In the **Charts** tab, select a stock.
+2. Toggle **Comparison Mode**.
+3. Add up to 5 additional symbols to compare relative performance.
+4. Toggle **Normalized (%)** to see percentage growth comparison starting from the same baseline.
 
 ### Data Collection
 
@@ -263,7 +307,7 @@ Access via Preferences → **Debug** tab:
    - Run: `pip3 install --upgrade yfinance`
 5. **Rate Limiting:**
    - Yahoo Finance may temporarily limit requests
-   - Wait 5-10 minutes and try again
+   - Suspended symbols are probed every 2 minutes and auto-resume when data returns
    - Stockbar automatically backs off on errors
 
 **Force Manual Refresh:**
@@ -420,10 +464,10 @@ If you encounter issues not covered in this guide:
 - Core Data (persistence)
 - Swift Charts (visualization)
 
-**Version:** 2.2.10
+**Version:** 2.3.4
 **License:** [License Type]
 **Created by:** [Author Name]
 
 ---
 
-*Last updated: October 2025*
+*Last updated: January 17, 2026*

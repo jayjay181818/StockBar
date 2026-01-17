@@ -1,7 +1,7 @@
 # Stockbar FAQ (Frequently Asked Questions)
 
-**Version:** 2.2.10
-**Last Updated:** October 2025
+**Version:** 2.3.4
+**Last Updated:** January 17, 2026
 
 ---
 
@@ -166,8 +166,9 @@ pip3 install yfinance
 
 #### 3. Rate Limiting
 - **Cause:** Yahoo Finance temporarily limits requests
-- **Solution:** Wait 5-10 minutes, Stockbar will retry automatically
+- **Solution:** Wait a few minutes while Stockbar probes suspended symbols every 2 minutes
 - **Status:** Check Debug tab → Cache Inspector for "Suspended" symbols
+- **Tip:** The menu shows probe failures and the last method attempted
 
 #### 4. Invalid Symbol
 - **Check:** Verify ticker on Yahoo Finance
@@ -472,11 +473,15 @@ If API fails, uses hardcoded fallback rates:
 - Symbol becomes **suspended** for 1 hour
 - Prevents hammering Yahoo Finance API with failing requests
 - Protects against rate limiting
+- While suspended, Stockbar sends a lightweight **probe every 2 minutes**
+- After **3 probe failures**, Stockbar attempts a fallback quote method
+- Probes do **not** increment failure counts
 
 **How to recover:**
 - Wait 1 hour (automatic)
 - Or click **Retry Now** in Cache Inspector
 - Or click **Clear All Caches**
+- Or wait for a probe to succeed (clears suspension)
 
 **Common causes of suspension:**
 - Invalid symbol
@@ -639,27 +644,23 @@ If API fails, uses hardcoded fallback rates:
 
 ## Version History
 
-### v2.2.10 (Current)
-- Added comprehensive unit test coverage
-- Improved debug tools (Cache Inspector, Advanced Tools)
-- Dark mode refinements
+### v2.3.4 (Current)
+- Consolidated refactoring, performance, and stability release
+- Menu bar visibility controls and notification modernization
+- Security hardening for symbol validation
+- Memory, concurrency, and caching improvements
+
+### v2.3.3
+- Swift 6 concurrency enforcement and Python bridge hardening
+- Refresh serialization and new data providers
+
+### v2.3.2
+- Critical macOS 15.1+ crash fix and defensive cleanups
+
+### v2.2.10
+- Comprehensive unit test coverage
+- Debug tools improvements
 - Core Data performance optimizations
-- Python dependency management
-- Enhanced documentation
-
-### v2.2.9
-- Reliability & memory efficiency improvements
-- Enhanced caching system
-- Performance optimizations
-
-### v2.2.8
-- Enhanced menu bar charts
-- Interactive features
-
-### v2.2.7
-- Performance optimizations
-- Enhanced charts
-- Robust data migration
 
 For complete version history, see release notes in repository.
 
@@ -689,5 +690,5 @@ For complete version history, see release notes in repository.
 
 ---
 
-*Last updated: October 2025*
+*Last updated: January 17, 2026*
 *For latest version, see `Docs/FAQ.md` in repository*

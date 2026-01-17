@@ -87,6 +87,21 @@ class DataModel: ObservableObject {
         }
     }
 
+    @Published var portfolioMenuBarDisplaySettings: PortfolioMenuBarDisplaySettings = {
+        let defaultCurrency = UserDefaults.standard.string(forKey: "preferredCurrency") ?? "USD"
+        return PortfolioMenuBarDisplaySettings.load(defaultCurrency: defaultCurrency)
+    }() {
+        didSet {
+            portfolioMenuBarDisplaySettings.save()
+        }
+    }
+
+    @Published var hideAllMenuBarItems: Bool = UserDefaults.standard.bool(forKey: "hideAllMenuBarItems") {
+        didSet {
+            UserDefaults.standard.set(hideAllMenuBarItems, forKey: "hideAllMenuBarItems")
+        }
+    }
+
     private let logger = Logger.shared
 
     @Published var refreshInterval: TimeInterval = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
