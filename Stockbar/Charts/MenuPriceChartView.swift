@@ -1,5 +1,5 @@
 import SwiftUI
-import Charts
+// import Charts
 import Combine
 
 enum MenuChartTimeRange: String, CaseIterable {
@@ -70,8 +70,9 @@ class MenuChartViewModel: ObservableObject {
                 
                 // Get price snapshots for the symbol within the time range
                 let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
+                let validSnapshots = snapshots.filter { $0.price.isFinite && $0.price > 0 }
                 
-                var dataPoints = snapshots.map { snapshot in
+                var dataPoints = validSnapshots.map { snapshot in
                     MenuChartDataPoint(
                         date: snapshot.timestamp,
                         price: snapshot.price,
@@ -95,6 +96,11 @@ class MenuChartViewModel: ObservableObject {
                     await logger.debug("📊 Added current price endpoint for \(symbol) - using \(dataPoints.count) data points")
                 } else if !currentPrice.isFinite || currentPrice <= 0 {
                     await logger.debug("📊 Invalid current price for \(symbol): \(currentPrice) - chart may not display properly")
+                }
+
+                if dataPoints.count < 2 {
+                    dataPoints = []
+                    await logger.debug("📊 Insufficient valid points for \(symbol); skipping chart render")
                 }
                 
                 await MainActor.run {
@@ -248,70 +254,79 @@ struct MenuPriceChartView: View {
     }
     
     private var chartView: some View {
-        Chart(viewModel.chartData) { dataPoint in
-            LineMark(
-                x: .value("Time", dataPoint.date),
-                y: .value("Price", dataPoint.price)
-            )
-            .foregroundStyle(chartColor)
-            .lineStyle(StrokeStyle(lineWidth: 2.0))
-
-            if let hoveredPoint = hoveredPoint, hoveredPoint.id == dataPoint.id {
-                PointMark(
-                    x: .value("Time", dataPoint.date),
-                    y: .value("Price", dataPoint.price)
+        Canvas { context, size in
+            let points = viewModel.chartData
+            guard points.count >= 2 else { return }
+            
+            let yRange = chartYAxisRange
+            let minPrice = yRange.lowerBound
+            let priceRange = yRange.upperBound - minPrice
+            
+            // Points are sorted by date in ViewModel
+            guard let minDate = points.first?.date.timeIntervalSince1970,
+                  let maxDate = points.last?.date.timeIntervalSince1970 else { return }
+            
+            let dateRange = maxDate - minDate
+            let safePriceRange = priceRange == 0 ? 1.0 : priceRange
+            let safeDateRange = dateRange == 0 ? 1.0 : dateRange
+            
+            func point(at index: Int) -> CGPoint {
+                let p = points[index]
+                let normalizedX = (p.date.timeIntervalSince1970 - minDate) / safeDateRange
+                let normalizedY = (p.price - minPrice) / safePriceRange
+                
+                return CGPoint(
+                    x: normalizedX * size.width,
+                    y: size.height - (normalizedY * size.height) // Flip Y
                 )
-                .foregroundStyle(chartColor)
-                .symbol(.circle)
-                .symbolSize(40)
             }
-        }
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary.opacity(0.3))
-                AxisTick()
-                AxisValueLabel {
-                    if let date = value.as(Date.self) {
-                        Text(formatXAxisDate(date))
-                            .font(.caption2)
-                    }
-                }
+            
+            var path = Path()
+            path.move(to: point(at: 0))
+            
+            for i in 1..<points.count {
+                let current = point(at: i)
+                let previous = point(at: i - 1)
+                
+                // Horizontal Bezier smoothing
+                let midX = previous.x + (current.x - previous.x) / 2
+                let control1 = CGPoint(x: midX, y: previous.y)
+                let control2 = CGPoint(x: midX, y: current.y)
+                
+                path.addCurve(to: current, control1: control1, control2: control2)
             }
+            
+            var fillPath = path
+            fillPath.addLine(to: CGPoint(x: size.width, y: size.height))
+            fillPath.addLine(to: CGPoint(x: 0, y: size.height))
+            fillPath.closeSubpath()
+            
+            context.fill(
+                fillPath,
+                with: .linearGradient(
+                    Gradient(colors: [chartColor.opacity(0.2), chartColor.opacity(0.0)]),
+                    startPoint: CGPoint(x: 0, y: 0),
+                    endPoint: CGPoint(x: 0, y: size.height)
+                )
+            )
+            
+            context.stroke(
+                path,
+                with: .color(chartColor.opacity(0.4)),
+                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+            )
+            
+            context.stroke(
+                path,
+                with: .color(chartColor),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+            )
         }
-        .chartYScale(domain: chartYAxisRange)
-        .chartYAxis {
-            AxisMarks(position: .trailing, values: .stride(by: chartYAxisStride)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary.opacity(0.3))
-                AxisTick()
-                AxisValueLabel {
-                    if let price = value.as(Double.self) {
-                        Text(String(format: "%.2f", price))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-        }
-        .chartPlotStyle { plotArea in
-            plotArea
-                .background(.clear)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.secondary.opacity(0.05))
+        .cornerRadius(8)
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
-        .onTapGesture { location in
-            // Simple tap gesture for point selection
-            let chartWidth: CGFloat = 280 // Full width minus padding (312 - 32)
-            let relativeProgress = location.x / chartWidth
-
-            if relativeProgress >= 0 && relativeProgress <= 1 {
-                let dataIndex = Int(relativeProgress * Double(viewModel.chartData.count - 1))
-                if dataIndex >= 0 && dataIndex < viewModel.chartData.count {
-                    hoveredPoint = viewModel.chartData[dataIndex]
-                }
-            }
-        }
     }
     
     private var chartColor: Color {
