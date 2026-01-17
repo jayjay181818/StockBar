@@ -3,9 +3,9 @@ import Combine
 import Cocoa
 
 @MainActor
-class StockMenuBarController {
+class StockMenuBarController: NSObject {
     // MARK: - Properties
-    private var cancellables: AnyCancellable?
+    private var cancellables = Set<AnyCancellable>()
     private let statusBar: StockStatusBar
     private let data: DataModel
     private var preferenceWindowController: PreferenceWindowController?
@@ -42,12 +42,50 @@ class StockMenuBarController {
     // MARK: - Private Methods
     
     private func setupDataBinding() {
-        self.cancellables = self.data.$realTimeTrades
+        self.data.$realTimeTrades
             .receive(on: DispatchQueue.main)
             .sink { [weak self] realTimeTrades in
                 self?.updateSymbolItemsFromUserData(realTimeTrades: realTimeTrades)
                 self?.updatePortfolioSummary()
             }
+            .store(in: &cancellables)
+
+        self.data.$portfolioMenuBarDisplaySettings
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updatePortfolioSummary()
+            }
+            .store(in: &cancellables)
+
+        self.data.$showColorCoding
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updatePortfolioSummary()
+            }
+            .store(in: &cancellables)
+
+        self.data.$preferredCurrency
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updatePortfolioSummary()
+            }
+            .store(in: &cancellables)
+
+        self.data.$hideAllMenuBarItems
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.updateSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .menuBarVisibilityChanged)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.updateSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
+            }
+            .store(in: &cancellables)
     }
     
     func constructMainItem() {
@@ -59,14 +97,20 @@ class StockMenuBarController {
     
     private func updateSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
         Task { await logger.debug("🔧 CONTROLLER: Updating symbol items, count: \(realTimeTrades.count)") }
-        Task { await logger.debug("🔧 CONTROLLER: Symbols: \(realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
 
         statusBar.removeAllSymbolItems()
-        for trade in realTimeTrades {
+        
+        guard !data.hideAllMenuBarItems else {
+            Task { await logger.debug("🔧 CONTROLLER: All menu bar items hidden by user preference") }
+            return
+        }
+        
+        let visibleTrades = realTimeTrades.filter { $0.trade.showInMenuBar }
+        for trade in visibleTrades {
             statusBar.constructSymbolItem(from: trade, dataModel: data)
         }
 
-        Task { await logger.debug("🔧 CONTROLLER: Finished creating \(realTimeTrades.count) symbol items") }
+        Task { await logger.debug("🔧 CONTROLLER: Created \(visibleTrades.count) of \(realTimeTrades.count) symbol items (filtered by visibility)") }
     }
 
     private func updatePortfolioSummary() {

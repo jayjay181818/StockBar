@@ -12,6 +12,7 @@ extension Notification.Name {
     static let chartMetricsToggled = Notification.Name("chartMetricsToggled")
     static let refreshIntervalChanged = Notification.Name("refreshIntervalChanged")
     static let realTimeTradesUIUpdateNeeded = Notification.Name("realTimeTradesUIUpdateNeeded")
+    static let menuBarVisibilityChanged = Notification.Name("menuBarVisibilityChanged")
 }
 
 // MARK: - Portfolio Export/Import Data Structure
@@ -637,6 +638,93 @@ struct PreferenceView: View {
             .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
             .cornerRadius(8)
 
+            // Global Menu Bar Visibility
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Menu Bar Visibility")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                Toggle("Show stocks in menu bar", isOn: Binding(
+                    get: { !userdata.hideAllMenuBarItems },
+                    set: { userdata.hideAllMenuBarItems = !$0 }
+                ))
+                .help("Hide all stock items from the menu bar to save space")
+
+                if userdata.hideAllMenuBarItems {
+                    Text("All menu bar items are hidden. Use the dock icon to access Stockbar.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .cornerRadius(8)
+
+            // Portfolio Menu Bar Settings
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Portfolio Menu Bar")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                HStack {
+                    Toggle("Show portfolio total in menu bar", isOn: $userdata.portfolioMenuBarDisplaySettings.isEnabled)
+                    Spacer()
+                }
+
+                HStack {
+                    Text("Currency:")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("", selection: $userdata.portfolioMenuBarDisplaySettings.currencyCode) {
+                        ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
+                            Text(currency).tag(currency)
+                        }
+                    }
+                    .frame(width: 120)
+                    .help("Currency used for the portfolio total in the menu bar")
+                    Spacer()
+                }
+
+                HStack {
+                    Text("Day Gain:")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("", selection: $userdata.portfolioMenuBarDisplaySettings.dayGainFormat) {
+                        ForEach(PortfolioMenuBarDisplaySettings.DayGainFormat.allCases, id: \.self) { format in
+                            Text(format.description).tag(format)
+                        }
+                    }
+                    .frame(width: 180)
+                    .help("Show day gain as currency or percentage")
+                    Spacer()
+                }
+
+                HStack {
+                    Text("Decimal Places:")
+                        .frame(width: 120, alignment: .leading)
+                    Stepper(value: $userdata.portfolioMenuBarDisplaySettings.decimalPlaces, in: 0...4) {
+                        Text("\(userdata.portfolioMenuBarDisplaySettings.decimalPlaces)")
+                            .frame(width: 30)
+                    }
+                    .help("Number of decimal places for portfolio value and day gain")
+                    Spacer()
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Preview:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(userdata.portfolioMenuBarDisplaySettings.samplePreview())
+                        .font(.system(.body, design: .monospaced))
+                        .padding(8)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(4)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+            .cornerRadius(8)
+
             Divider()
                 .padding(.vertical, 8)
 
@@ -934,6 +1022,20 @@ struct PreferenceView: View {
                         Image(systemName: "line.3.horizontal")
                             .foregroundColor(.secondary)
                             .help("Drag to reorder stocks in menu bar")
+                        
+                        // Menu bar visibility toggle
+                        Button(action: {
+                            if let index = self.userdata.realTimeTrades.firstIndex(where: { $0.id == item.id }) {
+                                self.userdata.realTimeTrades[index].trade.showInMenuBar.toggle()
+                                self.userdata.saveTradingInfo()
+                                NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
+                            }
+                        }) {
+                            Image(systemName: item.trade.showInMenuBar ? "menubar.rectangle" : "menubar.arrow.up.rectangle")
+                                .foregroundColor(item.trade.showInMenuBar ? .blue : .secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(item.trade.showInMenuBar ? "Visible in menu bar" : "Hidden from menu bar")
                         
                         Button(action: {
                             if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {

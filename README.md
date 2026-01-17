@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.3.3** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.3.4** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 
@@ -209,7 +209,17 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📋 Release History
 
-### Version 2.3.3 (Current) - Infrastructure & Stability Hardening
+### Version 2.3.4 (Current) - Refactoring, Performance & Stability
+- **📍 Menu Bar Visibility**: Per-stock and global visibility toggles to declutter the menu bar
+- **🎨 Charting Overhaul**: Modularized charting engine with smoother interactions and improved comparison logic
+- **🧠 Memory Management**: LRU cache eviction with normalized cache keys to prevent bloat
+- **⚡ Performance**: UI update coalescing, optimized correlation/attribution calculations
+- **🔐 Security**: Symbol allowlist validation and subprocess input sanitization
+- **🧵 Concurrency**: Thread-safe currency conversion and menu updates
+- **🔔 Modernization**: UserNotifications migration and timer/resource leak fixes
+- **🐛 Bug Fixes**: Duplicate alert deduplication and menu bar stability improvements
+
+### Version 2.3.3 - Infrastructure & Stability Hardening
 - **🧵 Swift 6 Concurrency**: Full MainActor enforcement for UI components, thread-safe data coordination
 - **🔧 Application Lifecycle**: Restored manual entry point with `main.swift` for reliable menu bar initialization
 - **🐍 Python Bridge Robustness**: Buffer overflow protection with incremental output reading via `SafeDataBuffer`
@@ -294,7 +304,7 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📊 Performance Metrics
 
-StockBar v2.3.2 delivers professional-grade performance:
+StockBar v2.3.4 delivers professional-grade performance:
 
 - **CPU Usage**: <5% during normal operation (down from 100%)
 - **Memory Footprint**: <50MB with automatic cleanup under pressure and smart cache promotion
@@ -319,4 +329,4 @@ StockBar v2.3.2 delivers professional-grade performance:
 
 **Built with ❤️ using Swift 6.0 and modern macOS technologies**
 
-*Last updated: November 18, 2025 - Version 2.3.3*
+*Last updated: January 17, 2026 - Version 2.3.4*

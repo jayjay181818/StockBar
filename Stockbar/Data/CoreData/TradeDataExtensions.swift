@@ -17,7 +17,8 @@ extension TradeEntity {
         return Trade(
             name: name ?? "",
             position: position,
-            isWatchlistOnly: isWatchlistOnly
+            isWatchlistOnly: isWatchlistOnly,
+            showInMenuBar: showInMenuBar
         )
     }
     
@@ -36,6 +37,7 @@ extension TradeEntity {
         self.currency = trade.position.currency
         self.costCurrency = trade.position.costCurrency
         self.isWatchlistOnly = trade.isWatchlistOnly
+        self.showInMenuBar = trade.showInMenuBar
         self.lastModified = Date()
     }
 }
