@@ -33,6 +33,7 @@ class StockMenuBarController: NSObject {
     init(data: DataModel) {
         self.data = data
         self.statusBar = StockStatusBar(dataModel: data)
+        super.init()
         constructMainItem()
         // Timer management is now handled by DataModel/RefreshService
         setupDataBinding()
