@@ -38,6 +38,9 @@ class HistoricalDataCoordinator {
     private var backfillNotifications: Bool {
         UserDefaults.standard.bool(forKey: "backfillNotifications")
     }
+
+    private let benchmarkBackfillDays = 30
+    private let benchmarkCoverageThreshold: Double = 0.10
     
     init(networkService: NetworkService, historicalDataManager: HistoricalDataManager) {
         self.networkService = networkService
@@ -180,23 +183,35 @@ class HistoricalDataCoordinator {
             await Task.yield()
             
             let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-            let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= fiveYearsAgo }
+            let isBenchmark = SymbolMetadata.isBenchmarkSymbol(symbol)
+            let baseCoverageStartDate = isBenchmark
+                ? (calendar.date(byAdding: .day, value: -benchmarkBackfillDays, to: today) ?? today)
+                : fiveYearsAgo
+            var coverageStartDate = baseCoverageStartDate
+            var coverageLabel = isBenchmark ? "\(benchmarkBackfillDays)-day benchmark" : "5-year"
+            if let earliestAvailable = historicalDataManager.earliestAvailableDate(for: symbol),
+               earliestAvailable > baseCoverageStartDate {
+                coverageStartDate = earliestAvailable
+                coverageLabel = "\(coverageLabel) since \(DateFormatter.debug.string(from: earliestAvailable))"
+            }
+            let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= coverageStartDate }
             
             // Count unique days with data in the past 5 years
             let uniqueDays = Set(historicalSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
             
-            // Calculate expected business days over 5 years
-            let daysIn5Years = calendar.dateComponents([.day], from: fiveYearsAgo, to: today).day ?? 0
-            let expectedBusinessDays = max(1, daysIn5Years * 5 / 7)
+            // Calculate expected business days over coverage window
+            let daysInRange = calendar.dateComponents([.day], from: coverageStartDate, to: today).day ?? 0
+            let expectedBusinessDays = max(1, daysInRange * 5 / 7)
             
             let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
+            let coverageThreshold = isBenchmark ? benchmarkCoverageThreshold : 0.10
 
             // If we have less than 10% coverage over 5 years, trigger backfill (lowered from 50% for better detection)
-            if coverageRatio < 0.10 {
+            if coverageRatio < coverageThreshold {
                 symbolsNeedingBackfill.append(symbol)
-                await logger.info("📊 COMPREHENSIVE: \(symbol) needs 5-year backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
+                await logger.info("📊 COMPREHENSIVE: \(symbol) needs \(coverageLabel) backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
             } else {
-                await logger.debug("✅ COMPREHENSIVE: \(symbol) has good 5-year coverage - \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
+                await logger.debug("✅ COMPREHENSIVE: \(symbol) has good \(coverageLabel) coverage - \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
             }
         }
         
@@ -261,8 +276,14 @@ class HistoricalDataCoordinator {
     
     /// Backfills historical data for a single symbol in yearly chunks
     private func backfillHistoricalDataForSymbol(_ symbol: String, yearsToFetch: Int) async {
+        if SymbolMetadata.isBenchmarkSymbol(symbol) {
+            await backfillBenchmarkHistory(for: symbol)
+            return
+        }
+
         let calendar = Calendar.current
         let endDate = Date()
+        let earliestAvailableDate = historicalDataManager.earliestAvailableDate(for: symbol)
         
         await logger.info("🔄 CHUNKED BACKFILL: Starting \(yearsToFetch)-year backfill for \(symbol)")
         
@@ -289,7 +310,22 @@ class HistoricalDataCoordinator {
         // Fetch data in yearly chunks, working backwards from current date
         for yearOffset in 1...yearsToFetch {
             let chunkEndDate = calendar.date(byAdding: .year, value: -(yearOffset - 1), to: endDate) ?? endDate
-            let chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
+            var chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
+
+            if let earliestAvailableDate {
+                if chunkEndDate <= earliestAvailableDate {
+                    await logger.info("⏭️ CHUNKED BACKFILL: \(symbol) skipping year \(yearOffset) - reached earliest available data at \(DateFormatter.debug.string(from: earliestAvailableDate))")
+                    break
+                }
+                if chunkStartDate < earliestAvailableDate {
+                    chunkStartDate = earliestAvailableDate
+                }
+            }
+
+            if chunkStartDate >= chunkEndDate {
+                await logger.info("⏭️ CHUNKED BACKFILL: \(symbol) skipping year \(yearOffset) - invalid range after bounds adjustment")
+                continue
+            }
 
             // Check if this chunk has significant gaps
             let daysInChunk = calendar.dateComponents([.day], from: chunkStartDate, to: chunkEndDate).day ?? 0
@@ -309,16 +345,32 @@ class HistoricalDataCoordinator {
             
             await logger.info("📅 CHUNKED BACKFILL: Fetching year \(yearOffset) for \(symbol) (\(chunkExistingDates.count)/\(expectedBusinessDays) days, \(String(format: "%.1f", coverageRatio * 100))% coverage)")
             
-            await fetchHistoricalDataChunk(for: symbol, from: chunkStartDate, to: chunkEndDate, yearOffset: yearOffset)
+            let shouldContinue = await fetchHistoricalDataChunk(for: symbol, from: chunkStartDate, to: chunkEndDate, yearOffset: yearOffset)
+            if !shouldContinue {
+                await logger.info("⏹️ CHUNKED BACKFILL: Stopping older chunks for \(symbol) after reaching earliest available data")
+                break
+            }
             
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         
         await logger.info("✅ CHUNKED BACKFILL: Completed \(yearsToFetch)-year backfill for \(symbol)")
     }
+
+    private func backfillBenchmarkHistory(for symbol: String) async {
+        let calendar = Calendar.current
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -benchmarkBackfillDays, to: endDate) else {
+            await logger.warning("⚠️ BENCHMARK: Unable to compute backfill window for \(symbol)")
+            return
+        }
+
+        await logger.info("🧭 BENCHMARK: Backfilling last \(benchmarkBackfillDays) days for \(symbol)")
+        _ = await fetchHistoricalDataChunk(for: symbol, from: startDate, to: endDate, yearOffset: 1)
+    }
     
     /// Fetches a single chunk of historical data
-    private func fetchHistoricalDataChunk(for symbol: String, from startDate: Date, to endDate: Date, yearOffset: Int) async {
+    private func fetchHistoricalDataChunk(for symbol: String, from startDate: Date, to endDate: Date, yearOffset: Int) async -> Bool {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         
@@ -357,9 +409,22 @@ class HistoricalDataCoordinator {
                 await logger.warning("⚠️ CHUNKED BACKFILL: No data received for \(symbol) chunk \(yearOffset)")
             }
             
+            return true
+        } catch let error as NetworkError {
+            if case let .noData(details) = error,
+               let message = details?.lowercased(),
+               message.contains("no historical data available") {
+                historicalDataManager.recordEarliestAvailableDate(endDate, for: symbol)
+                await logger.warning("⛔️ CHUNKED BACKFILL: \(symbol) reported no historical data prior to \(dateFormatter.string(from: endDate))")
+                return false
+            }
+            await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
+            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
+            return true
         } catch {
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
             await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
+            return true
         }
     }
     
@@ -398,4 +463,3 @@ class HistoricalDataCoordinator {
         NSUserNotificationCenter.default.deliver(notification)
     }
 }
-

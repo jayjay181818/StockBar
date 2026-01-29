@@ -50,6 +50,8 @@ class DataModel: ObservableObject {
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
     private var cancellables = Set<AnyCancellable>()// Keep as is
+    private let tradeContentDidChange = PassthroughSubject<Void, Never>()
+    private var tradeContentCancellables = Set<AnyCancellable>()
     internal var historicalDataManager: HistoricalDataManager { HistoricalDataManager.shared }
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
@@ -199,6 +201,8 @@ class DataModel: ObservableObject {
 
         // Initialize memory optimization
         setupMemoryManagement()
+        
+        ensureBenchmarkTracking()
 
         // NEW: Start enhanced portfolio calculation in background after app startup
         Task { @MainActor in
@@ -312,13 +316,30 @@ class DataModel: ObservableObject {
     
     // MARK: - Migration Methods
     
+    private func isBenchmarkSymbol(_ symbol: String) -> Bool {
+        SymbolMetadata.isBenchmarkSymbol(symbol)
+    }
+    
+    private func isBenchmarkTrade(_ trade: RealTimeTrade) -> Bool {
+        isBenchmarkSymbol(trade.trade.name)
+    }
+    
+    private func removePersistedBenchmarks() {
+        let beforeCount = realTimeTrades.count
+        realTimeTrades.removeAll { isBenchmarkTrade($0) }
+        let removed = beforeCount - realTimeTrades.count
+        if removed > 0 {
+            Task { await logger.info("Removed \(removed) persisted benchmark trades") }
+        }
+    }
+    
     private func migrateCostCurrencyData() {
         var needsSave = false
         
         for trade in realTimeTrades {
             if trade.trade.position.costCurrency == nil {
                 // Auto-detect currency based on symbol
-                let detectedCurrency = trade.trade.name.uppercased().hasSuffix(".L") ? "GBX" : "USD"
+                let detectedCurrency = SymbolMetadata.isUKSymbol(trade.trade.name) ? "GBX" : "USD"
                 trade.trade.position.costCurrency = detectedCurrency
                 needsSave = true
                 Task { await logger.info("Migrated \(trade.trade.name) to use \(detectedCurrency) as cost currency") }
@@ -337,7 +358,7 @@ class DataModel: ObservableObject {
         for trade in realTimeTrades {
             if trade.realTimeInfo.currency == nil {
                 // Auto-detect currency based on symbol
-                let detectedCurrency = trade.trade.name.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+                let detectedCurrency = SymbolMetadata.defaultCurrency(for: trade.trade.name)
                 trade.realTimeInfo.currency = detectedCurrency
                 needsSave = true
                 Task { await logger.info("Migrated real-time info for \(trade.trade.name) to use \(detectedCurrency) currency") }
@@ -378,8 +399,11 @@ class DataModel: ObservableObject {
                 Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(self.realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
 
                 // Apply migrations after loading
+                self.removePersistedBenchmarks()
                 self.migrateCostCurrencyData()
                 self.migrateRealTimeTradesCurrency()
+                
+                self.ensureBenchmarkTracking()
             }
 
             // Kick off an immediate refresh for anything that isn't fresh yet
@@ -416,7 +440,9 @@ class DataModel: ObservableObject {
     
     
     internal func saveTradingInfo() {
-        let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades.map { ($0.trade.name, $0.realTimeInfo) })
+        let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades
+            .filter { !isBenchmarkTrade($0) }
+            .map { ($0.trade.name, $0.realTimeInfo) })
         
         // Move saving to background queue to prevent UI blocking
         Task.detached(priority: .utility) { [weak self, logger] in
@@ -698,17 +724,39 @@ class DataModel: ObservableObject {
     /// which doesn't automatically trigger the @Published realTimeTrades publisher.
     func triggerTradeUpdate() {
         objectWillChange.send()
-        // Force emit current value to trigger debounce pipeline
-        // This is needed because objectWillChange just notifies views, it doesn't feed the $realTimeTrades pipeline directly
-        // We need to manually trigger the save logic
-        
-        // Debounce is handled by the pipeline in setupPublishers if we re-assign or if we had a subject.
-        // Since $realTimeTrades is a Published property, we can't easily force it to emit without changing the value.
-        // Instead, let's add a manual trigger subject.
         tradeUpdateTrigger.send()
+        ensureBenchmarkTracking()
     }
     
+    private func ensureBenchmarkTracking() {
+        var needsRefresh = false
+        
+        for symbol in SymbolMetadata.benchmarkSymbols {
+            if !realTimeTrades.contains(where: { $0.trade.name == symbol }) {
+                let benchmarkTrade = Trade(
+                    name: symbol,
+                    position: Position(unitSize: "0", positionAvgCost: "0"),
+                    isWatchlistOnly: true,
+                    showInMenuBar: false
+                )
+                let rt = RealTimeTrade(trade: benchmarkTrade, realTimeInfo: TradingInfo())
+                realTimeTrades.append(rt)
+                needsRefresh = true
+            }
+        }
+        
+        if needsRefresh {
+            Task {
+                await refreshAllTrades()
+            }
+        }
+    }
+
+    
     private let tradeUpdateTrigger = PassthroughSubject<Void, Never>()
+    var tradeContentPublisher: AnyPublisher<Void, Never> {
+        tradeContentDidChange.eraseToAnyPublisher()
+    }
 
     // MARK: - Private Methods
 
@@ -740,20 +788,40 @@ class DataModel: ObservableObject {
             }
         }
         .store(in: &cancellables)
+
+        $realTimeTrades
+            .receive(on: RunLoop.main)
+            .sink { [weak self] trades in
+                guard let self = self else { return }
+                self.bindTradeContentObservers(for: trades)
+                self.tradeContentDidChange.send()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func bindTradeContentObservers(for trades: [RealTimeTrade]) {
+        tradeContentCancellables.removeAll()
+        for trade in trades {
+            trade.objectWillChange
+                .sink { [weak self] _ in
+                    self?.tradeContentDidChange.send()
+                }
+                .store(in: &tradeContentCancellables)
+        }
     }
 
     private func saveTrades(_ trades: [RealTimeTrade]) {
         Task { await logger.debug("Saving \(trades.count) trades to Core Data") }
+
+        // Filter on main actor to avoid crossing actor boundaries in detached task.
+        let tradesToSave = trades.filter { !$0.trade.name.isEmpty && !isBenchmarkTrade($0) }
+        let tradeModels = tradesToSave.map { $0.trade }
         
         // Move saving to background queue to prevent UI blocking
         Task.detached(priority: .utility) { [weak self, logger] in
             guard let self = self else { return }
             
             do {
-                // Filter out any potential placeholder/empty trades before saving
-                let tradesToSave = trades.filter { !$0.trade.name.isEmpty }
-                let tradeModels = tradesToSave.map { $0.trade }
-                
                 // Save directly to Core Data
                 try await self.tradeDataService.saveAllTrades(tradeModels)
                 await logger.debug("Successfully saved \(tradesToSave.count) trades to Core Data")
@@ -797,7 +865,7 @@ class DataModel: ObservableObject {
     
     /// Saves the current order of stocks for menu bar display
     private func saveUserOrder(_ trades: [RealTimeTrade]) {
-        let symbolOrder = trades.map { $0.trade.name }
+        let symbolOrder = trades.filter { !isBenchmarkTrade($0) }.map { $0.trade.name }
         UserDefaults.standard.set(symbolOrder, forKey: "stockDisplayOrder")
         Task { await logger.debug("💾 Saved stock display order: \(symbolOrder)") }
     }
@@ -841,11 +909,7 @@ class DataModel: ObservableObject {
             var stock = userData.stocks[i]
             if stock.currency == nil {
                 // Set default currency if not specified (only for loaded data that might be old)
-                if stock.symbol.uppercased().hasSuffix(".L") {
-                    stock.currency = "GBP" // UK stocks (since Python script converted pence to pounds)
-                } else {
-                    stock.currency = "USD" // Default to USD for other stocks
-                }
+                stock.currency = SymbolMetadata.defaultCurrency(for: stock.symbol)
                 userData.stocks[i] = stock // Update the stock in the array
                 Task { await logger.debug("Normalized currency for \(stock.symbol) to \(stock.currency ?? "nil") upon loading.") }
             }
@@ -894,13 +958,7 @@ extension RealTimeTrade {
 
         // Determine timezone based on symbol
         let timeZone: TimeZone
-        if symbol.uppercased().hasSuffix(".L") {
-            // London Stock Exchange
-            timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone.current
-        } else {
-            // US markets (assume NYSE/NASDAQ)
-            timeZone = TimeZone(identifier: "America/New_York") ?? TimeZone.current
-        }
+        timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
 
         let components = calendar.dateComponents(in: timeZone, from: now)
         let hour = components.hour ?? 12
@@ -912,7 +970,7 @@ extension RealTimeTrade {
             return "CLOSED"
         }
 
-        if symbol.uppercased().hasSuffix(".L") {
+        if SymbolMetadata.isUKSymbol(symbol) {
             // LSE hours (London time)
             // Pre-market: 7:00-8:00
             // Regular: 8:00-16:30
@@ -945,8 +1003,32 @@ extension RealTimeTrade {
         }
     }
 
+    @MainActor
+    private func resolvePreviousCloseFromSnapshots(symbol: String, referenceDate: Date, cutoff: Double, epsilon: Double) -> Double? {
+        let timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+
+        let todayStart = calendar.startOfDay(for: referenceDate)
+        guard let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else {
+            return nil
+        }
+
+        let snapshots = HistoricalDataManager.shared.getPriceSnapshots(for: symbol, from: yesterdayStart, to: todayStart)
+        guard let lastSnapshot = snapshots.last(where: { $0.timestamp < todayStart && $0.price.isFinite && $0.price > 0 }) else {
+            return nil
+        }
+
+        if abs(lastSnapshot.price - cutoff) <= epsilon {
+            return nil
+        }
+
+        return lastSnapshot.price
+    }
+
     /// Updates the trade with new data from the network service
     /// Returns true if the update was successful (non-NaN data), false if it failed and old data was retained
+    @MainActor
     func updateWithResult(_ result: StockFetchResult, retainOnFailure: Bool = true) -> Bool {
         let validator = DataValidationService.shared
 
@@ -963,6 +1045,7 @@ extension RealTimeTrade {
 
         // Check if this is a failed fetch (NaN values or invalid prices)
         let isFetchFailure = sanitizedRegularPrice == nil || sanitizedPrevClose == nil
+        var updatedInfo = self.realTimeInfo
         
         if isFetchFailure {
             Task { await Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)") }
@@ -973,27 +1056,28 @@ extension RealTimeTrade {
                 Task { await Logger.shared.info("Retaining last successful data for \(result.symbol)") }
 
                 // CRITICAL: Update timestamp and metadata even on failure so UI shows fresh "last updated" time
-                self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-                self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-                self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? self.realTimeInfo.exchangeTimezoneName
-                self.realTimeInfo.shortName = result.shortName ?? self.realTimeInfo.shortName
+                updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+                updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+                updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? updatedInfo.exchangeTimezoneName
+                updatedInfo.shortName = result.shortName ?? updatedInfo.shortName
 
                 // Market state handling: if result provides a state, use it; otherwise infer from current time
                 if let newMarketState = result.marketState?.rawValue {
-                    self.realTimeInfo.marketState = newMarketState
+                    updatedInfo.marketState = newMarketState
                 } else {
                     // When FMP fallback is used (no market state), infer based on current time
-                    self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
+                    updatedInfo.marketState = inferMarketState(for: self.trade.name)
                 }
 
                 // Also update pre/post market times if available
                 if let preTime = result.preMarketTime {
-                    self.realTimeInfo.preMarketTime = preTime
+                    updatedInfo.preMarketTime = preTime
                 }
                 if let postTime = result.postMarketTime {
-                    self.realTimeInfo.postMarketTime = postTime
+                    updatedInfo.postMarketTime = postTime
                 }
 
+                self.realTimeInfo = updatedInfo
                 return false // Indicate failure
             } else {
                 // Old behavior - update with NaN values
@@ -1001,8 +1085,8 @@ extension RealTimeTrade {
             }
         }
 
-        var currency = result.currency
         let symbol = result.symbol
+        let currency = SymbolMetadata.normalizeCurrency(result.currency) ?? SymbolMetadata.defaultCurrency(for: symbol)
         
         // IMPORTANT: Our Python script already converts pence to pounds for .L stocks
         // So we should NOT do any additional conversion here
@@ -1010,60 +1094,66 @@ extension RealTimeTrade {
         let finalRegularPrice = sanitizedRegularPrice ?? regularPrice
         let _ = displayPrice  // Display price not currently sanitized
         let finalPrevClose = sanitizedPrevClose ?? prevClose
-        
-        // Set default currency if not specified
-        if currency == nil {
-            if symbol.uppercased().hasSuffix(".L") {
-                currency = "GBP" // UK stocks (since Python script converted pence to pounds)
-            } else {
-                currency = "USD" // Default to USD for other stocks
-            }
-        }
 
         // Only update price data if fetch was successful or retainOnFailure is false
         if !isFetchFailure || !retainOnFailure {
-            self.realTimeInfo.currentPrice = finalRegularPrice  // Use regular market price for day calculations
-            self.realTimeInfo.previousClose = finalPrevClose // Use the (potentially adjusted) finalPrevClose
-            self.realTimeInfo.prevClosePrice = finalPrevClose // Also set the field that StockStatusBar reads
-            self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
+            updatedInfo.currentPrice = finalRegularPrice  // Use regular market price for day calculations
+            var resolvedPrevClose = finalPrevClose
+
+            // UK symbols sometimes return previousClose == currentPrice; fall back to prior-day snapshot if available.
+            if SymbolMetadata.isUKSymbol(symbol),
+               finalRegularPrice.isFinite,
+               finalRegularPrice > 0,
+               resolvedPrevClose.isFinite,
+               resolvedPrevClose > 0 {
+                let epsilon = max(0.0001, finalRegularPrice * 0.0001)
+                if abs(resolvedPrevClose - finalRegularPrice) <= epsilon {
+                    if let fallbackPrev = resolvePreviousCloseFromSnapshots(symbol: symbol, referenceDate: Date(), cutoff: finalRegularPrice, epsilon: epsilon) {
+                        resolvedPrevClose = fallbackPrev
+                        Task { await Logger.shared.info("Resolved prev close from snapshots for \(symbol): \(fallbackPrev)") }
+                    }
+                }
+            }
+
+            updatedInfo.previousClose = resolvedPrevClose // Use the (potentially adjusted) prev close
+            updatedInfo.prevClosePrice = resolvedPrevClose // Also set the field that StockStatusBar reads
+            updatedInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
             
             // Update pre/post market data
-            self.realTimeInfo.preMarketPrice = result.preMarketPrice
-            self.realTimeInfo.preMarketChange = result.preMarketChange
-            self.realTimeInfo.preMarketChangePercent = result.preMarketChangePercent
-            self.realTimeInfo.preMarketTime = result.preMarketTime
-            self.realTimeInfo.postMarketPrice = result.postMarketPrice
-            self.realTimeInfo.postMarketChange = result.postMarketChange
-            self.realTimeInfo.postMarketChangePercent = result.postMarketChangePercent
-            self.realTimeInfo.postMarketTime = result.postMarketTime
+            updatedInfo.preMarketPrice = result.preMarketPrice
+            updatedInfo.preMarketChange = result.preMarketChange
+            updatedInfo.preMarketChangePercent = result.preMarketChangePercent
+            updatedInfo.preMarketTime = result.preMarketTime
+            updatedInfo.postMarketPrice = result.postMarketPrice
+            updatedInfo.postMarketChange = result.postMarketChange
+            updatedInfo.postMarketChangePercent = result.postMarketChangePercent
+            updatedInfo.postMarketTime = result.postMarketTime
         }
         
         // ALWAYS update timestamp, metadata, and market state - even if we retained old price data
         // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
-        self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-        self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-        self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
-        self.realTimeInfo.shortName = result.shortName ?? self.trade.name
+        updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+        updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+        updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
+        updatedInfo.shortName = result.shortName ?? self.trade.name
 
         // Market state handling: if result provides a state, use it; otherwise infer from current time
         if let newMarketState = result.marketState?.rawValue {
-            self.realTimeInfo.marketState = newMarketState
+            updatedInfo.marketState = newMarketState
         } else {
             // When FMP fallback is used (no market state), infer based on current time
-            self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
+            updatedInfo.marketState = inferMarketState(for: self.trade.name)
         }
 
         let logger = Logger.shared // Already defined in DataModel, but ok for local scope too
 
-        if isFetchFailure && retainOnFailure {
-            Task { await logger.info("Retained old data for \(self.trade.name): Price \(self.realTimeInfo.currentPrice) Currency: \(self.realTimeInfo.currency ?? "N/A") (fetch failed)") }
-        } else {
-            Task { await logger.info("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) prevClosePrice: \(self.realTimeInfo.prevClosePrice) Currency: \(self.realTimeInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
-        }
+        self.realTimeInfo = updatedInfo
 
-        // CRITICAL: Manually trigger objectWillChange since we modified struct properties
-        // @Published doesn't detect changes to properties WITHIN a struct, only replacement of the entire struct
-        objectWillChange.send()
+        if isFetchFailure && retainOnFailure {
+            Task { await logger.info("Retained old data for \(self.trade.name): Price \(updatedInfo.currentPrice) Currency: \(updatedInfo.currency ?? "N/A") (fetch failed)") }
+        } else {
+            Task { await logger.info("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
+        }
 
         return !isFetchFailure // Return true if successful, false if failed
     }

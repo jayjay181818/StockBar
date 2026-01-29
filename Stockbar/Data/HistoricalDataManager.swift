@@ -78,6 +78,7 @@ class HistoricalDataManager: ObservableObject {
     private let calculationLock = NSLock()
     private var lastPortfolioCalculationDate: Date = Date.distantPast
     private let portfolioCalculationCacheInterval: TimeInterval = 1800 // 30 minutes cache (increased from 5 minutes)
+    private var earliestAvailableDates: [String: Date] = [:]
     
     // MARK: - Data Storage Configuration
     
@@ -90,6 +91,7 @@ class HistoricalDataManager: ObservableObject {
         static let lastRetroactiveCalculationDate = "lastRetroactiveCalculationDate"
         static let cachedHistoricalPortfolioValues = "cachedHistoricalPortfolioValues"
         static let lastPortfolioCalculationDate = "lastPortfolioCalculationDate"
+        static let earliestAvailableDates = "earliestAvailableDates"
     }
     
     // MARK: - Performance Caching
@@ -936,7 +938,7 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Triggers historical data fetching for a specific symbol and time range
-    private func triggerHistoricalDataFetch(for symbol: String, timeRange: ChartTimeRange, startDate: Date) async {
+    func triggerHistoricalDataFetch(for symbol: String, timeRange: ChartTimeRange, startDate: Date) async {
         await logger.info("🔄 Starting historical data fetch for \(symbol) from \(startDate)")
         
         // Use NetworkService to fetch historical data
@@ -1163,7 +1165,7 @@ class HistoricalDataManager: ObservableObject {
         let minValue = relevantSnapshots.map { $0.price }.min() ?? lastSnapshot.price
         
         // Determine currency for the stock
-        let currency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+        let currency = SymbolMetadata.defaultCurrency(for: symbol)
         
         // MARK: - Advanced Analytics for Stocks
         
@@ -1341,6 +1343,11 @@ class HistoricalDataManager: ObservableObject {
         if lastPortfolioCalculationDate != Date.distantPast {
             Task { await logger.info("HistoricalDataManager: Last portfolio calculation: \(DateFormatter.debug.string(from: lastPortfolioCalculationDate)) (legacy)") }
         }
+
+        earliestAvailableDates = retrieveFromCache([String: Date].self, key: StorageKeys.earliestAvailableDates) ?? [:]
+        if !earliestAvailableDates.isEmpty {
+            Task { await logger.info("HistoricalDataManager: Loaded earliest available dates for \(earliestAvailableDates.count) symbols") }
+        }
         
         let totalSnaps = priceSnapshots.values.reduce(0) { $0 + $1.count }
         Task { await logger.info("HistoricalDataManager: Loaded. Price snapshots in memory: \(totalSnaps). Historical portfolio snapshots in memory: \(historicalPortfolioSnapshots.count). Legacy portfolio snapshots in memory: \(portfolioSnapshots.count).") }
@@ -1415,6 +1422,9 @@ class HistoricalDataManager: ObservableObject {
         }
         storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: true)
         storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: true)
+        if !earliestAvailableDates.isEmpty {
+            storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates, isRecent: false)
+        }
         
         Task { await logger.debug("HistoricalDataManager: Metadata saved to tiered cache.") }
     }
@@ -1474,6 +1484,7 @@ class HistoricalDataManager: ObservableObject {
         cachedHistoricalPortfolioValues.removeAll()
         lastPortfolioCalculationDate = Date.distantPast
         lastRetroactiveCalculationDate = Date.distantPast
+        earliestAvailableDates.removeAll()
         
         UserDefaults.standard.removeObject(forKey: StorageKeys.portfolioSnapshots)
         UserDefaults.standard.removeObject(forKey: StorageKeys.priceSnapshots)
@@ -1482,6 +1493,7 @@ class HistoricalDataManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: StorageKeys.lastRetroactiveCalculationDate)
         UserDefaults.standard.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
         UserDefaults.standard.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
+        UserDefaults.standard.removeObject(forKey: StorageKeys.earliestAvailableDates)
         
         Task { await logger.info("Cleared all historical data including enhanced portfolio snapshots") }
     }
@@ -1495,6 +1507,20 @@ class HistoricalDataManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "cachedHistoricalPortfolioValues")
         UserDefaults.standard.removeObject(forKey: "lastPortfolioCalculationDate")
         Task { await logger.info("Cleared inconsistent portfolio historical data and cache - will rebuild with correct calculations") }
+    }
+
+    func earliestAvailableDate(for symbol: String) -> Date? {
+        earliestAvailableDates[symbol.uppercased()]
+    }
+
+    func recordEarliestAvailableDate(_ date: Date, for symbol: String) {
+        let key = symbol.uppercased()
+        if let existing = earliestAvailableDates[key], existing >= date {
+            return
+        }
+        earliestAvailableDates[key] = date
+        storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates, isRecent: false)
+        Task { await logger.info("HistoricalDataManager: Recorded earliest available date for \(symbol): \(DateFormatter.debug.string(from: date))") }
     }
     
     func forceSnapshot(from dataModel: DataModel) {
