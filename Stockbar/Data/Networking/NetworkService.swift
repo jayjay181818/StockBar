@@ -234,10 +234,10 @@ class PythonNetworkService: NetworkService {
                     if let closePrice = Double(output[closeRange]),
                        let prevClosePrice = Double(output[prevCloseRange]) {
                         // Detect currency based on symbol - Python script already converts pence to pounds for .L stocks
-                        let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+                        let detectedCurrency = SymbolMetadata.defaultCurrency(for: symbol)
                         await logger.info("Successfully fetched Close=\(closePrice), PrevClose=\(prevClosePrice) for \(symbol) via Python. Detected currency: \(detectedCurrency)")
                         // Determine timezone based on symbol
-                        let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
+                        let timezone = SymbolMetadata.defaultTimezone(for: symbol)
                         return StockFetchResult(
                             currency: detectedCurrency,
                             symbol: symbol,
@@ -401,8 +401,9 @@ class PythonNetworkService: NetworkService {
         }
 
         // Detect currency and timezone
-        let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
-        let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
+        let rawCurrency = data["currency"] as? String
+        let detectedCurrency = SymbolMetadata.normalizeCurrency(rawCurrency) ?? SymbolMetadata.defaultCurrency(for: symbol)
+        let timezone = SymbolMetadata.defaultTimezone(for: symbol)
 
         Task { await logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil"), preMarketTime=\(preMarketTime?.description ?? "nil"), postMarketTime=\(postMarketTime?.description ?? "nil")") }
 
@@ -442,9 +443,9 @@ class PythonNetworkService: NetworkService {
             } catch {
                 await logger.error("Failed to fetch quote for \(symbol) in batch: \(error.localizedDescription)")
                 // Create a placeholder result for failed fetches to maintain currency info
-                let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
-                let placeholderResult = StockFetchResult(
-                    currency: symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD",
+        let timezone = SymbolMetadata.defaultTimezone(for: symbol)
+        let placeholderResult = StockFetchResult(
+                    currency: SymbolMetadata.defaultCurrency(for: symbol),
                     symbol: symbol,
                     shortName: symbol,
                     regularMarketTime: Int(Date().timeIntervalSince1970),

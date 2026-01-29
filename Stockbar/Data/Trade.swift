@@ -64,7 +64,7 @@ struct Position: Codable, Equatable {
         let detectedCostCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
         
         // Convert GBX to GBP for UK stocks if needed
-        if symbol.uppercased().hasSuffix(".L") && detectedCostCurrency == "GBX" {
+        if SymbolMetadata.isUKSymbol(symbol) && detectedCostCurrency == "GBX" {
             return rawCost / 100.0
         }
         
@@ -73,7 +73,7 @@ struct Position: Codable, Equatable {
     
     /// Auto-detects the likely currency unit based on the symbol
     private func autoDetectCostCurrency(for symbol: String) -> String {
-        if symbol.uppercased().hasSuffix(".L") {
+        if SymbolMetadata.isUKSymbol(symbol) {
             return "GBX" // UK stocks are typically quoted in pence
         }
         return "USD" // Default to USD for other stocks

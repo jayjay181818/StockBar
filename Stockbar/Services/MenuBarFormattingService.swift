@@ -119,7 +119,7 @@ actor MenuBarFormattingService {
         settings: MenuBarDisplaySettings,
         useColorCoding: Bool
     ) -> NSAttributedString {
-        let isPositive = change > 0
+        let isPositive = change >= 0
         let isNegative = change < 0
 
         // Get the template

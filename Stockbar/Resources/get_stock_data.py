@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.error
 import csv
 import io
+import math
 
 try:
     import requests
@@ -32,6 +33,8 @@ except ImportError:
 # Use a cache file in the user's home directory
 CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
 CACHE_DURATION_SECONDS = 300  # 5 minutes
+PREV_CLOSE_CACHE_KEY = "_prev_close_cache"
+PREV_CLOSE_CACHE_MAX_AGE_SECONDS = 18 * 60 * 60
 
 # API Base URLs
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
@@ -52,6 +55,8 @@ def get_config():
     return {}
 
 CONFIG = get_config()
+RAW_SYMBOL_ALIASES = CONFIG.get("SYMBOL_ALIASES", {}) if isinstance(CONFIG, dict) else {}
+SYMBOL_ALIASES = {str(k).upper(): str(v).upper() for k, v in RAW_SYMBOL_ALIASES.items()}
 
 def get_api_key(key_name, env_name=None):
     """Get API key from config or environment"""
@@ -85,13 +90,64 @@ def get_cached(symbol):
     if entry:
         ts = entry.get('timestamp')
         if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
-            return entry.get('result')
+            cached_result = entry.get('result')
+            return apply_previous_close_backfill(symbol, cached_result)
     return None
 
 def set_cache(symbol, result):
     cache[symbol] = {
         'timestamp': time.time(),
         'result': result
+    }
+    save_cache()
+
+def _prev_close_cache():
+    entry = cache.get(PREV_CLOSE_CACHE_KEY)
+    if not isinstance(entry, dict):
+        cache[PREV_CLOSE_CACHE_KEY] = {}
+    return cache[PREV_CLOSE_CACHE_KEY]
+
+def market_date_for_symbol(symbol):
+    tz = None
+    try:
+        from zoneinfo import ZoneInfo
+        tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        try:
+            import pytz
+            tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = None
+    now = datetime.now(tz) if tz is not None else datetime.utcnow()
+    return now.date().isoformat()
+
+def get_cached_prev_close(symbol):
+    prev_cache = _prev_close_cache()
+    entry = prev_cache.get(symbol)
+    if not isinstance(entry, dict):
+        return None
+    if entry.get('date') != market_date_for_symbol(symbol):
+        return None
+    ts = entry.get('timestamp')
+    if ts and (time.time() - ts > PREV_CLOSE_CACHE_MAX_AGE_SECONDS):
+        return None
+    value = entry.get('value')
+    try:
+        value = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+def set_cached_prev_close(symbol, value):
+    prev_cache = _prev_close_cache()
+    prev_cache[symbol] = {
+        'date': market_date_for_symbol(symbol),
+        'timestamp': time.time(),
+        'value': value
     }
     save_cache()
 
@@ -149,13 +205,51 @@ def make_fmp_request(url, params=None):
     params['apikey'] = FMP_API_KEY
     return make_request(url, params)
 
+UK_SUFFIXES = ('.L', '.LON', '.XC')
+
+def is_uk_symbol(symbol):
+    return symbol.upper().endswith(UK_SUFFIXES)
+
+def resolve_symbol_alias(symbol):
+    upper = symbol.upper()
+    alias = SYMBOL_ALIASES.get(upper)
+    if alias:
+        return alias
+    if upper.endswith('.XC'):
+        return upper.replace('.XC', '.L')
+    return upper
+
+def history_symbol_for_prev_close(symbol):
+    """Map alt-venue UK symbols to a primary history symbol."""
+    upper = resolve_symbol_alias(symbol)
+    if upper.endswith('.XC'):
+        return upper.replace('.XC', '.L')
+    return upper
+
 def handle_lse_symbol(symbol):
     """Convert London Stock Exchange symbols for FMP API"""
-    if symbol.upper().endswith('.L'):
+    upper = resolve_symbol_alias(symbol)
+    if upper.endswith('.XC'):
+        return upper.replace('.XC', '.L')
+    if upper.endswith('.L'):
         return symbol.upper()
-    elif symbol.upper().endswith('.LON'):
+    elif upper.endswith('.LON'):
         return symbol.upper().replace('.LON', '.L')
     return symbol.upper()
+
+def normalize_currency(raw_currency, symbol):
+    """Normalize currency codes and detect pence-based quotes."""
+    if raw_currency is None:
+        if is_uk_symbol(symbol):
+            uses_pence = symbol.upper().endswith(('.L', '.LON'))
+            return "GBP", uses_pence
+        return None, False
+
+    raw = str(raw_currency).strip()
+    if raw in ("GBp", "GBX"):
+        return "GBP", True
+
+    return raw.upper(), False
 
 # --- Twelve Data Fetcher ---
 
@@ -164,10 +258,13 @@ def handle_twelvedata_symbol(symbol):
     # Twelve Data usually takes symbol and exchange separately or handles suffix
     # For LSE, it often uses just the ticker if exchange is specified, or ticker.L
     # We'll try to map common suffixes to exchanges if needed, or just pass through
-    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
+    upper = resolve_symbol_alias(symbol)
+    if upper.endswith('.XC'):
+        upper = upper.replace('.XC', '.L')
+    if upper.endswith('.L') or upper.endswith('.LON'):
         # Strip suffix, specify exchange in params
-        return symbol.upper().replace('.L', '').replace('.LON', ''), "LSE"
-    return symbol.upper(), None
+        return upper.replace('.L', '').replace('.LON', ''), "LSE"
+    return upper, None
 
 def fetch_historical_data_twelvedata(symbol, start_date, end_date):
     """Fetch historical data from Twelve Data"""
@@ -366,11 +463,14 @@ def fetch_real_time_quote_yfinance(symbol):
         return None
         
     try:
-        ticker = yf.Ticker(symbol)
+        resolved_symbol = resolve_symbol_alias(symbol)
+        ticker = yf.Ticker(resolved_symbol)
+        history_symbol = history_symbol_for_prev_close(resolved_symbol)
+        history_ticker = yf.Ticker(history_symbol) if history_symbol != resolved_symbol else ticker
         
         # 1. Get daily history to find a reliable previous day's close.
         # Fetch more days to ensure we get complete trading day data
-        daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        daily_hist = history_ticker.history(period="5d", interval="1d", auto_adjust=False)
         if daily_hist.empty:
             return None
         
@@ -395,9 +495,12 @@ def fetch_real_time_quote_yfinance(symbol):
         post_market_price = None
         market_state = "REGULAR"
         
+        currency = None
+
         # 2. Get comprehensive ticker info for pre/post market data
         try:
             info = ticker.info
+            currency = info.get('currency') or info.get('financialCurrency')
             
             # Extract timestamp from regularMarketTime
             if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
@@ -424,6 +527,8 @@ def fetch_real_time_quote_yfinance(symbol):
             try:
                 regular_market_price = float(ticker.fast_info['last_price'])
                 current_price = regular_market_price
+                if currency is None:
+                    currency = ticker.fast_info.get('currency')
             except Exception as e:
                 print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
 
@@ -440,7 +545,7 @@ def fetch_real_time_quote_yfinance(symbol):
             current_price = regular_market_price
 
         # 6. Determine market state based on appropriate timezone for the stock
-        if symbol.upper().endswith('.L'):
+        if is_uk_symbol(symbol):
             # LSE stocks - use London timezone
             try:
                 from zoneinfo import ZoneInfo
@@ -510,8 +615,8 @@ def fetch_real_time_quote_yfinance(symbol):
             else:
                 market_state = "CLOSED"
 
-        # 7. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
-        if symbol.upper().endswith('.L'):
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
             current_price /= 100.0
             previous_close /= 100.0
             if regular_market_price is not None:
@@ -538,7 +643,8 @@ def fetch_real_time_quote_yfinance(symbol):
             'preMarketTime': pre_market_time,
             'postMarketTime': post_market_time,
             'marketState': market_state,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'currency': normalized_currency
         }
         
     except Exception as e:
@@ -561,12 +667,13 @@ def fetch_real_time_quote_fmp(symbol):
         current_price = quote.get('price', 0)
         previous_close = quote.get('previousClose', 0)
         timestamp = quote.get('timestamp', int(time.time()))
+        raw_currency = quote.get('currency')
         
         if current_price <= 0 or previous_close <= 0:
             return None
         
-        # Handle LSE stocks
-        if api_symbol.endswith('.L'):
+        normalized_currency, uses_pence = normalize_currency(raw_currency, symbol)
+        if uses_pence:
             current_price = current_price / 100.0
             previous_close = previous_close / 100.0
             
@@ -574,7 +681,8 @@ def fetch_real_time_quote_fmp(symbol):
             'symbol': symbol,
             'price': current_price,
             'previousClose': previous_close,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'currency': normalized_currency
         }
     except Exception as e:
         # Re-raise HTTP errors
@@ -582,6 +690,333 @@ def fetch_real_time_quote_fmp(symbol):
             raise e
         print(f"FMP fetch failed for {symbol}: {e}", file=sys.stderr)
         return None
+
+def fetch_real_time_quote_twelvedata(symbol):
+    """Fetch real-time quote from Twelve Data (fallback)."""
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    base_symbol, exchange = handle_twelvedata_symbol(symbol)
+    url = f"{TWELVE_DATA_BASE_URL}/quote"
+    params = {
+        'symbol': base_symbol,
+        'apikey': TWELVE_DATA_API_KEY
+    }
+    if exchange:
+        params['exchange'] = exchange
+
+    try:
+        data = make_request(url, params)
+        if not data:
+            return None
+
+        if data.get('status') == 'error' or data.get('code') not in (None, 200):
+            print(f"Twelve Data error for {symbol}: {data.get('message')}", file=sys.stderr)
+            return None
+
+        close_raw = data.get('close')
+        previous_close_raw = data.get('previous_close')
+        timestamp = data.get('timestamp')
+
+        if close_raw is None or previous_close_raw is None:
+            return None
+
+        close_price = float(close_raw)
+        previous_close = float(previous_close_raw)
+
+        normalized_currency, uses_pence = normalize_currency(data.get('currency'), symbol)
+        if uses_pence:
+            close_price /= 100.0
+            previous_close /= 100.0
+
+        return {
+            'symbol': symbol,
+            'price': close_price,
+            'regularMarketPrice': close_price,
+            'previousClose': previous_close,
+            'timestamp': int(timestamp) if timestamp is not None else int(time.time()),
+            'currency': normalized_currency
+        }
+    except Exception as e:
+        print(f"Twelve Data fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def fetch_real_time_quote_yahoo_api(symbol):
+    """Fetch real-time quote via Yahoo quote API (lightweight fallback)."""
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    try:
+        resolved_symbol = resolve_symbol_alias(symbol)
+        data = make_request(url, params={'symbols': resolved_symbol})
+        if not data or 'quoteResponse' not in data:
+            return None
+
+        results = data.get('quoteResponse', {}).get('result', [])
+        if not results:
+            return None
+
+        quote = results[0]
+        regular_market_price = quote.get('regularMarketPrice')
+        previous_close = quote.get('regularMarketPreviousClose')
+        market_state = quote.get('marketState')
+        regular_market_time = quote.get('regularMarketTime')
+        pre_market_price = quote.get('preMarketPrice')
+        post_market_price = quote.get('postMarketPrice')
+        pre_market_time = quote.get('preMarketTime')
+        post_market_time = quote.get('postMarketTime')
+
+        if regular_market_price is None or previous_close is None:
+            return None
+
+        normalized_currency, uses_pence = normalize_currency(quote.get('currency'), symbol)
+        if uses_pence:
+            regular_market_price /= 100.0
+            previous_close /= 100.0
+            if pre_market_price is not None:
+                pre_market_price /= 100.0
+            if post_market_price is not None:
+                post_market_price /= 100.0
+
+        current_price = regular_market_price
+        if market_state == "PRE" and pre_market_price is not None:
+            current_price = pre_market_price
+        elif market_state == "POST" and post_market_price is not None:
+            current_price = post_market_price
+
+        timestamp = regular_market_time if regular_market_time is not None else int(time.time())
+
+        return {
+            'symbol': symbol,
+            'price': current_price,
+            'regularMarketPrice': regular_market_price,
+            'previousClose': previous_close,
+            'preMarketPrice': pre_market_price,
+            'postMarketPrice': post_market_price,
+            'preMarketTime': pre_market_time,
+            'postMarketTime': post_market_time,
+            'marketState': market_state,
+            'timestamp': timestamp,
+            'currency': normalized_currency
+        }
+    except Exception as e:
+        print(f"Yahoo API fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def needs_prev_close_backfill(symbol, current_price, previous_close, currency):
+    try:
+        if previous_close is None or not math.isfinite(float(previous_close)) or float(previous_close) <= 0:
+            return True
+    except Exception:
+        return True
+
+    try:
+        price = float(current_price)
+    except Exception:
+        return False
+
+    if not math.isfinite(price) or price <= 0:
+        return False
+
+    currency_code = str(currency).upper() if currency else ""
+    if is_uk_symbol(symbol) or currency_code == "GBP":
+        epsilon = max(0.0001, price * 0.0001)
+        return abs(float(previous_close) - price) <= epsilon
+
+    return False
+
+def fetch_previous_close_twelvedata(symbol):
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    history_symbol = history_symbol_for_prev_close(symbol)
+    if history_symbol != symbol:
+        print(f"Prev close: mapping {symbol} -> {history_symbol} for Twelve Data history", file=sys.stderr)
+    ticker, exchange = handle_twelvedata_symbol(history_symbol)
+    url = f"{TWELVE_DATA_BASE_URL}/time_series"
+    params = {
+        'symbol': ticker,
+        'interval': '1day',
+        'outputsize': 2,
+        'order': 'ASC',
+        'apikey': TWELVE_DATA_API_KEY
+    }
+    if exchange:
+        params['exchange'] = exchange
+
+    try:
+        data = make_request(url, params)
+        if not data or 'values' not in data:
+            return None
+
+        values = data.get('values') or []
+        if not values:
+            return None
+
+        try:
+            values = sorted(values, key=lambda v: v.get('datetime', ''))
+        except Exception:
+            pass
+
+        target = values[-2] if len(values) > 1 else values[-1]
+        prev_close_raw = target.get('close')
+        if prev_close_raw is None:
+            return None
+
+        prev_close = float(prev_close_raw)
+        currency = None
+        meta = data.get('meta')
+        if isinstance(meta, dict):
+            currency = meta.get('currency')
+
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
+            prev_close /= 100.0
+
+        if not math.isfinite(prev_close) or prev_close <= 0:
+            return None
+
+        return prev_close
+    except Exception as e:
+        print(f"Twelve Data previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def fetch_previous_close_stooq(symbol):
+    try:
+        end_date = datetime.utcnow().date()
+        start_date = end_date - timedelta(days=14)
+        history_symbol = history_symbol_for_prev_close(symbol)
+        if history_symbol != symbol:
+            print(f"Prev close: mapping {symbol} -> {history_symbol} for Stooq history", file=sys.stderr)
+        data = fetch_historical_data_stooq(history_symbol, start_date.isoformat(), end_date.isoformat())
+        if not data:
+            return None
+        prev_close = data[-1].get('previousClose')
+        prev_close = float(prev_close) if prev_close is not None else None
+        if prev_close is None or not math.isfinite(prev_close) or prev_close <= 0:
+            return None
+        return prev_close
+    except Exception as e:
+        print(f"Stooq previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def fetch_previous_close_yfinance(symbol):
+    if not YFINANCE_AVAILABLE:
+        return None
+
+    try:
+        history_symbol = history_symbol_for_prev_close(symbol)
+        if history_symbol != symbol:
+            print(f"Prev close: mapping {symbol} -> {history_symbol} for yfinance history", file=sys.stderr)
+        ticker = yf.Ticker(history_symbol)
+        daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        if daily_hist.empty:
+            return None
+
+        daily_hist = daily_hist.sort_index()
+        today = datetime.now().date()
+        complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
+
+        if not complete_days.empty:
+            previous_close = float(complete_days.iloc[-1]['Close'])
+        else:
+            previous_close = float(daily_hist.iloc[-1]['Close'])
+
+        currency = None
+        try:
+            info = ticker.info
+            currency = info.get('currency') or info.get('financialCurrency')
+        except Exception:
+            currency = None
+
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
+            previous_close /= 100.0
+
+        if not math.isfinite(previous_close) or previous_close <= 0:
+            return None
+        return previous_close
+    except Exception as e:
+        print(f"yfinance previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+def fetch_previous_close_from_history(symbol):
+    prev_close = fetch_previous_close_twelvedata(symbol)
+    if prev_close is not None:
+        return prev_close
+
+    if symbol.upper().endswith(('.L', '.LON')):
+        prev_close = fetch_previous_close_stooq(symbol)
+        if prev_close is not None:
+            return prev_close
+
+    prev_close = fetch_previous_close_yfinance(symbol)
+    return prev_close
+
+def apply_previous_close_backfill(symbol, quote):
+    if not isinstance(quote, dict):
+        return quote
+
+    current_price = quote.get('regularMarketPrice') or quote.get('price')
+    previous_close = quote.get('previousClose')
+    currency = quote.get('currency')
+
+    if not needs_prev_close_backfill(symbol, current_price, previous_close, currency):
+        return quote
+
+    price_value = None
+    try:
+        price_value = float(current_price)
+    except Exception:
+        price_value = None
+
+    epsilon = max(0.0001, (price_value or 0) * 0.0001)
+
+    print(f"Prev close backfill needed for {symbol}. current={current_price} prev={previous_close} currency={currency}", file=sys.stderr)
+
+    cached_prev = get_cached_prev_close(symbol)
+    if cached_prev is not None:
+        if symbol.upper().endswith('.XC'):
+            print(f"Prev close cache bypassed for {symbol} to refetch history", file=sys.stderr)
+            cached_prev = None
+        elif price_value is not None and abs(cached_prev - price_value) <= epsilon and is_uk_symbol(symbol):
+            print(f"Prev close cache matches current price for {symbol}; refetching history", file=sys.stderr)
+            cached_prev = None
+        else:
+            print(f"Prev close backfill using cached value for {symbol}: {cached_prev}", file=sys.stderr)
+            quote['previousClose'] = cached_prev
+            return quote
+
+    fetched_prev = fetch_previous_close_from_history(symbol)
+    if fetched_prev is None:
+        print(f"Prev close backfill failed for {symbol}: no history result", file=sys.stderr)
+        return quote
+
+    if symbol.upper().endswith('.XC') and price_value is not None:
+        try:
+            ratio = float(price_value) / float(fetched_prev)
+        except Exception:
+            ratio = None
+        if ratio is not None:
+            if ratio > 50 and ratio < 200:
+                fetched_prev = float(fetched_prev) * 100.0
+                print(f"Prev close scale adjust for {symbol}: matched current price scale (x100)", file=sys.stderr)
+            elif ratio > 0 and ratio < 0.02:
+                fetched_prev = float(fetched_prev) / 100.0
+                print(f"Prev close scale adjust for {symbol}: matched current price scale (/100)", file=sys.stderr)
+
+    try:
+        prev_close_value = float(previous_close) if previous_close is not None else None
+    except Exception:
+        prev_close_value = None
+
+    if prev_close_value is None or not math.isfinite(prev_close_value) or prev_close_value <= 0 or (price_value is not None and abs(fetched_prev - prev_close_value) > epsilon):
+        quote['previousClose'] = fetched_prev
+        print(f"Prev close backfill applied for {symbol}: {fetched_prev}", file=sys.stderr)
+    else:
+        print(f"Prev close backfill skipped for {symbol}: history close ~= current prev close", file=sys.stderr)
+
+    if price_value is None or abs(fetched_prev - price_value) > epsilon or not is_uk_symbol(symbol):
+        set_cached_prev_close(symbol, fetched_prev)
+    return quote
 
 def fetch_real_time_quote(symbol):
     """Fetch real-time quote using yfinance first, FMP as fallback"""
@@ -591,12 +1026,23 @@ def fetch_real_time_quote(symbol):
         result = fetch_real_time_quote_yfinance(symbol)
         if result:
             print(f"Using yfinance for real-time data: {symbol}", file=sys.stderr)
-            return result
+            return apply_previous_close_backfill(symbol, result)
         else:
             print(f"yfinance failed for {symbol}, falling back to FMP", file=sys.stderr)
-    
+
+    twelvedata_result = fetch_real_time_quote_twelvedata(symbol)
+    if twelvedata_result:
+        print(f"Using Twelve Data for real-time data: {symbol}", file=sys.stderr)
+        return apply_previous_close_backfill(symbol, twelvedata_result)
+
+    yahoo_result = fetch_real_time_quote_yahoo_api(symbol)
+    if yahoo_result:
+        print(f"Using Yahoo quote API for real-time data: {symbol}", file=sys.stderr)
+        return apply_previous_close_backfill(symbol, yahoo_result)
+
     print(f"Using FMP for real-time data: {symbol}", file=sys.stderr)
-    return fetch_real_time_quote_fmp(symbol)
+    fmp_result = fetch_real_time_quote_fmp(symbol)
+    return apply_previous_close_backfill(symbol, fmp_result)
 
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
@@ -734,8 +1180,11 @@ def get_fetch_priority(symbol):
 
 def fetch_historical_data(symbol, start_date, end_date):
     """Fetch historical data using configured priority sources"""
-    
-    priority = get_fetch_priority(symbol)
+    fetch_symbol = resolve_symbol_alias(symbol)
+    if fetch_symbol != symbol:
+        print(f"Historical alias: {symbol} -> {fetch_symbol}", file=sys.stderr)
+
+    priority = get_fetch_priority(fetch_symbol)
     
     # Ensure we always have valid sources in the list
     # Filter duplicates and ensure valid names
@@ -755,7 +1204,10 @@ def fetch_historical_data(symbol, start_date, end_date):
             valid_sources.append(source)
             seen.add(source)
             
-    print(f"Fetch priority for {symbol}: {valid_sources}", file=sys.stderr)
+    if fetch_symbol == symbol:
+        print(f"Fetch priority for {symbol}: {valid_sources}", file=sys.stderr)
+    else:
+        print(f"Fetch priority for {fetch_symbol} (requested {symbol}): {valid_sources}", file=sys.stderr)
     
     last_error = None
     
@@ -764,18 +1216,21 @@ def fetch_historical_data(symbol, start_date, end_date):
             result = None
             if source == "yfinance":
                 if YFINANCE_AVAILABLE:
-                    result = fetch_historical_data_yfinance(symbol, start_date, end_date)
+                    result = fetch_historical_data_yfinance(fetch_symbol, start_date, end_date)
                 else:
                     print("Skipping yfinance (not available)", file=sys.stderr)
             elif source == "fmp":
                 # For LSE, only try FMP if it's high priority or others failed
-                result = fetch_historical_data_fmp(symbol, start_date, end_date)
+                result = fetch_historical_data_fmp(fetch_symbol, start_date, end_date)
             elif source == "twelvedata":
-                result = fetch_historical_data_twelvedata(symbol, start_date, end_date)
+                result = fetch_historical_data_twelvedata(fetch_symbol, start_date, end_date)
             elif source == "stooq":
-                result = fetch_historical_data_stooq(symbol, start_date, end_date)
+                result = fetch_historical_data_stooq(fetch_symbol, start_date, end_date)
                 
             if result:
+                if fetch_symbol != symbol:
+                    for entry in result:
+                        entry['symbol'] = symbol
                 print(f"Successfully fetched historical data from {source} for {symbol}", file=sys.stderr)
                 return result
                 

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Cocoa
+import SwiftUI
 
 @MainActor
 class StockMenuBarController: NSObject {
@@ -46,7 +47,14 @@ class StockMenuBarController: NSObject {
         self.data.$realTimeTrades
             .receive(on: DispatchQueue.main)
             .sink { [weak self] realTimeTrades in
-                self?.updateSymbolItemsFromUserData(realTimeTrades: realTimeTrades)
+                self?.syncSymbolItemsFromUserData(realTimeTrades: realTimeTrades)
+                self?.updatePortfolioSummary()
+            }
+            .store(in: &cancellables)
+
+        self.data.tradeContentPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
                 self?.updatePortfolioSummary()
             }
             .store(in: &cancellables)
@@ -76,7 +84,7 @@ class StockMenuBarController: NSObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
-                self.updateSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
+                self.syncSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
             }
             .store(in: &cancellables)
 
@@ -84,7 +92,7 @@ class StockMenuBarController: NSObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
-                self.updateSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
+                self.syncSymbolItemsFromUserData(realTimeTrades: self.data.realTimeTrades)
             }
             .store(in: &cancellables)
     }
@@ -96,22 +104,19 @@ class StockMenuBarController: NSObject {
         self.statusBar.constructMainItemMenu(items: mainMenuItems)
     }
     
-    private func updateSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
-        Task { await logger.debug("🔧 CONTROLLER: Updating symbol items, count: \(realTimeTrades.count)") }
-
-        statusBar.removeAllSymbolItems()
+    private func syncSymbolItemsFromUserData(realTimeTrades: [RealTimeTrade]) {
+        Task { await logger.debug("🔧 CONTROLLER: Syncing symbol items, count: \(realTimeTrades.count)") }
         
         guard !data.hideAllMenuBarItems else {
+            statusBar.removeAllSymbolItems()
             Task { await logger.debug("🔧 CONTROLLER: All menu bar items hidden by user preference") }
             return
         }
         
         let visibleTrades = realTimeTrades.filter { $0.trade.showInMenuBar }
-        for trade in visibleTrades {
-            statusBar.constructSymbolItem(from: trade, dataModel: data)
-        }
+        statusBar.syncSymbolItems(with: visibleTrades, dataModel: data)
 
-        Task { await logger.debug("🔧 CONTROLLER: Created \(visibleTrades.count) of \(realTimeTrades.count) symbol items (filtered by visibility)") }
+        Task { await logger.debug("🔧 CONTROLLER: Synced \(visibleTrades.count) of \(realTimeTrades.count) symbol items (filtered by visibility)") }
     }
 
     private func updatePortfolioSummary() {
@@ -210,11 +215,22 @@ class StockMenuBarController: NSObject {
             name: .refreshIntervalChanged,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(refreshRequested(_:)),
+            name: .refreshRequested,
+            object: nil
+        )
     }
     
     @objc private func refreshIntervalChanged(_ notification: Notification) {
         // RefreshService in DataModel handles the timer update automatically via property observer
         Task { await logger.info("🔧 MenuBar: Refresh interval changed notification received") }
+    }
+
+    @objc private func refreshRequested(_ notification: Notification) {
+        Task { await data.refreshAllTrades() }
     }
     
     deinit {
