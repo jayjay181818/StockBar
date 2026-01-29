@@ -13,6 +13,7 @@ extension Notification.Name {
     static let refreshIntervalChanged = Notification.Name("refreshIntervalChanged")
     static let realTimeTradesUIUpdateNeeded = Notification.Name("realTimeTradesUIUpdateNeeded")
     static let menuBarVisibilityChanged = Notification.Name("menuBarVisibilityChanged")
+    static let refreshRequested = Notification.Name("refreshRequested")
 }
 
 // MARK: - Portfolio Export/Import Data Structure
@@ -72,7 +73,7 @@ class PortfolioManager {
             let symbol = trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let units = trade.trade.position.unitSize
             let avgCost = trade.trade.position.positionAvgCost
-            let currency = trade.trade.position.costCurrency ?? (symbol.uppercased().hasSuffix(".L") ? "GBX" : "USD")
+            let currency = trade.trade.position.costCurrency ?? (SymbolMetadata.isUKSymbol(symbol) ? "GBX" : "USD")
             
             // Skip empty trades
             if !symbol.isEmpty && units > 0 {
@@ -149,11 +150,11 @@ struct PreferenceRow: View {
             return costCurrency
         }
         // Auto-detect based on symbol
-        return realTimeTrade.trade.name.uppercased().hasSuffix(".L") ? "GBX" : "USD"
+        return SymbolMetadata.isUKSymbol(realTimeTrade.trade.name) ? "GBX" : "USD"
     }
 
     private var availableCurrencies: [String] {
-        if realTimeTrade.trade.name.uppercased().hasSuffix(".L") {
+        if SymbolMetadata.isUKSymbol(realTimeTrade.trade.name) {
             return ["GBX", "GBP"]
         } else {
             return ["USD", "GBP", "EUR"]
@@ -274,7 +275,7 @@ struct PreferenceRow: View {
                             .padding(.vertical, 4)
                         }
                         
-                        if realTimeTrade.trade.name.uppercased().hasSuffix(".L") {
+                        if SymbolMetadata.isUKSymbol(realTimeTrade.trade.name) {
                             Text("UK stocks (.L) are typically quoted in GBX (pence)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -2052,7 +2053,7 @@ struct PreferenceView: View {
         
         // Filter to only clear symbols that actually exist in our data
         let symbolsToProcess = userdata.realTimeTrades.map { $0.trade.name }.filter { symbol in
-            ukSymbolsWithBadData.contains(symbol) || symbol.uppercased().hasSuffix(".L")
+            ukSymbolsWithBadData.contains(symbol) || SymbolMetadata.isUKSymbol(symbol)
         }
         
         if !symbolsToProcess.isEmpty {

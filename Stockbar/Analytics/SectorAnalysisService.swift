@@ -222,8 +222,10 @@ actor SectorAnalysisService {
             }
 
             // Try without .L suffix for UK stocks
-            if symbol.uppercased().hasSuffix(".L") {
-                let baseSymbol = symbolUpper.replacingOccurrences(of: ".L", with: "")
+            if SymbolMetadata.isUKSymbol(symbol) {
+                let baseSymbol = symbolUpper
+                    .replacingOccurrences(of: ".LON", with: "")
+                    .replacingOccurrences(of: ".L", with: "")
                 if let sector = sectorMap[baseSymbol] {
                     return sector
                 }

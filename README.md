@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.3.4** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.4.0** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 

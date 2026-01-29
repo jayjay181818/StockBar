@@ -1622,7 +1622,7 @@ struct PerformanceChartView: View {
             if let trade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
                 currency = trade.realTimeInfo.currency ?? "USD"
             } else {
-                currency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+                currency = SymbolMetadata.defaultCurrency(for: symbol)
             }
         case .portfolioValue, .portfolioGains:
             currency = dataModel?.preferredCurrency ?? "USD"
@@ -1965,7 +1965,7 @@ struct PerformanceChartView: View {
             if let trade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
                 return trade.realTimeInfo.currency ?? "USD"
             } else {
-                return symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+                return SymbolMetadata.defaultCurrency(for: symbol)
             }
         case .portfolioValue, .portfolioGains:
             return dataModel?.preferredCurrency ?? "USD"
