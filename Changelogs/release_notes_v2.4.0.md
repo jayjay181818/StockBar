@@ -1,6 +1,6 @@
 # Release Notes v2.4.0
 
-## Popover Improvements
+## 🧩 Popover Improvements
 
 - Fixed popover anchoring so it consistently appears below the menu bar item.
 - Centered footer layout for the updated timestamp, with Preferences and Quit aligned to the edges.
@@ -14,7 +14,7 @@
 
 ---
 
-## Charts and Benchmarks
+## 📈 Charts and Benchmarks
 
 - Range-based change: the header percent and P&L now reflect the selected time range (1D/1W/1M).
 - Benchmark comparison line is thicker and more legible.
@@ -25,7 +25,7 @@
 
 ---
 
-## Menu Bar Stability
+## 🧭 Menu Bar Stability
 
 - Reused existing status items instead of recreating them on each refresh to prevent third-party menu managers (e.g., Bartender) from reshuffling items and stuttering.
 - Fixed first-launch menu bar tickers rendering blank until a click by forcing an initial title update.
@@ -36,14 +36,14 @@
 
 ---
 
-## Menu Dropdown Redesign
+## 🪟 Menu Dropdown Redesign
 
 - **Menu Dropdown Redesign (Layout)**: Implemented a new popover-style layout in `MenuPriceChartView` with header, hero chart, bento grid, and footer styling.
 - **Canvas Chart Rendering**: Kept Canvas-based rendering for the menu chart to avoid Charts.framework crashes.
 
 ---
 
-## Data Providers & Symbol Handling
+## 🧮 Data Providers & Symbol Handling
 
 - Added symbol alias support via `SYMBOL_ALIASES` in `~/Documents/.stockbar_config.json` (e.g., `COPGL.XC` → `COPG.L`) to handle provider-specific tickers.
 - Expanded UK symbol detection to include `.XC`, with centralized currency/timezone defaults in `SymbolMetadata`.
@@ -55,14 +55,14 @@
 
 ---
 
-## Menu Bar Refresh & Updates
+## 🔄 Menu Bar Refresh & Updates
 
 - Added a refresh action to the “Updated: …” footer in the popover (with a refresh icon) to force an immediate quote refresh.
 - Menu bar items now react to deep trade changes using a dedicated trade-content publisher (keeps titles in sync with edits).
 
 ---
 
-## Settings & Persistence Fixes
+## 🧷 Settings & Persistence Fixes
 
 - Restored deep-edit persistence by re-triggering the debounced save pipeline for units/cost/symbol edits.
 - Portfolio summary now respects the `showColorCoding` preference (neutral colors when disabled).
