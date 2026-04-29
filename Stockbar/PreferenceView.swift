@@ -75,8 +75,8 @@ class PortfolioManager {
             let avgCost = trade.trade.position.positionAvgCost
             let currency = trade.trade.position.costCurrency ?? (SymbolMetadata.isUKSymbol(symbol) ? "GBX" : "USD")
             
-            // Skip empty trades
-            if !symbol.isEmpty && units > 0 {
+            // Skip empty/internal rows
+            if !symbol.isEmpty && units > 0 && !SymbolMetadata.isBenchmarkSymbol(symbol) {
                 csvString += "\(symbol),\(units),\(avgCost),\(currency)\n"
             }
         }
@@ -106,6 +106,11 @@ class PortfolioManager {
                 // Validate data
                 guard !symbol.isEmpty else {
                     errors.append("Line \(index + 1): Empty symbol")
+                    continue
+                }
+
+                guard !SymbolMetadata.isBenchmarkSymbol(symbol) else {
+                    errors.append("Line \(index + 1): \(symbol) is an internal benchmark symbol")
                     continue
                 }
                 
@@ -138,8 +143,7 @@ class PortfolioManager {
 
 struct PreferenceRow: View {
     @ObservedObject var realTimeTrade: RealTimeTrade
-    // Add DataModel dependency to trigger saves
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @State private var showCurrencyPicker = false
     @State private var validationError: String? = nil
 
@@ -394,7 +398,11 @@ struct PreferenceView: View {
     }
     
     private var availableSymbols: [String] {
-        userdata.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
+        editablePortfolioTrades.map { $0.trade.name }.filter { !$0.isEmpty }
+    }
+
+    private var editablePortfolioTrades: [RealTimeTrade] {
+        userdata.realTimeTrades.filter { !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }
     }
 
     var body: some View {
@@ -937,10 +945,10 @@ struct PreferenceView: View {
                         .frame(height: 20)
 
                     Button("Select All") {
-                        selectedSymbols = Set(userdata.realTimeTrades.map { $0.trade.name })
+                        selectedSymbols = Set(editablePortfolioTrades.map { $0.trade.name })
                     }
                     .buttonStyle(.borderless)
-                    .disabled(selectedSymbols.count == userdata.realTimeTrades.count)
+                    .disabled(selectedSymbols.count == editablePortfolioTrades.count)
 
                     Button("Deselect All") {
                         selectedSymbols.removeAll()
@@ -1006,7 +1014,7 @@ struct PreferenceView: View {
 
             // List for drag-and-drop functionality
             List {
-                ForEach(userdata.realTimeTrades) { item in
+                ForEach(editablePortfolioTrades) { item in
                     HStack {
                         // Show checkbox in bulk edit mode
                         if bulkEditMode {
@@ -1041,6 +1049,7 @@ struct PreferenceView: View {
                         Button(action: {
                             if let index = self.userdata.realTimeTrades.map({ $0.id }).firstIndex(of: item.id) {
                                 self.userdata.realTimeTrades.remove(at: index)
+                                self.userdata.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
                             }
                         }) {
                             Text("-")
@@ -1062,7 +1071,7 @@ struct PreferenceView: View {
                 .onDelete(perform: deleteStocks)
             }
             .listStyle(PlainListStyle())
-            .frame(minHeight: CGFloat(userdata.realTimeTrades.count * 40 + 20))
+            .frame(minHeight: CGFloat(editablePortfolioTrades.count * 40 + 20))
             
             // Portfolio Export/Import Section
             VStack(spacing: 12) {
@@ -1854,13 +1863,27 @@ struct PreferenceView: View {
     }
     
     private func moveStocks(from source: IndexSet, to destination: Int) {
-        userdata.realTimeTrades.move(fromOffsets: source, toOffset: destination)
-        // The move operation will automatically trigger the DataModel's didSet observer
-        // which will save the new order to UserDefaults
+        let portfolioRows = editablePortfolioTrades
+        let portfolioIDs = portfolioRows.map { $0.id }
+        var reorderedIDs = portfolioIDs
+        reorderedIDs.move(fromOffsets: source, toOffset: destination)
+
+        let tradesByID = Dictionary(uniqueKeysWithValues: portfolioRows.map { ($0.id, $0) })
+        let reorderedPortfolioRows = reorderedIDs.compactMap { tradesByID[$0] }
+        let internalRows = userdata.realTimeTrades.filter { SymbolMetadata.isBenchmarkSymbol($0.trade.name) }
+
+        userdata.realTimeTrades = reorderedPortfolioRows + internalRows
+        userdata.persistPortfolioAfterUserEdit()
     }
     
     private func deleteStocks(at offsets: IndexSet) {
-        userdata.realTimeTrades.remove(atOffsets: offsets)
+        let portfolioRows = editablePortfolioTrades
+        let idsToRemove = Set(offsets.compactMap { offset in
+            portfolioRows.indices.contains(offset) ? portfolioRows[offset].id : nil
+        })
+
+        userdata.realTimeTrades.removeAll { idsToRemove.contains($0.id) }
+        userdata.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
     }
 
     // MARK: - Bulk Edit Functions
@@ -1875,17 +1898,21 @@ struct PreferenceView: View {
 
     private func applyBulkCurrency(_ currency: String) {
         for symbol in selectedSymbols {
-            if let index = userdata.realTimeTrades.firstIndex(where: { $0.trade.name == symbol }) {
+            if let index = userdata.realTimeTrades.firstIndex(where: {
+                $0.trade.name == symbol && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
+            }) {
                 userdata.realTimeTrades[index].trade.position.costCurrency = currency
             }
         }
+        userdata.persistPortfolioAfterUserEdit()
         Task { await Logger.shared.info("💱 [BulkEdit] Changed currency to \(currency) for \(selectedSymbols.count) stocks") }
     }
 
     private func deleteSelectedStocks() {
         // Get indices of selected stocks
         let indicesToRemove = userdata.realTimeTrades.indices.filter { index in
-            selectedSymbols.contains(userdata.realTimeTrades[index].trade.name)
+            let symbol = userdata.realTimeTrades[index].trade.name
+            return selectedSymbols.contains(symbol) && !SymbolMetadata.isBenchmarkSymbol(symbol)
         }
 
         // Remove in reverse order to avoid index shifting issues
@@ -1893,6 +1920,7 @@ struct PreferenceView: View {
             userdata.realTimeTrades.remove(at: index)
         }
 
+        userdata.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
         Task { await Logger.shared.info("🗑️ [BulkEdit] Deleted \(selectedSymbols.count) stocks") }
         selectedSymbols.removeAll()
     }
@@ -2252,37 +2280,44 @@ struct PreferenceView: View {
                 let importResult = PortfolioManager.importFromCSV(csvContent)
                 
                 if importResult.errors.isEmpty {
-                    // Clear existing trades and add imported ones
-                    self.userdata.realTimeTrades.removeAll()
-                    
-                    for trade in importResult.trades {
-                        let emptyTradingInfo = TradingInfo()
-                        let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
-                        self.userdata.realTimeTrades.append(realTimeTrade)
+                    Task {
+                        do {
+                            try await self.userdata.replacePortfolioTrades(importResult.trades, source: "csv-import")
+                            await MainActor.run {
+                                self.importAlertMessage = "Successfully imported \(importResult.trades.count) stocks from portfolio"
+                                self.showingImportAlert = true
+                            }
+                        } catch {
+                            await MainActor.run {
+                                self.importAlertMessage = "Import failed: \(error.localizedDescription)"
+                                self.showingImportAlert = true
+                            }
+                        }
                     }
-                    
-                    self.importAlertMessage = "Successfully imported \(importResult.trades.count) stocks from portfolio"
                 } else {
                     let successCount = importResult.trades.count
                     let errorCount = importResult.errors.count
                     
                     if successCount > 0 {
-                        // Clear existing trades and add successfully imported ones
-                        self.userdata.realTimeTrades.removeAll()
-                        
-                        for trade in importResult.trades {
-                            let emptyTradingInfo = TradingInfo()
-                            let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
-                            self.userdata.realTimeTrades.append(realTimeTrade)
+                        Task {
+                            do {
+                                try await self.userdata.replacePortfolioTrades(importResult.trades, source: "csv-import")
+                                await MainActor.run {
+                                    self.importAlertMessage = "Imported \(successCount) stocks with \(errorCount) errors:\n\(importResult.errors.joined(separator: "\n"))"
+                                    self.showingImportAlert = true
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    self.importAlertMessage = "Import failed: \(error.localizedDescription)"
+                                    self.showingImportAlert = true
+                                }
+                            }
                         }
-                        
-                        self.importAlertMessage = "Imported \(successCount) stocks with \(errorCount) errors:\n\(importResult.errors.joined(separator: "\n"))"
                     } else {
                         self.importAlertMessage = "Import failed with \(errorCount) errors:\n\(importResult.errors.joined(separator: "\n"))"
+                        self.showingImportAlert = true
                     }
                 }
-                
-                self.showingImportAlert = true
                 
             } catch {
                 self.importAlertMessage = "Failed to read file: \(error.localizedDescription)"
@@ -2792,18 +2827,9 @@ struct RestoreBackupView: View {
 
                 // Restore from backup
                 let restoredTrades = try await BackupService.shared.restoreFromBackup(backupURL: backup.url)
+                try await dataModel.replacePortfolioTrades(restoredTrades, source: "backup-restore")
 
                 await MainActor.run {
-                    // Clear existing trades
-                    dataModel.realTimeTrades.removeAll()
-
-                    // Add restored trades
-                    for trade in restoredTrades {
-                        let emptyTradingInfo = TradingInfo()
-                        let realTimeTrade = RealTimeTrade(trade: trade, realTimeInfo: emptyTradingInfo)
-                        dataModel.realTimeTrades.append(realTimeTrade)
-                    }
-
                     // Close the sheet
                     isPresented = false
                 }

@@ -17,8 +17,8 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Cache Status Tests
 
-    func testNeverFetchedStatus() {
-        let status = cacheCoordinator.getCacheStatus(for: "AAPL", at: Date())
+    func testNeverFetchedStatus() async {
+        let status = await cacheCoordinator.getCacheStatus(for: "AAPL", at: Date())
 
         if case .neverFetched = status {
             // Success
@@ -27,15 +27,15 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testFreshCacheStatus() {
+    func testFreshCacheStatus() async {
         let now = Date()
         let symbol = "AAPL"
 
         // Record successful fetch
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
 
         // Check status immediately after
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
 
         if case .fresh = status {
             // Success
@@ -44,16 +44,16 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testStaleCacheStatus() {
+    func testStaleCacheStatus() async {
         let now = Date()
         let symbol = "AAPL"
 
         // Record fetch 10 minutes ago
         let fetchTime = now.addingTimeInterval(-600) // 10 minutes ago
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: fetchTime)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: fetchTime)
 
         // Check status now (15-minute fresh period has not passed, but stale period may have started)
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
 
         // Should be stale or fresh depending on configuration
         switch status {
@@ -65,16 +65,16 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testExpiredCacheStatus() {
+    func testExpiredCacheStatus() async {
         let now = Date()
         let symbol = "AAPL"
 
         // Record fetch 2 hours ago
         let fetchTime = now.addingTimeInterval(-7200) // 2 hours ago
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: fetchTime)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: fetchTime)
 
         // Check status now
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
 
         if case .expired = status {
             // Success
@@ -85,13 +85,13 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Fetch Success Recording Tests
 
-    func testRecordFetchSuccess() {
+    func testRecordFetchSuccess() async {
         let symbol = "AAPL"
         let now = Date()
 
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
 
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
         if case .fresh = status {
             // Success
         } else {
@@ -99,16 +99,16 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testRecordMultipleFetchSuccesses() {
+    func testRecordMultipleFetchSuccesses() async {
         let symbol = "AAPL"
         let firstFetch = Date()
         let secondFetch = firstFetch.addingTimeInterval(600) // 10 minutes later
 
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: firstFetch)
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: secondFetch)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: firstFetch)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: secondFetch)
 
         // Should use most recent fetch time
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: secondFetch)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: secondFetch)
         if case .fresh = status {
             // Success
         } else {
@@ -118,13 +118,13 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Fetch Failure Recording Tests
 
-    func testRecordFetchFailure() {
+    func testRecordFetchFailure() async {
         let symbol = "AAPL"
         let now = Date()
 
-        cacheCoordinator.setFailedFetch(for: symbol, at: now)
+        await cacheCoordinator.setFailedFetch(for: symbol, at: now)
 
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
         if case .failedRecently = status {
             // Success
         } else {
@@ -132,16 +132,16 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testFailureRetryStatus() {
+    func testFailureRetryStatus() async {
         let symbol = "AAPL"
         let now = Date()
 
         // Record failure 6 minutes ago
         let failureTime = now.addingTimeInterval(-360) // 6 minutes ago
-        cacheCoordinator.setFailedFetch(for: symbol, at: failureTime)
+        await cacheCoordinator.setFailedFetch(for: symbol, at: failureTime)
 
         // Check if ready to retry (assuming 5-minute retry interval)
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now)
         if case .readyToRetry = status {
             // Success
         } else {
@@ -151,17 +151,17 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Suspension Tests
 
-    func testSuspensionAfterMultipleFailures() {
+    func testSuspensionAfterMultipleFailures() async {
         let symbol = "AAPL"
         let now = Date()
 
         // Record 5 consecutive failures
         for i in 0..<5 {
             let failureTime = now.addingTimeInterval(Double(i * 60)) // 1 minute apart
-            cacheCoordinator.setFailedFetch(for: symbol, at: failureTime)
+            await cacheCoordinator.setFailedFetch(for: symbol, at: failureTime)
         }
 
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
         if case .suspended = status {
             // Success
         } else {
@@ -169,16 +169,16 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
-    func testClearSuspension() {
+    func testClearSuspension() async {
         let symbol = "AAPL"
         let now = Date()
 
         // Suspend the symbol
         for i in 0..<5 {
-            cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(Double(i * 60)))
+            await cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(Double(i * 60)))
         }
 
-        let statusBeforeClear = cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
+        let statusBeforeClear = await cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
         if case .suspended = statusBeforeClear {
             // Good - suspended as expected
         } else {
@@ -186,31 +186,31 @@ class CacheCoordinatorTests: XCTestCase {
         }
 
         // Clear suspension
-        cacheCoordinator.clearSuspension(for: symbol)
+        await cacheCoordinator.clearSuspension(for: symbol)
 
         // Should now be ready to retry
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(300))
         if case .suspended = status {
             XCTFail("Suspension should be cleared, but still suspended")
         }
     }
 
-    func testClearAllSuspensions() {
+    func testClearAllSuspensions() async {
         let symbol1 = "AAPL"
         let symbol2 = "GOOGL"
         let now = Date()
 
         // Suspend both symbols
         for i in 0..<5 {
-            cacheCoordinator.setFailedFetch(for: symbol1, at: now.addingTimeInterval(Double(i * 60)))
-            cacheCoordinator.setFailedFetch(for: symbol2, at: now.addingTimeInterval(Double(i * 60)))
+            await cacheCoordinator.setFailedFetch(for: symbol1, at: now.addingTimeInterval(Double(i * 60)))
+            await cacheCoordinator.setFailedFetch(for: symbol2, at: now.addingTimeInterval(Double(i * 60)))
         }
 
         // Clear all suspensions
-        cacheCoordinator.clearAllCache()
+        await cacheCoordinator.clearAllCache()
 
-        let status1 = cacheCoordinator.getCacheStatus(for: symbol1, at: now.addingTimeInterval(300))
-        let status2 = cacheCoordinator.getCacheStatus(for: symbol2, at: now.addingTimeInterval(300))
+        let status1 = await cacheCoordinator.getCacheStatus(for: symbol1, at: now.addingTimeInterval(300))
+        let status2 = await cacheCoordinator.getCacheStatus(for: symbol2, at: now.addingTimeInterval(300))
 
         if case .suspended = status1 {
             XCTFail("Symbol1 should not be suspended after clearAllCache")
@@ -222,22 +222,22 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Success After Failure Tests
 
-    func testSuccessAfterFailureClearsFailureCount() {
+    func testSuccessAfterFailureClearsFailureCount() async {
         let symbol = "AAPL"
         let now = Date()
 
         // Record some failures
         for i in 0..<3 {
-            cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(Double(i * 60)))
+            await cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(Double(i * 60)))
         }
 
         // Record success
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(200))
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(200))
 
         // Record more failures - should not suspend immediately if count was reset
-        cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(300))
+        await cacheCoordinator.setFailedFetch(for: symbol, at: now.addingTimeInterval(300))
 
-        let status = cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(360))
+        let status = await cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(360))
         if case .suspended = status {
             XCTFail("Should not be suspended after success reset failure count")
         }
@@ -245,33 +245,33 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Multiple Symbols Tests
 
-    func testMultipleSymbolsIndependentStatus() {
+    func testMultipleSymbolsIndependentStatus() async {
         let now = Date()
 
         // Symbol 1: Fresh
-        cacheCoordinator.setSuccessfulFetch(for: "AAPL", at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: "AAPL", at: now)
 
         // Symbol 2: Failed
-        cacheCoordinator.setFailedFetch(for: "GOOGL", at: now)
+        await cacheCoordinator.setFailedFetch(for: "GOOGL", at: now)
 
         // Symbol 3: Never fetched
         // (don't record anything)
 
-        let appleStatus = cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
+        let appleStatus = await cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
         if case .fresh = appleStatus {
             // Success
         } else {
             XCTFail("Expected AAPL to be fresh, got \(appleStatus.description)")
         }
 
-        let googleStatus = cacheCoordinator.getCacheStatus(for: "GOOGL", at: now)
+        let googleStatus = await cacheCoordinator.getCacheStatus(for: "GOOGL", at: now)
         if case .failedRecently = googleStatus {
             // Success
         } else {
             XCTFail("Expected GOOGL to be failedRecently, got \(googleStatus.description)")
         }
 
-        let teslaStatus = cacheCoordinator.getCacheStatus(for: "TSLA", at: now)
+        let teslaStatus = await cacheCoordinator.getCacheStatus(for: "TSLA", at: now)
         if case .neverFetched = teslaStatus {
             // Success
         } else {
@@ -281,19 +281,19 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Cache Statistics Tests
 
-    func testCacheStatistics() {
+    func testCacheStatistics() async {
         let now = Date()
 
         // Fresh cache
-        cacheCoordinator.setSuccessfulFetch(for: "AAPL", at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: "AAPL", at: now)
 
         // Stale cache
-        cacheCoordinator.setSuccessfulFetch(for: "GOOGL", at: now.addingTimeInterval(-1200)) // 20 min ago
+        await cacheCoordinator.setSuccessfulFetch(for: "GOOGL", at: now.addingTimeInterval(-1200)) // 20 min ago
 
         // Failed cache
-        cacheCoordinator.setFailedFetch(for: "TSLA", at: now)
+        await cacheCoordinator.setFailedFetch(for: "TSLA", at: now)
 
-        let stats = cacheCoordinator.getCacheStatistics()
+        let stats = await cacheCoordinator.getCacheStatistics()
 
         // Verify stats structure (exact values depend on implementation)
         XCTAssertNotNil(stats)
@@ -302,34 +302,49 @@ class CacheCoordinatorTests: XCTestCase {
 
     // MARK: - Edge Cases
 
-    func testCacheStatusWithFutureDate() {
+    func testCacheStatusWithFutureDate() async {
         let symbol = "AAPL"
         let now = Date()
 
-        cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
 
         // Check status with a past date (before fetch)
-        let pastStatus = cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(-3600))
-        XCTAssertTrue(pastStatus == .fresh || pastStatus == .neverFetched, "Checking with past date should handle gracefully")
+        let pastStatus = await cacheCoordinator.getCacheStatus(for: symbol, at: now.addingTimeInterval(-3600))
+        XCTAssertTrue(
+            pastStatus.isFresh || pastStatus.isNeverFetched,
+            "Checking with past date should handle gracefully"
+        )
     }
 
-    func testEmptySymbolHandling() {
-        let status = cacheCoordinator.getCacheStatus(for: "", at: Date())
+    func testEmptySymbolHandling() async {
+        let status = await cacheCoordinator.getCacheStatus(for: "", at: Date())
         XCTAssertNotNil(status, "Empty symbol should be handled gracefully")
     }
 
-    func testCaseInsensitiveSymbols() {
+    func testCaseInsensitiveSymbols() async {
         let now = Date()
 
-        cacheCoordinator.setSuccessfulFetch(for: "aapl", at: now)
+        await cacheCoordinator.setSuccessfulFetch(for: "aapl", at: now)
 
         // Most systems treat symbols as case-insensitive, but test actual behavior
-        let lowerStatus = cacheCoordinator.getCacheStatus(for: "aapl", at: now)
-        let upperStatus = cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
+        let lowerStatus = await cacheCoordinator.getCacheStatus(for: "aapl", at: now)
+        let upperStatus = await cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
 
         // This test documents the actual behavior - adjust assertion based on implementation
         // If case-sensitive: statuses will differ
         // If case-insensitive: statuses will match
-        XCTAssertTrue(lowerStatus == .fresh || upperStatus == .fresh, "Should handle case consistently")
+        XCTAssertTrue(lowerStatus.isFresh || upperStatus.isFresh, "Should handle case consistently")
+    }
+}
+
+private extension CacheStatus {
+    var isFresh: Bool {
+        if case .fresh = self { return true }
+        return false
+    }
+
+    var isNeverFetched: Bool {
+        if case .neverFetched = self { return true }
+        return false
     }
 }

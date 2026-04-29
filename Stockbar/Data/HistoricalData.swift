@@ -1,6 +1,6 @@
 import Foundation
 
-struct PriceSnapshot: Codable, Identifiable {
+struct PriceSnapshot: Codable, Identifiable, Sendable {
     let id = UUID()
     let timestamp: Date
     let price: Double
@@ -26,7 +26,7 @@ struct PriceSnapshot: Codable, Identifiable {
     }
 }
 
-struct PortfolioSnapshot: Codable, Identifiable {
+struct PortfolioSnapshot: Codable, Identifiable, Sendable {
     let id = UUID()
     let timestamp: Date
     let totalValue: Double
@@ -122,7 +122,7 @@ enum ChartTimeRange: String, CaseIterable {
     }
 }
 
-struct ChartDataPoint: Identifiable, Codable {
+struct ChartDataPoint: Identifiable, Codable, Sendable {
     let id = UUID()
     let date: Date
     let value: Double
@@ -137,7 +137,7 @@ struct ChartDataPoint: Identifiable, Codable {
 
 // MARK: - Enhanced Portfolio Snapshot Structures
 
-struct HistoricalPortfolioSnapshot: Codable, Identifiable {
+struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
     let id = UUID()
     let date: Date
     let totalValue: Double
@@ -156,7 +156,7 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable {
     }
 }
 
-struct PositionSnapshot: Codable {
+struct PositionSnapshot: Codable, Sendable {
     let symbol: String
     let units: Double
     let priceAtDate: Double
@@ -174,7 +174,7 @@ struct PositionSnapshot: Codable {
 
 // MARK: - Portfolio Composition Tracking
 
-struct PortfolioComposition: Codable, Hashable {
+struct PortfolioComposition: Codable, Hashable, Sendable {
     let positions: [PortfolioPosition]
     let compositionHash: String
     
@@ -191,7 +191,7 @@ struct PortfolioComposition: Codable, Hashable {
     }
 }
 
-struct PortfolioPosition: Codable, Hashable {
+struct PortfolioPosition: Codable, Hashable, Sendable {
     let symbol: String
     let units: Double
     let avgCost: Double

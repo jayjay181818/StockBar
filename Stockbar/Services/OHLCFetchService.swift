@@ -10,21 +10,36 @@ import Foundation
 
 // MARK: - OHLC Fetch Service
 
-@MainActor
-class OHLCFetchService {
+protocol OHLCDataStoring: Sendable {
+    func saveSnapshots(_ snapshots: [OHLCSnapshot]) async throws
+    func fetchSnapshots(symbol: String, startDate: Date?, endDate: Date?) async throws -> [OHLCSnapshot]
+}
+
+extension OHLCDataService: OHLCDataStoring {}
+
+final class OHLCFetchService: @unchecked Sendable {
     static let shared = OHLCFetchService()
 
     private let pythonScriptPath: String
-    private let ohlcDataService = OHLCDataService()
+    private let processRunner: any PythonProcessRunning
+    private let ohlcDataStore: any OHLCDataStoring
 
-    private init() {
+    init(
+        pythonScriptPath: String? = nil,
+        processRunner: (any PythonProcessRunning)? = nil,
+        ohlcDataStore: (any OHLCDataStoring)? = nil
+    ) {
         // Get path to Python script
-        if let scriptPath = Bundle.main.path(forResource: "get_ohlc_data", ofType: "py") {
+        if let pythonScriptPath {
+            self.pythonScriptPath = pythonScriptPath
+        } else if let scriptPath = Bundle.main.path(forResource: "get_ohlc_data", ofType: "py") {
             self.pythonScriptPath = scriptPath
         } else {
             // Fallback to main get_stock_data.py location
             self.pythonScriptPath = Bundle.main.resourcePath?.appending("/get_ohlc_data.py") ?? ""
         }
+        self.processRunner = processRunner ?? PythonProcessRunner(config: .load())
+        self.ohlcDataStore = ohlcDataStore ?? OHLCDataService()
     }
 
     // MARK: - Public Methods
@@ -42,49 +57,23 @@ class OHLCFetchService {
     ) async throws -> [OHLCSnapshot] {
         await Logger.shared.debug("Fetching OHLC data for \(symbol) - period: \(period), interval: \(interval)")
 
-        // Execute Python script
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = [pythonScriptPath, symbol, period, interval]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        // Set timeout
-        let timeoutSeconds: TimeInterval = 30
-        var timedOut = false
-
-        let timeoutTimer = DispatchSource.makeTimerSource(queue: .global())
-        timeoutTimer.schedule(deadline: .now() + timeoutSeconds)
-        timeoutTimer.setEventHandler {
-            if process.isRunning {
-                Task { await Logger.shared.warning("OHLC fetch timeout for \(symbol), terminating process") }
-                process.terminate()
-                timedOut = true
-            }
+        guard !pythonScriptPath.isEmpty else {
+            await Logger.shared.error("OHLC Python script not found in bundle")
+            throw OHLCFetchError.fetchFailed("Python script not found")
         }
-        timeoutTimer.resume()
 
         do {
-            try process.run()
-            process.waitUntilExit()
-            timeoutTimer.cancel()
+            let result = try await processRunner.run(
+                arguments: [pythonScriptPath, symbol, period, interval],
+                timeoutSeconds: 30,
+                logContext: "OHLC fetch for \(symbol)"
+            )
 
-            if timedOut {
-                throw OHLCFetchError.timeout
-            }
-
-            // Read output
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-            if let errorOutput = String(data: errorData, encoding: .utf8), !errorOutput.isEmpty {
+            if let errorOutput = String(data: result.stderr, encoding: .utf8), !errorOutput.isEmpty {
                 await Logger.shared.debug("Python stderr: \(errorOutput)")
             }
 
-            guard let output = String(data: outputData, encoding: .utf8), !output.isEmpty else {
+            guard let output = String(data: result.stdout, encoding: .utf8), !output.isEmpty else {
                 await Logger.shared.error("Empty output from OHLC fetch for \(symbol)")
                 throw OHLCFetchError.emptyResponse
             }
@@ -93,11 +82,14 @@ class OHLCFetchService {
             let snapshots = try parseOHLCOutput(output, symbol: symbol)
 
             // Save to Core Data
-            try await ohlcDataService.saveSnapshots(snapshots)
+            try await ohlcDataStore.saveSnapshots(snapshots)
 
             await Logger.shared.info("Successfully fetched \(snapshots.count) OHLC data points for \(symbol)")
             return snapshots
 
+        } catch NetworkError.timeout {
+            await Logger.shared.error("OHLC fetch timed out for \(symbol)")
+            throw OHLCFetchError.timeout
         } catch {
             await Logger.shared.error("Failed to fetch OHLC data for \(symbol): \(error)")
             throw OHLCFetchError.fetchFailed(error.localizedDescription)
@@ -110,7 +102,7 @@ class OHLCFetchService {
         startDate: Date? = nil,
         endDate: Date? = nil
     ) async throws -> [OHLCDataPoint] {
-        let snapshots = try await ohlcDataService.fetchSnapshots(
+        let snapshots = try await ohlcDataStore.fetchSnapshots(
             symbol: symbol,
             startDate: startDate,
             endDate: endDate
@@ -204,4 +196,3 @@ enum OHLCFetchError: LocalizedError {
         }
     }
 }
-

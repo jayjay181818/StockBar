@@ -8,6 +8,17 @@
 
 import Foundation
 
+struct DisplayPortfolioSummary {
+    let totalValue: Double
+    let totalGain: Double
+    let totalGainPct: Double
+    let dayGain: Double
+    let dayGainPct: Double
+    let totalCost: Double
+    let ownedPositionCount: Int
+    let currency: String
+}
+
 /// Service responsible for portfolio value and gains calculations
 class PortfolioCalculationService {
     private let currencyConverter: CurrencyConverter
@@ -145,6 +156,70 @@ class PortfolioCalculationService {
         Task { await logger.debug("Net value calculated: \(finalAmount) \(preferredCurrency)") }
         return (finalAmount, preferredCurrency)
     }
+
+    /// Calculates the menu bar portfolio summary using the same display-price semantics as symbol rows.
+    func calculateDisplayPortfolioSummary(
+        trades: [RealTimeTrade],
+        preferredCurrency: String
+    ) -> DisplayPortfolioSummary {
+        Task { await logger.debug("Calculating display portfolio summary in \(preferredCurrency)") }
+
+        var totalValueUSD = 0.0
+        var totalPrevCloseUSD = 0.0
+        var totalGainUSD = 0.0
+        var totalCostUSD = 0.0
+        var dayGainUSD = 0.0
+        var ownedPositionCount = 0
+
+        for realTimeTradeItem in trades {
+            guard !realTimeTradeItem.trade.isWatchlistOnly else { continue }
+
+            let info = realTimeTradeItem.realTimeInfo
+            let displayPrice = info.getCurrentDisplayPrice()
+            let prevClosePrice = info.prevClosePrice
+            let units = realTimeTradeItem.trade.position.unitSize
+
+            guard displayPrice.isFinite, displayPrice > 0 else { continue }
+            guard units > 0 else { continue }
+
+            let symbol = realTimeTradeItem.trade.name
+            let currency = info.currency ?? "USD"
+            let currentValueUSD = convertToUSD(amount: displayPrice * units, currency: currency)
+            totalValueUSD += currentValueUSD
+            ownedPositionCount += 1
+
+            if prevClosePrice.isFinite, prevClosePrice > 0 {
+                let prevValueUSD = convertToUSD(amount: prevClosePrice * units, currency: currency)
+                totalPrevCloseUSD += prevValueUSD
+                dayGainUSD += currentValueUSD - prevValueUSD
+            }
+
+            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: symbol)
+            if adjustedCost.isFinite, adjustedCost > 0 {
+                let costUSD = convertToUSD(amount: adjustedCost * units, currency: currency)
+                totalCostUSD += costUSD
+                totalGainUSD += currentValueUSD - costUSD
+            }
+        }
+
+        let totalValue = convertFromUSD(amount: totalValueUSD, preferredCurrency: preferredCurrency)
+        let totalGain = convertFromUSD(amount: totalGainUSD, preferredCurrency: preferredCurrency)
+        let dayGain = convertFromUSD(amount: dayGainUSD, preferredCurrency: preferredCurrency)
+        let totalCost = convertFromUSD(amount: totalCostUSD, preferredCurrency: preferredCurrency)
+        let totalGainPct = totalCostUSD > 0 ? (totalGainUSD / totalCostUSD) * 100 : 0
+        let dayGainPct = totalPrevCloseUSD > 0 ? (dayGainUSD / totalPrevCloseUSD) * 100 : 0
+
+        return DisplayPortfolioSummary(
+            totalValue: totalValue,
+            totalGain: totalGain,
+            totalGainPct: totalGainPct,
+            dayGain: dayGain,
+            dayGainPct: dayGainPct,
+            totalCost: totalCost,
+            ownedPositionCount: ownedPositionCount,
+            currency: preferredCurrency
+        )
+    }
     
     /// Memory-efficient calculation of portfolio metrics
     func calculatePortfolioMetricsEfficiently(
@@ -172,5 +247,34 @@ class PortfolioCalculationService {
         
         return (finalGains, finalValue, preferredCurrency)
     }
-}
 
+    private func convertToUSD(amount: Double, currency: String) -> Double {
+        if currency == "GBX" || currency == "GBp" {
+            let gbpAmount = amount / 100.0
+            return currencyConverter.convert(amount: gbpAmount, from: "GBP", to: "USD")
+        }
+
+        if currency == "GBP" {
+            return currencyConverter.convert(amount: amount, from: "GBP", to: "USD")
+        }
+
+        if currency == "USD" {
+            return amount
+        }
+
+        return currencyConverter.convert(amount: amount, from: currency, to: "USD")
+    }
+
+    private func convertFromUSD(amount: Double, preferredCurrency: String) -> Double {
+        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+            let gbpAmount = currencyConverter.convert(amount: amount, from: "USD", to: "GBP")
+            return gbpAmount * 100.0
+        }
+
+        if preferredCurrency == "USD" {
+            return amount
+        }
+
+        return currencyConverter.convert(amount: amount, from: "USD", to: preferredCurrency)
+    }
+}

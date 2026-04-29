@@ -12,7 +12,7 @@ import SwiftUI
 // MARK: - OHLC Data Point
 
 /// Represents a single OHLC (Open, High, Low, Close) data point for candlestick charts
-struct OHLCDataPoint: Identifiable, Codable {
+struct OHLCDataPoint: Identifiable, Codable, Sendable {
     let id: UUID
     let timestamp: Date
     let open: Double

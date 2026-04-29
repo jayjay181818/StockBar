@@ -231,17 +231,17 @@ actor CorrelationMatrixService {
         var variance = 0.0
 
         for i in 0..<n {
-            let symbol_i = symbols[i]
-            let w_i = weights[symbol_i] ?? 0.0
-            let vol_i = volatilities[symbol_i] ?? 0.0
+            let firstSymbol = symbols[i]
+            let firstWeight = weights[firstSymbol] ?? 0.0
+            let firstVolatility = volatilities[firstSymbol] ?? 0.0
 
             for j in 0..<n {
-                let symbol_j = symbols[j]
-                let w_j = weights[symbol_j] ?? 0.0
-                let vol_j = volatilities[symbol_j] ?? 0.0
+                let secondSymbol = symbols[j]
+                let secondWeight = weights[secondSymbol] ?? 0.0
+                let secondVolatility = volatilities[secondSymbol] ?? 0.0
                 let corr = matrix[i][j]
 
-                variance += w_i * w_j * vol_i * vol_j * corr
+                variance += firstWeight * secondWeight * firstVolatility * secondVolatility * corr
             }
         }
 

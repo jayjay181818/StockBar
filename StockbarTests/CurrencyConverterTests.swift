@@ -7,17 +7,18 @@ class CurrencyConverterTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        converter = CurrencyConverter.shared
-
-        // Set up mock exchange rates for testing
-        converter.exchangeRates = [
+        converter = CurrencyConverter(
+            exchangeRates: [
             "USD": 1.0,
             "GBP": 0.79,
             "EUR": 0.92,
             "JPY": 149.50,
             "CAD": 1.36,
             "AUD": 1.53
-        ]
+            ],
+            refreshOnInit: false,
+            loadHistoryOnInit: false
+        )
     }
 
     override func tearDown() {

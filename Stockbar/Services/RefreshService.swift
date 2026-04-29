@@ -194,20 +194,6 @@ class RefreshService {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
         }
 
-        if anySuccessfulUpdate {
-            dataModel.saveTradingInfo()
-            Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
-
-            let randomCheck = Int.random(in: 1...100)
-
-            if randomCheck == 1 {
-                // 1% chance trigger retroactive calculation
-                Task {
-                    await Logger.shared.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
-                    await dataModel.historicalDataManager.calculateRetroactivePortfolioHistory(using: dataModel)
-                }
-            }
-        }
     }
 
     // MARK: - Refresh Timer

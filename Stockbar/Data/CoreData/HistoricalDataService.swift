@@ -1,7 +1,7 @@
-import Foundation
-import CoreData
+@preconcurrency import CoreData
+@preconcurrency import Foundation
 
-protocol HistoricalDataServiceProtocol {
+protocol HistoricalDataServiceProtocol: Sendable {
     func savePriceSnapshots(_ snapshots: [PriceSnapshot]) async throws
     func fetchPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
     func fetchAllPriceSnapshots(for symbol: String) async throws -> [PriceSnapshot]
@@ -15,7 +15,7 @@ protocol HistoricalDataServiceProtocol {
     func getPortfolioSnapshotCount() async throws -> Int
 }
 
-class CoreDataHistoricalDataService: HistoricalDataServiceProtocol {
+final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unchecked Sendable {
     private let coreDataStack: CoreDataStack
     
     init(coreDataStack: CoreDataStack = .shared) {
@@ -51,13 +51,13 @@ class CoreDataHistoricalDataService: HistoricalDataServiceProtocol {
         }
         
         // Convert to dictionary format for batch insert
-        let snapshotDicts = newSnapshots.map { snapshot in
+        let snapshotDicts: [CoreDataBatchValues] = newSnapshots.map { snapshot in
             return [
                 "symbol": snapshot.symbol,
                 "timestamp": snapshot.timestamp,
                 "price": snapshot.price,
                 "previousClose": snapshot.previousClose,
-                "volume": snapshot.volume as Any
+                "volume": snapshot.volume
             ]
         }
         
@@ -270,7 +270,13 @@ class CoreDataHistoricalDataService: HistoricalDataServiceProtocol {
             symbolFetchRequest.returnsDistinctResults = true
             symbolFetchRequest.resultType = .dictionaryResultType
             
-            let symbolResults = try context.fetch(symbolFetchRequest) as! [[String: Any]]
+            guard let symbolResults = try context.fetch(symbolFetchRequest) as? [[String: Any]] else {
+                throw NSError(
+                    domain: "HistoricalDataService",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to read distinct price snapshot symbols"]
+                )
+            }
             let symbols = symbolResults.compactMap { $0["symbol"] as? String }
             
             // Optimize price snapshots for each symbol
