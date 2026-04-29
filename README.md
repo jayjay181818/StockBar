@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.4.0** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.4.1** | **macOS 15.4+** | **Swift 6.0**
 
 StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
 
@@ -209,7 +209,19 @@ The Debug tab provides comprehensive monitoring:
 
 ## 📋 Release History
 
-### Version 2.3.4 (Current) - Refactoring, Performance & Stability
+### Version 2.4.1 (Current) - Reliability & Portfolio Popover Release
+- **📊 Portfolio Popover**: Modernized the portfolio total popover and shared menu chart components
+- **🛡️ Data Safety**: Added Core Data recovery safeguards and hardened backup, restore, import, and export flows
+- **🔐 Logging Safety**: Added canonical secret redaction across app and Python subprocess logs
+- **⚡ Responsiveness**: Moved OHLC/Python subprocess work off the UI actor with async pipe reads and timeouts
+- **🧪 Test Coverage**: Restored full Xcode test target membership and added reliability regression coverage
+
+### Version 2.4.0 - Portfolio & Stability Improvements
+- **📈 Portfolio Accuracy**: Unified display-aware portfolio calculations and menu bar totals
+- **🧩 UI Improvements**: Improved menu-bar portfolio and stock display behaviour
+- **🧰 Reliability**: Continued Core Data, refresh, and historical-data hardening
+
+### Version 2.3.4 - Refactoring, Performance & Stability
 - **📍 Menu Bar Visibility**: Per-stock and global visibility toggles to declutter the menu bar
 - **🎨 Charting Overhaul**: Modularized charting engine with smoother interactions and improved comparison logic
 - **🧠 Memory Management**: LRU cache eviction with normalized cache keys to prevent bloat
