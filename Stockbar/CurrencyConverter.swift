@@ -2,13 +2,13 @@ import Combine
 import Foundation
 
 // Structure to store historical rate data
-public struct CurrencyRateSnapshot: Codable {
+public struct CurrencyRateSnapshot: Codable, Sendable {
     let timestamp: Date
     let rates: [String: Double]
     let baseCurrency: String
 }
 
-public class CurrencyConverter: ObservableObject {
+public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     @Published public var exchangeRates: [String: Double] = [:]
     @Published public var lastRefreshTime: Date = Date.distantPast
     @Published public var lastRefreshSuccess: Bool = false
@@ -24,9 +24,23 @@ public class CurrencyConverter: ObservableObject {
     private var lastAlertTimestamps: [String: Date] = [:] // currency pair -> last alert time
     private let alertCooldown: TimeInterval = 3600 // 1 hour between alerts for same pair
 
-    public init() {
-        loadRateHistory()
-        refreshRates()
+    public init(
+        exchangeRates: [String: Double] = [:],
+        refreshOnInit: Bool = true,
+        loadHistoryOnInit: Bool = true
+    ) {
+        self.exchangeRates = exchangeRates
+        if !exchangeRates.isEmpty {
+            lastRefreshTime = Date()
+            lastRefreshSuccess = true
+        }
+
+        if loadHistoryOnInit {
+            loadRateHistory()
+        }
+        if refreshOnInit {
+            refreshRates()
+        }
     }
 
     // Get exchange rate with metadata for UI display
@@ -96,13 +110,13 @@ public class CurrencyConverter: ObservableObject {
             guard let data = data,
                   let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
-                DispatchQueue.main.async {
+                Task { @MainActor [weak self] in
                     self?.lastRefreshSuccess = false
                 }
                 return
             }
 
-            DispatchQueue.main.async {
+            Task { @MainActor [weak self] in
                 // Check for significant changes before updating
                 self?.checkForSignificantChanges(newRates: response.rates)
                 
@@ -136,7 +150,8 @@ public class CurrencyConverter: ObservableObject {
         rateHistory = rateHistory.filter { $0.timestamp >= cutoffDate }
         
         saveRateHistory()
-        Task { await Logger.shared.debug("💱 [CurrencyConverter] Saved rate history. Total snapshots: \(rateHistory.count)") }
+        let snapshotCount = rateHistory.count
+        Task { await Logger.shared.debug("💱 [CurrencyConverter] Saved rate history. Total snapshots: \(snapshotCount)") }
     }
     
     private func saveRateHistory() {
@@ -151,7 +166,8 @@ public class CurrencyConverter: ObservableObject {
         if let data = defaults.data(forKey: "currencyRateHistory"),
            let history = try? JSONDecoder().decode([CurrencyRateSnapshot].self, from: data) {
             rateHistory = history
-            Task { await Logger.shared.info("💱 [CurrencyConverter] Loaded \(history.count) historical rate snapshots") }
+            let snapshotCount = history.count
+            Task { await Logger.shared.info("💱 [CurrencyConverter] Loaded \(snapshotCount) historical rate snapshots") }
         }
     }
     
@@ -227,53 +243,79 @@ public class CurrencyConverter: ObservableObject {
     }
 
     public func convert(amount: Double, from: String, to: String) -> Double {
+        let sourceIsPence = Self.isPenceCurrency(from)
+        let targetIsPence = Self.isPenceCurrency(to)
+        let sourceCurrency = sourceIsPence ? "GBP" : Self.normalizedCurrencyCode(from)
+        let targetCurrency = targetIsPence ? "GBP" : Self.normalizedCurrencyCode(to)
+
+        if sourceIsPence && targetIsPence {
+            return amount
+        }
+
+        if sourceIsPence {
+            return convert(amount: amount / 100, from: "GBP", to: targetCurrency)
+        }
+
+        if targetIsPence {
+            return convert(amount: amount, from: sourceCurrency, to: "GBP") * 100
+        }
+
         // If same currency, return original amount
-        if from == to {
+        if sourceCurrency == targetCurrency {
             return amount
         }
         
-        Task { await Logger.shared.debug("💱 [CurrencyConverter] Converting \(amount) from \(from) to \(to)") }
+        Task { await Logger.shared.debug("💱 [CurrencyConverter] Converting \(amount) from \(sourceCurrency) to \(targetCurrency)") }
         
         // Handle USD as base currency (API uses USD as base)
-        if from == "USD" {
-            guard let targetRate = exchangeRates[to] else {
+        if sourceCurrency == "USD" {
+            guard let targetRate = exchangeRates[targetCurrency] else {
                 // Fallback rates if API fails
-                let fallbackRate = getFallbackRate(to: to)
+                let fallbackRate = getFallbackRate(to: targetCurrency)
                 let result = amount * fallbackRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(to)") }
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(targetCurrency)") }
                 return result
             }
             let result = amount * targetRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) USD × \(targetRate) = \(result) \(to)") }
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) USD × \(targetRate) = \(result) \(targetCurrency)") }
             return result
-        } else if to == "USD" {
-            guard let sourceRate = exchangeRates[from] else {
+        } else if targetCurrency == "USD" {
+            guard let sourceRate = exchangeRates[sourceCurrency] else {
                 // Fallback rates if API fails
-                let fallbackRate = getFallbackRate(to: from)
+                let fallbackRate = getFallbackRate(to: sourceCurrency)
                 let result = amount / fallbackRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) \(from) ÷ \(fallbackRate) = \(result) USD") }
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) \(sourceCurrency) ÷ \(fallbackRate) = \(result) USD") }
                 return result
             }
             let result = amount / sourceRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) \(from) ÷ \(sourceRate) = \(result) USD") }
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) \(sourceCurrency) ÷ \(sourceRate) = \(result) USD") }
             return result
         } else {
             // Convert from source to USD, then USD to target
-            guard let sourceRate = exchangeRates[from],
-                  let targetRate = exchangeRates[to] else {
+            guard let sourceRate = exchangeRates[sourceCurrency],
+                  let targetRate = exchangeRates[targetCurrency] else {
                 // Fallback conversion
-                let fallbackFromRate = getFallbackRate(to: from)
-                let fallbackToRate = getFallbackRate(to: to)
+                let fallbackFromRate = getFallbackRate(to: sourceCurrency)
+                let fallbackToRate = getFallbackRate(to: targetCurrency)
                 let usdAmount = amount / fallbackFromRate
                 let result = usdAmount * fallbackToRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rates: \(amount) \(from) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(to)") }
+                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rates: \(amount) \(sourceCurrency) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(targetCurrency)") }
                 return result
             }
             let amountInUSD = amount / sourceRate
             let result = amountInUSD * targetRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rates: \(amount) \(from) ÷ \(sourceRate) × \(targetRate) = \(result) \(to)") }
+                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rates: \(amount) \(sourceCurrency) ÷ \(sourceRate) × \(targetRate) = \(result) \(targetCurrency)") }
             return result
         }
+    }
+
+    private static func normalizedCurrencyCode(_ currency: String) -> String {
+        currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private static func isPenceCurrency(_ currency: String) -> Bool {
+        let trimmed = currency.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "GBp" || trimmed.uppercased() == "GBX"
     }
     
     private func getFallbackRate(to currency: String) -> Double {

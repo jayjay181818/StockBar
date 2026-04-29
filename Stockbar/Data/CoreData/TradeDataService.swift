@@ -1,8 +1,34 @@
 import Foundation
 import CoreData
 
+private actor TradeDataWriteGate {
+    static let shared = TradeDataWriteGate()
+
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if !isLocked {
+            isLocked = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func signal() {
+        if waiters.isEmpty {
+            isLocked = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Service for managing trade data persistence in Core Data
-class TradeDataService {
+final class TradeDataService: @unchecked Sendable {
     
     // MARK: - Core Data Stack Access
     
@@ -14,16 +40,25 @@ class TradeDataService {
     
     /// Saves all current trades to Core Data, replacing existing trades
     func saveAllTrades(_ trades: [Trade]) async throws {
-        try await CoreDataStack.shared.performBackgroundTask { context in
-            // Delete existing trades more efficiently with a batch delete request
-            let fetchRequest: NSFetchRequest<NSFetchRequestResult> = TradeEntity.fetchRequest()
-            let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-            try context.execute(deleteRequest)
-            
-            // Create new trade entities
-            for trade in trades {
-                _ = TradeEntity.fromTrade(trade, in: context)
+        let uniqueTrades = Self.deduplicatedTrades(trades)
+
+        await TradeDataWriteGate.shared.wait()
+        do {
+            try await CoreDataStack.shared.performBackgroundTask { context in
+                // Delete existing trades more efficiently with a batch delete request
+                let fetchRequest: NSFetchRequest<NSFetchRequestResult> = TradeEntity.fetchRequest()
+                let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+                try context.execute(deleteRequest)
+                
+                // Create new trade entities
+                for trade in uniqueTrades {
+                    _ = TradeEntity.fromTrade(trade, in: context)
+                }
             }
+            await TradeDataWriteGate.shared.signal()
+        } catch {
+            await TradeDataWriteGate.shared.signal()
+            throw error
         }
     }
     
@@ -34,8 +69,23 @@ class TradeDataService {
             fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \TradeEntity.name, ascending: true)]
             
             let tradeEntities = try context.fetch(fetchRequest)
-            return tradeEntities.map { $0.toTrade() }
+            return Self.deduplicatedTrades(tradeEntities.map { $0.toTrade() })
         }
+    }
+
+    private static func deduplicatedTrades(_ trades: [Trade]) -> [Trade] {
+        var seenSymbols: Set<String> = []
+        var uniqueTrades: [Trade] = []
+
+        for trade in trades {
+            let symbol = trade.name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard !symbol.isEmpty, !seenSymbols.contains(symbol) else { continue }
+
+            seenSymbols.insert(symbol)
+            uniqueTrades.append(trade)
+        }
+
+        return uniqueTrades
     }
     
     /// Saves a single trade

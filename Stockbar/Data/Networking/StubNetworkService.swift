@@ -8,7 +8,7 @@
 
 import Foundation
 
-class StubNetworkService: NetworkService {
+final class StubNetworkService: NetworkService, @unchecked Sendable {
     
     private let logger = Logger.shared
     
@@ -266,4 +266,3 @@ class StubNetworkService: NetworkService {
         mockOHLCData.removeAll()
     }
 }
-

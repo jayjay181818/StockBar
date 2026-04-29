@@ -27,6 +27,7 @@ public actor Logger {
     private init() {
         dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        Self.scrubPersistedLogFiles(fileManager: .default)
     }
     
     /// Logs a message with the specified level
@@ -45,8 +46,9 @@ public actor Logger {
     ) {
         let timestamp = dateFormatter.string(from: Date())
         let filename = (file as NSString).lastPathComponent
+        let safeMessage = LogRedactor.redact(message)
         
-        let logMessage = "\(timestamp) \(level.emoji) [\(level.rawValue.uppercased())] [\(filename):\(line)] \(function): \(message)"
+        let logMessage = "\(timestamp) \(level.emoji) [\(level.rawValue.uppercased())] [\(filename):\(line)] \(function): \(safeMessage)"
         
         // Print to console in debug
         #if DEBUG
@@ -85,13 +87,24 @@ public actor Logger {
     }
     
     private func getLogFileURL() -> URL? {
+        return getLogDirectoryURL()?.appendingPathComponent("stockbar.log")
+    }
+
+    private func getLogDirectoryURL() -> URL? {
+        Self.resolveLogDirectoryURL(fileManager: fileManager)
+    }
+
+    private static func resolveLogDirectoryURL(fileManager: FileManager) -> URL? {
         guard let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
 
-        let bundlePathComponent = Bundle.main.bundleIdentifier?.isEmpty == false
-            ? Bundle.main.bundleIdentifier!
-            : "Stockbar"
+        let bundlePathComponent: String
+        if let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty {
+            bundlePathComponent = bundleIdentifier
+        } else {
+            bundlePathComponent = "Stockbar"
+        }
         let appSupportURL = baseURL.appendingPathComponent(bundlePathComponent, isDirectory: true)
 
         if !fileManager.fileExists(atPath: appSupportURL.path) {
@@ -105,7 +118,24 @@ public actor Logger {
             }
         }
 
-        return appSupportURL.appendingPathComponent("stockbar.log")
+        return appSupportURL
+    }
+
+    private static func scrubPersistedLogFiles(fileManager: FileManager) {
+        guard let baseURL = resolveLogDirectoryURL(fileManager: fileManager) else { return }
+
+        for fileName in ["stockbar.log", "stockbar.1.log", "stockbar.2.log"] {
+            let fileURL = baseURL.appendingPathComponent(fileName)
+            guard fileManager.fileExists(atPath: fileURL.path),
+                  let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                continue
+            }
+
+            let redactedContent = LogRedactor.redact(content)
+            guard redactedContent != content else { continue }
+
+            try? redactedContent.write(to: fileURL, atomically: true, encoding: .utf8)
+        }
     }
     
     public func debug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
@@ -149,10 +179,11 @@ public actor Logger {
                 .filter { !$0.isEmpty }
                 .map { line in
                     // Truncate extremely long lines to prevent UI issues
-                    if line.count > 1000 {
-                        return String(line.prefix(1000)) + " ... [truncated]"
+                    let safeLine = LogRedactor.redact(line)
+                    if safeLine.count > 1000 {
+                        return String(safeLine.prefix(1000)) + " ... [truncated]"
                     }
-                    return line
+                    return safeLine
                 }
             
             // Return the last maxLines entries
@@ -226,10 +257,11 @@ public actor Logger {
                 let newLines = content.components(separatedBy: .newlines)
                     .filter { !$0.isEmpty }
                     .map { line in
-                        if line.count > 1000 {
-                            return String(line.prefix(1000)) + " ... [truncated]"
+                        let safeLine = LogRedactor.redact(line)
+                        if safeLine.count > 1000 {
+                            return String(safeLine.prefix(1000)) + " ... [truncated]"
                         }
-                        return line
+                        return safeLine
                     }
                 
                 lines = newLines
@@ -356,16 +388,16 @@ public actor Logger {
     }
 
     /// Gets total size of all log files in MB
-    public func getTotalLogSize() -> Double {
-        guard let baseURL = getLogFileURL()?.deletingLastPathComponent() else { return 0 }
+    public nonisolated func getTotalLogSize() -> Double {
+        guard let baseURL = Self.resolveLogDirectoryURL(fileManager: .default) else { return 0 }
 
         let logFiles = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
         var totalSize: Int64 = 0
 
         for logFile in logFiles {
             let fileURL = baseURL.appendingPathComponent(logFile)
-            if fileManager.fileExists(atPath: fileURL.path),
-               let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+            if FileManager.default.fileExists(atPath: fileURL.path),
+               let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                let fileSize = attributes[.size] as? Int64 {
                 totalSize += fileSize
             }

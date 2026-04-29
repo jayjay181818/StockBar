@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 class PreferenceWindowController: NSWindowController, NSWindowDelegate {
 
     // Keep a strong reference to the hosting controller
@@ -66,9 +67,5 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
         showWindow(nil)
     }
     
-    deinit {
-        // Ensure proper cleanup when the window controller is deallocated
-        window?.delegate = nil
-        hostingController = nil
-    }
+    deinit {}
 }

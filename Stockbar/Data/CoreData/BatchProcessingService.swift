@@ -1,5 +1,5 @@
-import Foundation
 import CoreData
+import Foundation
 import OSLog
 
 /// High-performance batch processing service for large Core Data operations
@@ -40,9 +40,7 @@ actor BatchProcessingService {
             items: snapshots,
             operationId: operationId,
             batchSize: defaultBatchSize
-        ) { batch, context in
-            try await self.insertPriceSnapshotBatch(batch, context: context)
-        }
+        )
         
         Task { await logger.info("✅ Completed batch insert of \(snapshots.count) price snapshots") }
     }
@@ -66,9 +64,7 @@ actor BatchProcessingService {
             items: snapshots,
             operationId: operationId,
             batchSize: min(defaultBatchSize / 2, 500) // Smaller batches for complex objects
-        ) { batch, context in
-            try await self.insertPortfolioSnapshotBatch(batch, context: context)
-        }
+        )
         
         Task { await logger.info("✅ Completed batch insert of \(snapshots.count) portfolio snapshots") }
     }
@@ -119,7 +115,7 @@ actor BatchProcessingService {
     /// Performs batch update operations with optimized performance
     func batchUpdatePriceSnapshots(
         matching predicate: NSPredicate,
-        updates: [String: Any]
+        updates: CoreDataBatchValues
     ) async throws -> Int {
         Task { await logger.info("🔄 Starting batch update of price snapshots") }
         
@@ -131,7 +127,9 @@ actor BatchProcessingService {
             
             let batchUpdate = NSBatchUpdateRequest(entity: PriceSnapshotEntity.entity())
             batchUpdate.predicate = predicate
-            batchUpdate.propertiesToUpdate = updates
+            batchUpdate.propertiesToUpdate = updates.reduce(into: [String: Any]()) { result, pair in
+                result[pair.key] = pair.value
+            }
             batchUpdate.resultType = .updatedObjectsCountResultType
             
             let result = try context.execute(batchUpdate) as? NSBatchUpdateResult
@@ -163,7 +161,7 @@ actor BatchProcessingService {
         
         let context = coreDataStack.newBackgroundContext()
         
-        try await context.perform {
+        await context.perform {
             // Refresh all registered objects to clear memory
             context.refreshAllObjects()
             
@@ -179,27 +177,21 @@ actor BatchProcessingService {
     
     // MARK: - Private Implementation
     
-    private func performBatchInsert<T>(
+    private func performBatchInsert<T: Sendable>(
         items: [T],
         operationId: String,
-        batchSize: Int,
-        insertBatch: @escaping ([T], NSManagedObjectContext) async throws -> Void
+        batchSize: Int
     ) async throws {
         
         let batches = items.chunked(into: batchSize)
         let totalBatches = batches.count
         
-        await withThrowingTaskGroup(of: Void.self) { group in
+        try await withThrowingTaskGroup(of: Void.self) { group in
             let semaphore = AsyncSemaphore(value: maxConcurrentBatches)
             
             for (batchIndex, batch) in batches.enumerated() {
                 group.addTask {
                     await semaphore.wait()
-                    defer { 
-                        Task {
-                            await semaphore.signal()
-                        }
-                    }
                     
                     do {
                         let context = self.coreDataStack.newBackgroundContext()
@@ -245,60 +237,26 @@ actor BatchProcessingService {
                         if (batchIndex + 1) % 10 == 0 {
                             await Task.yield()
                         }
-                        
+                        await semaphore.signal()
                     } catch {
+                        await semaphore.signal()
                         Task { await self.logger.error("🔄 Batch insertion failed for batch \(batchIndex): \(error)") }
                         throw error
                     }
                 }
             }
+            try await group.waitForAll()
         }
     }
-    
-    private func insertPriceSnapshotBatch(_ snapshots: [PriceSnapshot], context: NSManagedObjectContext) async throws {
-        for snapshot in snapshots {
-            let entity = PriceSnapshotEntity(context: context)
-            entity.id = snapshot.id
-            entity.timestamp = snapshot.timestamp
-            entity.price = snapshot.price
-            entity.previousClose = snapshot.previousClose
-            entity.volume = Int64(snapshot.volume ?? 0)
-            entity.symbol = snapshot.symbol
-        }
-    }
-    
-    private func insertPortfolioSnapshotBatch(_ snapshots: [HistoricalPortfolioSnapshot], context: NSManagedObjectContext) async throws {
-        for snapshot in snapshots {
-            let entity = PortfolioSnapshotEntity(context: context)
-            entity.id = snapshot.id
-            entity.timestamp = snapshot.date
-            entity.totalValue = snapshot.totalValue
-            entity.totalGains = snapshot.totalGains
-            entity.totalCost = snapshot.totalCost
-            entity.currency = snapshot.currency
-            entity.compositionHash = Self.generateCompositionHashSync(snapshot.portfolioComposition)
-            
-            // Create position snapshots
-            for (_, position) in snapshot.portfolioComposition {
-                let positionEntity = PositionSnapshotEntity(context: context)
-                positionEntity.symbol = position.symbol
-                positionEntity.units = position.units
-                positionEntity.priceAtDate = position.priceAtDate
-                positionEntity.valueAtDate = position.valueAtDate
-                positionEntity.currency = position.currency
-                positionEntity.portfolioSnapshot = entity
-            }
-        }
-    }
-    
+
     private func generateCompositionHash(_ composition: [String: PositionSnapshot]) -> String {
         return Self.generateCompositionHashSync(composition)
     }
     
     private static func generateCompositionHashSync(_ composition: [String: PositionSnapshot]) -> String {
         let sortedKeys = composition.keys.sorted()
-        let hashString = sortedKeys.map { key in
-            let position = composition[key]!
+        let hashString = sortedKeys.compactMap { key -> String? in
+            guard let position = composition[key] else { return nil }
             return "\(key):\(position.units):\(position.priceAtDate)"
         }.joined(separator: "|")
         

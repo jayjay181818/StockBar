@@ -6,6 +6,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var dataModel: DataModel!
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard !ProcessInfo.processInfo.isRunningUnitTests else {
+            return
+        }
+
+        _ = CoreDataStack.shared.persistentContainer
         dataModel = DataModel()
 
         // Perform legacy cleanup on first launch
@@ -32,6 +37,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await scheduleAutomaticBackup()
         }
+
+        Task {
+            await RuntimeIssueMonitor.shared.start()
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            presentCoreDataRecoveryNoticeIfNeeded()
+        }
     }
 
     // Handle dock icon clicks - reopen preferences window
@@ -49,6 +63,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Performs automatic backup if needed (once per day)
     @MainActor
     private func scheduleAutomaticBackup() async {
+        guard await dataModel.waitForInitialTradeLoad() else {
+            await Logger.shared.warning("Automatic backup skipped because portfolio load did not complete")
+            return
+        }
+
+        let portfolioTrades = dataModel.realTimeTrades.filter { trade in
+            !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !SymbolMetadata.isBenchmarkSymbol(trade.trade.name)
+        }
+        guard !portfolioTrades.isEmpty else {
+            await Logger.shared.debug("Automatic backup skipped because no portfolio stocks are loaded")
+            return
+        }
+
         let success = await BackupService.shared.performAutomaticBackupIfNeeded(trades: dataModel.realTimeTrades)
         if success {
             await Logger.shared.info("Automatic backup completed successfully")
@@ -63,6 +91,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showPreferences(_ sender: Any?) {
         stockMenuBarController?.showPreferences(sender)
+    }
+
+    private func presentCoreDataRecoveryNoticeIfNeeded() {
+        guard let notice = CoreDataRecoveryNotice(state: CoreDataStack.shared.storeLoadState) else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = notice.title
+        alert.informativeText = notice.message
+        alert.alertStyle = .critical
+        if notice.backupDirectory != nil {
+            alert.addButton(withTitle: "Open Backup Folder")
+        }
+        alert.addButton(withTitle: "OK")
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn,
+              let backupDirectory = notice.backupDirectory else {
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([backupDirectory])
     }
 
     // MARK: - Python Dependency Management
@@ -160,5 +211,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         default: // Dismiss
             break
         }
+    }
+}
+
+private extension ProcessInfo {
+    var isRunningUnitTests: Bool {
+        environment["XCTestConfigurationFilePath"] != nil
     }
 }

@@ -10,6 +10,7 @@ import urllib.error
 import csv
 import io
 import math
+import re
 
 try:
     import requests
@@ -41,6 +42,23 @@ FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 STOOQ_BASE_URL = "https://stooq.com/q/d/l"
 
+SECRET_REDACTION_PATTERNS = [
+    (re.compile(r"(?i)([?&](?:apikey|api_key|access_token|token|key)=)[^&\s\"'<>)\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)[^\s,;\"')\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+]
+
+def sanitize_log_message(message):
+    """Remove credential values before emitting stderr/stdout diagnostics."""
+    sanitized = str(message)
+    for pattern, replacement in SECRET_REDACTION_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
+
+def log_error(message):
+    print(sanitize_log_message(message), file=sys.stderr)
+
 def get_config():
     """Read the entire configuration file"""
     try:
@@ -51,7 +69,7 @@ def get_config():
             with open(config_file, 'r') as f:
                 return json.load(f)
     except Exception as e:
-        print(f"Error reading config file: {e}", file=sys.stderr)
+        log_error(f"Error reading config file: {e}")
     return {}
 
 CONFIG = get_config()
@@ -167,7 +185,7 @@ def make_request(url, params=None, headers=None):
         except requests.exceptions.HTTPError as e:
             raise e
         except requests.exceptions.RequestException as e:
-            print(f"Request failed via requests: {e}", file=sys.stderr)
+            log_error(f"Request failed via requests: {e}")
             return None
     else:
         try:
@@ -190,10 +208,10 @@ def make_request(url, params=None, headers=None):
         except urllib.error.HTTPError as e:
             raise e
         except urllib.error.URLError as e:
-            print(f"Request failed via urllib: {e}", file=sys.stderr)
+            log_error(f"Request failed via urllib: {e}")
             return None
         except Exception as e:
-            print(f"Unexpected error during urllib request: {e}", file=sys.stderr)
+            log_error(f"Unexpected error during urllib request: {e}")
             return None
 
 def make_fmp_request(url, params=None):
@@ -332,7 +350,7 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
                     'previousClose': 0.0 # Placeholder, will fix in post-processing if possible
                 })
             except Exception as e:
-                print(f"Error parsing Twelve Data entry: {e}", file=sys.stderr)
+                log_error(f"Error parsing Twelve Data entry: {e}")
                 continue
         
         # Fix previousClose
@@ -348,7 +366,7 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
         return historical_data
 
     except Exception as e:
-        print(f"Twelve Data fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Twelve Data fetch failed for {symbol}: {e}")
         return None
 
 # --- Stooq Fetcher ---
@@ -452,7 +470,7 @@ def fetch_historical_data_stooq(symbol, start_date, end_date):
         return historical_data
 
     except Exception as e:
-        print(f"Stooq fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Stooq fetch failed for {symbol}: {e}")
         return None
 
 # --- Existing Fetchers (Refactored) ---
@@ -520,7 +538,7 @@ def fetch_real_time_quote_yfinance(symbol):
                 current_price = regular_market_price
                 
         except Exception as e:
-            print(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.", file=sys.stderr)
+            log_error(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.")
 
         # 3. Try to get the latest price using fast_info if we don't have it yet
         if regular_market_price is None:
@@ -530,7 +548,7 @@ def fetch_real_time_quote_yfinance(symbol):
                 if currency is None:
                     currency = ticker.fast_info.get('currency')
             except Exception as e:
-                print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
+                log_error(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.")
 
         # 4. If still no regular market price, try intraday history with pre/post market data
         if regular_market_price is None:
@@ -648,7 +666,7 @@ def fetch_real_time_quote_yfinance(symbol):
         }
         
     except Exception as e:
-        print(f"yfinance fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"yfinance fetch failed for {symbol}: {e}")
         return None
 
 
@@ -688,7 +706,7 @@ def fetch_real_time_quote_fmp(symbol):
         # Re-raise HTTP errors
         if "HTTP Error" in str(e) or hasattr(e, 'code') or (hasattr(e, 'response') and hasattr(e.response, 'status_code')):
             raise e
-        print(f"FMP fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"FMP fetch failed for {symbol}: {e}")
         return None
 
 def fetch_real_time_quote_twelvedata(symbol):
@@ -738,7 +756,7 @@ def fetch_real_time_quote_twelvedata(symbol):
             'currency': normalized_currency
         }
     except Exception as e:
-        print(f"Twelve Data fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Twelve Data fetch failed for {symbol}: {e}")
         return None
 
 def fetch_real_time_quote_yahoo_api(symbol):
@@ -798,7 +816,7 @@ def fetch_real_time_quote_yahoo_api(symbol):
             'currency': normalized_currency
         }
     except Exception as e:
-        print(f"Yahoo API fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Yahoo API fetch failed for {symbol}: {e}")
         return None
 
 def needs_prev_close_backfill(symbol, current_price, previous_close, currency):
@@ -876,7 +894,7 @@ def fetch_previous_close_twelvedata(symbol):
 
         return prev_close
     except Exception as e:
-        print(f"Twelve Data previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Twelve Data previous close fetch failed for {symbol}: {e}")
         return None
 
 def fetch_previous_close_stooq(symbol):
@@ -895,7 +913,7 @@ def fetch_previous_close_stooq(symbol):
             return None
         return prev_close
     except Exception as e:
-        print(f"Stooq previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Stooq previous close fetch failed for {symbol}: {e}")
         return None
 
 def fetch_previous_close_yfinance(symbol):
@@ -935,7 +953,7 @@ def fetch_previous_close_yfinance(symbol):
             return None
         return previous_close
     except Exception as e:
-        print(f"yfinance previous close fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"yfinance previous close fetch failed for {symbol}: {e}")
         return None
 
 def fetch_previous_close_from_history(symbol):
@@ -1096,7 +1114,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
             return historical_data
             
         except Exception as e:
-            print(f"yfinance historical fetch failed for {symbol} (attempt {attempt+1}): {e}", file=sys.stderr)
+            log_error(f"yfinance historical fetch failed for {symbol} (attempt {attempt+1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)
     
@@ -1138,7 +1156,7 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
                 'previousClose': previous_close
             })
         except Exception as e:
-            print(f"Error processing historical entry for {api_symbol}: {e}", file=sys.stderr)
+            log_error(f"Error processing historical entry for {api_symbol}: {e}")
             continue
     
     historical_data.sort(key=lambda x: x['timestamp'])
@@ -1235,7 +1253,7 @@ def fetch_historical_data(symbol, start_date, end_date):
                 return result
                 
         except Exception as e:
-            print(f"Source {source} failed for {symbol}: {e}", file=sys.stderr)
+            log_error(f"Source {source} failed for {symbol}: {e}")
             
             # Check for specific errors to handle gracefully
             is_403 = False
@@ -1289,7 +1307,7 @@ def fetch_batch(symbols):
             time.sleep(1.0)  # 1 second delay between requests to be more conservative
             
         except Exception as e:
-            print(f"Error fetching {symbol}: {e}", file=sys.stderr)
+            log_error(f"Error fetching {symbol}: {e}")
             results[symbol] = None
     
     return results
@@ -1305,7 +1323,7 @@ def fetch_single(symbol):
             
             return (timestamp_str, close_price, close_price, close_price, prev_close)
     except Exception as e:
-        print(f"Single fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Single fetch failed for {symbol}: {e}")
     return None
 
 def output_error(error_code, message, symbol=None, retry_after=None):
@@ -1313,7 +1331,7 @@ def output_error(error_code, message, symbol=None, retry_after=None):
     error_obj = {
         'error': True,
         'error_code': error_code,
-        'message': message,
+        'message': sanitize_log_message(message),
         'timestamp': int(time.time())
     }
     if symbol:
@@ -1363,7 +1381,7 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
         return ohlc_data
 
     except Exception as e:
-        print(f"yfinance OHLC fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"yfinance OHLC fetch failed for {symbol}: {e}")
         return None
 
 def fetch_ohlc_data(symbol, period='1mo', interval='1d'):
@@ -1394,7 +1412,7 @@ def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
             time.sleep(1.0)
 
         except Exception as e:
-            print(f"Error fetching OHLC for {symbol}: {e}", file=sys.stderr)
+            log_error(f"Error fetching OHLC for {symbol}: {e}")
             results[symbol] = None
 
     return results

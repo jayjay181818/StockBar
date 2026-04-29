@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 /// Tiered caching system for optimal performance across different data access patterns
-class CacheManager: ObservableObject {
+final class CacheManager: ObservableObject, @unchecked Sendable {
     static let shared = CacheManager()
     
     private let logger = Logger.shared
@@ -195,14 +195,15 @@ class CacheManager: ObservableObject {
     // MARK: - Cache Operations
     
     /// Store value in appropriate cache tier based on access patterns
-    func store<T: Codable>(_ value: T, forKey key: String, level: CacheLevel? = nil) {
+    func store<T: Codable & Sendable>(_ value: T, forKey key: String, level: CacheLevel? = nil) {
         var targetLevel = level ?? determineOptimalCacheLevel(for: key)
         
         do {
             var entry = try CacheEntry(key: key, value: value, compressionLevel: targetLevel.compressionLevel, encoder: encoder)
 
             if targetLevel == .memory && entry.size > maxMemoryEntrySize {
-                Task { await logger.debug("⚖️ Cache entry \(key) is \(ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .memory)); using disk cache instead of memory") }
+                let formattedSize = ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .memory)
+                Task { await logger.debug("⚖️ Cache entry \(key) is \(formattedSize); using disk cache instead of memory") }
                 targetLevel = .disk
                 entry = try CacheEntry(key: key, value: value, compressionLevel: targetLevel.compressionLevel, encoder: encoder)
             }
@@ -225,7 +226,7 @@ class CacheManager: ObservableObject {
     }
     
     /// Retrieve value from cache, checking all tiers in order of speed
-    func retrieve<T: Codable>(_ type: T.Type, forKey key: String) -> T? {
+    func retrieve<T: Codable & Sendable>(_ type: T.Type, forKey key: String) -> T? {
         // Check memory cache first (fastest)
         if let value = retrieveFromMemoryCache(type, key: key) {
             updateStatistics(for: .memory, operation: .hit)
@@ -336,7 +337,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func retrieveFromMemoryCache<T: Codable>(_ type: T.Type, key: String) -> T? {
+    private func retrieveFromMemoryCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         return memoryCacheQueue.sync {
             guard let entry = memoryCache[key] else { return nil }
             
@@ -353,7 +354,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func retrieveFromDiskCache<T: Codable>(_ type: T.Type, key: String) -> T? {
+    private func retrieveFromDiskCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         return diskCacheQueue.sync {
             let fileURL = diskCacheDirectory.appendingPathComponent("\(key).cache")
             
@@ -377,7 +378,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func retrieveFromArchiveCache<T: Codable>(_ type: T.Type, key: String) -> T? {
+    private func retrieveFromArchiveCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         return archiveCacheQueue.sync {
             let fileURL = archiveCacheDirectory.appendingPathComponent("\(key).archive")
             
@@ -411,7 +412,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func promoteToMemoryCache<T: Codable>(_ value: T, key: String) {
+    private func promoteToMemoryCache<T: Codable & Sendable>(_ value: T, key: String) {
         // Only promote if there's space and the data is recent
         memoryCacheQueue.async { [weak self] in
             guard let self = self,
@@ -431,7 +432,7 @@ class CacheManager: ObservableObject {
         }
     }
     
-    private func promoteToHigherTier<T: Codable>(_ value: T, key: String) {
+    private func promoteToHigherTier<T: Codable & Sendable>(_ value: T, key: String) {
         // Promote frequently accessed archive data to disk cache
         diskCacheQueue.async { [weak self] in
             guard let self = self else { return }

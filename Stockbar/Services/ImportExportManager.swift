@@ -41,7 +41,9 @@ actor ImportExportManager {
     func exportPortfolio(trades: [RealTimeTrade]) async -> String? {
         await logger.info("📤 EXPORT: Starting portfolio export...")
         
-        let exportTrades = trades.map { trade in
+        let exportTrades = trades.filter { trade in
+            !SymbolMetadata.isBenchmarkSymbol(trade.trade.name)
+        }.map { trade in
             PortfolioExport.PortfolioTrade(
                 symbol: trade.trade.name,
                 units: trade.trade.position.unitSizeString,
@@ -98,6 +100,12 @@ actor ImportExportManager {
             var tradesSkipped = 0
             
             for importTrade in portfolioImport.trades {
+                guard !SymbolMetadata.isBenchmarkSymbol(importTrade.symbol) else {
+                    await logger.warning("📥 IMPORT: Skipping internal benchmark symbol: \(importTrade.symbol)")
+                    tradesSkipped += 1
+                    continue
+                }
+
                 // Check if trade already exists (if not replacing)
                 if !replaceExisting && currentTrades.contains(where: { $0.trade.name == importTrade.symbol }) {
                     await logger.info("📥 IMPORT: Skipping existing trade: \(importTrade.symbol)")
@@ -157,4 +165,3 @@ actor ImportExportManager {
         }
     }
 }
-

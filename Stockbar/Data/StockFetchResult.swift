@@ -1,7 +1,7 @@
 import Foundation
 
 /// Struct to represent the fetched stock data in a common format
-struct StockFetchResult {
+struct StockFetchResult: Sendable {
     let currency: String?
     let symbol: String
     let shortName: String?
@@ -45,7 +45,7 @@ struct StockFetchResult {
     }
 }
 
-enum MarketState: String, CaseIterable {
+enum MarketState: String, CaseIterable, Sendable {
     case preMarket = "PRE"
     case regular = "REGULAR"
     case postMarket = "POST"

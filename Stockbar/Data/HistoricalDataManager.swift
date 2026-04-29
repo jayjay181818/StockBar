@@ -19,6 +19,15 @@ extension DateFormatter {
     }()
 }
 
+struct ComprehensiveDataStatus: Sendable {
+    let symbol: String
+    let daily: Int
+    let weekly: Int
+    let monthly: Int
+    let oldestDate: String
+    let newestDate: String
+}
+
 // CRITICAL FIX: Task timeout utility to prevent infinite processing
 func withTaskTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async -> T? {
     return await withTaskGroup(of: T?.self) { group in
@@ -1774,141 +1783,21 @@ class HistoricalDataManager: ObservableObject {
     
     /// Calculates historical portfolio values for a specific time period
     private func calculateHistoricalPortfolioValuesForPeriod(from startDate: Date, to endDate: Date, using dataModel: DataModel) async -> [ChartDataPoint] {
-        let calendar = Calendar.current
-        let currencyConverter = CurrencyConverter()
-        let preferredCurrency = dataModel.preferredCurrency
-        
-        // Debug: Show what symbols we're working with
-        let symbols = dataModel.realTimeTrades.map { $0.trade.name }
-        Task { await logger.debug("📊 PERIOD CALC: Processing symbols: \(symbols)") }
-        
-        // Get all available historical dates in this period across all symbols
-        var allDates = Set<Date>()
-        var symbolDataCounts: [String: Int] = [:]
-        
-        for (symbol, snapshots) in priceSnapshots {
-            var countForSymbol = 0
-            for snapshot in snapshots {
-                if snapshot.timestamp >= startDate && snapshot.timestamp <= endDate {
-                    // Use start of day to group by date
-                    let dayStart = calendar.startOfDay(for: snapshot.timestamp)
-                    allDates.insert(dayStart)
-                    countForSymbol += 1
-                }
-            }
-            if countForSymbol > 0 {
-                symbolDataCounts[symbol] = countForSymbol
-            }
-        }
-        
-        Task { await logger.debug("📊 PERIOD CALC: Data availability for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)):") }
-        for (symbol, count) in symbolDataCounts {
-            Task { await logger.debug("📊 PERIOD CALC: - \(symbol): \(count) data points") }
-        }
-        
-        guard !allDates.isEmpty else {
-            Task { await logger.warning("📊 PERIOD CALC: No historical price data available for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))") }
-            return []
-        }
-        
-        var portfolioValues: [ChartDataPoint] = []
-        let sortedDates = Array(allDates.sorted())
-        
-        Task { await logger.debug("📊 PERIOD CALC: Processing \(sortedDates.count) unique dates for period \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate))") }
-        
-        // Process each date
-        var validDatesCount = 0
-        for (index, date) in sortedDates.enumerated() {
-            var totalValueUSD = 0.0
-            var symbolsWithData = 0
-            var symbolsProcessed = 0
-            
-            // Yield control every 20 dates to prevent UI blocking
-            if index % 20 == 0 {
-                await Task.yield()
-            }
-            
-            // Calculate portfolio value for this date using current portfolio composition
-            for trade in dataModel.realTimeTrades {
-                let symbol = trade.trade.name
-                symbolsProcessed += 1
-                
-                // Find the historical price for this symbol on this date
-                let symbolSnapshots = priceSnapshots[symbol] ?? []
-                
-                if !symbolSnapshots.isEmpty,
-                   let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) {
-                    
-                    let units = trade.trade.position.unitSize
-                    let historicalPrice = historicalSnapshot.price
-                    let currency = trade.realTimeInfo.currency ?? "USD"
-                    
-                    // Check if this snapshot is too old (more than 30 days from target date)
-                    let daysDifference = Calendar.current.dateComponents([.day], from: historicalSnapshot.timestamp, to: date).day ?? 0
-                    
-                    if !historicalPrice.isNaN && historicalPrice > 0 && units > 0 && daysDifference <= 30 {
-                        let positionValue = historicalPrice * units
-                        
-                        // Convert to USD for aggregation
-                        var valueInUSD = positionValue
-                        if currency == "GBP" {
-                            valueInUSD = currencyConverter.convert(amount: positionValue, from: "GBP", to: "USD")
-                        } else if currency != "USD" {
-                            valueInUSD = currencyConverter.convert(amount: positionValue, from: currency, to: "USD")
-                        }
-                        
-                        totalValueUSD += valueInUSD
-                        symbolsWithData += 1
-                        
-                        if index < 3 || validDatesCount % 20 == 0 { // Log first few and every 20th date
-                            Task { await logger.debug("📊 PERIOD CALC: \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), value=\(valueInUSD) USD (snapshot age: \(daysDifference) days)") }
-                        }
-                    } else {
-                        if index < 3 || validDatesCount % 20 == 0 {
-                            Task { await logger.debug("📊 PERIOD CALC: Rejected \(symbol) on \(DateFormatter.debug.string(from: date)): price=\(historicalPrice), units=\(units), age=\(daysDifference) days") }
-                        }
-                    }
-                } else {
-                    if index < 3 || validDatesCount % 20 == 0 {
-                        Task { await logger.debug("📊 PERIOD CALC: No data found for \(symbol) on \(DateFormatter.debug.string(from: date))") }
-                    }
-                }
-            }
-            
-            // Accept portfolio value if we have data for at least 50% of symbols (more lenient)
-            let hasValidData = symbolsWithData >= max(1, symbolsProcessed / 2)
-            
-            if hasValidData {
-                validDatesCount += 1
-                if index < 3 || validDatesCount % 10 == 0 { // Log first few and every 10th valid date
-                    Task { await logger.debug("📊 PERIOD CALC: Date \(DateFormatter.debug.string(from: date)): \(symbolsWithData)/\(symbolsProcessed) symbols, totalUSD=\(totalValueUSD)") }
-                }
-                
-                // Convert to preferred currency
-                var finalValue = totalValueUSD
-                if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-                    let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
-                    finalValue = gbpAmount * 100.0
-                } else if preferredCurrency != "USD" {
-                    finalValue = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
-                }
-                
-                portfolioValues.append(ChartDataPoint(date: date, value: finalValue))
-            } else {
-                if index < 5 || validDatesCount % 50 == 0 { // Less frequent logging for rejections
-                    Task { await logger.debug("📊 PERIOD CALC: Rejected date \(DateFormatter.debug.string(from: date)): only \(symbolsWithData)/\(symbolsProcessed) symbols have valid data") }
-                }
-            }
-            
-            // Yield every 50 calculations to keep UI responsive
-            if index % 50 == 0 {
-                await Task.yield()
-            }
-        }
-        
-        Task { await logger.debug("📊 PERIOD CALC: Summary for \(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)): \(validDatesCount)/\(sortedDates.count) dates yielded portfolio values, result: \(portfolioValues.count) data points") }
-        
-        return portfolioValues.sorted { $0.date < $1.date }
+        let input = HistoricalPortfolioCalculationInput(
+            startDate: startDate,
+            endDate: endDate,
+            priceSnapshots: priceSnapshots,
+            composition: createPortfolioComposition(from: dataModel),
+            preferredCurrency: dataModel.preferredCurrency
+        )
+        let startTime = Date()
+        let snapshots = await HistoricalPortfolioCalculationService().calculateSnapshots(input)
+        await logger.debug(
+            "📊 PERIOD CALC: Generated \(snapshots.count) values from " +
+            "\(DateFormatter.debug.string(from: startDate)) to \(DateFormatter.debug.string(from: endDate)) " +
+            "off the main actor in \(String(format: "%.2f", Date().timeIntervalSince(startTime)))s"
+        )
+        return snapshots.map { ChartDataPoint(date: $0.date, value: $0.totalValue) }
     }
     
     /// Calculates and caches historical portfolio values using historical price data (async)
@@ -2312,11 +2201,11 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Gets comprehensive data status
-    func getComprehensiveDataStatus() -> [(symbol: String, daily: Int, weekly: Int, monthly: Int, oldestDate: String, newestDate: String)] {
+    func getComprehensiveDataStatus() -> [ComprehensiveDataStatus] {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         
-        var status: [(symbol: String, daily: Int, weekly: Int, monthly: Int, oldestDate: String, newestDate: String)] = []
+        var status: [ComprehensiveDataStatus] = []
         
         for symbol in priceSnapshots.keys.sorted() {
             let dailyCount = priceSnapshots[symbol]?.count ?? 0
@@ -2329,7 +2218,14 @@ class HistoricalDataManager: ObservableObject {
             let oldestDate = dates.min().map { formatter.string(from: $0) } ?? "No data"
             let newestDate = dates.max().map { formatter.string(from: $0) } ?? "No data"
             
-            status.append((symbol: symbol, daily: dailyCount, weekly: weeklyCount, monthly: monthlyCount, oldestDate: oldestDate, newestDate: newestDate))
+            status.append(ComprehensiveDataStatus(
+                symbol: symbol,
+                daily: dailyCount,
+                weekly: weeklyCount,
+                monthly: monthlyCount,
+                oldestDate: oldestDate,
+                newestDate: newestDate
+            ))
         }
         
         return status
@@ -2405,7 +2301,7 @@ class HistoricalDataManager: ObservableObject {
     
     /// Creates portfolio composition from current DataModel
     private func createPortfolioComposition(from dataModel: DataModel) -> PortfolioComposition {
-        let positions = dataModel.realTimeTrades.map { trade in
+        let positions = dataModel.realTimeTrades.filter { !$0.trade.isWatchlistOnly }.map { trade in
             PortfolioPosition(
                 symbol: trade.trade.name,
                 units: trade.trade.position.unitSize,
@@ -2477,12 +2373,18 @@ class HistoricalDataManager: ObservableObject {
         
         await logger.info("🔄 INCREMENTAL: Updating from \(DateFormatter.debug.string(from: lastCalculatedDate)) to \(DateFormatter.debug.string(from: endDate))") 
         
+        guard let composition = currentPortfolioComposition else {
+            await logger.warning("🔄 INCREMENTAL: Missing portfolio composition, skipping incremental update")
+            await calculationManager.updateProgress(completed: 85, status: "No portfolio composition")
+            return
+        }
+
         await calculationManager.updateProgress(completed: 50, status: "Calculating new portfolio values")
         let newSnapshots = await calculatePortfolioSnapshotsForPeriod(
             from: lastCalculatedDate,
             to: endDate,
             using: dataModel,
-            composition: currentPortfolioComposition!
+            composition: composition
         )
         
         await calculationManager.updateProgress(completed: 80, status: "Adding new snapshots")
@@ -2506,415 +2408,20 @@ class HistoricalDataManager: ObservableObject {
         using dataModel: DataModel,
         composition: PortfolioComposition
     ) async -> [HistoricalPortfolioSnapshot] {
-        
-        // For large date ranges, use concurrent processing
-        let dateRange = endDate.timeIntervalSince(startDate)
-        let daysInRange = Int(dateRange / 86400) // Convert to days
-        
-        if daysInRange > 100 {
-            // Use concurrent processing for large ranges
-            return await calculatePortfolioSnapshotsForPeriodConcurrent(
-                from: startDate,
-                to: endDate,
-                using: dataModel,
-                composition: composition
-            )
-        } else {
-            // Use sequential processing for smaller ranges
-            return await calculatePortfolioSnapshotsForPeriodSequential(
-                from: startDate,
-                to: endDate,
-                using: dataModel,
-                composition: composition
-            )
-        }
-    }
-    
-    /// Sequential calculation method (original implementation)
-    private func calculatePortfolioSnapshotsForPeriodSequential(
-        from startDate: Date,
-        to endDate: Date,
-        using dataModel: DataModel,
-        composition: PortfolioComposition
-    ) async -> [HistoricalPortfolioSnapshot] {
-        
-        let calendar = Calendar.current
-        let currencyConverter = CurrencyConverter()
-        let preferredCurrency = dataModel.preferredCurrency
-        
-        // Get all unique dates where we have historical data
-        var allDates = Set<Date>()
-        for (_, snapshots) in priceSnapshots {
-            for snapshot in snapshots {
-                if snapshot.timestamp >= startDate && snapshot.timestamp <= endDate {
-                    let dayStart = calendar.startOfDay(for: snapshot.timestamp)
-                    allDates.insert(dayStart)
-                }
-            }
-        }
-        
-        guard !allDates.isEmpty else {
-            Task { await logger.warning("🔄 CALC PERIOD: No historical data available for period") }
-            return []
-        }
-        
-        var portfolioSnapshots: [HistoricalPortfolioSnapshot] = []
-        let sortedDates = Array(allDates.sorted())
-        
-        Task { await logger.debug("🔄 CALC PERIOD: Processing \(sortedDates.count) unique dates") }
-        
-        // Calculate total investment cost (what was originally paid)
-        let totalInvestmentCost = calculateTotalInvestmentCost(composition: composition, currencyConverter: currencyConverter, preferredCurrency: preferredCurrency)
-        
-        for (index, date) in sortedDates.enumerated() {
-            // Yield control periodically and update progress
-            if index % 20 == 0 {
-                await Task.yield()
-                let progress = 50 + Int(Double(index) / Double(sortedDates.count) * 35) // 50-85% progress range
-                let calculationManager = await BackgroundCalculationManager.shared
-                await calculationManager.updateProgress(completed: progress, status: "Processing date \(index + 1)/\(sortedDates.count)")
-                await calculationManager.updateDataPointsCount(portfolioSnapshots.count)
-            }
-            
-            var totalValueUSD = 0.0
-            var positionSnapshots: [String: PositionSnapshot] = [:]
-            var validPositions = 0
-            var invalidPositions: [String] = []
-            
-            // Calculate value for each position on this date
-            for position in composition.positions {
-                guard let symbolSnapshots = priceSnapshots[position.symbol],
-                      let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
-                    invalidPositions.append(position.symbol)
-                    continue
-                }
-                
-                let price = historicalSnapshot.price
-                
-                // Enhanced data validation
-                guard !price.isNaN && price.isFinite && price > 0 else {
-                    invalidPositions.append("\(position.symbol) (invalid price: \(price))")
-                    continue
-                }
-                
-                guard position.units > 0 && position.units.isFinite else {
-                    invalidPositions.append("\(position.symbol) (invalid units: \(position.units))")
-                    continue
-                }
-                
-                let valueAtDate = price * position.units
-                
-                // Validate calculated value
-                guard valueAtDate.isFinite && valueAtDate > 0 else {
-                    invalidPositions.append("\(position.symbol) (invalid value: \(valueAtDate))")
-                    continue
-                }
-                
-                // Convert to USD for aggregation with validation
-                var valueInUSD = valueAtDate
-                if position.currency == "GBP" {
-                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: "GBP", to: "USD")
-                } else if position.currency != "USD" {
-                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: position.currency, to: "USD")
-                }
-                
-                // Validate converted value
-                guard valueInUSD.isFinite && valueInUSD > 0 else {
-                    invalidPositions.append("\(position.symbol) (invalid USD conversion: \(valueInUSD))")
-                    continue
-                }
-                
-                totalValueUSD += valueInUSD
-                validPositions += 1
-                
-                // Store position snapshot
-                positionSnapshots[position.symbol] = PositionSnapshot(
-                    symbol: position.symbol,
-                    units: position.units,
-                    priceAtDate: price,
-                    valueAtDate: valueAtDate,
-                    currency: position.currency
-                )
-            }
-            
-            // Log validation issues for debugging
-            if !invalidPositions.isEmpty && index < 5 {
-                Task { await logger.debug("🔄 VALIDATION: Invalid positions on \(DateFormatter.debug.string(from: date)): \(invalidPositions.joined(separator: ", "))") }
-            }
-            
-            // Only create portfolio snapshot if we have data for at least 50% of positions
-            guard validPositions >= max(1, composition.positions.count / 2) else {
-                if index < 5 {
-                    Task { await logger.debug("🔄 VALIDATION: Skipping date \(DateFormatter.debug.string(from: date)) - only \(validPositions)/\(composition.positions.count) valid positions") }
-                }
-                continue
-            }
-            
-            // Validate total portfolio value
-            guard totalValueUSD.isFinite && totalValueUSD > 0 else {
-                Task { await logger.warning("🔄 VALIDATION: Invalid total portfolio value on \(DateFormatter.debug.string(from: date)): \(totalValueUSD)") }
-                continue
-            }
-            
-            // Convert to preferred currency
-            var finalValue = totalValueUSD
-            if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-                let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
-                finalValue = gbpAmount * 100.0
-            } else if preferredCurrency != "USD" {
-                finalValue = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
-            }
-            
-            let totalGains = finalValue - totalInvestmentCost
-            
-            let portfolioSnapshot = HistoricalPortfolioSnapshot(
-                date: date,
-                totalValue: finalValue,
-                totalGains: totalGains,
-                totalCost: totalInvestmentCost,
-                currency: preferredCurrency,
-                portfolioComposition: positionSnapshots
-            )
-            
-            portfolioSnapshots.append(portfolioSnapshot)
-        }
-        
-        Task { await logger.debug("🔄 CALC PERIOD: Generated \(portfolioSnapshots.count) snapshots from \(sortedDates.count) dates") }
-        return portfolioSnapshots
-    }
-    
-    /// Concurrent calculation method for large date ranges
-    private func calculatePortfolioSnapshotsForPeriodConcurrent(
-        from startDate: Date,
-        to endDate: Date,
-        using dataModel: DataModel,
-        composition: PortfolioComposition
-    ) async -> [HistoricalPortfolioSnapshot] {
-        
-        Task { await logger.info("🔄 CONCURRENT: Starting concurrent portfolio calculation") }
-        
-        let calendar = Calendar.current
-        let currencyConverter = CurrencyConverter()
-        let preferredCurrency = dataModel.preferredCurrency
-        
-        // Get all unique dates where we have historical data
-        var allDates = Set<Date>()
-        for (_, snapshots) in priceSnapshots {
-            for snapshot in snapshots {
-                if snapshot.timestamp >= startDate && snapshot.timestamp <= endDate {
-                    let dayStart = calendar.startOfDay(for: snapshot.timestamp)
-                    allDates.insert(dayStart)
-                }
-            }
-        }
-        
-        guard !allDates.isEmpty else {
-            Task { await logger.warning("🔄 CONCURRENT: No historical data available for period") }
-            return []
-        }
-        
-        let sortedDates = Array(allDates.sorted())
-        Task { await logger.info("🔄 CONCURRENT: Processing \(sortedDates.count) dates with concurrent processing") }
-        
-        // Calculate total investment cost once (thread-safe)
-        let totalInvestmentCost = calculateTotalInvestmentCost(
-            composition: composition, 
-            currencyConverter: currencyConverter, 
-            preferredCurrency: preferredCurrency
+        let input = HistoricalPortfolioCalculationInput(
+            startDate: startDate,
+            endDate: endDate,
+            priceSnapshots: priceSnapshots,
+            composition: composition,
+            preferredCurrency: dataModel.preferredCurrency
         )
-        
-        // Determine optimal chunk size based on available cores
-        let processorCount = ProcessInfo.processInfo.processorCount
-        let optimalChunks = min(processorCount, 8) // Cap at 8 to avoid too much overhead
-        let chunkSize = max(10, sortedDates.count / optimalChunks) // Minimum 10 dates per chunk
-        
-        Task { await logger.info("🔄 CONCURRENT: Using \(optimalChunks) concurrent tasks with ~\(chunkSize) dates each") }
-        
-        // Split dates into chunks for concurrent processing
-        let dateChunks = sortedDates.chunked(into: chunkSize)
-        
-        // Process chunks concurrently using TaskGroup with timeout protection
-        let allSnapshots = await withTaskTimeout(seconds: 600) { // 10 minute timeout
-            await withTaskGroup(of: [HistoricalPortfolioSnapshot].self) { group in
-                var results: [HistoricalPortfolioSnapshot] = []
-                
-                for (chunkIndex, chunk) in dateChunks.enumerated() {
-                    group.addTask { [weak self] in
-                        guard let self = self else { return [] }
-                        
-                        return await self.calculatePortfolioSnapshotsForChunk(
-                            dates: chunk,
-                            chunkIndex: chunkIndex,
-                            totalChunks: dateChunks.count,
-                            composition: composition,
-                            totalInvestmentCost: totalInvestmentCost,
-                            preferredCurrency: preferredCurrency,
-                            currencyConverter: currencyConverter
-                        )
-                    }
-                }
-                
-                // CRITICAL FIX: Collect results with timeout protection
-                for await chunkResult in group {
-                    results.append(contentsOf: chunkResult)
-                }
-                
-                return results
-            }
-        } ?? {
-            Task { await logger.error("🔄 CONCURRENT: TaskGroup timed out after 10 minutes, returning partial results") }
-            return []
-        }()
-        
-        // Sort results by date and return
-        let sortedSnapshots = allSnapshots.sorted { $0.date < $1.date }
-        Task { await logger.info("🔄 CONCURRENT: Generated \(sortedSnapshots.count) snapshots using concurrent processing") }
-        
-        return sortedSnapshots
-    }
-    
-    /// Processes a chunk of dates for concurrent calculation
-    private func calculatePortfolioSnapshotsForChunk(
-        dates: [Date],
-        chunkIndex: Int,
-        totalChunks: Int,
-        composition: PortfolioComposition,
-        totalInvestmentCost: Double,
-        preferredCurrency: String,
-        currencyConverter: CurrencyConverter
-    ) async -> [HistoricalPortfolioSnapshot] {
-        
-        var portfolioSnapshots: [HistoricalPortfolioSnapshot] = []
-        
-        for (dateIndex, date) in dates.enumerated() {
-            // CRITICAL FIX: Check for task cancellation first
-            do {
-                try Task.checkCancellation()
-            } catch {
-                Task { await logger.info("🔄 CHUNK \(chunkIndex): Task cancelled, stopping processing at date \(dateIndex)/\(dates.count)") }
-                break
-            }
-            
-            // Update progress less frequently for concurrent processing
-            if dateIndex % 5 == 0 {
-                await Task.yield() // Allow other tasks to run
-                
-                // Update global progress
-                let overallProgress = Double(chunkIndex * dates.count + dateIndex) / Double(totalChunks * dates.count)
-                let progressPercent = 50 + Int(overallProgress * 35) // 50-85% range
-                
-                let calculationManager = await BackgroundCalculationManager.shared
-                await calculationManager.updateProgress(
-                    completed: progressPercent, 
-                    status: "Concurrent processing chunk \(chunkIndex + 1)/\(totalChunks)"
-                )
-            }
-            
-            var totalValueUSD = 0.0
-            var positionSnapshots: [String: PositionSnapshot] = [:]
-            var validPositions = 0
-            
-            // Calculate value for each position on this date
-            for position in composition.positions {
-                guard let symbolSnapshots = priceSnapshots[position.symbol],
-                      let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
-                    continue
-                }
-                
-                let price = historicalSnapshot.price
-                
-                // Data validation
-                guard !price.isNaN && price.isFinite && price > 0,
-                      position.units > 0 && position.units.isFinite else {
-                    continue
-                }
-                
-                let valueAtDate = price * position.units
-                guard valueAtDate.isFinite && valueAtDate > 0 else { continue }
-                
-                // Convert to USD for aggregation
-                var valueInUSD = valueAtDate
-                if position.currency == "GBP" {
-                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: "GBP", to: "USD")
-                } else if position.currency != "USD" {
-                    valueInUSD = currencyConverter.convert(amount: valueAtDate, from: position.currency, to: "USD")
-                }
-                
-                guard valueInUSD.isFinite && valueInUSD > 0 else { continue }
-                
-                totalValueUSD += valueInUSD
-                validPositions += 1
-                
-                // Store position snapshot
-                positionSnapshots[position.symbol] = PositionSnapshot(
-                    symbol: position.symbol,
-                    units: position.units,
-                    priceAtDate: price,
-                    valueAtDate: valueAtDate,
-                    currency: position.currency
-                )
-            }
-            
-            // Only create portfolio snapshot if we have data for at least 50% of positions
-            guard validPositions >= max(1, composition.positions.count / 2),
-                  totalValueUSD.isFinite && totalValueUSD > 0 else {
-                continue
-            }
-            
-            // Convert to preferred currency
-            var finalValue = totalValueUSD
-            if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-                let gbpAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: "GBP")
-                finalValue = gbpAmount * 100.0
-            } else if preferredCurrency != "USD" {
-                finalValue = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
-            }
-            
-            let totalGains = finalValue - totalInvestmentCost
-            
-            let portfolioSnapshot = HistoricalPortfolioSnapshot(
-                date: date,
-                totalValue: finalValue,
-                totalGains: totalGains,
-                totalCost: totalInvestmentCost,
-                currency: preferredCurrency,
-                portfolioComposition: positionSnapshots
-            )
-            
-            portfolioSnapshots.append(portfolioSnapshot)
-        }
-        
-        return portfolioSnapshots
-    }
-    
-    /// Calculates total investment cost for a portfolio composition
-    private func calculateTotalInvestmentCost(composition: PortfolioComposition, currencyConverter: CurrencyConverter, preferredCurrency: String) -> Double {
-        var totalCostUSD = 0.0
-        
-        for position in composition.positions {
-            let totalPositionCost = position.avgCost * position.units
-            
-            // Convert to USD for aggregation
-            var costInUSD = totalPositionCost
-            if position.currency == "GBP" {
-                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: "GBP", to: "USD")
-            } else if position.currency != "USD" {
-                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: position.currency, to: "USD")
-            }
-            
-            totalCostUSD += costInUSD
-        }
-        
-        // Convert to preferred currency
-        var finalCost = totalCostUSD
-        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-            let gbpAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: "GBP")
-            finalCost = gbpAmount * 100.0
-        } else if preferredCurrency != "USD" {
-            finalCost = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: preferredCurrency)
-        }
-        
-        return finalCost
+        let startTime = Date()
+        let snapshots = await HistoricalPortfolioCalculationService().calculateSnapshots(input)
+        await logger.info(
+            "🔄 CALC PERIOD: Generated \(snapshots.count) portfolio snapshots off the main actor in " +
+            "\(String(format: "%.2f", Date().timeIntervalSince(startTime)))s"
+        )
+        return snapshots
     }
     
     /// Finds the earliest available historical data across all symbols

@@ -59,8 +59,22 @@ struct ValidationResult {
     }
 }
 
+struct SanitizedTradeInput {
+    let symbol: String
+    let units: Double
+    let cost: Double
+    let currency: String
+}
+
+struct TradeValidationInput {
+    let symbol: String
+    let units: String
+    let cost: String
+    let currency: String
+}
+
 // MARK: - Data Validation Service
-class DataValidationService {
+final class DataValidationService: Sendable {
     static let shared = DataValidationService()
 
     private let supportedCurrencies = Set(["USD", "GBP", "EUR", "JPY", "CAD", "AUD"])
@@ -238,11 +252,16 @@ class DataValidationService {
         }
 
         if errors.isEmpty {
-            return .success((
-                symbol: symbolResult.sanitizedValue as! String,
+            guard let sanitizedSymbol = symbolResult.sanitizedValue as? String,
+                  let sanitizedCurrency = currencyResult.sanitizedValue as? String else {
+                return .failure([.invalidFormat("trade")])
+            }
+
+            return .success(SanitizedTradeInput(
+                symbol: sanitizedSymbol,
                 units: unitsValue,
                 cost: costValue,
-                currency: currencyResult.sanitizedValue as! String
+                currency: sanitizedCurrency
             ))
         } else {
             return .failure(errors)
@@ -295,7 +314,7 @@ class DataValidationService {
     // MARK: - Batch Validation
 
     /// Validates multiple trades at once
-    func validateTrades(_ trades: [(symbol: String, units: String, cost: String, currency: String)]) -> [ValidationResult] {
+    func validateTrades(_ trades: [TradeValidationInput]) -> [ValidationResult] {
         return trades.map { trade in
             validateTrade(symbol: trade.symbol, units: trade.units, cost: trade.cost, currency: trade.currency)
         }

@@ -2,6 +2,49 @@ import XCTest
 @testable import Stockbar
 import AppKit
 
+private extension MenuBarFormattingService {
+    func formatStockTitle(
+        symbol: String,
+        price: Double,
+        change: Double,
+        changePct: Double,
+        currency: String,
+        settings: MenuBarDisplaySettings,
+        useColorCoding: Bool
+    ) -> NSAttributedString {
+        formatStockTitle(
+            symbol: symbol,
+            price: price,
+            change: change,
+            changePct: changePct,
+            dayPL: change,
+            currency: currency,
+            settings: settings,
+            useColorCoding: useColorCoding
+        )
+    }
+}
+
+private extension NSColor {
+    var isGreenishForTest: Bool {
+        if isEqual(NSColor.systemGreen) { return true }
+        guard let rgbColor = usingColorSpace(.sRGB) ?? usingColorSpace(.deviceRGB) else {
+            return false
+        }
+        return rgbColor.greenComponent > rgbColor.redComponent
+            && rgbColor.greenComponent > rgbColor.blueComponent
+    }
+
+    var isReddishForTest: Bool {
+        if isEqual(NSColor.systemRed) { return true }
+        guard let rgbColor = usingColorSpace(.sRGB) ?? usingColorSpace(.deviceRGB) else {
+            return false
+        }
+        return rgbColor.redComponent > rgbColor.greenComponent
+            && rgbColor.redComponent > rgbColor.blueComponent
+    }
+}
+
 final class MenuBarFormattingServiceTests: XCTestCase {
 
     var service: MenuBarFormattingService!
@@ -121,7 +164,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Given: Minimal mode settings
         var settings = MenuBarDisplaySettings()
         settings.displayMode = .minimal
-        settings.useArrowIndicators = true
+        settings.arrowStyle = .simple
         settings.arrowStyle = .simple
 
         // When: Format stock title (positive change)
@@ -145,7 +188,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Given: Minimal mode with down arrow
         var settings = MenuBarDisplaySettings()
         settings.displayMode = .minimal
-        settings.useArrowIndicators = true
+        settings.arrowStyle = .simple
         settings.arrowStyle = .simple
 
         // When: Format stock title (negative change)
@@ -355,10 +398,12 @@ final class MenuBarFormattingServiceTests: XCTestCase {
 
         // Then: Should have green color attribute
         var foundGreenColor = false
-        result.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: result.length)) { value, range, stop in
+        result.enumerateAttribute(
+            NSAttributedString.Key.foregroundColor,
+            in: NSRange(location: 0, length: result.length)
+        ) { value, range, stop in
             if let color = value as? NSColor {
-                // Check if color is greenish (hue around 120°)
-                if color.greenComponent > 0.3 {
+                if color.isGreenishForTest {
                     foundGreenColor = true
                     stop.pointee = true
                 }
@@ -386,10 +431,12 @@ final class MenuBarFormattingServiceTests: XCTestCase {
 
         // Then: Should have red color attribute
         var foundRedColor = false
-        result.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: result.length)) { value, range, stop in
+        result.enumerateAttribute(
+            NSAttributedString.Key.foregroundColor,
+            in: NSRange(location: 0, length: result.length)
+        ) { value, range, stop in
             if let color = value as? NSColor {
-                // Check if color is reddish
-                if color.redComponent > 0.3 {
+                if color.isReddishForTest {
                     foundRedColor = true
                     stop.pointee = true
                 }
@@ -470,7 +517,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Given: Settings with arrow indicators
         var settings = MenuBarDisplaySettings()
         settings.displayMode = .compact
-        settings.useArrowIndicators = true
+        settings.arrowStyle = .simple
         settings.arrowStyle = .simple
 
         // When: Format with positive change

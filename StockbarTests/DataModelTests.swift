@@ -1,24 +1,34 @@
 import XCTest
 @testable import Stockbar
 
+@MainActor
 class DataModelTests: XCTestCase {
     
     var dataModel: DataModel!
+    private var originalRefreshInterval: Any?
     
     override func setUp() {
         super.setUp()
-        dataModel = DataModel()
+        originalRefreshInterval = UserDefaults.standard.object(forKey: "refreshInterval")
+        dataModel = DataModel(
+            currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false
+        )
     }
     
     override func tearDown() {
         dataModel = nil
+        if let originalRefreshInterval {
+            UserDefaults.standard.set(originalRefreshInterval, forKey: "refreshInterval")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "refreshInterval")
+        }
         super.tearDown()
     }
     
     func testDataModelInitialization() {
         XCTAssertNotNil(dataModel)
         XCTAssertTrue(dataModel.refreshInterval > 0, "Refresh interval should be positive")
-        XCTAssertTrue(dataModel.cacheInterval > 0, "Cache interval should be positive")
     }
     
     func testRefreshCadenceCalculation() {
@@ -37,33 +47,21 @@ class DataModelTests: XCTestCase {
         dataModel.refreshInterval = originalInterval
     }
     
-    func testCacheIntervalPersistence() {
-        // Test that cache interval can be set and retrieved
-        let testInterval: TimeInterval = 600 // 10 minutes
-        
-        dataModel.cacheInterval = testInterval
-        XCTAssertEqual(dataModel.cacheInterval, testInterval)
-    }
-    
     func testStockDataHandling() {
         // Test basic stock data structures
         let trades = dataModel.realTimeTrades
-        XCTAssertTrue(trades.isEmpty || trades.count >= 0)
+        XCTAssertGreaterThanOrEqual(trades.count, 0)
     }
     
     func testUserDefaultsPersistence() {
         // Test that intervals are persisted to UserDefaults
         let testRefreshInterval: TimeInterval = 420 // 7 minutes
-        let testCacheInterval: TimeInterval = 720 // 12 minutes
         
         dataModel.refreshInterval = testRefreshInterval
-        dataModel.cacheInterval = testCacheInterval
         
         // Check if values were saved to UserDefaults
         let savedRefresh = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval
-        let savedCache = UserDefaults.standard.object(forKey: "cacheInterval") as? TimeInterval
         
         XCTAssertEqual(savedRefresh, testRefreshInterval)
-        XCTAssertEqual(savedCache, testCacheInterval)
     }
 } 

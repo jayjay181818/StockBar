@@ -1,8 +1,21 @@
-import Foundation
-import CoreData
+@preconcurrency import CoreData
+@preconcurrency import Foundation
 
-class CoreDataStack: ObservableObject {
+typealias CoreDataBatchValues = [String: any Sendable]
+
+extension NSPredicate: @unchecked @retroactive Sendable {}
+
+final class CoreDataStack: ObservableObject, @unchecked Sendable {
     static let shared = CoreDataStack()
+    private let storeRecovery = CoreDataStoreRecovery()
+    private let stateLock = NSLock()
+    private var protectedStoreLoadState: CoreDataStoreLoadState = .notLoaded
+
+    var storeLoadState: CoreDataStoreLoadState {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return protectedStoreLoadState
+    }
     
     private init() {}
     
@@ -29,17 +42,16 @@ class CoreDataStack: ObservableObject {
         container.loadPersistentStores(completionHandler: { (storeDescription, error) in
             if let error = error as NSError? {
                 Task { await Logger.shared.error("Core Data failed to load store: \(error), \(error.userInfo)") }
-                
-                // In case of persistent errors, remove and recreate the store
-                self.recreateStore(container: container)
+                self.handlePersistentStoreLoadFailure(error: error, storeDescription: storeDescription, container: container)
             } else {
+                self.updateStoreLoadState(.loaded)
                 Task { await Logger.shared.info("Core Data store loaded successfully with performance optimizations") }
             }
         })
         
         // Configure contexts for optimal performance
         container.viewContext.automaticallyMergesChangesFromParent = true
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.mergePolicy = Self.objectTrumpMergePolicy()
         container.viewContext.undoManager = nil // Disable undo for better performance
         container.viewContext.stalenessInterval = 0.0 // Always use fresh data
         
@@ -54,14 +66,14 @@ class CoreDataStack: ObservableObject {
     
     func newBackgroundContext() -> NSManagedObjectContext {
         let context = persistentContainer.newBackgroundContext()
-        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.mergePolicy = Self.objectTrumpMergePolicy()
         context.undoManager = nil // Disable undo for better performance
         return context
     }
     
     func newOptimizedBackgroundContext() -> NSManagedObjectContext {
         let context = persistentContainer.newBackgroundContext()
-        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.mergePolicy = Self.objectTrumpMergePolicy()
         context.undoManager = nil
         // Batch operations don't need to observe changes
         context.automaticallyMergesChangesFromParent = false
@@ -89,7 +101,7 @@ class CoreDataStack: ObservableObject {
     
     // MARK: - Background Operations
     
-    func performBackgroundTask<T>(_ block: @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
+    func performBackgroundTask<T: Sendable>(_ block: @Sendable @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
             persistentContainer.performBackgroundTask { context in
                 do {
@@ -105,7 +117,7 @@ class CoreDataStack: ObservableObject {
     
     // MARK: - Batch Operations
     
-    func performOptimizedBatchTask<T>(_ block: @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
+    func performOptimizedBatchTask<T: Sendable>(_ block: @Sendable @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
             let context = newOptimizedBackgroundContext()
             context.perform {
@@ -122,7 +134,7 @@ class CoreDataStack: ObservableObject {
     
     func performBatchInsert<T: NSManagedObject>(
         entity: T.Type,
-        objects: [[String: Any]],
+        objects: [CoreDataBatchValues],
         batchSize: Int = 1000
     ) async throws -> Int {
         guard !objects.isEmpty else { return 0 }
@@ -131,30 +143,36 @@ class CoreDataStack: ObservableObject {
         let chunks = objects.chunked(into: batchSize)
         
         for chunk in chunks {
-            try await performOptimizedBatchTask { context in
-                let batchInsert = NSBatchInsertRequest(entity: T.entity(), objects: chunk)
+            let insertedCount = try await performOptimizedBatchTask { context in
+                let batchObjects = chunk.map { object in
+                    object.reduce(into: [String: Any]()) { result, pair in
+                        result[pair.key] = pair.value
+                    }
+                }
+                let batchInsert = NSBatchInsertRequest(entity: T.entity(), objects: batchObjects)
                 batchInsert.resultType = .count
                 
                 let result = try context.execute(batchInsert) as? NSBatchInsertResult
-                if let count = result?.result as? Int {
-                    totalInserted += count
-                }
+                return result?.result as? Int ?? 0
             }
+            totalInserted += insertedCount
         }
         
-        Task { await Logger.shared.info("Batch inserted \(totalInserted) \(String(describing: T.self)) objects") }
+        await Logger.shared.info("Batch inserted \(totalInserted) \(String(describing: T.self)) objects")
         return totalInserted
     }
     
     func performBatchUpdate(
         entityName: String,
         predicate: NSPredicate,
-        propertiesToUpdate: [String: Any]
+        propertiesToUpdate: CoreDataBatchValues
     ) async throws -> Int {
         return try await performOptimizedBatchTask { context in
             let batchUpdate = NSBatchUpdateRequest(entityName: entityName)
             batchUpdate.predicate = predicate
-            batchUpdate.propertiesToUpdate = propertiesToUpdate
+            batchUpdate.propertiesToUpdate = propertiesToUpdate.reduce(into: [String: Any]()) { result, pair in
+                result[pair.key] = pair.value
+            }
             batchUpdate.resultType = .updatedObjectsCountResultType
             
             let result = try context.execute(batchUpdate) as? NSBatchUpdateResult
@@ -179,22 +197,44 @@ class CoreDataStack: ObservableObject {
     }
     
     // MARK: - Store Management
+
+    private static func objectTrumpMergePolicy() -> NSMergePolicy {
+        NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)
+    }
+
+    private func updateStoreLoadState(_ state: CoreDataStoreLoadState) {
+        stateLock.lock()
+        protectedStoreLoadState = state
+        stateLock.unlock()
+    }
     
-    private func recreateStore(container: NSPersistentContainer) {
-        guard let storeURL = container.persistentStoreDescriptions.first?.url else { return }
-        
-        do {
-            try container.persistentStoreCoordinator.destroyPersistentStore(at: storeURL, ofType: NSSQLiteStoreType, options: nil)
-            try FileManager.default.removeItem(at: storeURL)
-            Task { await Logger.shared.info("Recreated Core Data store after error") }
-        } catch {
-            Task { await Logger.shared.error("Failed to recreate Core Data store: \(error)") }
+    private func handlePersistentStoreLoadFailure(
+        error: NSError,
+        storeDescription: NSPersistentStoreDescription,
+        container: NSPersistentContainer
+    ) {
+        guard let storeURL = storeDescription.url ?? container.persistentStoreDescriptions.first?.url else {
+            updateStoreLoadState(.failedBackup("Persistent store URL was unavailable after load failure."))
+            Task { await Logger.shared.error("Core Data recovery skipped because persistent store URL was unavailable.") }
+            return
         }
-        
-        // Reload the store
-        container.loadPersistentStores { _, error in
-            if let error = error {
-                Task { await Logger.shared.error("Failed to reload Core Data store: \(error)") }
+
+        do {
+            let result = try storeRecovery.createSafetyBackup(for: storeURL)
+            updateStoreLoadState(.failedAndBackedUp(result.backupDirectory))
+            Task {
+                await Logger.shared.error(
+                    "Core Data store load failed and was preserved at \(result.backupDirectory.path). " +
+                    "Copied \(result.copiedFiles.count) store file(s). Original store was not deleted. Error: \(error.localizedDescription)"
+                )
+            }
+        } catch {
+            updateStoreLoadState(.failedBackup(error.localizedDescription))
+            Task {
+                await Logger.shared.error(
+                    "Core Data store load failed and safety backup could not be created. " +
+                    "Original store was not deleted. Error: \(error.localizedDescription)"
+                )
             }
         }
     }

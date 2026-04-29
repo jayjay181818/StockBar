@@ -99,9 +99,22 @@ class BackupService {
             let filename = "\(backupFilePrefix)\(dateString)\(timeString).\(backupFileExtension)"
             let backupURL = backupDir.appendingPathComponent(filename)
 
-            // Convert trades to exportable format
-            let exportData = trades.map { trade in
+            let nonEmptyTrades = trades.filter { !$0.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+            // Convert user portfolio trades to exportable format. Benchmarks are internal rows.
+            let exportData = nonEmptyTrades.filter { trade in
+                !SymbolMetadata.isBenchmarkSymbol(trade.trade.name)
+            }.map { trade in
                 PortfolioExportData(from: trade.trade)
+            }
+
+            guard !exportData.isEmpty else {
+                if nonEmptyTrades.isEmpty {
+                    await logger.debug("Backup skipped because no portfolio rows were present")
+                } else {
+                    await logger.warning("Backup skipped because only internal benchmark rows were present")
+                }
+                return false
             }
 
             // Encode to JSON
@@ -165,7 +178,13 @@ class BackupService {
         decoder.dateDecodingStrategy = .iso8601
 
         let exportData = try decoder.decode([PortfolioExportData].self, from: data)
-        let trades = exportData.map { $0.toTrade() }
+        let trades = exportData
+            .map { $0.toTrade() }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !trades.isEmpty || exportData.isEmpty else {
+            throw BackupRestoreError.noRestorablePortfolioTrades
+        }
 
         await logger.info("Successfully restored \(trades.count) trades from backup")
         return trades
@@ -178,6 +197,7 @@ class BackupService {
         decoder.dateDecodingStrategy = .iso8601
 
         return try decoder.decode([PortfolioExportData].self, from: data)
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.symbol) }
     }
 
     // MARK: - Cleanup
@@ -223,6 +243,17 @@ class BackupService {
             try deleteBackup(backupURL: backup.url)
         }
         Task { await logger.info("Deleted all \(backups.count) backup(s)")  }
+    }
+}
+
+enum BackupRestoreError: LocalizedError {
+    case noRestorablePortfolioTrades
+
+    var errorDescription: String? {
+        switch self {
+        case .noRestorablePortfolioTrades:
+            return "This backup only contains internal benchmark rows and cannot restore a portfolio."
+        }
     }
 }
 

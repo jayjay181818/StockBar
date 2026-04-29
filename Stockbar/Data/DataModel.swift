@@ -127,6 +127,7 @@ class DataModel: ObservableObject {
     private var lastMemoryWarning = Date.distantPast
     private let maxTradesInMemory = 100 // Limit trades kept in memory
     private var isMemoryOptimizationEnabled = true
+    private var hasCompletedInitialTradeLoad = false
 
     @Published var userData: UserData {
         didSet {
@@ -137,26 +138,30 @@ class DataModel: ObservableObject {
 
     // MARK: - Initialization
 
-    init(currencyConverter: CurrencyConverter = CurrencyConverter()) {
+    init(
+        currencyConverter: CurrencyConverter = CurrencyConverter(),
+        startRuntimeServices: Bool = true
+    ) {
         // Ensure network service uses the correct implementation
         // self.networkService = PythonNetworkService() // Already done in property declaration
 
         self.currencyConverter = currencyConverter
 
-        // Initialize userData first
-        _userData = Published(initialValue: UserData(positions: [], settings: UserSettings()))
+        // Initialize userData first without triggering persistence during construction.
+        _userData = Published(initialValue: Self.loadUserData(decoder: decoder))
 
         // Initialize realTimeTrades first - will be loaded async after init
         self.realTimeTrades = []
-        
-        // Load user data after userData is initialized
-        self.userData = loadUserData()
         
         // Note: All data loading now happens asynchronously via loadTradesAsync()
         // including migration of cost currency and trading info currency
         
         if self.realTimeTrades.isEmpty {
             Task { await logger.warning("No saved trades found, starting with empty list.") }
+        }
+
+        guard startRuntimeServices else {
+            return
         }
 
         setupPublishers() // Keep as is
@@ -202,8 +207,6 @@ class DataModel: ObservableObject {
         // Initialize memory optimization
         setupMemoryManagement()
         
-        ensureBenchmarkTracking()
-
         // NEW: Start enhanced portfolio calculation in background after app startup
         Task { @MainActor in
             // Prevent multiple startup tasks
@@ -372,6 +375,23 @@ class DataModel: ObservableObject {
     }
     
     // MARK: - Core Data Aware Persistence Methods
+
+    func waitForInitialTradeLoad(timeout: TimeInterval = 15) async -> Bool {
+        if hasCompletedInitialTradeLoad {
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while !hasCompletedInitialTradeLoad && Date() < deadline {
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return false
+            }
+        }
+
+        return hasCompletedInitialTradeLoad
+    }
     
     /// Load trades asynchronously from Core Data
     private func loadTradesAsync() async {
@@ -383,7 +403,9 @@ class DataModel: ObservableObject {
             
             // Load trades from Core Data
             await logger.info("📊 Loading trades from Core Data")
-            let trades = try await tradeDataService.loadAllTrades()
+            let trades = try await recoverLegacyUserTradesIfNeeded(
+                afterLoading: try await tradeDataService.loadAllTrades()
+            )
             
             // Create RealTimeTrade objects
             let realTimeTrades = trades.map { RealTimeTrade(trade: $0, realTimeInfo: TradingInfo()) }
@@ -404,6 +426,7 @@ class DataModel: ObservableObject {
                 self.migrateRealTimeTradesCurrency()
                 
                 self.ensureBenchmarkTracking()
+                self.hasCompletedInitialTradeLoad = true
             }
 
             // Kick off an immediate refresh for anything that isn't fresh yet
@@ -415,9 +438,34 @@ class DataModel: ObservableObject {
             // Initialize with empty trades if Core Data fails
             await MainActor.run {
                 self.realTimeTrades = []
+                self.hasCompletedInitialTradeLoad = true
+                self.ensureBenchmarkTracking()
                 Task { await logger.warning("⚠️ Initialized with empty trades due to Core Data failure") }
             }
         }
+    }
+
+    private func recoverLegacyUserTradesIfNeeded(afterLoading trades: [Trade]) async throws -> [Trade] {
+        let portfolioTrades = trades.filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+        guard portfolioTrades.isEmpty else {
+            return portfolioTrades
+        }
+
+        guard let legacyData = UserDefaults.standard.data(forKey: "usertrades") else {
+            return portfolioTrades
+        }
+
+        let legacyTrades = try decoder.decode([Trade].self, from: legacyData)
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !legacyTrades.isEmpty else {
+            return portfolioTrades
+        }
+
+        await logger.warning("⚠️ Core Data portfolio was empty; recovering \(legacyTrades.count) trades from legacy UserDefaults")
+        try await tradeDataService.saveAllTrades(legacyTrades)
+        return legacyTrades
     }
     
     /// Load trading info asynchronously from Core Data
@@ -506,7 +554,7 @@ class DataModel: ObservableObject {
     
     /// Returns the current status of automatic historical data checking - delegates to HistoricalDataCoordinator
     @MainActor
-    public func getHistoricalDataStatus() -> (isRunningComprehensive: Bool, isRunningStandard: Bool, lastComprehensiveCheck: Date, nextComprehensiveCheck: Date) {
+    public func getHistoricalDataStatus() -> HistoricalDataStatus {
         return historicalDataCoordinator.getHistoricalDataStatus()
     }
     
@@ -703,6 +751,29 @@ class DataModel: ObservableObject {
         return service.calculateNetValue(trades: realTimeTrades, preferredCurrency: preferredCurrency)
     }
 
+    /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
+    func calculateDisplayPortfolioSummary(preferredCurrency overrideCurrency: String? = nil) -> DisplayPortfolioSummary {
+        let summaryCurrency = overrideCurrency ?? preferredCurrency
+
+        guard let service = portfolioCalculationService else {
+            return DisplayPortfolioSummary(
+                totalValue: 0.0,
+                totalGain: 0.0,
+                totalGainPct: 0.0,
+                dayGain: 0.0,
+                dayGainPct: 0.0,
+                totalCost: 0.0,
+                ownedPositionCount: 0,
+                currency: summaryCurrency
+            )
+        }
+
+        return service.calculateDisplayPortfolioSummary(
+            trades: realTimeTrades,
+            preferredCurrency: summaryCurrency
+        )
+    }
+
     func startStaggeredRefresh() {
         // Delegate to RefreshService
         Task { @MainActor in
@@ -723,9 +794,28 @@ class DataModel: ObservableObject {
     /// Use this when updating properties within a RealTimeTrade object (like units or cost)
     /// which doesn't automatically trigger the @Published realTimeTrades publisher.
     func triggerTradeUpdate() {
-        objectWillChange.send()
+        tradeContentDidChange.send()
         tradeUpdateTrigger.send()
+    }
+
+    func persistPortfolioAfterUserEdit(allowEmptyPortfolio: Bool = false) {
+        objectWillChange.send()
         ensureBenchmarkTracking()
+
+        let validTrades = realTimeTrades.filter { trade in
+            let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasUnits = trade.trade.position.unitSize > 0
+            let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasSymbol || hasUnits || hasPrice
+        }
+
+        let validPortfolioTrades = validTrades.filter { !isBenchmarkTrade($0) }
+        saveTrades(validTrades, allowEmptyPortfolio: allowEmptyPortfolio)
+
+        if !validPortfolioTrades.isEmpty || allowEmptyPortfolio {
+            saveUserOrder(validPortfolioTrades)
+            saveTradingInfo()
+        }
     }
     
     private func ensureBenchmarkTracking() {
@@ -755,7 +845,9 @@ class DataModel: ObservableObject {
     
     private let tradeUpdateTrigger = PassthroughSubject<Void, Never>()
     var tradeContentPublisher: AnyPublisher<Void, Never> {
-        tradeContentDidChange.eraseToAnyPublisher()
+        tradeContentDidChange
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .eraseToAnyPublisher()
     }
 
     // MARK: - Private Methods
@@ -771,6 +863,11 @@ class DataModel: ObservableObject {
         .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
         .sink { [weak self] _ in
             guard let self = self else { return }
+            guard self.hasCompletedInitialTradeLoad else {
+                Task { await self.logger.debug("Skipping trade save until initial load completes") }
+                return
+            }
+
             let trades = self.realTimeTrades
             
             // Save trades with meaningful data (units > 0 OR price set OR symbol set)
@@ -782,9 +879,15 @@ class DataModel: ObservableObject {
                 return hasSymbol || hasUnits || hasPrice
             }
             if !validTrades.isEmpty {
+                let validPortfolioTrades = validTrades.filter { !self.isBenchmarkTrade($0) }
                 self.saveTrades(validTrades)
-                self.saveUserOrder(validTrades)
-                self.saveTradingInfo()
+
+                if !validPortfolioTrades.isEmpty {
+                    self.saveUserOrder(validPortfolioTrades)
+                    self.saveTradingInfo()
+                }
+
+                self.objectWillChange.send()
             }
         }
         .store(in: &cancellables)
@@ -810,30 +913,66 @@ class DataModel: ObservableObject {
         }
     }
 
-    private func saveTrades(_ trades: [RealTimeTrade]) {
+    private func saveTrades(_ trades: [RealTimeTrade], allowEmptyPortfolio: Bool = false) {
         Task { await logger.debug("Saving \(trades.count) trades to Core Data") }
 
         // Filter on main actor to avoid crossing actor boundaries in detached task.
         let tradesToSave = trades.filter { !$0.trade.name.isEmpty && !isBenchmarkTrade($0) }
         let tradeModels = tradesToSave.map { $0.trade }
+
+        guard !tradeModels.isEmpty || allowEmptyPortfolio else {
+            Task { await logger.warning("Skipped Core Data save because only benchmark/internal rows were present") }
+            return
+        }
         
         // Move saving to background queue to prevent UI blocking
-        Task.detached(priority: .utility) { [weak self, logger] in
-            guard let self = self else { return }
-            
+        let tradeDataService = tradeDataService
+        let savedTradeCount = tradeModels.count
+        Task.detached(priority: .utility) { [logger, tradeDataService, tradeModels, savedTradeCount] in
             do {
                 // Save directly to Core Data
-                try await self.tradeDataService.saveAllTrades(tradeModels)
-                await logger.debug("Successfully saved \(tradesToSave.count) trades to Core Data")
+                try await tradeDataService.saveAllTrades(tradeModels)
+                await logger.debug("Successfully saved \(savedTradeCount) trades to Core Data")
             } catch {
                 await logger.error("Failed to save trades to Core Data: \(error.localizedDescription)")
             }
         }
     }
 
-    private func loadUserData() -> UserData {
+    func replacePortfolioTrades(_ trades: [Trade], source: String, allowEmptyPortfolio: Bool = false) async throws {
+        let portfolioTrades = trades
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !portfolioTrades.isEmpty || allowEmptyPortfolio || trades.isEmpty else {
+            throw PortfolioRestoreError.noRestorablePortfolioTrades
+        }
+
+        try await tradeDataService.saveAllTrades(portfolioTrades)
+
+        var existingInfo: [String: TradingInfo] = [:]
+        for trade in realTimeTrades {
+            existingInfo[trade.trade.name.uppercased()] = trade.realTimeInfo
+        }
+        let restoredTrades = portfolioTrades.map { trade in
+            RealTimeTrade(
+                trade: trade,
+                realTimeInfo: existingInfo[trade.name.uppercased()] ?? TradingInfo()
+            )
+        }
+
+        self.realTimeTrades = applyUserOrderToTrades(restoredTrades)
+        saveUserOrder(self.realTimeTrades)
+        saveTradingInfo()
+        ensureBenchmarkTracking()
+
+        await logger.info("Replaced portfolio with \(portfolioTrades.count) trades from \(source)")
+        await refreshCriticalSymbols(reason: source)
+    }
+
+    private static func loadUserData(decoder: JSONDecoder) -> UserData {
         if let data = UserDefaults.standard.data(forKey: "userData") {
-            if let decodedUserData = try? JSONDecoder().decode(UserData.self, from: data) {
+            if let decodedUserData = try? decoder.decode(UserData.self, from: data) {
                 // Apply any necessary data migrations after decoding
                 var migratedUserData = decodedUserData
                 // This migration was for Position.costCurrency
@@ -911,7 +1050,9 @@ class DataModel: ObservableObject {
                 // Set default currency if not specified (only for loaded data that might be old)
                 stock.currency = SymbolMetadata.defaultCurrency(for: stock.symbol)
                 userData.stocks[i] = stock // Update the stock in the array
-                Task { await logger.debug("Normalized currency for \(stock.symbol) to \(stock.currency ?? "nil") upon loading.") }
+                let symbol = stock.symbol
+                let currency = stock.currency ?? "nil"
+                Task { await logger.debug("Normalized currency for \(symbol) to \(currency) upon loading.") }
             }
         }
     }
@@ -936,8 +1077,10 @@ class DataModel: ObservableObject {
         )
         
         if let trades = newTrades {
+            let portfolioTrades = trades.filter { !isBenchmarkTrade($0) }
             await MainActor.run {
-                self.realTimeTrades = trades
+                self.realTimeTrades = portfolioTrades
+                self.persistPortfolioAfterUserEdit(allowEmptyPortfolio: replaceExisting)
             }
             
             // Trigger refresh for the new trades
@@ -945,6 +1088,17 @@ class DataModel: ObservableObject {
         }
         
         return result
+    }
+}
+
+enum PortfolioRestoreError: LocalizedError {
+    case noRestorablePortfolioTrades
+
+    var errorDescription: String? {
+        switch self {
+        case .noRestorablePortfolioTrades:
+            return "The selected backup does not contain any portfolio stocks. It only contains internal benchmark rows."
+        }
     }
 }
 

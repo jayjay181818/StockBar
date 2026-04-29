@@ -270,8 +270,8 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
         // Verify relationships: lower < middle < upper
         for band in bands {
-            XCTAssertLessThan(band.lowerBand, band.middleBand, "Lower band should be below middle")
-            XCTAssertLessThan(band.middleBand, band.upperBand, "Middle band should be below upper")
+            XCTAssertLessThan(band.lower, band.middle, "Lower band should be below middle")
+            XCTAssertLessThan(band.middle, band.upper, "Middle band should be below upper")
         }
     }
 
@@ -286,8 +286,8 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
         // Then: High volatility bands should be wider
         if let lowLast = lowVolBands.last, let highLast = highVolBands.last {
-            let lowWidth = lowLast.upperBand - lowLast.lowerBand
-            let highWidth = highLast.upperBand - highLast.lowerBand
+            let lowWidth = lowLast.upper - lowLast.lower
+            let highWidth = highLast.upper - highLast.lower
             XCTAssertGreaterThan(highWidth, lowWidth, "High volatility should produce wider bands")
         }
     }
@@ -339,18 +339,5 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
         }
 
         return data
-    }
-}
-
-// MARK: - OHLCDataPoint Extension for Testing
-
-extension OHLCDataPoint {
-    init(timestamp: Date, open: Double, high: Double, low: Double, close: Double, volume: Int64) {
-        self.timestamp = timestamp
-        self.open = open
-        self.high = high
-        self.low = low
-        self.close = close
-        self.volume = volume
     }
 }

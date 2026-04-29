@@ -1,7 +1,7 @@
 import Foundation
 
 /// Service to clean up legacy data storage on first app launch after migration
-class LegacyCleanupService {
+final class LegacyCleanupService: @unchecked Sendable {
     static let shared = LegacyCleanupService()
     
     private let cleanupDoneKey = "legacyCleanupDone"
