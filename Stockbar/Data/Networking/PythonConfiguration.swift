@@ -8,7 +8,7 @@
 
 import Foundation
 
-struct PythonConfiguration {
+struct PythonConfiguration: Sendable {
     // MARK: - Properties
     
     /// Path to the Python interpreter (e.g. /usr/bin/python3, /opt/homebrew/bin/python3)
@@ -111,4 +111,3 @@ struct PythonConfiguration {
         return symbol.uppercased().filter { allowed.contains($0) }
     }
 }
-

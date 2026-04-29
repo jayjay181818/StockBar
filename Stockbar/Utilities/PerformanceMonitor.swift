@@ -1,5 +1,5 @@
 import Foundation
-import CoreData
+@preconcurrency import CoreData
 import OSLog
 
 /// Performance monitoring system for tracking Core Data and memory optimizations
@@ -12,21 +12,24 @@ actor PerformanceMonitor {
     
     // MARK: - Performance Metric Types
     
-    struct PerformanceMetric {
-        let name: String
-        var totalTime: TimeInterval = 0
-        var count: Int = 0
-        var averageTime: TimeInterval { count > 0 ? totalTime / Double(count) : 0 }
+        struct PerformanceMetric {
+            let name: String
+            var totalTime: TimeInterval = 0
+            var executionCount: Int = 0
+            var averageTime: TimeInterval {
+                guard executionCount != 0 else { return 0 }
+                return totalTime / Double(executionCount)
+            }
         var minTime: TimeInterval = Double.greatestFiniteMagnitude
         var maxTime: TimeInterval = 0
         var lastExecuted: Date = Date()
         
-        mutating func addExecution(duration: TimeInterval) {
-            totalTime += duration
-            count += 1
-            minTime = min(minTime, duration)
-            maxTime = max(maxTime, duration)
-            lastExecuted = Date()
+            mutating func addExecution(duration: TimeInterval) {
+                totalTime += duration
+                executionCount += 1
+                minTime = min(minTime, duration)
+                maxTime = max(maxTime, duration)
+                lastExecuted = Date()
         }
     }
     
@@ -93,7 +96,7 @@ actor PerformanceMonitor {
         
         for metric in sortedMetrics {
             report += "Operation: \(metric.name)\n"
-            report += "  Count: \(metric.count)\n"
+            report += "  Count: \(metric.executionCount)\n"
             report += "  Total Time: \(String(format: "%.3f", metric.totalTime))s\n"
             report += "  Average: \(String(format: "%.3f", metric.averageTime))s\n"
             report += "  Min: \(String(format: "%.3f", metric.minTime))s\n"
@@ -189,13 +192,19 @@ func withPerformanceTracking<T>(_ operationName: String, operation: () async thr
 
 extension CoreDataStack {
     
-    func performTrackedBackgroundTask<T>(_ operationName: String, _ block: @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
+    func performTrackedBackgroundTask<T: Sendable>(
+        _ operationName: String,
+        _ block: @Sendable @escaping (NSManagedObjectContext) throws -> T
+    ) async throws -> T {
         return try await withPerformanceTracking("CoreData_\(operationName)") {
             return try await performBackgroundTask(block)
         }
     }
     
-    func performTrackedBatchOperation<T>(_ operationName: String, _ block: @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
+    func performTrackedBatchOperation<T: Sendable>(
+        _ operationName: String,
+        _ block: @Sendable @escaping (NSManagedObjectContext) throws -> T
+    ) async throws -> T {
         return try await withPerformanceTracking("CoreDataBatch_\(operationName)") {
             return try await performOptimizedBatchTask(block)
         }
@@ -205,7 +214,7 @@ extension CoreDataStack {
 // MARK: - String Extension for Formatting
 
 extension String {
-    static func *(lhs: String, rhs: Int) -> String {
+    static func * (lhs: String, rhs: Int) -> String {
         return String(repeating: lhs, count: rhs)
     }
 }

@@ -1,5 +1,5 @@
-import Foundation
-import CoreData
+@preconcurrency import Foundation
+@preconcurrency import CoreData
 
 /// Errors that can occur during trade data migration
 enum TradeDataMigrationError: Error {
@@ -10,7 +10,7 @@ enum TradeDataMigrationError: Error {
 }
 
 /// Service responsible for migrating trade data from UserDefaults to Core Data
-class TradeDataMigrationService {
+final class TradeDataMigrationService: @unchecked Sendable {
     
     private let tradeDataService = TradeDataService()
     private let decoder = JSONDecoder()
@@ -37,8 +37,14 @@ class TradeDataMigrationService {
         
         // Check if migration has already been completed
         if UserDefaults.standard.bool(forKey: migrationKey) {
-            Task { await logger.info("✅ MIGRATION: Trade data migration already completed") }
-            return
+            let hasLegacyTrades = UserDefaults.standard.data(forKey: "usertrades") != nil
+            let hasCoreDataTrades = await tradeDataService.areTradesMigrated()
+            if !hasLegacyTrades || hasCoreDataTrades {
+                Task { await logger.info("✅ MIGRATION: Trade data migration already completed") }
+                return
+            }
+
+            Task { await logger.warning("⚠️ MIGRATION: Migration was marked complete but Core Data has no trades; rerunning from UserDefaults") }
         }
         
         do {
@@ -92,7 +98,6 @@ class TradeDataMigrationService {
         guard let tradesData = UserDefaults.standard.data(forKey: "usertrades") else {
             Task { await logger.info("ℹ️ MIGRATION: No trades found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
-            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
@@ -100,7 +105,8 @@ class TradeDataMigrationService {
         let trades: [Trade]
         do {
             trades = try JSONDecoder().decode([Trade].self, from: tradesData)
-            Task { await logger.info("📊 MIGRATION: Found \(trades.count) trades in UserDefaults") }
+                .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+            Task { await logger.info("📊 MIGRATION: Found \(trades.count) portfolio trades in UserDefaults") }
         } catch {
             Task { await logger.error("❌ MIGRATION: Failed to decode trades from UserDefaults: \(error)") }
             throw TradeDataMigrationError.decodingFailed(error)
@@ -128,7 +134,6 @@ class TradeDataMigrationService {
         guard let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") else {
             Task { await logger.info("ℹ️ MIGRATION: No trading info found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
-            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
@@ -163,14 +168,14 @@ class TradeDataMigrationService {
         let documentDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         
         // Backup trades
-        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
+        if let tradesData = UserDefaults.standard.data(forKey: "usertrades") {
             let tradesBackupURL = documentDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
             try tradesData.write(to: tradesBackupURL)
             Task { await logger.info("💾 MIGRATION: Trades backup saved to \(tradesBackupURL.path)") }
         }
         
         // Backup trading info
-        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
+        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") {
             let tradingInfoBackupURL = documentDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
             try tradingInfoData.write(to: tradingInfoBackupURL)
             Task { await logger.info("💾 MIGRATION: Trading info backup saved to \(tradingInfoBackupURL.path)") }
@@ -198,10 +203,12 @@ class TradeDataMigrationService {
         Task { await logger.info("🔍 MIGRATION: Validating migration integrity") }
         
         // Compare UserDefaults trades with Core Data trades
-        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
+        if let tradesData = UserDefaults.standard.data(forKey: "usertrades") {
             do {
                 let userDefaultsTrades = try JSONDecoder().decode([Trade].self, from: tradesData)
+                    .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
                 let coreDataTrades = try await tradeDataService.loadAllTrades()
+                    .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
                 
                 if userDefaultsTrades.count != coreDataTrades.count {
                     Task { await logger.error("❌ MIGRATION: Trade count mismatch - UserDefaults: \(userDefaultsTrades.count), Core Data: \(coreDataTrades.count)") }
@@ -225,7 +232,7 @@ class TradeDataMigrationService {
         }
         
         // Compare UserDefaults trading info with Core Data trading info
-        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
+        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") {
             do {
                 let userDefaultsTradingInfo = try JSONDecoder().decode([String: TradingInfo].self, from: tradingInfoData)
                 let coreDataTradingInfo = try await tradeDataService.loadAllTradingInfo()

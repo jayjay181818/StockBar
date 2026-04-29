@@ -1,7 +1,7 @@
-import Foundation
-import CoreData // Ensure CoreData is imported
+@preconcurrency import Foundation
+@preconcurrency import CoreData // Ensure CoreData is imported
 
-class DataMigrationService {
+final class DataMigrationService: @unchecked Sendable {
     static let shared = DataMigrationService()
     
     private let coreDataService: HistoricalDataServiceProtocol
@@ -128,7 +128,9 @@ class DataMigrationService {
             
             // Migrate trades from UserDefaults
             let hasUserTrades = userDefaults.data(forKey: "usertrades") != nil
-            if !userDefaults.bool(forKey: MigrationKeys.tradesMigrated) && (migrationVersionStored < currentMigrationVersion || hasUserTrades) {
+            let hasCoreDataTrades = await tradeDataMigrationService.areTradesMigrated()
+            if (!userDefaults.bool(forKey: MigrationKeys.tradesMigrated) || (hasUserTrades && !hasCoreDataTrades))
+                && (migrationVersionStored < currentMigrationVersion || hasUserTrades) {
                 try await migrateTrades()
                 userDefaults.set(true, forKey: MigrationKeys.tradesMigrated)
             }
@@ -206,7 +208,8 @@ class DataMigrationService {
                 for (_, snapshots) in tieredCache {
                     allSnapshots.append(contentsOf: snapshots)
                 }
-                Task { await Logger.shared.info("Loaded \(allSnapshots.count) snapshots from tiered cache") }
+                let snapshotCount = allSnapshots.count
+                Task { await Logger.shared.info("Loaded \(snapshotCount) snapshots from tiered cache") }
             } catch {
                 Task { await Logger.shared.error("Failed to decode tiered cache data: \(error)") }
             }
@@ -219,7 +222,8 @@ class DataMigrationService {
                 for (_, snapshots) in legacySnapshots {
                     allSnapshots.append(contentsOf: snapshots)
                 }
-                Task { await Logger.shared.info("Loaded additional \(legacySnapshots.values.flatMap { $0 }.count) snapshots from legacy storage") }
+                let snapshotCount = legacySnapshots.values.flatMap { $0 }.count
+                Task { await Logger.shared.info("Loaded additional \(snapshotCount) snapshots from legacy storage") }
             } catch {
                 Task { await Logger.shared.error("Failed to decode legacy price snapshots: \(error)") }
             }

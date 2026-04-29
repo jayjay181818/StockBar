@@ -4,7 +4,8 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// Manages export functionality for portfolio data to CSV and PDF formats
-class ExportManager {
+@MainActor
+final class ExportManager {
     
     static let shared = ExportManager()
     private let logger = Logger.shared

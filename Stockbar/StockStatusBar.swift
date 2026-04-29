@@ -1,5 +1,5 @@
 import Cocoa
-import Combine
+@preconcurrency import Combine
 import Foundation
 import SwiftUI
 
@@ -61,9 +61,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private var symbolItemById: [UUID: StockStatusItemController] = [:]
     private var cancellables = Set<AnyCancellable>()
     private var mainPopover: NSPopover?
-    private var mainMenuItems: [NSMenuItem] = []
+    private var portfolioActions = PortfolioMenuActions.noop
     private var popoverGlobalMonitor: Any?
     private var popoverLocalMonitor: Any?
+    private let mainPopoverSize = NSSize(width: 330, height: 410)
 
     // MARK: - Initialization
     init(dataModel: DataModel) {
@@ -125,8 +126,12 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     }
     
     // MARK: - Public Methods
-    func constructMainItemMenu(items: [NSMenuItem]) {
-        mainMenuItems = items
+    func configurePortfolioActions(
+        refresh: @escaping () -> Void,
+        preferences: @escaping () -> Void,
+        quit: @escaping () -> Void
+    ) {
+        portfolioActions = PortfolioMenuActions(refresh: refresh, preferences: preferences, quit: quit)
     }
     
     func removeAllSymbolItems() {
@@ -178,7 +183,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             return
         }
 
-        let (totalValue, dayGain, dayGainPct) = calculatePortfolioSummary(for: trades, preferredCurrency: settings.currencyCode)
+        let summary = dataModel.calculateDisplayPortfolioSummary(preferredCurrency: settings.currencyCode)
+        let totalValue = summary.totalValue
+        let dayGain = summary.dayGain
+        let dayGainPct = summary.dayGainPct
 
         let dayGainPctString = String(format: "%+.2f%%", dayGainPct)
 
@@ -213,72 +221,6 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         let attributed = NSAttributedString(string: combined, attributes: attributes)
         button.attributedTitle = attributed
         button.attributedAlternateTitle = attributed
-    }
-
-    private func calculatePortfolioSummary(
-        for trades: [RealTimeTrade],
-        preferredCurrency: String
-    ) -> (totalValue: Double, dayGain: Double, dayGainPct: Double) {
-        var totalValueUSD = 0.0
-        var totalPrevUSD = 0.0
-        var dayGainUSD = 0.0
-
-        for trade in trades {
-            guard !trade.trade.isWatchlistOnly else { continue }
-            let info = trade.realTimeInfo
-            guard info.currentPrice.isFinite, info.prevClosePrice.isFinite else { continue }
-
-            let units = trade.trade.position.unitSize
-            guard units > 0 else { continue }
-
-            let currentValue = info.currentPrice * units
-            let prevValue = info.prevClosePrice * units
-            let currency = info.currency ?? "USD"
-
-            let currentValueUSD = convertToUSD(amount: currentValue, currency: currency)
-            let prevValueUSD = convertToUSD(amount: prevValue, currency: currency)
-
-            totalValueUSD += currentValueUSD
-            totalPrevUSD += prevValueUSD
-            dayGainUSD += (currentValueUSD - prevValueUSD)
-        }
-
-        let dayGainPct = totalPrevUSD > 0 ? (dayGainUSD / totalPrevUSD) * 100 : 0
-
-        let totalValue = convertFromUSD(amount: totalValueUSD, preferredCurrency: preferredCurrency)
-        let dayGain = convertFromUSD(amount: dayGainUSD, preferredCurrency: preferredCurrency)
-
-        return (totalValue, dayGain, dayGainPct)
-    }
-
-    private func convertToUSD(amount: Double, currency: String) -> Double {
-        if currency == "GBX" || currency == "GBp" {
-            let gbpAmount = amount / 100.0
-            return dataModel.currencyConverter.convert(amount: gbpAmount, from: "GBP", to: "USD")
-        }
-
-        if currency == "GBP" {
-            return dataModel.currencyConverter.convert(amount: amount, from: "GBP", to: "USD")
-        }
-
-        if currency == "USD" {
-            return amount
-        }
-
-        return dataModel.currencyConverter.convert(amount: amount, from: currency, to: "USD")
-    }
-
-    private func convertFromUSD(amount: Double, preferredCurrency: String) -> Double {
-        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-            let gbpAmount = dataModel.currencyConverter.convert(amount: amount, from: "USD", to: "GBP")
-            return gbpAmount * 100.0
-        }
-
-        if preferredCurrency == "USD" {
-            return amount
-        }
-
-        return dataModel.currencyConverter.convert(amount: amount, from: "USD", to: preferredCurrency)
     }
 
     static func convertToGBP(amount: Double, currency: String, currencyConverter: CurrencyConverter) -> Double? {
@@ -338,15 +280,18 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             mainPopover?.performClose(sender)
             stopMainPopoverEventMonitors()
         } else {
-            let menu = NSMenu()
-            mainMenuItems.forEach { menu.addItem($0.copy() as! NSMenuItem) }
-            
-            let menuView = NSHostingController(rootView: MainMenuPopoverView(menu: menu))
-            mainPopover?.contentViewController = menuView
-            mainPopover?.contentSize = NSSize(width: 200, height: CGFloat(mainMenuItems.count * 24 + 16))
-            
+            mainPopover?.contentSize = mainPopoverSize
+            mainPopover?.animates = false
+            mainPopover?.contentViewController = NSHostingController(
+                rootView: PortfolioMenuPopoverView(
+                    dataModel: dataModel,
+                    actions: actionsForCurrentPortfolioPopover()
+                )
+            )
+
             mainPopover?.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             startMainPopoverEventMonitors()
+            clampMainPopoverToVisibleFrame(relativeTo: sender)
         }
     }
     
@@ -384,6 +329,60 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         if let monitor = popoverLocalMonitor {
             NSEvent.removeMonitor(monitor)
             popoverLocalMonitor = nil
+        }
+    }
+
+    private func actionsForCurrentPortfolioPopover() -> PortfolioMenuActions {
+        PortfolioMenuActions(
+            refresh: { [weak self] in
+                Task { @MainActor in self?.portfolioActions.refresh() }
+            },
+            preferences: { [weak self] in
+                Task { @MainActor in
+                    self?.closeMainPopover()
+                    self?.portfolioActions.preferences()
+                }
+            },
+            quit: { [weak self] in
+                Task { @MainActor in
+                    self?.closeMainPopover()
+                    self?.portfolioActions.quit()
+                }
+            }
+        )
+    }
+
+    private func closeMainPopover() {
+        mainPopover?.performClose(nil)
+        stopMainPopoverEventMonitors()
+    }
+
+    private func clampMainPopoverToVisibleFrame(relativeTo sender: NSStatusBarButton) {
+        DispatchQueue.main.async { [weak self, weak sender] in
+            guard let self,
+                  let sender,
+                  let popoverWindow = self.mainPopover?.contentViewController?.view.window,
+                  let screen = sender.window?.screen else {
+                return
+            }
+
+            let visibleFrame = screen.visibleFrame
+            var frame = popoverWindow.frame
+
+            if frame.maxY > visibleFrame.maxY {
+                frame.origin.y = visibleFrame.maxY - frame.height
+            }
+            if frame.minY < visibleFrame.minY {
+                frame.origin.y = visibleFrame.minY
+            }
+            if frame.minX < visibleFrame.minX {
+                frame.origin.x = visibleFrame.minX
+            }
+            if frame.maxX > visibleFrame.maxX {
+                frame.origin.x = visibleFrame.maxX - frame.width
+            }
+
+            popoverWindow.setFrame(frame, display: true)
         }
     }
 }
@@ -425,11 +424,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         print("🔧 ITEM: Status item configured for \(realTimeTrade.trade.name), visible: \(self.item.isVisible), title: \(self.item.button?.title ?? "nil")")
     }
 
-    deinit {
-        // Cleanup cancellables to prevent memory leaks
-        cancellables.removeAll()
-        // Note: Status item removal is handled by StockStatusBar.removeAllSymbolItems()
-    }
+    deinit {}
     
     // MARK: - Private Methods
     private func setupInitialState(with trade: RealTimeTrade) {
@@ -575,6 +570,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     }
     
     @MainActor
+    // swiftlint:disable:next cyclomatic_complexity
     private func updateMenu(trade: Trade, data: TradingData) async {
         let menu = NSMenu()
 
@@ -1317,49 +1313,5 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             // Trigger immediate refresh
             await dataModel.refreshAllTrades()
         }
-    }
-}
-
-struct MainMenuPopoverView: View {
-    let menu: NSMenu
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(menu.items.enumerated()), id: \.offset) { _, item in
-                if item.isSeparatorItem {
-                    Divider()
-                        .padding(.vertical, 2)
-                } else {
-                    Button(action: {
-                        dismiss()
-                        if let action = item.action, let target = item.target {
-                            _ = target.perform(action, with: item)
-                        }
-                    }) {
-                        HStack {
-                            if let title = item.attributedTitle {
-                                Text(AttributedString(title))
-                            } else {
-                                Text(item.title)
-                            }
-                            Spacer()
-                            if !item.keyEquivalent.isEmpty {
-                                Text(item.keyEquivalent)
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!item.isEnabled)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-            }
-        }
-        .padding(8)
-        .frame(minWidth: 180)
     }
 }

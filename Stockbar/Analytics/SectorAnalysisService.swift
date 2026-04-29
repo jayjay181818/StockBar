@@ -375,7 +375,7 @@ actor SectorAnalysisService {
         // Generate recommendations
         var recommendations: [String] = []
 
-        if topHeavySectors.count > 0 {
+        if !topHeavySectors.isEmpty {
             for sector in topHeavySectors {
                 recommendations.append("Consider reducing exposure to \(sector.displayName) (>\(String(format: "%.1f", sectorAllocations.first { $0.sector == sector }?.percentageOfPortfolio ?? 0))%)")
             }
@@ -386,7 +386,7 @@ actor SectorAnalysisService {
         let missingMajorSectors = [Sector.technology, .healthcare, .financials, .consumerCyclical]
             .filter { !representedSectors.contains($0) }
 
-        if missingMajorSectors.count > 0 {
+        if !missingMajorSectors.isEmpty {
             recommendations.append("Consider adding exposure to: \(missingMajorSectors.map { $0.displayName }.joined(separator: ", "))")
         }
 

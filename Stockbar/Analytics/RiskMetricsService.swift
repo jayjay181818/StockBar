@@ -33,6 +33,13 @@ actor RiskMetricsService {
         let durationDays: Int
     }
 
+    struct MaxDrawdownMetrics {
+        let maxDrawdown: Double
+        let duration: Int
+        let peak: Double
+        let trough: Double
+    }
+
     // MARK: - Value at Risk (VaR) Calculation
 
     /// Calculate Value at Risk using historical method
@@ -174,8 +181,7 @@ actor RiskMetricsService {
 
     /// Calculate maximum drawdown and related metrics
     /// - Parameter portfolioValues: Array of portfolio values over time (chronological order)
-    /// - Returns: Tuple of (max drawdown %, max drawdown duration in periods, peak value, trough value)
-    func calculateMaxDrawdown(portfolioValues: [Double]) async -> (maxDrawdown: Double, duration: Int, peak: Double, trough: Double)? {
+    func calculateMaxDrawdown(portfolioValues: [Double]) async -> MaxDrawdownMetrics? {
         guard portfolioValues.count > 1 else { return nil }
 
         var maxDrawdown = 0.0
@@ -208,7 +214,12 @@ actor RiskMetricsService {
 
         await logger.debug("📊 Max Drawdown: \(String(format: "%.2f%%", maxDrawdown * 100)) over \(maxDuration) periods (peak: \(String(format: "%.2f", maxDrawdownPeak)), trough: \(String(format: "%.2f", maxDrawdownTrough)))")
 
-        return (maxDrawdown, maxDuration, maxDrawdownPeak, maxDrawdownTrough)
+        return MaxDrawdownMetrics(
+            maxDrawdown: maxDrawdown,
+            duration: maxDuration,
+            peak: maxDrawdownPeak,
+            trough: maxDrawdownTrough
+        )
     }
 
     /// Find all drawdown periods exceeding a threshold

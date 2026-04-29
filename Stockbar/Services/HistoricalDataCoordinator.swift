@@ -8,6 +8,13 @@
 
 import Foundation
 
+struct HistoricalDataStatus: Sendable {
+    let isRunningComprehensive: Bool
+    let isRunningStandard: Bool
+    let lastComprehensiveCheck: Date
+    let nextComprehensiveCheck: Date
+}
+
 /// Service responsible for coordinating historical data backfill operations
 @MainActor
 class HistoricalDataCoordinator {
@@ -443,9 +450,9 @@ class HistoricalDataCoordinator {
     }
     
     /// Returns the current status of automatic historical data checking
-    public func getHistoricalDataStatus() -> (isRunningComprehensive: Bool, isRunningStandard: Bool, lastComprehensiveCheck: Date, nextComprehensiveCheck: Date) {
+    public func getHistoricalDataStatus() -> HistoricalDataStatus {
         let nextCheck = lastComprehensiveCheckTime.addingTimeInterval(comprehensiveCheckCooldown)
-        return (
+        return HistoricalDataStatus(
             isRunningComprehensive: isRunningComprehensiveCheck,
             isRunningStandard: isRunningStandardCheck,
             lastComprehensiveCheck: lastComprehensiveCheckTime,

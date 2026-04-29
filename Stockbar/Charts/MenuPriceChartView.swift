@@ -1,49 +1,7 @@
 import Combine
-import Combine
 import Foundation
 import SwiftUI
 import AppKit
-
-enum MenuChartTimeRange: String, CaseIterable {
-    case day = "1D"
-    case week = "1W"
-    case month = "1M"
-    
-    var description: String {
-        switch self {
-        case .day: return "1 Day"
-        case .week: return "1 Week"
-        case .month: return "1 Month"
-        }
-    }
-    
-    var timeInterval: TimeInterval {
-        switch self {
-        case .day: return 24 * 60 * 60
-        case .week: return 7 * 24 * 60 * 60
-        case .month: return 30 * 24 * 60 * 60
-        }
-    }
-
-    var chartTimeRange: ChartTimeRange {
-        switch self {
-        case .day: return .day
-        case .week: return .week
-        case .month: return .month
-        }
-    }
-    
-    func startDate(from endDate: Date = Date()) -> Date {
-        return endDate.addingTimeInterval(-timeInterval)
-    }
-}
-
-struct MenuChartDataPoint: Identifiable {
-    let id = UUID()
-    let date: Date
-    let price: Double
-    let symbol: String
-}
 
 struct MenuPopoverMetrics {
     let exchangeName: String
@@ -93,7 +51,6 @@ class MenuChartViewModel: ObservableObject {
         errorMessage = nil
         
         Task {
-            do {
                 let endDate = Date()
                 let startDate = selectedTimeRange.startDate(from: endDate)
                 
@@ -194,14 +151,6 @@ class MenuChartViewModel: ObservableObject {
                         await logger.debug("📊 Chart data for \(symbol): range \(String(format: "%.2f", minPrice)) - \(String(format: "%.2f", maxPrice)) (\(self.chartData.count) points)") 
                     }
                 }
-                
-            } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Failed to load chart data: \(error.localizedDescription)"
-                }
-                await logger.error("❌ Failed to load chart data for \(symbol): \(error)")
-            }
         }
     }
     
@@ -262,13 +211,13 @@ struct MenuPriceChartView: View {
     private var marketValue: String {
         let val = currentPrice * metrics.units
         if val.isNaN || val.isInfinite { return "—" }
-        return formatCurrency(val, currency: metrics.currency)
+        return MenuPopoverFormatter.currency(val, currency: metrics.currency)
     }
-    private var totalPnL: String { formatCurrency(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
-    private var totalPnLPercent: String { formatPercent(metrics.totalPnLPercent) }
+    private var totalPnL: String { MenuPopoverFormatter.currency(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
+    private var totalPnLPercent: String { MenuPopoverFormatter.percent(metrics.totalPnLPercent) }
     private var priceChangePercent: Double? { metrics.priceChangePercent }
-    private var units: String { formatUnits(metrics.units) }
-    private var avgCost: String { formatCurrency(metrics.avgCost, currency: metrics.currency) }
+    private var units: String { MenuPopoverFormatter.units(metrics.units) }
+    private var avgCost: String { MenuPopoverFormatter.currency(metrics.avgCost, currency: metrics.currency) }
 
     private var rangePriceChange: (value: Double, percent: Double)? {
         guard let first = viewModel.chartData.first,
@@ -295,7 +244,7 @@ struct MenuPriceChartView: View {
               let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol) else {
             return nil
         }
-        return MenuPriceChartView.benchmarkDisplayName(for: benchmark)
+        return "vs \(MenuPriceChartView.benchmarkDisplayName(for: benchmark))"
     }
 
     init(symbol: String, currentPrice: Double, currency: String, metrics: MenuPopoverMetrics, onUnitsSave: ((Double) -> Void)? = nil) {
@@ -306,7 +255,7 @@ struct MenuPriceChartView: View {
         self.onUnitsSave = onUnitsSave
         let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol)
         self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice, benchmarkSymbol: benchmark))
-        self._unitsInput = State(initialValue: formatUnits(metrics.units))
+        self._unitsInput = State(initialValue: MenuPopoverFormatter.units(metrics.units))
     }
     
     var body: some View {
@@ -317,11 +266,22 @@ struct MenuPriceChartView: View {
                 .padding(.bottom, 12)
 
             ZStack(alignment: .topTrailing) {
-                chartContentView
+                MenuPopoverLineChart(
+                    points: viewModel.chartData,
+                    comparisonPoints: benchmarkEnabled ? viewModel.benchmarkData : [],
+                    comparisonLabel: benchmarkLabel,
+                    isLoading: viewModel.isLoading,
+                    hoveredPoint: $hoveredPoint
+                )
                     .frame(height: chartHeight)
                     .clipShape(Rectangle())
                 
-                floatingTimeRangePicker
+                MenuPopoverTimeRangePicker(
+                    selectedRange: $viewModel.selectedTimeRange,
+                    namespace: animationNamespace
+                ) { range in
+                    viewModel.setTimeRange(range)
+                }
                     .padding(.top, 12)
                     .padding(.trailing, 16)
             }
@@ -362,7 +322,6 @@ struct MenuPriceChartView: View {
                 Text(symbol)
                     .font(.system(size: 24, weight: .bold, design: .default))
                     .foregroundColor(.white)
-                    .tracking(-0.5)
 
                 Text(metrics.exchangeName)
                     .font(.caption)
@@ -406,7 +365,7 @@ struct MenuPriceChartView: View {
                             .strokeBorder(isPositive ? Color.green.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
                     )
                 } else if let point = hoveredPoint {
-                    Text(formatDate(point.date))
+                    Text(MenuPopoverFormatter.date(point.date, range: viewModel.selectedTimeRange))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                         .padding(.horizontal, 8)
@@ -417,243 +376,16 @@ struct MenuPriceChartView: View {
         }
     }
     
-    private var floatingTimeRangePicker: some View {
-        HStack(spacing: 0) {
-            ForEach(MenuChartTimeRange.allCases, id: \.self) { range in
-                Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        viewModel.setTimeRange(range)
-                    }
-                }) {
-                    Text(range.rawValue)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(viewModel.selectedTimeRange == range ? .black : .white.opacity(0.8))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background {
-                            if viewModel.selectedTimeRange == range {
-                                Capsule()
-                                    .fill(Color.white)
-                                    .matchedGeometryEffect(id: "activeTab", in: animationNamespace)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(
-            Capsule()
-                .fill(.ultraThinMaterial)
-                .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 0.5))
-        )
-        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
-    }
-    
-    private var chartContentView: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .tint(.white)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.chartData.count >= 2 {
-                    chartView
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    let x = value.location.x
-                                    let width = geometry.size.width
-                                    let percentage = max(0, min(1, x / width))
-                                    let index = Int(Double(viewModel.chartData.count - 1) * percentage)
-                                    if index >= 0 && index < viewModel.chartData.count {
-                                        hoveredPoint = viewModel.chartData[index]
-                                    }
-                                }
-                                .onEnded { _ in
-                                    hoveredPoint = nil
-                                }
-                        )
-                } else if viewModel.chartData.isEmpty {
-                     Text("No Data")
-                        .foregroundColor(.white.opacity(0.3))
-                        .font(.caption)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-
-                if let benchmarkLabel {
-                    Text("vs \(benchmarkLabel)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.6))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule().fill(Color.black.opacity(0.35))
-                        )
-                        .padding(.leading, 16)
-                        .padding(.top, 12)
-                }
-            }
-        }
-    }
-    
-    private var chartView: some View {
-        Canvas { context, size in
-            let points = viewModel.chartData
-            guard points.count >= 2 else { return }
-
-            let benchmarkPoints = benchmarkEnabled ? viewModel.benchmarkData : []
-
-            guard let minDate = points.first?.date.timeIntervalSince1970,
-                  let maxDate = points.last?.date.timeIntervalSince1970 else { return }
-
-            let dateRange = maxDate - minDate
-            let safeDateRange = dateRange == 0 ? 1.0 : dateRange
-
-            func percentSeries(_ series: [MenuChartDataPoint]) -> [(time: TimeInterval, value: Double)] {
-                guard let first = series.first else { return [] }
-                let baseline = first.price
-                return series.map { point in
-                    let percent = baseline.isFinite && baseline != 0 ? (point.price / baseline) - 1.0 : 0.0
-                    return (point.date.timeIntervalSince1970, percent)
-                }
-            }
-
-            let stockPercentSeries = percentSeries(points)
-            let benchmarkPercentSeries = percentSeries(benchmarkPoints)
-            let combinedValues = stockPercentSeries.map { $0.value } + benchmarkPercentSeries.map { $0.value }
-            let minValue = combinedValues.min() ?? 0
-            let maxValue = combinedValues.max() ?? 0
-            let range = max(maxValue - minValue, 0.0001)
-
-            let bottomInset = size.height * 0.06
-
-            // Dynamic top inset: Avoid overlap with time range picker (top-right)
-            // Picker occupies approx top 45pt in the right 40% of the chart
-            let pickerHeight: CGFloat = 45.0
-            let dangerZoneThreshold = minDate + (safeDateRange * 0.60)
-            let baseTopInset = size.height * 0.16
-
-            func calculateRequiredInset(_ series: [(time: TimeInterval, value: Double)]) -> CGFloat {
-                var maxInset = baseTopInset
-                for point in series where point.time > dangerZoneThreshold {
-                    let v = CGFloat((point.value - minValue) / range)
-                    if v > 0.05 {
-                        // Solve for TopInset (T) to ensure point is below PickerHeight:
-                        // y = (H-B)*(1-v) + v*T >= PickerHeight
-                        // T >= (PickerHeight - (H-B)*(1-v)) / v
-                        let hMinusB = size.height - bottomInset
-                        let req = (pickerHeight - hMinusB * (1.0 - v)) / v
-                        if req > maxInset { maxInset = req }
-                    }
-                }
-                return maxInset
-            }
-
-            let topInset = min(
-                max(calculateRequiredInset(stockPercentSeries), calculateRequiredInset(benchmarkPercentSeries)),
-                size.height * 0.45
-            )
-
-            let usableHeight = max(size.height - topInset - bottomInset, 1)
-
-            func normalize(_ series: [(time: TimeInterval, value: Double)]) -> [CGPoint] {
-                series.map { item in
-                    let normalizedX = (item.time - minDate) / safeDateRange
-                    let normalizedY = (item.value - minValue) / range
-                    return CGPoint(
-                        x: normalizedX * size.width,
-                        y: size.height - bottomInset - (normalizedY * usableHeight)
-                    )
-                }
-            }
-
-            let seriesPoints = normalize(stockPercentSeries)
-            let benchmarkSeriesPoints = normalize(benchmarkPercentSeries)
-
-            func smoothedPath(_ points: [CGPoint]) -> Path? {
-                guard let first = points.first else { return nil }
-                var path = Path()
-                path.move(to: first)
-                for index in 1..<points.count {
-                    let current = points[index]
-                    let previous = points[index - 1]
-                    let midX = previous.x + (current.x - previous.x) / 2
-                    let control1 = CGPoint(x: midX, y: previous.y)
-                    let control2 = CGPoint(x: midX, y: current.y)
-                    path.addCurve(to: current, control1: control1, control2: control2)
-                }
-                return path
-            }
-
-            if let benchmarkPath = smoothedPath(benchmarkSeriesPoints), !benchmarkSeriesPoints.isEmpty {
-                context.stroke(
-                    benchmarkPath,
-                    with: .color(.white.opacity(0.25)),
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
-                )
-            }
-
-            guard let linePath = smoothedPath(seriesPoints) else { return }
-
-            var fillPath = linePath
-            fillPath.addLine(to: CGPoint(x: size.width, y: size.height))
-            fillPath.addLine(to: CGPoint(x: 0, y: size.height))
-            fillPath.closeSubpath()
-
-            context.fill(
-                fillPath,
-                with: .linearGradient(
-                    Gradient(colors: [chartColor.opacity(0.5), chartColor.opacity(0.0)]),
-                    startPoint: CGPoint(x: 0, y: 0),
-                    endPoint: CGPoint(x: 0, y: size.height)
-                )
-            )
-
-            context.stroke(
-                linePath,
-                with: .color(chartColor.opacity(0.35)),
-                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
-            )
-
-            context.stroke(
-                linePath,
-                with: .color(chartColor),
-                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
-            )
-
-            if let hovered = hoveredPoint,
-               let index = points.firstIndex(where: { $0.id == hovered.id }),
-               index < seriesPoints.count {
-                let pt = seriesPoints[index]
-
-                var cursorPath = Path()
-                cursorPath.move(to: CGPoint(x: pt.x, y: 0))
-                cursorPath.addLine(to: CGPoint(x: pt.x, y: size.height))
-
-                context.stroke(
-                    cursorPath,
-                    with: .color(.white.opacity(0.25)),
-                    style: StrokeStyle(lineWidth: 1, dash: [4, 4])
-                )
-
-                let dotRect = CGRect(x: pt.x - 4, y: pt.y - 4, width: 8, height: 8)
-                context.fill(Path(ellipseIn: dotRect), with: .color(.white))
-                context.stroke(Path(ellipseIn: dotRect), with: .color(chartColor), lineWidth: 2)
-            }
-        }
-    }
-    
     private var bentoStatsGrid: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                statBox(label: "Market Value", value: marketValue)
+                MenuPopoverStatBox(label: "Market Value", value: marketValue)
                 Rectangle()
                     .fill(Color.white.opacity(0.1))
                     .frame(width: 1)
                 
                 let totalColor: Color = (metrics.totalPnL ?? 0) >= 0 ? .green : .red
-                statBox(label: "Total P&L", value: totalPnL, subValue: totalPnLPercent, valueColor: totalColor)
+                MenuPopoverStatBox(label: "Total P&L", value: totalPnL, subValue: totalPnLPercent, valueColor: totalColor)
             }
             
             Rectangle()
@@ -662,11 +394,11 @@ struct MenuPriceChartView: View {
             
             HStack(spacing: 0) {
                 let rangeValue = formatCurrency(rangePnL.value, currency: metrics.currency, includeSign: true)
-                let rangePctStr = formatPercent(rangePnL.percent)
+                let rangePctStr = MenuPopoverFormatter.percent(rangePnL.percent)
                 let rangeColor: Color = (rangePnL.value ?? 0) >= 0 ? .green : .red
                 let rangeLabel = "\(viewModel.selectedTimeRange.rawValue) P&L"
                 
-                statBox(label: rangeLabel, value: rangeValue, subValue: rangePctStr, valueColor: rangeColor)
+                MenuPopoverStatBox(label: rangeLabel, value: rangeValue, subValue: rangePctStr, valueColor: rangeColor)
                 
                 Rectangle()
                     .fill(Color.white.opacity(0.1))
@@ -681,28 +413,6 @@ struct MenuPriceChartView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
-    }
-    
-    private func statBox(label: String, value: String, subValue: String? = nil, valueColor: Color = .white) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            HStack(spacing: 4) {
-                Text(value)
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundColor(valueColor)
-                
-                if let sub = subValue, !sub.isEmpty {
-                    Text(sub)
-                        .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundColor(valueColor.opacity(0.8))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
     }
     
     private var unitsBox: some View {
@@ -752,7 +462,7 @@ struct MenuPriceChartView: View {
             
             HStack(spacing: 12) {
                 Button("Cancel") {
-                    unitsInput = formatUnits(metrics.units)
+                    unitsInput = MenuPopoverFormatter.units(metrics.units)
                     isEditingUnits = false
                 }
                 
@@ -769,98 +479,22 @@ struct MenuPriceChartView: View {
     }
     
     private var footerView: some View {
-        ZStack {
-            Button(action: {
+        MenuPopoverFooter(
+            updatedText: metrics.updatedText,
+            onRefresh: {
                 NotificationCenter.default.post(name: .refreshRequested, object: nil)
-            }) {
-                HStack(spacing: 6) {
-                    Text(metrics.updatedText)
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.55))
-                .frame(maxWidth: .infinity, alignment: .center)
+            },
+            onPreferences: {
+                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+            },
+            onQuit: {
+                NSApplication.shared.terminate(nil)
             }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            
-            HStack {
-                Button(action: {
-                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-                }) {
-                    Text("Preferences")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                
-                Spacer()
-                
-                Button(action: {
-                    NSApplication.shared.terminate(nil)
-                }) {
-                    Text("Quit")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-    
-    private var chartColor: Color {
-        guard let first = viewModel.chartData.first?.price,
-              let last = viewModel.chartData.last?.price else { return .blue }
-        return last >= first ? Color(red: 0.2, green: 0.85, blue: 0.5) : Color(red: 1.0, green: 0.3, blue: 0.3)
-    }
-    
-    private var chartYAxisRange: ClosedRange<Double> {
-        guard !viewModel.chartData.isEmpty else { return 0...100 }
-        let prices = viewModel.chartData.map { $0.price }
-        let minPrice = prices.min() ?? 0
-        let maxPrice = prices.max() ?? 100
-        let buffer = max((maxPrice - minPrice) * 0.1, 0.01)
-        return (minPrice - buffer)...(maxPrice + buffer)
-    }
-    
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = viewModel.selectedTimeRange == .day ? "HH:mm" : "MMM d, HH:mm"
-        return formatter.string(from: date)
+        )
     }
 
     private func formatCurrency(_ value: Double?, currency: String, includeSign: Bool = false) -> String {
-        guard let value = value, value.isFinite else { return "—" }
-        let displayValue = currency == "GBX" ? (value / 100.0) : value
-        let symbol: String
-        switch currency {
-        case "USD": symbol = "$"
-        case "GBP", "GBX": symbol = "£"
-        case "EUR": symbol = "€"
-        case "JPY": symbol = "¥"
-        case "CAD": symbol = "C$"
-        case "AUD": symbol = "A$"
-        default: symbol = currency
-        }
-        let format: String
-        if abs(displayValue) >= 10000 {
-            format = includeSign ? "%+.0f" : "%.0f"
-        } else if abs(displayValue) >= 1000 {
-            format = includeSign ? "%+.1f" : "%.1f"
-        } else {
-            format = includeSign ? "%+.2f" : "%.2f"
-        }
-        return String(format: format, displayValue) + symbol
-    }
-
-    private func formatPercent(_ value: Double?) -> String {
-        guard let value = value, value.isFinite else { return "" }
-        return String(format: "%+.2f%%", value)
-    }
-
-    private func formatUnits(_ value: Double) -> String {
-        value.isFinite ? String(format: "%.0f", value) : "—"
+        MenuPopoverFormatter.currency(value, currency: currency, includeSign: includeSign)
     }
 
     static func benchmarkSymbol(for symbol: String) -> String? {

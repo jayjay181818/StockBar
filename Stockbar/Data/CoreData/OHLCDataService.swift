@@ -321,7 +321,7 @@ actor OHLCDataService {
 // MARK: - OHLC Snapshot Model
 
 /// In-memory representation of an OHLC candlestick data point
-struct OHLCSnapshot: Codable, Identifiable {
+struct OHLCSnapshot: Codable, Identifiable, Sendable {
     let id: UUID
     let symbol: String
     let timestamp: Date

@@ -6,8 +6,10 @@
 //  UI/UX Enhancement - Menu Bar Formatting Service
 //
 
-import Foundation
 import AppKit
+import Foundation
+
+extension NSAttributedString: @unchecked @retroactive Sendable {}
 
 /// Thread-safe service for formatting stock data for menu bar display
 actor MenuBarFormattingService {
@@ -242,7 +244,7 @@ actor MenuBarFormattingService {
         // Use system font
         attributed.addAttribute(.font, value: NSFont.menuBarFont(ofSize: 0), range: range)
 
-        return attributed
+        return attributed.copy() as? NSAttributedString ?? NSAttributedString(attributedString: attributed)
     }
 
     private func cleanupCache() {

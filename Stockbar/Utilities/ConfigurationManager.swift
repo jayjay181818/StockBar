@@ -2,7 +2,7 @@ import Foundation
 
 /// Manages storage of configuration data like API keys
 /// Uses plain-text JSON file storage in user's Documents directory
-public class ConfigurationManager {
+public final class ConfigurationManager: @unchecked Sendable {
     public static let shared = ConfigurationManager()
     private let fileManager = FileManager.default
 

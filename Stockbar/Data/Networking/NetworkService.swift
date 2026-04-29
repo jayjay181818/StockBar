@@ -5,7 +5,7 @@ import Foundation
 // Removed OSLog import to avoid conflict with custom Logger
 
 // Keep the original protocol for compatibility
-protocol NetworkService {
+protocol NetworkService: Sendable {
     func fetchQuote(for symbol: String) async throws -> StockFetchResult
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult]
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
@@ -15,7 +15,7 @@ protocol NetworkService {
 }
 
 // MARK: - Network Error Enum (Extended for script execution)
-enum NetworkError: LocalizedError {
+enum NetworkError: LocalizedError, Sendable {
     case invalidURL
     case invalidResponse(String? = nil)
     case httpError(Int)
@@ -105,10 +105,16 @@ enum NetworkError: LocalizedError {
 }
 
 // MARK: - Python Script Service
-class PythonNetworkService: NetworkService {
+actor PythonNetworkService: NetworkService {
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     private let scriptName = "get_stock_data.py"
-    private let config = PythonConfiguration.load()
+    private let config: PythonConfiguration
+    private let processRunner: any PythonProcessRunning
+
+    init(config: PythonConfiguration = .load(), processRunner: (any PythonProcessRunning)? = nil) {
+        self.config = config
+        self.processRunner = processRunner ?? PythonProcessRunner(config: config)
+    }
 
     /// Parse JSON error from Python script output
     private func parseError(from output: String) throws {
@@ -153,6 +159,19 @@ class PythonNetworkService: NetworkService {
         }
     }
 
+    private func runPythonProcess(
+        arguments: [String],
+        timeoutSeconds: TimeInterval,
+        logContext: String
+    ) async throws -> (stdout: Data, stderr: Data, exitCode: Int32) {
+        let result = try await processRunner.run(
+            arguments: arguments,
+            timeoutSeconds: timeoutSeconds,
+            logContext: logContext
+        )
+        return (result.stdout, result.stderr, result.exitCode)
+    }
+
     func fetchQuote(for symbol: String) async throws -> StockFetchResult {
         await logger.debug("Attempting to fetch quote for \(symbol) using Python script.")
 
@@ -167,32 +186,12 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, symbol]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
         do {
-            try process.run()
-            
-            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30)) // 30 second timeout
-                if process.isRunning {
-                    await logger.warning("Process timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: [scriptPath, symbol],
+                timeoutSeconds: 30,
+                logContext: "Quote fetch for \(symbol)"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.error("Python script stderr for \(symbol): \(err)")
@@ -277,33 +276,12 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        // Use multiple symbols to trigger JSON output format
-        process.arguments = [scriptPath, symbol, symbol] // Duplicate symbol to trigger batch mode
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
         do {
-            try process.run()
-            
-            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30)) // 30 second timeout
-                if process.isRunning {
-                    await logger.warning("Enhanced process timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: [scriptPath, symbol, symbol],
+                timeoutSeconds: 30,
+                logContext: "Enhanced quote fetch for \(symbol)"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.error("Python script stderr for enhanced \(symbol): \(err)")
@@ -486,26 +464,6 @@ class PythonNetworkService: NetworkService {
         return results
     }
     
-    // MARK: - Helper Classes
-    
-    /// Thread-safe buffer for capturing process output
-    final class SafeDataBuffer: @unchecked Sendable {
-        private var data = Data()
-        private let lock = NSLock()
-        
-        func append(_ newData: Data) {
-            lock.lock()
-            defer { lock.unlock() }
-            data.append(newData)
-        }
-        
-        var contents: Data {
-            lock.lock()
-            defer { lock.unlock() }
-            return data
-        }
-    }
-
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] {
         await logger.info("🐍 PYTHON SCRIPT: Starting historical data fetch for \(symbol)")
         
@@ -532,75 +490,23 @@ class PythonNetworkService: NetworkService {
         
         await logger.info("🐍 PYTHON SCRIPT: Formatted dates - start: \(startDateString), end: \(endDateString)")
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
-        
-        await logger.info("🐍 PYTHON SCRIPT: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
-        
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
+        await logger.info("🐍 PYTHON SCRIPT: Command: \(config.interpreterPath) \(arguments.joined(separator: " "))")
         
         do {
             await logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
-            try process.run()
-            
-            // Add timeout protection for historical data fetching (5 minutes max)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
-                if process.isRunning {
-                    await logger.warning("🐍 PYTHON SCRIPT: Timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            // Read data incrementally to avoid pipe buffer overflow (65KB limit)
-            // Use readability handler approach for reliable streaming
-            let outputBuffer = SafeDataBuffer()
-            let errorBuffer = SafeDataBuffer()
+            let (outputData, errorData, exitCode) = try await runPythonProcess(
+                arguments: arguments,
+                timeoutSeconds: 300,
+                logContext: "Historical fetch for \(symbol)"
+            )
 
-            outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if !chunk.isEmpty {
-                    outputBuffer.append(chunk)
-                }
-            }
-
-            errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if !chunk.isEmpty {
-                    errorBuffer.append(chunk)
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            // Clear handlers and read any final data
-            outputPipe.fileHandleForReading.readabilityHandler = nil
-            errorPipe.fileHandleForReading.readabilityHandler = nil
-
-            // Read any remaining buffered data
-            let remainingOutput = outputPipe.fileHandleForReading.availableData
-            if !remainingOutput.isEmpty {
-                outputBuffer.append(remainingOutput)
-            }
-            let remainingError = errorPipe.fileHandleForReading.availableData
-            if !remainingError.isEmpty {
-                errorBuffer.append(remainingError)
-            }
-            
-            let exitCode = process.terminationStatus
             await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
-            
-            let errorData = errorBuffer.contents
+
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("🐍 PYTHON SCRIPT: Debug output for \(symbol): \(err)")
             }
-            
-            let outputData = outputBuffer.contents
+
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
                 await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
@@ -705,34 +611,15 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
-
-        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
+        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(arguments.joined(separator: " "))")
 
         do {
-            try process.run()
-
-            // Add timeout protection (2 minutes for OHLC data)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 120_000_000_000) // 2 minutes
-                if process.isRunning {
-                    await logger.warning("📊 OHLC: Timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: arguments,
+                timeoutSeconds: 120,
+                logContext: "OHLC fetch for \(symbol)"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("📊 OHLC: Debug output for \(symbol): \(err)")
@@ -825,36 +712,16 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
         args.append(contentsOf: symbols)
-        process.arguments = args
-
         await logger.info("📊 OHLC BATCH: Command: \(config.interpreterPath) \(args.joined(separator: " "))")
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
         do {
-            try process.run()
-
-            // Add timeout protection (5 minutes for batch OHLC data)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
-                if process.isRunning {
-                    await logger.warning("📊 OHLC BATCH: Timeout reached, terminating process")
-                    process.terminate()
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: args,
+                timeoutSeconds: 300,
+                logContext: "OHLC batch fetch"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("📊 OHLC BATCH: Debug output: \(err)")
@@ -949,31 +816,12 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--test-key", service]
-        
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
         do {
-            try process.run()
-            
-            // Timeout protection (30 seconds)
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30))
-                if process.isRunning {
-                    await logger.warning("🔑 VERIFY: Timeout reached, terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel()
-            
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, _, _) = try await runPythonProcess(
+                arguments: [scriptPath, "--test-key", service],
+                timeoutSeconds: 30,
+                logContext: "Verify API key for \(service)"
+            )
             
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
                 await logger.warning("🔑 VERIFY: stdout is empty.")

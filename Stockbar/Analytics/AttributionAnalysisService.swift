@@ -392,7 +392,7 @@ actor AttributionAnalysisService {
                 break
             }
 
-            irr = irr - (npv / npvDerivative)
+            irr -= npv / npvDerivative
         }
 
         let mwr = irr * 100

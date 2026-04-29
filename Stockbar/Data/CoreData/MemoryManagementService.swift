@@ -1,5 +1,5 @@
-import Foundation
-import CoreData
+@preconcurrency import Foundation
+@preconcurrency import CoreData
 import OSLog
 
 /// Advanced memory management service for chart data and Core Data operations

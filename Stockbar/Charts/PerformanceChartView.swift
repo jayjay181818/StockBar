@@ -1543,7 +1543,7 @@ struct PerformanceChartView: View {
             } else {
                 convertedAmount = currencyConverter.convert(amount: amount, from: sourceCurrency, to: preferredCurrency == "GBX" ? "GBP" : preferredCurrency)
                 if preferredCurrency == "GBX" {
-                    convertedAmount = convertedAmount * 100.0
+                    convertedAmount *= 100.0
                 }
             }
             

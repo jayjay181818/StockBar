@@ -17,6 +17,33 @@ struct Trade: Codable, Equatable {
     var position: Position
     var isWatchlistOnly: Bool = false  // If true, this is a watch-only stock (no position calculations)
     var showInMenuBar: Bool = true     // If false, hide from menu bar but keep in portfolio
+
+    init(
+        name: String,
+        position: Position,
+        isWatchlistOnly: Bool = false,
+        showInMenuBar: Bool = true
+    ) {
+        self.name = name
+        self.position = position
+        self.isWatchlistOnly = isWatchlistOnly
+        self.showInMenuBar = showInMenuBar
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case position
+        case isWatchlistOnly
+        case showInMenuBar
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        position = try container.decode(Position.self, forKey: .position)
+        isWatchlistOnly = try container.decodeIfPresent(Bool.self, forKey: .isWatchlistOnly) ?? false
+        showInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? true
+    }
 }
 
 struct Position: Codable, Equatable {
@@ -25,16 +52,12 @@ struct Position: Codable, Equatable {
             return self._unitSize
         }
         set(newUnitSize) {
-            if Double(newUnitSize) != nil {
-                _unitSize = newUnitSize
-            } else {
-                _unitSize = "1"
-            }
+            _unitSize = newUnitSize
         }
     }
     var unitSize: Double {
         get {
-            return Double(unitSizeString) ?? 1
+            return Double(unitSizeString) ?? 0
         }
     }
     var positionAvgCostString: String
