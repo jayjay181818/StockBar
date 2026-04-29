@@ -644,7 +644,12 @@ If API fails, uses hardcoded fallback rates:
 
 ## Version History
 
-### v2.3.4 (Current)
+### v2.4.1 (Current)
+- Modernized portfolio total popover and shared menu chart UI
+- Added Core Data recovery safeguards, secret-safe logging, and async Python subprocess handling
+- Hardened backup/restore/import/export flows and restored full Xcode test target coverage
+
+### v2.4.0
 - Consolidated refactoring, performance, and stability release
 - Menu bar visibility controls and notification modernization
 - Security hardening for symbol validation

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, feature/portfolio-snapshot-migration ]
+    branches: [ main, testing ]
   pull_request:
-    branches: [ main, feature/portfolio-snapshot-migration ]
+    branches: [ main, testing ]
 
 jobs:
   build-and-test:
