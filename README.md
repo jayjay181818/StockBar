@@ -216,10 +216,18 @@ The Debug tab provides comprehensive monitoring:
 - **⚡ Responsiveness**: Moved OHLC/Python subprocess work off the UI actor with async pipe reads and timeouts
 - **🧪 Test Coverage**: Restored full Xcode test target membership and added reliability regression coverage
 
-### Version 2.4.0 - Portfolio & Stability Improvements
-- **📈 Portfolio Accuracy**: Unified display-aware portfolio calculations and menu bar totals
-- **🧩 UI Improvements**: Improved menu-bar portfolio and stock display behaviour
-- **🧰 Reliability**: Continued Core Data, refresh, and historical-data hardening
+### Version 2.4.0 - Portfolio Popover & Data Provider Improvements
+- **🧩 Popover Improvements**: Fixed menu popover anchoring, footer layout, dismissal behaviour, and updated timestamp formatting
+- **📈 Charts & Benchmarks**: Added benchmark overlays for `^GSPC` and `^FTSE` with range-aware chart changes
+- **🧭 Menu Bar Stability**: Reused status items across refreshes to reduce menu bar reshuffling and formatting loss
+- **🧮 Data Providers**: Added symbol aliases, improved UK symbol handling, and expanded quote/historical fallbacks
+- **🧷 Persistence Fixes**: Restored deep-edit persistence and prevented benchmark helpers from persisting as user trades
+
+### Version 2.3.5 - Menu Chart Reliability
+- **📊 Menu Chart Stability**: Replaced menu dropdown Swift Charts usage with a lightweight Canvas sparkline
+- **🛡️ Crash Fixes**: Hardened log compaction and startup initialization order
+- **📈 Safe Rendering**: Added invalid-data guardrails and missing-history fallbacks for dropdown charts
+- **🧩 Build Fixes**: Restored missing portfolio menu display model and removed stale refresh references
 
 ### Version 2.3.4 - Refactoring, Performance & Stability
 - **📍 Menu Bar Visibility**: Per-stock and global visibility toggles to declutter the menu bar
