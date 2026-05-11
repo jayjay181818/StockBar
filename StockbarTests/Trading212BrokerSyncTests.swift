@@ -1,0 +1,348 @@
+import XCTest
+@testable import Stockbar
+
+final class Trading212BrokerSyncTests: XCTestCase {
+    func testUpdatesLinkedManualHoldingWithBrokerQuantityCostAndPrice() throws {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let now = Date(timeIntervalSince1970: 200)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let existingTrade = Trade(
+            name: "AV.L",
+            position: Position(unitSize: "500", positionAvgCost: "486.26", currency: "GBX", costCurrency: "GBX")
+        )
+        let preview = makePreview(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            quantity: 525,
+            averagePrice: 490.5,
+            brokerPrice: 640.0,
+            currentValue: 3360.0
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [existingTrade],
+            tradingInfoBySymbol: ["AV.L": TradingInfo()],
+            links: snapshot,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: false),
+            syncedAt: now
+        )
+
+        XCTAssertEqual(plan.tradeUpdates.count, 1)
+        let update = try XCTUnwrap(plan.tradeUpdates.first)
+        XCTAssertEqual(update.trade.name, "AV.L")
+        XCTAssertEqual(update.trade.position.unitSizeString, "525")
+        XCTAssertEqual(update.trade.position.positionAvgCostString, "4.905")
+        XCTAssertEqual(update.trade.position.costCurrency, "GBP")
+        XCTAssertEqual(update.tradingInfo.currentPrice, 6.4, accuracy: 0.0001)
+        XCTAssertEqual(update.tradingInfo.currency, "GBP")
+        XCTAssertEqual(update.tradingInfo.shortName, "Aviva")
+        XCTAssertEqual(update.tradingInfo.lastUpdateTime, Int(now.timeIntervalSince1970))
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+    }
+
+    func testDeletesLinkedHoldingAndLinkWhenBrokerPositionIsMissingAndDeletionEnabled() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let existingTrade = Trade(
+            name: "AV.L",
+            position: Position(unitSize: "500", positionAvgCost: "486.26", currency: "GBX", costCurrency: "GBX")
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [existingTrade],
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: makePreview(rows: []),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(plan.deletedManualSymbols, ["AV.L"])
+        XCTAssertEqual(plan.deletedLinkIDs, [link.id])
+        XCTAssertTrue(plan.tradeUpdates.isEmpty)
+        XCTAssertTrue(plan.missingLinkedSymbols.isEmpty)
+    }
+
+    func testMissingBrokerPositionIsReportedButNotDeletedWhenDeletionDisabled() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [
+                Trade(name: "AV.L", position: Position(unitSize: "500", positionAvgCost: "486.26")),
+                Trade(name: "GOOGL", position: Position(unitSize: "10", positionAvgCost: "171.25"))
+            ],
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: makePreview(rows: []),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: false),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+        XCTAssertTrue(plan.deletedLinkIDs.isEmpty)
+        XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
+    }
+
+    func testProviderTickerFallbackPreventsFalseDeletionWhenMetadataIsSkipped() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "US:HIMS",
+            providerTicker: "OAC_US_EQ",
+            manualSymbol: "HIMS",
+            manualCurrency: "USD",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let row = Trading212ImportPreviewRow(
+            id: "Trading212|live|isa|hash|credential|account|US:OAC",
+            account: makeAccount(),
+            providerTicker: "OAC_US_EQ",
+            instrumentId: "US:OAC",
+            displaySymbol: "OAC",
+            displayName: "Oscar Health",
+            quantity: 50,
+            averagePrice: 46.47,
+            brokerProvidedPrice: 29.07,
+            currentValue: 1_065.62,
+            unrealizedProfitLoss: -645.28,
+            fxImpact: nil,
+            mappingConfidence: .medium,
+            manualMatch: nil,
+            additionalManualMatchCount: 0,
+            conflictStatus: .none,
+            valueSource: .brokerProvidedLivePositionData,
+            warnings: ["US instrument unresolved to NASDAQ/NYSE without Metadata exchange detail."]
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [
+                Trade(name: "HIMS", position: Position(unitSize: "50", positionAvgCost: "46.47", currency: "USD"))
+            ],
+            tradingInfoBySymbol: ["HIMS": TradingInfo()],
+            links: snapshot,
+            preview: makePreview(rows: [row]),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(plan.tradeUpdates.count, 1)
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+        XCTAssertTrue(plan.deletedLinkIDs.isEmpty)
+        XCTAssertEqual(plan.brokerOnlyCount, 0)
+    }
+
+    func testPencePricedLSEBrokerSyncNormalizesAverageCostWhenLinkedHoldingUsesGBP() throws {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let now = Date(timeIntervalSince1970: 200)
+        let link = makeLink(
+            instrumentId: "LSE:TW",
+            providerTicker: "TWI_EQ",
+            manualSymbol: "TW.L",
+            manualCurrency: "GBP",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let existingTrade = Trade(
+            name: "TW.L",
+            position: Position(unitSize: "10000", positionAvgCost: "109.03", currency: "GBP", costCurrency: "GBP")
+        )
+        let preview = makePreview(
+            instrumentId: "LSE:TW",
+            providerTicker: "TWI_EQ",
+            manualSymbol: "TW.L",
+            quantity: 10000,
+            averagePrice: 109.02634,
+            brokerPrice: 82.82,
+            currentValue: 8282.0
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [existingTrade],
+            tradingInfoBySymbol: ["TW.L": TradingInfo()],
+            links: snapshot,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: false),
+            syncedAt: now
+        )
+
+        let update = try XCTUnwrap(plan.tradeUpdates.first)
+        XCTAssertEqual(update.trade.position.positionAvgCostString, "1.0902634")
+        XCTAssertEqual(update.trade.position.costCurrency, "GBP")
+        XCTAssertEqual(update.tradingInfo.currentPrice, 0.8282, accuracy: 0.000001)
+
+        let service = PortfolioCalculationService(currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false))
+        let gains = service.calculateNetGains(
+            trades: [RealTimeTrade(trade: update.trade, realTimeInfo: update.tradingInfo)],
+            preferredCurrency: "GBP"
+        )
+        XCTAssertEqual(gains.amount, -2620.634, accuracy: 0.01)
+    }
+
+    func testTrading212SyncSettingsDefaultToThirtySecondAutoSync() {
+        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let settings = Trading212SettingsStore(defaults: defaults).load()
+
+        XCTAssertTrue(settings.autoSyncEnabled)
+        XCTAssertEqual(settings.syncIntervalSeconds, 30)
+    }
+
+    func testTrading212SettingsStoreIgnoresLegacyMinuteIntervalForBrokerSyncDefault() {
+        let defaults = UserDefaults(suiteName: "Trading212SyncSettingsTests.\(UUID().uuidString)")!
+        defaults.set(5, forKey: "trading212.syncIntervalMinutes")
+        let settings = Trading212SettingsStore(defaults: defaults).load()
+
+        XCTAssertEqual(settings.syncIntervalSeconds, 30)
+    }
+
+    private func makeLinkedAccount(linkedAt: Date) -> BrokerLinkedAccount {
+        BrokerLinkedAccount(
+            brokerAccountKey: "Trading212|live|isa|hash|credential|account",
+            broker: "Trading212",
+            accountLabel: "Trading 212 ISA",
+            accountType: .stocksAndSharesISA,
+            taxWrapper: "ISA",
+            environment: .live,
+            linkedAt: linkedAt,
+            updatedAt: linkedAt
+        )
+    }
+
+    private func makeLink(
+        instrumentId: String,
+        providerTicker: String,
+        manualSymbol: String,
+        manualCurrency: String,
+        linkedAt: Date
+    ) -> BrokerLinkedPosition {
+        BrokerLinkedPosition(
+            brokerAccountKey: "Trading212|live|isa|hash|credential|account",
+            instrumentId: instrumentId,
+            displaySymbol: "AV",
+            displayName: "Aviva",
+            providerTicker: providerTicker,
+            manualSymbol: manualSymbol,
+            manualQuantityAtLink: 500,
+            brokerQuantityAtLink: 500,
+            manualAverageCostAtLink: 486.26,
+            manualCurrency: manualCurrency,
+            linkedAt: linkedAt,
+            updatedAt: linkedAt
+        )
+    }
+
+    private func makePreview(
+        instrumentId: String,
+        providerTicker: String,
+        manualSymbol: String,
+        quantity: Double,
+        averagePrice: Double,
+        brokerPrice: Double,
+        currentValue: Double
+    ) -> Trading212ImportPreview {
+        let row = Trading212ImportPreviewRow(
+            id: "Trading212|live|isa|hash|credential|account|\(instrumentId)",
+            account: makeAccount(),
+            providerTicker: providerTicker,
+            instrumentId: instrumentId,
+            displaySymbol: "AV",
+            displayName: "Aviva",
+            quantity: quantity,
+            averagePrice: averagePrice,
+            brokerProvidedPrice: brokerPrice,
+            currentValue: currentValue,
+            unrealizedProfitLoss: 150,
+            fxImpact: nil,
+            mappingConfidence: .high,
+            manualMatch: Trading212ManualHoldingMatch(
+                symbol: manualSymbol,
+                instrumentId: instrumentId,
+                displayName: "Aviva",
+                quantity: quantity,
+                averageCost: averagePrice,
+                currency: "GBX",
+                isWatchlistOnly: false,
+                resolutionConfidence: .high
+            ),
+            additionalManualMatchCount: 0,
+            conflictStatus: .manualHoldingMatch,
+            valueSource: .brokerProvidedLivePositionData,
+            warnings: []
+        )
+        return makePreview(rows: [row])
+    }
+
+    private func makePreview(rows: [Trading212ImportPreviewRow]) -> Trading212ImportPreview {
+        Trading212ImportPreview(
+            account: makeAccount(),
+            accountSummary: nil,
+            rows: rows,
+            metadataAvailable: true,
+            generatedAt: Date(timeIntervalSince1970: 200),
+            warnings: []
+        )
+    }
+
+    private func makeAccount() -> BrokerAccountIdentity {
+        BrokerAccountIdentity(
+            broker: "Trading212",
+            brokerAccountKey: "Trading212|live|isa|hash|credential|account",
+            apiAccountIdHash: nil,
+            accountLabel: "Trading 212 ISA",
+            accountType: .stocksAndSharesISA,
+            taxWrapper: "ISA",
+            environment: .live,
+            credentialFingerprint: "credential"
+        )
+    }
+}

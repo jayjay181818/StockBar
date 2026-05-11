@@ -56,6 +56,14 @@ class DataModel: ObservableObject {
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let refreshCoordinator = RefreshCoordinator()
+    private let trading212SettingsStore = Trading212SettingsStore.shared
+    private let trading212CredentialStore = Trading212CredentialStore.shared
+    private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
+    private let trading212BrokerLinkStore = BrokerLinkStore.shared
+    private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
+    private var trading212BrokerSyncTask: Task<Void, Never>?
+    private var trading212BrokerSyncTimer: Timer?
+    private var isTrading212BrokerSyncInProgress = false
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
@@ -195,6 +203,7 @@ class DataModel: ObservableObject {
 
             await MainActor.run {
                 self.startStaggeredRefresh()
+                self.restartTrading212LinkedSyncScheduler()
             }
         }
 
@@ -315,6 +324,7 @@ class DataModel: ObservableObject {
     
     deinit {
         memoryPressureSource?.cancel()
+        trading212BrokerSyncTask?.cancel()
     }
     
     // MARK: - Migration Methods
@@ -656,6 +666,184 @@ class DataModel: ObservableObject {
         await performRefreshAllTrades()
     }
 
+    func restartTrading212LinkedSyncScheduler() {
+        trading212BrokerSyncTimer?.invalidate()
+        trading212BrokerSyncTimer = nil
+        trading212BrokerSyncTask?.cancel()
+        trading212BrokerSyncTask = nil
+
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled,
+              settings.autoSyncEnabled,
+              settings.accountType.isSupportedByPublicAPI,
+              trading212CredentialStore.hasCredentials(environment: settings.environment)
+        else {
+            return
+        }
+
+        let intervalSeconds = Trading212SyncPolicy.clampedIntervalSeconds(settings.syncIntervalSeconds)
+        Task {
+            await Logger.shared.info(
+                "Trading 212 auto-sync scheduler started: interval=\(intervalSeconds)s, environment=\(settings.environment.displayName)"
+            )
+        }
+        runTrading212AutoSync(reason: "auto-start")
+
+        trading212BrokerSyncTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(intervalSeconds), repeats: true) {
+            [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.runTrading212AutoSync(reason: "auto")
+            }
+        }
+        trading212BrokerSyncTimer?.tolerance = min(5.0, TimeInterval(intervalSeconds) * 0.1)
+    }
+
+    private func runTrading212AutoSync(reason: String) {
+        trading212BrokerSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.syncLinkedTrading212Holdings(reason: reason)
+            } catch {
+                await Logger.shared.warning("Trading 212 auto-sync \(reason) failed: \(LogRedactor.redact(error.localizedDescription))")
+            }
+        }
+    }
+
+    func syncLinkedTrading212Holdings(reason: String = "manual") async throws -> Trading212BrokerSyncResult {
+        guard !isTrading212BrokerSyncInProgress else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 sync is already running."
+            )
+        }
+        isTrading212BrokerSyncInProgress = true
+        defer { isTrading212BrokerSyncInProgress = false }
+
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled, settings.accountType.isSupportedByPublicAPI else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 is not enabled."
+            )
+        }
+
+        let credentials = try trading212CredentialStore.load(environment: settings.environment)
+        let links = try await trading212BrokerLinkStore.loadSnapshot()
+        let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
+        guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
+            )
+        }
+
+        let preview = try await trading212PreviewCoordinator.preview(
+            settings: settings,
+            credentials: credentials,
+            existingManualHoldings: realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) },
+            includeMetadata: false,
+            useCache: false
+        )
+        let plan = trading212BrokerSyncPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            tradingInfoBySymbol: tradingInfoBySymbol(),
+            links: links,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
+            syncedAt: Date()
+        )
+
+        applyTrading212BrokerSyncPlan(plan)
+        if !plan.deletedLinkIDs.isEmpty {
+            _ = try await trading212BrokerLinkStore.removePositions(ids: plan.deletedLinkIDs)
+        }
+        if plan.changedCount > 0 {
+            persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        }
+
+        let result = Trading212BrokerSyncResult(
+            updatedCount: plan.tradeUpdates.count,
+            deletedCount: plan.deletedManualSymbols.count,
+            missingCount: plan.missingLinkedSymbols.count,
+            brokerOnlyCount: plan.brokerOnlyCount,
+            skippedReason: nil
+        )
+        await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    func trading212LinkedSymbolsShouldSkipMarketRefresh() async -> Set<String> {
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled,
+              settings.autoSyncEnabled,
+              trading212CredentialStore.hasCredentials(environment: settings.environment) else {
+            return []
+        }
+
+        do {
+            let snapshot = try await trading212BrokerLinkStore.loadSnapshot()
+            let accountKeys = Set(snapshot.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
+            return Set(snapshot.positions
+                .filter { accountKeys.contains($0.brokerAccountKey) }
+                .map { $0.manualSymbol.uppercased() })
+        } catch {
+            await logger.warning("Failed to load Trading 212 links for market-refresh skip list: \(LogRedactor.redact(error.localizedDescription))")
+            return []
+        }
+    }
+
+    private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
+        let updatesBySymbol = Dictionary(uniqueKeysWithValues: plan.tradeUpdates.map {
+            ($0.manualSymbol.uppercased(), $0)
+        })
+        let deletedSymbols = Set(plan.deletedManualSymbols.map { $0.uppercased() })
+
+        var updatedTrades: [RealTimeTrade] = []
+        for realTimeTrade in realTimeTrades {
+            let symbolKey = realTimeTrade.trade.name.uppercased()
+            if deletedSymbols.contains(symbolKey), !isBenchmarkTrade(realTimeTrade) {
+                continue
+            }
+            if let update = updatesBySymbol[symbolKey], !isBenchmarkTrade(realTimeTrade) {
+                realTimeTrade.trade = update.trade
+                realTimeTrade.realTimeInfo = update.tradingInfo
+            }
+            updatedTrades.append(realTimeTrade)
+        }
+
+        realTimeTrades = updatedTrades
+    }
+
+    private func tradingInfoBySymbol() -> [String: TradingInfo] {
+        var values: [String: TradingInfo] = [:]
+        for realTimeTrade in realTimeTrades {
+            values[realTimeTrade.trade.name.uppercased()] = realTimeTrade.realTimeInfo
+        }
+        return values
+    }
+
+    private func trading212ManualHoldingSnapshot(from realTimeTrade: RealTimeTrade) -> Trading212ManualHoldingSnapshot {
+        let trade = realTimeTrade.trade
+        let displayName = realTimeTrade.realTimeInfo.shortName.isEmpty ? nil : realTimeTrade.realTimeInfo.shortName
+        return Trading212ManualHoldingSnapshot(
+            symbol: trade.name,
+            displayName: displayName,
+            quantity: trade.position.unitSize,
+            averageCost: trade.position.positionAvgCost.isFinite ? trade.position.positionAvgCost : nil,
+            currency: trade.position.currency ?? trade.position.costCurrency ?? realTimeTrade.realTimeInfo.currency,
+            isWatchlistOnly: trade.isWatchlistOnly
+        )
+    }
+
     /// Triggers an immediate refresh for the provided symbols, bypassing the
     /// staggered rotation. Symbols are matched case-insensitively against the
     /// current portfolio.
@@ -772,6 +960,26 @@ class DataModel: ObservableObject {
             trades: realTimeTrades,
             preferredCurrency: summaryCurrency
         )
+    }
+
+    /// Calculates per-position P/L for Holdings rows using the shared portfolio math service.
+    func calculatePositionProfitLoss(for realTimeTrade: RealTimeTrade) -> PositionProfitLossSummary {
+        guard let service = portfolioCalculationService else {
+            let currency = realTimeTrade.realTimeInfo.currency
+                ?? realTimeTrade.trade.position.currency
+                ?? realTimeTrade.trade.position.costCurrency
+                ?? preferredCurrency
+
+            return PositionProfitLossSummary(
+                dayAmount: .nan,
+                dayPercent: .nan,
+                totalAmount: .nan,
+                totalPercent: .nan,
+                currency: currency
+            )
+        }
+
+        return service.calculatePositionProfitLoss(for: realTimeTrade)
     }
 
     func startStaggeredRefresh() {

@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = CoreDataStack.shared.persistentContainer
         dataModel = DataModel()
+        setupMainMenu()
 
         // Perform legacy cleanup on first launch
         LegacyCleanupService.shared.performCleanupIfNeeded()
@@ -27,6 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         stockMenuBarController = StockMenuBarController(data: dataModel)
+        stockMenuBarController?.showStockbarWindow(nil)
 
         // Check Python dependencies on first launch
         Task {
@@ -48,11 +50,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Handle dock icon clicks - reopen preferences window
+    // Handle dock icon clicks - reopen the main Stockbar window.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            // No visible windows, show preferences
-            stockMenuBarController?.showPreferences(nil)
+            stockMenuBarController?.showStockbarWindow(nil)
         } else {
             // Windows exist, bring them to front
             NSApp.activate(ignoringOtherApps: true)
@@ -91,6 +92,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showPreferences(_ sender: Any?) {
         stockMenuBarController?.showPreferences(sender)
+    }
+
+    @objc func showStockbarWindow(_ sender: Any?) {
+        stockMenuBarController?.showStockbarWindow(sender)
+    }
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+
+        mainMenu.addItem(appMenuItem)
+        appMenuItem.submenu = appMenu
+
+        let openItem = NSMenuItem(
+            title: "Open Stockbar",
+            action: #selector(showStockbarWindow(_:)),
+            keyEquivalent: "o"
+        )
+        openItem.target = self
+        appMenu.addItem(openItem)
+
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(showPreferences(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
+
+        appMenu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(
+            title: "Quit Stockbar",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func presentCoreDataRecoveryNoticeIfNeeded() {

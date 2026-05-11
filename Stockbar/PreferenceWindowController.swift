@@ -23,8 +23,8 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
     }
     
     private func setupWindow() {
-        // Create a fresh SwiftUI view with the data model
-        let preferenceView = PreferenceView(userdata: dataModel)
+        // Create a fresh SwiftUI view with the data model.
+        let preferenceView = StockbarSettingsView(dataModel: dataModel)
         
         // Use standard NSHostingController 
         let hostingController = NSHostingController(rootView: preferenceView)
@@ -32,11 +32,11 @@ class PreferenceWindowController: NSWindowController, NSWindowDelegate {
         // Create a resizable window that can auto-resize and be manually adjusted
         let window = NSWindow(contentViewController: hostingController)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.title = "StockBar Preferences"
+        window.title = "Stockbar Settings"
         window.isReleasedWhenClosed = false
         
-        // Set the initial window size to 1200px wide
-        window.setContentSize(NSSize(width: 1200, height: 800))
+        // Set the initial window size to match the modern settings surface.
+        window.setContentSize(NSSize(width: 1180, height: 820))
         
         self.window = window
         
