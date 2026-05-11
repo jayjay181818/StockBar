@@ -99,7 +99,8 @@ class RefreshService {
             let targetSet = Set(targetSymbols.map { $0.uppercased() })
             candidateSymbols = allSymbols.filter { targetSet.contains($0.uppercased()) }
         } else {
-            candidateSymbols = allSymbols
+            let linkedBrokerSymbols = await dataModel.trading212LinkedSymbolsShouldSkipMarketRefresh()
+            candidateSymbols = allSymbols.filter { !linkedBrokerSymbols.contains($0.uppercased()) }
         }
 
         if candidateSymbols.isEmpty {

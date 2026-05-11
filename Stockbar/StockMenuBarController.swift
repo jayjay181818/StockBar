@@ -10,6 +10,7 @@ class StockMenuBarController: NSObject {
     private let statusBar: StockStatusBar
     private let data: DataModel
     private var preferenceWindowController: PreferenceWindowController?
+    private var mainWindowController: StockbarMainWindowController?
     
     private let logger = Logger.shared
     
@@ -106,6 +107,14 @@ class StockMenuBarController: NSObject {
         // Show the window
         preferenceWindowController?.showWindow()
     }
+
+    @objc func showStockbarWindow(_ sender: Any?) {
+        mainWindowController?.close()
+        mainWindowController = nil
+
+        mainWindowController = StockbarMainWindowController(dataModel: data)
+        mainWindowController?.showWindow()
+    }
     
     private func refreshPortfolio() {
         Task { await data.refreshAllTrades() }
@@ -125,6 +134,13 @@ class StockMenuBarController: NSObject {
             name: .refreshRequested,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openStockbarWindowRequested(_:)),
+            name: .openStockbarWindowRequested,
+            object: nil
+        )
     }
     
     @objc private func refreshIntervalChanged(_ notification: Notification) {
@@ -134,6 +150,10 @@ class StockMenuBarController: NSObject {
 
     @objc private func refreshRequested(_ notification: Notification) {
         Task { await data.refreshAllTrades() }
+    }
+
+    @objc private func openStockbarWindowRequested(_ notification: Notification) {
+        showStockbarWindow(nil)
     }
     
     deinit {

@@ -142,6 +142,8 @@ struct DataSourcesSettingsView: View {
                 .padding()
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
                 .cornerRadius(8)
+
+                Trading212DataSourceSection(dataModel: dataModel)
                 
                 // MARK: - Priority Section
                 VStack(alignment: .leading, spacing: 12) {

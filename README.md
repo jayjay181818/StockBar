@@ -1,352 +1,248 @@
 # StockBar
 
-**Version 2.4.1** | **macOS 15.4+** | **Swift 6.0**
+**Version 2.4.2** | **macOS 15.4+** | **Swift 6**
 
-StockBar is a high-performance macOS menu bar application for real-time stock portfolio monitoring. It combines advanced data visualization, intelligent caching, and comprehensive debugging tools to provide professional-grade portfolio tracking directly in your menu bar.
+StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
-## ✨ Key Features
+## Key Features
 
-### 🎯 Real-Time Portfolio Tracking
-- **Individual Stock Display**: Each stock shows live day gains/losses in the menu bar
-- **Drag-and-Drop Reordering**: Customize stock order in Portfolio preferences tab
-- **Multi-Currency Support**: Automatic USD, GBP, EUR, JPY, CAD, AUD handling
-- **Smart UK Stock Detection**: Automatic GBX ↔ GBP conversion for London Exchange (.L) stocks
-- **Intelligent Caching**: 5-minute refresh intervals with failure retry logic
-- **Persistent Data**: Retains portfolio state and last successful data across app restarts
+### Portfolio And Holdings
+- Native Stockbar window with sidebar navigation: Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, and Diagnostics.
+- Editable Holdings table for visibility, symbol, units, average cost, currency, current price, value, Day P/L, Total P/L, and row actions.
+- Day P/L and Total P/L columns toggle between amount and percentage when clicked.
+- Net Value, Total Net Gains, and Tracked Symbols summary cards.
+- Manual holdings, watchlist-only symbols, and broker-linked holdings can coexist.
+- UK `.L` holdings and GBX/GBP cost bases are normalized consistently for display and gain calculations.
 
-### 📊 Advanced Analytics & Charts
-- **Interactive Performance Charts**: Built with Swift Charts framework for smooth 60fps rendering
-- **Multiple Chart Types**: Portfolio Value, Portfolio Gains, Individual Stock Performance
-- **Comprehensive Time Ranges**: 1 Day, 1 Week, 1 Month, 3 Months, 6 Months, 1 Year, All Time
-- **Hover Tooltips**: Precise data point inspection with values, dates, and times
-- **Performance Metrics**: Total returns, volatility analysis, value ranges with auto-calculated statistics
-- **Historical Data Collection**: Automatic 5-minute snapshots with up to 5 years of data storage
-- **Retroactive Portfolio Calculations**: Complete historical portfolio value reconstruction
+### Trading 212 Broker Sync
+- Trading 212 can be enabled from Settings -> Data Sources as a broker/portfolio provider.
+- Credentials are API Key + API Secret and are stored in macOS Keychain only.
+- Supports Live / Real Money and Demo / Paper environments with separated account keys and cache namespaces.
+- Account type and label are configurable, including Stocks & Shares ISA, Invest/general, and Unknown/custom.
+- Read-only Test Connection and Preview Import flow before linking anything.
+- Preview maps Trading 212 provider tickers to canonical instruments and audits manual matches, quantity deltas, and conflicts.
+- Link Matched Holdings saves broker links only after user confirmation.
+- Linked Trading 212 holdings use broker-provided live position data by default for quantity, current price, value, average cost, and P/L.
+- Auto-sync uses one bulk Trading 212 positions/account refresh every 30 seconds when enabled.
+- Market-data providers are not called unnecessarily for linked Trading 212 holdings during normal broker sync.
+- Optional setting can delete linked manual holdings when the position is removed from Trading 212.
+- Trading/order execution is not supported and is never required.
 
-### 🎛️ Professional User Interface
-- **Native Menu Bar Integration**: Individual status items for each tracked stock with color coding
-- **Interactive Menu Bar Charts**: Real-time price charts with 1D/1W/1M views in each stock's dropdown menu
-- **Quick Status Menu Actions**: Preferences and Quit commands in every status menu with keyboard shortcuts
-- **Tabbed Preferences Window**: Portfolio Management, Charts, and Debug tabs with responsive layout
-- **Modern SwiftUI Design**: Adaptive interface with automatic window resizing and scrollable chart pickers
-- **Pre/Post Market Indicators**: Visual indicators for market hours (🔆 pre-market, 🌙 after-hours, 🔒 closed)
-- **Keyboard Shortcuts**: ⌘, for instant preferences access from any status menu
-- **Accessibility Support**: Full VoiceOver and keyboard navigation support with enhanced chart picker labels
+### Market Data And Charts
+- yfinance remains the primary general market-data provider.
+- Financial Modeling Prep, Twelve Data, and Stooq remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
+- Fetch priority is configurable from Settings -> Data Sources.
+- Historical charts continue to use the existing market-data system unless a future broker-history integration is added.
+- Interactive Swift Charts views cover portfolio value, portfolio gains, and individual symbol performance.
+- Benchmark support includes symbols such as `^GSPC` and `^FTSE`.
 
-### 🔧 Developer-Grade Debugging
-- **Real-Time Debug Console**: Live application logs with async Swift 6 actor-based logging
-- **Advanced Log Management**: Auto-refresh, configurable line limits (100-2000), tail mode for large files
-- **Color-Coded Severity**: Instant visual identification of errors, warnings, info, and debug messages
-- **Performance Monitoring**: Network timing, cache efficiency, memory usage tracking
-- **Export Capabilities**: One-click log file access for detailed analysis
+### Menu Bar Experience
+- Portfolio total can be shown in the macOS menu bar with configurable formatting.
+- Individual stock menu bar items can be shown or hidden.
+- Stock dropdowns include current values, day/position changes, and lightweight chart surfaces.
+- Menu bar values update from Trading 212 broker sync for linked holdings and from market-data refreshes for manual/watchlist symbols.
 
-### ⚡ Performance & Reliability
-- **CPU Optimization**: Reduced from 100% to <5% CPU usage with intelligent background processing
-- **Thread-Safe Refresh Pipeline**: Actor-backed coordinator preventing overlapping updates
-- **Memory-Aware Caching**: 512KB entry limits with automatic disk promotion for large payloads
-- **Memory Management**: Automatic cleanup under memory pressure with configurable limits
-- **Network Resilience**: Graceful degradation during outages with urllib fallback and smart retry logic
-- **Timeout Protection**: 5-minute limits on data fetching to prevent hanging processes
-- **Error Recovery**: Comprehensive fallback mechanisms with detailed error reporting
+### Settings
+- Modern Settings window tabs: General, Menu Bar, Appearance, Data Sources, Refresh, and Advanced.
+- Data Sources includes API key fields for FMP and Twelve Data, fetch priority/fallback order, and Trading 212 broker configuration.
+- Trading 212 settings include enable/disable, environment, account type, account label, credential status, Test Connection, Preview Import, Link Matched Holdings, auto-sync settings, and missing-position deletion behavior.
+- Sensitive credential fields stay empty after save by design; stored status is shown instead.
 
-## 🏗️ Architecture
+### Reliability, Backups, And Diagnostics
+- Backups view for creating, inspecting, and restoring portfolio backups.
+- Data Health and Diagnostics views for current portfolio/cache state and log review.
+- Core Data persistence for trades, trading info, historical snapshots, and analytics data.
+- Broker links are stored separately from market quote/historical caches.
+- Log redaction covers API keys, Trading 212 credentials, auth headers, and sensitive account identifiers.
+- Memory pressure handling, cache maintenance, retry/cooldown behavior, and Python subprocess timeouts are built in.
 
-StockBar uses a modern hybrid architecture optimized for performance and reliability:
+## Architecture
 
-### Frontend (Swift 6.0)
-- **AppKit & SwiftUI**: Native macOS UI with declarative interface components and AppKit integration
-- **Swift Charts Framework**: Hardware-accelerated interactive charting with hover support
-- **Combine Framework**: Reactive data flow with debounced updates and memory-safe publishers
-- **Actor-Isolated Components**: Thread-safe logging and data management with Swift 6 actor isolation
-- **MVVM Pattern**: Clean separation with ObservableObject data models and reactive UI binding
+StockBar uses a hybrid Swift + Python architecture:
 
-### Backend & Data Management
-- **Python Integration**: Subprocess-based data fetching using `yfinance` library with timeout protection and urllib fallback
-- **Actor-Based Coordination**: RefreshCoordinator ensures thread-safe, non-overlapping data updates
-- **Core Data Stack**: Modern Core Data Model V2 with automatic lightweight migration
-- **Multi-Tier Storage**: UserDefaults for configuration, Core Data for persistent data, in-memory for active data
-- **Comprehensive Services**: Data migration, memory optimization, cache management, and cleanup services
+- **Swift/AppKit/SwiftUI**: Main app windows, settings, menu bar controllers, portfolio state, Trading 212 provider, broker sync, analytics, diagnostics, and persistence orchestration.
+- **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
+- **Keychain**: Trading 212 credentials and other secrets where supported.
+- **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches.
+- **MarketDataProvider path**: yfinance, FMP, Twelve Data, and Stooq for quotes, watchlists, and history.
+- **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
 
-### Performance Systems
-- **Intelligent Caching**: Memory-aware caching with 512KB entry limits and automatic disk promotion
-- **Background Processing**: Prioritized task queue with 3% chance background checks (reduced from 6%)
-- **Memory Optimization**: Automatic data compression, cleanup, and efficient data structures with pressure handling
-- **Thread-Safe Coordination**: Actor-based refresh pipeline preventing overlapping updates
-- **Timeout Management**: 5-minute protection on all network operations with automatic process termination
+Broker data and market data are intentionally separate. Trading 212 is the source of truth for linked broker positions, while yfinance/FMP/Twelve Data/Stooq continue to serve general quotes, watchlists, fallbacks, and historical chart data.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
-1. **macOS 15.4 or later**
-2. **Python 3.7+** with yfinance library:
+1. macOS 15.4 or later.
+2. Xcode 15 or later for local development.
+3. Python 3.7+ with yfinance for the market-data subprocess path:
+
    ```bash
    pip3 install yfinance
    ```
-3. **Xcode 15.0+** (for building from source)
 
-### Installation
-1. **From Release**: Download the latest release from [GitHub Releases](https://github.com/jayjay181818/StockBar/releases)
-2. **From Source**: 
-   ```bash
-   git clone https://github.com/jayjay181818/StockBar.git
-   cd StockBar
-   open Stockbar.xcodeproj
-   # Build and run the Stockbar target
-   ```
+### Build From Source
 
-### Quick Setup
-1. Launch StockBar
-2. Click the StockBar menu bar item → "Preferences" (or ⌘,)
-3. **Portfolio Tab**:
-   - Add stock symbols with the "+" button
-   - Enter units and average cost for each position
-   - Drag stocks to reorder them in the menu bar
-   - Set preferred currency and enable color coding
-4. **Charts Tab**: View analytics once data collection begins (2+ data points needed)
-5. **Debug Tab**: Monitor real-time logs for troubleshooting
+```bash
+git clone https://github.com/jayjay181818/StockBar.git
+cd StockBar
+open Stockbar.xcodeproj
+```
 
-## 📈 Usage Guide
+Or build/run from this local workspace:
 
-### Portfolio Management
-- **Adding Stocks**: Use "+" button, supports US stocks (`AAPL`), UK stocks (`BP.L`), and most international markets
-- **Position Entry**: Enter number of units and average cost per share
-- **Currency Handling**: Automatic detection - USD for most stocks, GBX/GBP for UK (.L) stocks
-- **Reordering**: Drag and drop stocks in the list to customize menu bar order
-- **Real-Time Values**: Total portfolio value and net gains update automatically
+```bash
+./script/build_and_run.sh --verify
+```
 
-### Chart Analysis
-- **Chart Types**: Toggle between Portfolio Value, Portfolio Gains, and Individual Stock charts
-- **Time Selection**: Choose from 1 Day to All Time with automatic data optimization
-- **Interactive Features**: Hover for exact values, dates (DD/MM/YY), and times (HH:MM)
-- **Performance Metrics**: Expand for detailed statistics including volatility and total returns
-- **Historical Data**: Automatic collection with retroactive portfolio value calculations
+### Manual Portfolio Setup
+1. Launch StockBar.
+2. Open the main Stockbar window from the menu bar or app menu.
+3. Go to Holdings.
+4. Use Add Holding to add or edit manual positions.
+5. Use Settings -> Data Sources to configure market-data API keys and provider priority if needed.
+6. Use Charts, Risk, Allocation, Alerts, Backups, Data Health, and Diagnostics from the sidebar as needed.
 
-### Debug & Monitoring
-- **Live Logs**: Real-time application monitoring with auto-refresh every 10 seconds
-- **Log Controls**: 
-  - Auto-refresh toggle for performance
-  - Adjustable line limits (100-2000) with tail mode for large files
-  - Manual refresh and clear functions
-- **Performance Tracking**: Monitor API calls, cache efficiency, and memory usage
-- **Error Analysis**: Color-coded messages for quick issue identification
+### Trading 212 Setup
+1. Open Settings -> Data Sources.
+2. Enable Trading 212.
+3. Choose Live / Real Money or Demo / Paper.
+4. Select the account type and account label, for example `Trading 212 ISA`.
+5. Paste the Trading 212 API Key and API Secret, then save credentials to Keychain.
+6. Use Test Connection.
+7. Use Preview Import to review proposed mappings and conflicts.
+8. If all rows are clean manual matches, use Link Matched Holdings.
+9. Enable auto-sync if you want linked holdings refreshed from Trading 212 every 30 seconds.
 
-### Advanced Features
-- **Background Processing**: Automatic historical data gaps detection and filling
-- **API Key Management**: Optional Financial Modeling Prep API key for enhanced data
-- **Data Export**: Portfolio data export and historical data management
-- **Memory Optimization**: Automatic cleanup with configurable limits and memory pressure detection
+Trading 212 setup is read-only until you explicitly link matched holdings. Previewing does not mutate holdings, backups, historical data, market caches, or Core Data trade rows.
 
-## 🔧 Configuration
+## Usage Guide
 
-### Refresh Intervals (Debug Tab)
-- **Main Refresh Interval**: 5 minutes (default) - how often stock prices update
-- **Cache Duration**: 5 minutes (default) - how long to keep data before re-fetching  
-- **Chart Data Collection**: 5 minutes (default) - how often to save data for charts
+### Holdings
+- **Current** shows the latest display price for the position source.
+- **Value** is current price multiplied by units.
+- **Day P/L** compares current price with previous close.
+- **Total P/L** compares current price with normalized average cost.
+- Click either P/L column header or value to toggle that column between amount and percentage.
+- Linked Trading 212 holdings use broker-provided live position data by default.
+- Manual and watchlist-only rows continue through the configured market-data provider chain.
 
-### Performance Tuning
-- **Background Tasks**: 3% chance comprehensive checks, 2% chance standard gap checks
-- **Memory Limits**: 100 trades in memory, automatic cleanup under pressure
-- **Timeout Protection**: 5-minute maximum for any network operation
-- **Cache Management**: Smart invalidation with maximum 1-hour age
+### Charts And Analytics
+- Charts use existing historical data and provider fetches.
+- Trading 212 linked holdings still use the market-data provider chain for history unless broker history is added later.
+- Risk and Allocation views use stored portfolio and historical data.
 
-### Data Storage
-- **Configuration**: macOS UserDefaults for settings and preferences
-- **Persistent Data**: Core Data for historical data and trading information
-- **Temporary Data**: In-memory for active trading data with automatic persistence
-- **Historical Data**: Up to 5 years with automatic data compression and optimization
+### Backups And Data Health
+- Create a backup before large portfolio changes or broker-linking work.
+- Data Health shows portfolio/cache state.
+- Diagnostics shows logs with redacted sensitive values.
 
-## 🐛 Troubleshooting
+## Configuration
 
-### Built-in Diagnostics
-The Debug tab provides comprehensive monitoring:
+### Data Sources
+- **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data, Stooq.
+- **Broker data**: Trading 212 for linked broker positions.
+- **FMP/Twelve Data keys**: configured in Settings -> Data Sources.
+- **Trading 212 credentials**: stored in Keychain only.
+- **Fetch priority**: configurable for market-data fallbacks.
 
-1. **Error Identification**:
-   - 🔴 **Red**: Critical errors requiring immediate attention
-   - 🟠 **Orange**: Warnings about potential issues  
-   - 🔵 **Blue**: Normal operational information
-   - ⚪ **Gray**: Detailed debug traces
+### Refresh Behavior
+- Trading 212 linked holdings: one bulk broker sync every 30 seconds when enabled.
+- General market-data fallback refreshes retain the slower app/provider cadence.
+- Historical chart data uses the existing historical fetch/backfill system.
 
-2. **Performance Monitoring**:
-   - API call timing and success rates
-   - Cache hit/miss ratios and efficiency
-   - Memory usage and cleanup events
-   - Background task execution frequency
+### Storage
+- **UserDefaults**: non-secret preferences and settings.
+- **Keychain**: Trading 212 API Key/API Secret.
+- **Core Data**: portfolio trades, trading info, historical data, portfolio snapshots.
+- **Broker links**: local broker-link records keyed by broker account and instrument identity.
+- **Caches**: market quote, historical data, and broker preview/sync data remain separate.
 
-3. **Network Diagnostics**:
-   - Real-time API request monitoring
-   - Rate limiting and retry logic
-   - Currency conversion API status
-   - Historical data fetch progress
+## Troubleshooting
 
-### Common Issues
+### Trading 212
+- If Test Connection fails, verify environment selection, API Key/API Secret, and Account data permission.
+- Metadata permission is recommended for reliable mapping, but preview can still work with lower-confidence mappings when account-position fields are usable.
+- Orders - Execute is not needed and should not be enabled for StockBar.
+- If a linked holding disappears from Trading 212, StockBar reports it as missing; deletion of the local linked holding is controlled by the Settings option.
 
-#### Data Problems
-- **"N/A" or Missing Prices**: Check Debug tab for network errors, verify Python/yfinance installation
-- **Incorrect Values**: Verify stock symbols are correct, check currency conversion in logs
-- **Chart Loading Issues**: Ensure sufficient data collection time (minimum 2 data points)
+### Market Data
+- Missing manual/watchlist quotes usually indicate provider fallback, yfinance, or network issues.
+- FMP `403` messages usually indicate key/plan limits; keys are redacted in logs.
+- Python `urllib3`/LibreSSL warnings can appear from the local Python environment and are separate from Trading 212 broker sync.
 
-#### Performance Issues  
-- **High CPU Usage**: Check Debug tab for infinite loops, verify 5-minute refresh intervals
-- **Memory Warnings**: Enable memory optimization in Debug tab, clear old historical data
-- **Slow Performance**: Reduce log line limits, check for excessive background processing
+### Logs
+- Diagnostics shows redacted logs.
+- Log files are stored under the app's Application Support directory.
+- Trading 212 sync health can be confirmed by log lines like:
 
-#### Network Issues
-- **Rate Limiting**: Debug tab shows "429" errors, automatic retry after 5 minutes
-- **API Failures**: Monitor Debug tab for specific error messages and retry attempts
-- **Currency Issues**: Verify UK stocks use .L suffix, check conversion logs
-
-### Advanced Debugging
-- **Python Script Testing**: 
-  ```bash
-  python3 Stockbar/Resources/get_stock_data.py AAPL
+  ```text
+  Trading 212 linked sync (auto): Synced 11 linked holdings. Deleted 0. Missing 0. Broker-only 0.
   ```
-- **Dependency Updates**: 
-  ```bash
-  pip3 install --upgrade yfinance
-  ```
-- **Log File Analysis**: Access via Debug tab for external analysis tools
-- **Performance Profiling**: Monitor refresh timing and memory usage in real-time logs
 
-## 📋 Release History
+## Development
 
-### Version 2.4.1 (Current) - Reliability & Portfolio Popover Release
-- **📊 Portfolio Popover**: Modernized the portfolio total popover and shared menu chart components
-- **🛡️ Data Safety**: Added Core Data recovery safeguards and hardened backup, restore, import, and export flows
-- **🔐 Logging Safety**: Added canonical secret redaction across app and Python subprocess logs
-- **⚡ Responsiveness**: Moved OHLC/Python subprocess work off the UI actor with async pipe reads and timeouts
-- **🧪 Test Coverage**: Restored full Xcode test target membership and added reliability regression coverage
+### Useful Commands
+
+```bash
+# Build
+xcodebuild build -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
+
+# Test
+xcodebuild test -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
+
+# Build and run local debug app
+./script/build_and_run.sh --verify
+
+# Python market-data smoke test
+python3 Stockbar/Resources/get_stock_data.py AAPL
+```
+
+### Test Coverage
+- Portfolio calculation tests cover day/total P/L amount and percentage calculations.
+- Trading 212 auth tests cover API Key/API Secret Basic auth and secret redaction.
+- Trading 212 preview/resolver tests cover UK `.L`/`.LON`/legacy `.XC`, LSE/GBP hints, US symbols, HIMS aliasing, and manual-match safety.
+- Trading 212 broker-link/sync tests cover broker account keys, linked updates, missing-position deletion behavior, 30-second sync defaults, and GBX/GBP normalization.
+
+## Release History
+
+### Version 2.4.2 (Current) - Trading 212 Broker Sync & Modern UI
+- **Trading 212 Broker Provider**: Added read-only connection testing, import preview, manual-match audit, broker-link persistence, and linked holding sync.
+- **Secure Credentials**: Trading 212 API Key/API Secret are stored in Keychain; logs redact credentials, auth headers, account identifiers, and sensitive payload fields.
+- **Broker-Primary Linked Holdings**: Linked Trading 212 holdings use broker-provided live position data by default for quantity, price, value, average cost, and P/L.
+- **30-Second Broker Sync**: Trading 212 sync uses one bulk positions refresh every 30 seconds without changing the slower market-data fallback cadence.
+- **ISA/Account Labelling**: Users can configure account type and account label, including Stocks & Shares ISA.
+- **Safe Linking**: Preview/import does not mutate holdings until explicit linking; broker links are keyed by broker account and instrument identity.
+- **Modern Stockbar Window**: Added the first-class sidebar UI for Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, and Diagnostics.
+- **Modern Settings Window**: Added General, Menu Bar, Appearance, Data Sources, Refresh, and Advanced tabs.
+- **Holdings P/L**: Added Total P/L beside Day P/L with amount/percentage toggles.
+- **Fixes**: Corrected Trading 212 LSE pence/GBP cost-basis normalization and HIMS provider alias mapping.
+- See [Changelogs/release_notes_v2.4.2.md](./Changelogs/release_notes_v2.4.2.md).
+
+### Version 2.4.1 - Reliability & Portfolio Popover Release
+- **Portfolio Popover**: Modernized the portfolio total popover and shared menu chart components.
+- **Data Safety**: Added Core Data recovery safeguards and hardened backup, restore, import, and export flows.
+- **Logging Safety**: Added canonical secret redaction across app and Python subprocess logs.
+- **Responsiveness**: Moved OHLC/Python subprocess work off the UI actor with async pipe reads and timeouts.
+- **Test Coverage**: Restored full Xcode test target membership and added reliability regression coverage.
 
 ### Version 2.4.0 - Portfolio Popover & Data Provider Improvements
-- **🧩 Popover Improvements**: Fixed menu popover anchoring, footer layout, dismissal behaviour, and updated timestamp formatting
-- **📈 Charts & Benchmarks**: Added benchmark overlays for `^GSPC` and `^FTSE` with range-aware chart changes
-- **🧭 Menu Bar Stability**: Reused status items across refreshes to reduce menu bar reshuffling and formatting loss
-- **🧮 Data Providers**: Added symbol aliases, improved UK symbol handling, and expanded quote/historical fallbacks
-- **🧷 Persistence Fixes**: Restored deep-edit persistence and prevented benchmark helpers from persisting as user trades
-
-### Version 2.3.5 - Menu Chart Reliability
-- **📊 Menu Chart Stability**: Replaced menu dropdown Swift Charts usage with a lightweight Canvas sparkline
-- **🛡️ Crash Fixes**: Hardened log compaction and startup initialization order
-- **📈 Safe Rendering**: Added invalid-data guardrails and missing-history fallbacks for dropdown charts
-- **🧩 Build Fixes**: Restored missing portfolio menu display model and removed stale refresh references
-
-### Version 2.3.4 - Refactoring, Performance & Stability
-- **📍 Menu Bar Visibility**: Per-stock and global visibility toggles to declutter the menu bar
-- **🎨 Charting Overhaul**: Modularized charting engine with smoother interactions and improved comparison logic
-- **🧠 Memory Management**: LRU cache eviction with normalized cache keys to prevent bloat
-- **⚡ Performance**: UI update coalescing, optimized correlation/attribution calculations
-- **🔐 Security**: Symbol allowlist validation and subprocess input sanitization
-- **🧵 Concurrency**: Thread-safe currency conversion and menu updates
-- **🔔 Modernization**: UserNotifications migration and timer/resource leak fixes
-- **🐛 Bug Fixes**: Duplicate alert deduplication and menu bar stability improvements
-
-### Version 2.3.3 - Infrastructure & Stability Hardening
-- **🧵 Swift 6 Concurrency**: Full MainActor enforcement for UI components, thread-safe data coordination
-- **🔧 Application Lifecycle**: Restored manual entry point with `main.swift` for reliable menu bar initialization
-- **🐍 Python Bridge Robustness**: Buffer overflow protection with incremental output reading via `SafeDataBuffer`
-- **🔄 Refresh Serialization**: `RefreshCoordinator` actor prevents race conditions during simultaneous updates
-- **⚡ Performance Optimizations**: Intelligent chart sampling based on dataset size, refresh guard to prevent overlapping cycles
-- **🌐 Data Source Configuration**: New Data tab for API key management (FMP, Twelve Data), configurable fetch priority with fallbacks (Yahoo Finance, FMP, Twelve Data, Stooq)
-- **🔌 New Data Providers**: Integrated Twelve Data and Stooq historical fetchers with GBX→GBP normalization
-- **🐛 Bug Fixes**: Type safety improvements, compiler warning resolution, actor isolation corrections
-
-### Version 2.3.2 - Critical Stability Fix
-- **🔒 macOS 15.1+ Crash Fix**: Resolved EXC_BAD_ACCESS crashes in menu bar display system
-- **🧠 Memory Management**: Added weak reference captures in Combine subscriptions
-- **🛡️ Defensive Programming**: Implemented proper cleanup and nil checks
-- **⚡ Swift 6 Compliance**: Maintained full concurrency safety throughout
-- **Zero Regressions**: All v2.3.1 features continue working perfectly
-
-### Version 2.3.1 - Intelligent Backfill & Analytics Enhancements
-- **📅 Automatic Backfill Scheduler**: Intelligent gap detection with minimal API usage
-- **🎯 Performance Attribution**: Individual stock and sector contribution analysis
-- **📊 Chart Interaction Infrastructure**: Annotation system and crosshair tool
-- **🎨 Dock Icon Improvements**: Always visible with proper window management
-- **🔧 Menu Bar Enhancements**: Position P&L format options
-
-### Version 2.3.0 - Major Feature Release
-- **🔐 Security Enhancement**: Migrated API keys to macOS Keychain
-- **📊 Advanced Analytics**: Risk metrics, correlation analysis, diversification scoring
-- **📈 Technical Indicators**: 8 indicators including RSI, MACD, Bollinger Bands
-- **🕯️ Candlestick Charts**: OHLC visualization with volume analysis
-- **🎨 Menu Bar Customization**: 4 display modes with custom templates
-
-### Version 2.2.10 - Major Feature & Quality Release
-- **Performance & reliability improvements**
-- **Enhanced data management**
-- See [Changelogs/release_notes_v2.2.10.md](./Changelogs/release_notes_v2.2.10.md)
-
-### Version 2.2.9 - Reliability & Memory Efficiency
-- **🧭 Quick Status Menu Actions**: Preferences and Quit in every status menu
-- **📈 Chart Picker Enhancements**: Scrollable horizontal chip buttons
-- **🔄 Safer Refresh Pipeline**: Actor-backed RefreshCoordinator
-- **🧠 Memory-Aware Caching**: 512KB limits with disk promotion
-
-### Version 2.2.8 - Interactive Menu Bar Charts
-- **📊 Menu Bar Price Charts**: Real-time charts in stock dropdowns
-- **📈 Enhanced Visualization**: Smart Y-axis scaling, color-coded charts
-
-### Version 2.2.6 - Performance & Feature Enhancements
-- **🚀 Performance Improvements**: CPU usage reduced from 100% to <5%
-- **✨ New Features**: Drag-and-drop reordering, retroactive calculations
+- **Popover Improvements**: Fixed menu popover anchoring, footer layout, dismissal behavior, and updated timestamp formatting.
+- **Charts & Benchmarks**: Added benchmark overlays for `^GSPC` and `^FTSE` with range-aware chart changes.
+- **Menu Bar Stability**: Reused status items across refreshes to reduce menu bar reshuffling and formatting loss.
+- **Data Providers**: Added symbol aliases, improved UK symbol handling, and expanded quote/historical fallbacks.
+- **Persistence Fixes**: Restored deep-edit persistence and prevented benchmark helpers from persisting as user trades.
 
 ### Previous Versions
-- See [Changelogs/](./Changelogs/) for detailed release notes
+- See [Changelogs/](./Changelogs/) for detailed release notes.
 
-## 🛠️ Development
-
-### Technology Stack
-- **Swift 6.0**: Latest language features with actor isolation and async/await
-- **SwiftUI + AppKit**: Hybrid approach for optimal performance and native feel
-- **Core Data**: Modern stack with automatic migration and optimization
-- **Combine**: Reactive programming with memory-safe publishers
-- **Swift Charts**: Hardware-accelerated interactive data visualization
-
-### Code Quality
-- **SwiftLint Integration**: Automated code style enforcement with CI/CD
-- **Actor Isolation**: Thread-safe design with Swift 6 actor patterns
-- **Comprehensive Testing**: Unit tests for core functionality with automated CI
-- **Memory Safety**: Weak references, proper cleanup, and leak detection
-- **Error Handling**: Comprehensive error types with detailed context
-
-### Development Setup
-1. Clone repository and install dependencies
-2. Run SwiftLint for code quality checks
-3. Use Debug tab for real-time development monitoring
-4. Follow logging guidelines with `Logger.shared`
-5. Test with multiple portfolios and network conditions
-
-### Contributing Guidelines
-- **Logging**: Use structured logging with appropriate severity levels
-- **Performance**: Monitor Debug tab for performance regressions
-- **UI**: Ensure all modifications occur on main thread
-- **Error Handling**: Provide graceful fallbacks and user-friendly messages
-- **Testing**: Validate with Debug tab monitoring during development
-
-## 📊 Performance Metrics
-
-StockBar v2.3.4 delivers professional-grade performance:
-
-- **CPU Usage**: <5% during normal operation (down from 100%)
-- **Memory Footprint**: <50MB with automatic cleanup under pressure and smart cache promotion
-- **Response Time**: <2 seconds for portfolio updates with thread-safe coordination
-- **Chart Rendering**: 60fps interactive charts with smooth animations and scrollable pickers
-- **Data Capacity**: Up to 5 years historical data with automatic optimization
-- **Network Efficiency**: <10 API calls per hour with intelligent caching (512KB memory limit)
-- **Cache Intelligence**: Automatic disk promotion for large payloads, memory-aware eviction
-
-## 📄 License
-
-[Add your license information here]
-
-## 🔗 Links
+## Links
 
 - **Releases**: [GitHub Releases](https://github.com/jayjay181818/StockBar/releases)
 - **Issues**: [GitHub Issues](https://github.com/jayjay181818/StockBar/issues)
 - **Changelogs**: [Release Notes](./Changelogs/)
-- **Documentation**: [Technical Documentation](./BUILD_FIXES_DOCUMENTATION.md)
 
 ---
 
-**Built with ❤️ using Swift 6.0 and modern macOS technologies**
+Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-*Last updated: January 17, 2026 - Version 2.3.4*
+Last updated: May 11, 2026 - Version 2.4.2
