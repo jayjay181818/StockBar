@@ -19,6 +19,14 @@ struct DisplayPortfolioSummary {
     let currency: String
 }
 
+struct PositionProfitLossSummary: Equatable {
+    let dayAmount: Double
+    let dayPercent: Double
+    let totalAmount: Double
+    let totalPercent: Double
+    let currency: String
+}
+
 /// Service responsible for portfolio value and gains calculations
 class PortfolioCalculationService {
     private let currencyConverter: CurrencyConverter
@@ -218,6 +226,56 @@ class PortfolioCalculationService {
             totalCost: totalCost,
             ownedPositionCount: ownedPositionCount,
             currency: preferredCurrency
+        )
+    }
+
+    /// Calculates per-position day and total P/L in the position display currency.
+    func calculatePositionProfitLoss(for realTimeTrade: RealTimeTrade) -> PositionProfitLossSummary {
+        let info = realTimeTrade.realTimeInfo
+        let displayPrice = info.getCurrentDisplayPrice()
+        let previousClose = info.prevClosePrice
+        let units = realTimeTrade.trade.position.unitSize
+        let symbol = realTimeTrade.trade.name
+        let averageCost = realTimeTrade.trade.position.getNormalizedAvgCost(for: symbol)
+        let currency = info.currency
+            ?? realTimeTrade.trade.position.currency
+            ?? realTimeTrade.trade.position.costCurrency
+            ?? ""
+
+        let dayAmount: Double
+        let dayPercent: Double
+        if displayPrice.isFinite,
+           previousClose.isFinite,
+           previousClose > 0,
+           units > 0 {
+            let dayDelta = displayPrice - previousClose
+            dayAmount = dayDelta * units
+            dayPercent = (dayDelta / previousClose) * 100.0
+        } else {
+            dayAmount = .nan
+            dayPercent = .nan
+        }
+
+        let totalAmount: Double
+        let totalPercent: Double
+        if displayPrice.isFinite,
+           averageCost.isFinite,
+           averageCost > 0,
+           units > 0 {
+            let totalDelta = displayPrice - averageCost
+            totalAmount = totalDelta * units
+            totalPercent = (totalDelta / averageCost) * 100.0
+        } else {
+            totalAmount = .nan
+            totalPercent = .nan
+        }
+
+        return PositionProfitLossSummary(
+            dayAmount: dayAmount,
+            dayPercent: dayPercent,
+            totalAmount: totalAmount,
+            totalPercent: totalPercent,
+            currency: currency
         )
     }
     

@@ -870,7 +870,11 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let preferencesItem = NSMenuItem(title: "Preferences…", action: #selector(AppDelegate.showPreferences(_:)), keyEquivalent: ",")
+        let openStockbarItem = NSMenuItem(title: "Open Stockbar", action: #selector(AppDelegate.showStockbarWindow(_:)), keyEquivalent: "o")
+        openStockbarItem.target = NSApp.delegate
+        menu.addItem(openStockbarItem)
+
+        let preferencesItem = NSMenuItem(title: "Settings…", action: #selector(AppDelegate.showPreferences(_:)), keyEquivalent: ",")
         preferencesItem.target = NSApp.delegate
         menu.addItem(preferencesItem)
 
@@ -1081,7 +1085,11 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
             menu.addItem(NSMenuItem.separator())
 
-            let preferencesItem = NSMenuItem(title: "Preferences…", action: #selector(AppDelegate.showPreferences(_:)), keyEquivalent: ",")
+            let openStockbarItem = NSMenuItem(title: "Open Stockbar", action: #selector(AppDelegate.showStockbarWindow(_:)), keyEquivalent: "o")
+            openStockbarItem.target = NSApp.delegate
+            menu.addItem(openStockbarItem)
+
+            let preferencesItem = NSMenuItem(title: "Settings…", action: #selector(AppDelegate.showPreferences(_:)), keyEquivalent: ",")
             preferencesItem.target = NSApp.delegate
             menu.addItem(preferencesItem)
 

@@ -381,6 +381,27 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(summary.ownedPositionCount, 1)
     }
 
+    func testPositionProfitLossSummaryIncludesDayAndTotalAmountAndPercent() {
+        // Given
+        let trade = makeRealTimeTrade(
+            symbol: "AAPL",
+            units: "10",
+            avgCost: "150",
+            currentPrice: 170,
+            previousClose: 160
+        )
+
+        // When
+        let summary = service.calculatePositionProfitLoss(for: trade)
+
+        // Then
+        XCTAssertEqual(summary.dayAmount, 100.0, accuracy: 0.01)
+        XCTAssertEqual(summary.dayPercent, 6.25, accuracy: 0.01)
+        XCTAssertEqual(summary.totalAmount, 200.0, accuracy: 0.01)
+        XCTAssertEqual(summary.totalPercent, 13.333, accuracy: 0.01)
+        XCTAssertEqual(summary.currency, "USD")
+    }
+
     func testPortfolioMenuChartDataBuilder_WithNoHistory_CreatesFlatFallback() {
         // Given
         let now = Date(timeIntervalSince1970: 1_000_000)

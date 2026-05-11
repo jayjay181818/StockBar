@@ -21,6 +21,7 @@
 		04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */; };
 		04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */; };
 		04C0FFEE0000000000000028 /* HistoricalPortfolioCalculationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000029 /* HistoricalPortfolioCalculationServiceTests.swift */; };
+		04C0FFEE0000000000000030 /* Trading212BrokerSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStoreRecoveryTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OHLCFetchServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000029 /* HistoricalPortfolioCalculationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalPortfolioCalculationServiceTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Trading212BrokerSyncTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -103,6 +105,7 @@
 				04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */,
 				04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */,
 				04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */,
+				04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */,
 			);
 			path = StockbarTests;
 			sourceTree = "<group>";
@@ -244,6 +247,7 @@
 				04C0FFEE0000000000000020 /* ProjectTestTargetMembershipTests.swift in Sources */,
 				04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */,
 				04C0FFEE000000000000001E /* TechnicalIndicatorServiceTests.swift in Sources */,
+				04C0FFEE0000000000000030 /* Trading212BrokerSyncTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -389,7 +393,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 241;
+				CURRENT_PROJECT_VERSION = 242;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
@@ -399,7 +403,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 2.4.1;
+				MARKETING_VERSION = 2.4.2;
 					PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.Stockbar;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					REGISTER_APP_GROUPS = YES;
@@ -417,7 +421,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 241;
+				CURRENT_PROJECT_VERSION = 242;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
@@ -427,7 +431,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 2.4.1;
+				MARKETING_VERSION = 2.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.Stockbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

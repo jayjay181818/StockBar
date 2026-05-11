@@ -9,7 +9,11 @@ enum LogRedactor {
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)[^\s,;"')\]]+"#,
+            #"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|TRADING212_API_KEY|TRADING212_API_SECRET|API_SECRET|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)[^\s,;"')\]]+"#,
+            "$1[REDACTED]"
+        ),
+        (
+            #"(?i)\b(Authorization\s*[:=]\s*Basic\s+)[A-Za-z0-9._~+/\-=]+"#,
             "$1[REDACTED]"
         ),
         (
@@ -17,7 +21,15 @@ enum LogRedactor {
             "$1[REDACTED]"
         ),
         (
+            #"(?i)\b(Basic\s+)[A-Za-z0-9._~+/\-=]+"#,
+            "$1[REDACTED]"
+        ),
+        (
             #"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-=]+"#,
+            "$1[REDACTED]"
+        ),
+        (
+            #"(?i)\b((?:accountId|account_id|accountNumber|account_number|apiAccountId|api_account_id|id)\s*["']?\s*[:=]\s*)["']?[0-9]{5,}["']?"#,
             "$1[REDACTED]"
         )
     ]
@@ -49,8 +61,10 @@ enum LogRedactor {
 
     private static let redactedSecretPatterns: [String] = [
         #"(?i)[?&](?:apikey|api_key|access_token|token|key)=(?!\[REDACTED\])[^&\s"'<>)\]]+"#,
-        #"(?i)\b(?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*(?!\[REDACTED\])[^\s,;"')\]]+"#,
+        #"(?i)\b(?:FMP_API_KEY|TWELVE_DATA_API_KEY|TRADING212_API_KEY|TRADING212_API_SECRET|API_SECRET|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*(?!\[REDACTED\])[^\s,;"')\]]+"#,
+        #"(?i)\bAuthorization\s*[:=]\s*Basic\s+(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
         #"(?i)\bAuthorization\s*[:=]\s*Bearer\s+(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
+        #"(?i)\bBasic\s+(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
         #"(?i)\bBearer\s+(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#
     ]
 }
