@@ -183,6 +183,7 @@ enum Trading212PermissionPolicy {
 enum Trading212SyncPolicy {
     static let minimumIntervalSeconds = 30
     static let defaultIntervalSeconds = 30
+    static let defaultHoldingReconciliationIntervalSeconds = 3_600
     static let intervalOptionsSeconds = [30, 60, 300, 900, 1_800]
 
     static func clampedIntervalSeconds(_ seconds: Int) -> Int {
@@ -206,6 +207,9 @@ struct Trading212StoredSettings: Equatable {
     var autoSyncEnabled: Bool
     var syncIntervalSeconds: Int
     var deleteMissingLinkedHoldings: Bool
+    var autoReconcileHoldingsEnabled: Bool
+    var autoImportBrokerOnlyHoldings: Bool
+    var holdingReconciliationIntervalSeconds: Int
 
     static let defaults = Trading212StoredSettings(
         isEnabled: false,
@@ -214,7 +218,10 @@ struct Trading212StoredSettings: Equatable {
         accountLabel: "Trading 212 ISA",
         autoSyncEnabled: true,
         syncIntervalSeconds: Trading212SyncPolicy.defaultIntervalSeconds,
-        deleteMissingLinkedHoldings: false
+        deleteMissingLinkedHoldings: false,
+        autoReconcileHoldingsEnabled: false,
+        autoImportBrokerOnlyHoldings: false,
+        holdingReconciliationIntervalSeconds: Trading212SyncPolicy.defaultHoldingReconciliationIntervalSeconds
     )
 }
 

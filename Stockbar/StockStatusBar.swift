@@ -23,11 +23,16 @@ struct TradingData {
     let marketState: String?
     
     var displayPrice: Double {
+        func validExtendedPrice(_ price: Double?) -> Double? {
+            guard let price, price.isFinite, price > 0 else { return nil }
+            return price
+        }
+
         switch marketState {
         case "PRE":
-            return preMarketPrice ?? currentPrice
+            return validExtendedPrice(preMarketPrice) ?? currentPrice
         case "POST":
-            return postMarketPrice ?? currentPrice
+            return validExtendedPrice(postMarketPrice) ?? currentPrice
         default:
             return currentPrice
         }
@@ -58,7 +63,8 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private let dataModel: DataModel
     private var mainStatusItem: NSStatusItem?
     private var symbolStatusItems: [StockStatusItemController] = []
-    private var symbolItemById: [UUID: StockStatusItemController] = [:]
+    private var symbolItemByKey: [String: StockStatusItemController] = [:]
+    private var lastSymbolItemDebugSummary: String?
     private var cancellables = Set<AnyCancellable>()
     private var mainPopover: NSPopover?
     private var portfolioActions = PortfolioMenuActions.noop
@@ -72,6 +78,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         super.init()
         
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        mainStatusItem?.autosaveName = "com.fhl43211.Stockbar.portfolio"
 
         // CRITICAL: Ensure the status item is visible
         mainStatusItem?.isVisible = true
@@ -139,35 +146,62 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             NSStatusBar.system.removeStatusItem(controller.item)
         }
         symbolStatusItems.removeAll()
-        symbolItemById.removeAll()
+        symbolItemByKey.removeAll()
     }
     
-    func syncSymbolItems(with realTimeTrades: [RealTimeTrade], dataModel: DataModel) {
-        let desiredIds = Set(realTimeTrades.map { $0.id })
+    func syncSymbolItems(with realTimeTrades: [RealTimeTrade], dataModel: DataModel, isVisible: Bool = true) {
+        let desiredKeys = Set(realTimeTrades.map { symbolItemKey(for: $0) })
 
-        for (id, controller) in symbolItemById where !desiredIds.contains(id) {
+        for (key, controller) in symbolItemByKey where !desiredKeys.contains(key) {
             NSStatusBar.system.removeStatusItem(controller.item)
-            symbolItemById[id] = nil
+            symbolItemByKey[key] = nil
         }
 
         var orderedControllers: [StockStatusItemController] = []
         for trade in realTimeTrades {
-            if let existing = symbolItemById[trade.id] {
+            let key = symbolItemKey(for: trade)
+            if let existing = symbolItemByKey[key] {
+                existing.update(realTimeTrade: trade)
+                existing.item.isVisible = isVisible
                 orderedControllers.append(existing)
             } else {
                 let controller = StockStatusItemController(realTimeTrade: trade, dataModel: dataModel)
-                symbolItemById[trade.id] = controller
+                controller.item.isVisible = isVisible
+                symbolItemByKey[key] = controller
                 orderedControllers.append(controller)
             }
         }
 
         symbolStatusItems = orderedControllers
+        logSymbolItemState()
     }
     
     func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
         let controller = StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel)
         symbolStatusItems.append(controller)
-        symbolItemById[realTimeTrade.id] = controller
+        symbolItemByKey[symbolItemKey(for: realTimeTrade)] = controller
+    }
+
+    private func symbolItemKey(for realTimeTrade: RealTimeTrade) -> String {
+        realTimeTrade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private func logSymbolItemState() {
+        let visibleCount = symbolStatusItems.filter { $0.item.isVisible }.count
+        let sample = symbolStatusItems.prefix(4).map { controller in
+            let title = controller.item.button?.attributedTitle.string
+                ?? controller.item.button?.title
+                ?? "nil"
+            return "\(title.isEmpty ? "empty" : title):\(controller.item.isVisible ? "visible" : "hidden")"
+        }.joined(separator: ",")
+        let summary = "retained=\(symbolStatusItems.count) visibleItems=\(visibleCount) sample=\(sample)"
+
+        guard summary != lastSymbolItemDebugSummary else { return }
+        lastSymbolItemDebugSummary = summary
+
+        Task {
+            await Logger.shared.info("MenuBar: Symbol status item state \(summary)")
+        }
     }
     
     func mainItem() -> NSStatusItem? {
@@ -392,7 +426,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
     // MARK: - Properties
     private let dataModel: DataModel
-    private let realTimeTrade: RealTimeTrade
+    private var realTimeTrade: RealTimeTrade
     let item: NSStatusItem
     private var cancellables = Set<AnyCancellable>()
     private var detailPopover: NSPopover?
@@ -408,6 +442,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         self.dataModel = dataModel
         self.realTimeTrade = realTimeTrade
         self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.item.autosaveName = Self.autosaveName(for: realTimeTrade.trade.name)
         
         super.init()
 
@@ -425,10 +460,39 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     }
 
     deinit {}
+
+    private static func autosaveName(for symbol: String) -> String {
+        let stableSymbol = symbol
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
+        return "com.fhl43211.Stockbar.ticker.\(stableSymbol)"
+    }
+
+    func update(realTimeTrade: RealTimeTrade) {
+        guard self.realTimeTrade !== realTimeTrade else {
+            updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+            return
+        }
+
+        self.realTimeTrade = realTimeTrade
+        cancellables.removeAll()
+        setupInitialState(with: realTimeTrade)
+        setupDataBinding(for: realTimeTrade)
+        updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+    }
     
     // MARK: - Private Methods
     private func setupInitialState(with trade: RealTimeTrade) {
-        item.button?.title = trade.trade.name
+        let fallbackTitle = trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.button?.title = fallbackTitle
+        item.button?.attributedTitle = NSAttributedString(
+            string: fallbackTitle,
+            attributes: [
+                .foregroundColor: NSColor.labelColor,
+                .font: NSFont.menuBarFont(ofSize: 0)
+            ]
+        )
         item.button?.setButtonType(.momentaryPushIn)
     }
 
@@ -1192,7 +1256,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             detailPopover?.performClose(sender)
             stopPopoverEventMonitors()
         } else {
-            let metrics = buildMenuMetrics(trade: realTimeTrade.trade, data: TradingData(
+            let data = TradingData(
                 currentPrice: realTimeTrade.realTimeInfo.currentPrice,
                 previousPrice: realTimeTrade.realTimeInfo.prevClosePrice,
                 currency: realTimeTrade.realTimeInfo.currency ?? "USD",
@@ -1207,11 +1271,12 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
                 postMarketChange: realTimeTrade.realTimeInfo.postMarketChange,
                 postMarketChangePercent: realTimeTrade.realTimeInfo.postMarketChangePercent,
                 marketState: realTimeTrade.realTimeInfo.marketState
-            ))
+            )
+            let metrics = buildMenuMetrics(trade: realTimeTrade.trade, data: data)
 
             let chartView = MenuPriceChartView(
                 symbol: realTimeTrade.trade.name,
-                currentPrice: metrics.marketValue != nil ? realTimeTrade.realTimeInfo.currentPrice : realTimeTrade.realTimeInfo.currentPrice,
+                currentPrice: data.displayPrice,
                 currency: metrics.currency,
                 metrics: metrics,
                 onUnitsSave: { [weak self] newUnits in

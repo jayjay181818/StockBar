@@ -61,15 +61,30 @@ def log_error(message):
 
 def get_config():
     """Read the entire configuration file"""
-    try:
-        home_dir = os.path.expanduser("~")
-        config_file = os.path.join(home_dir, "Documents", ".stockbar_config.json")
-        
-        if os.path.exists(config_file):
+    candidate_paths = []
+    configured_path = os.getenv("STOCKBAR_CONFIG_FILE")
+    if configured_path:
+        candidate_paths.append(configured_path)
+
+    home_dir = os.path.expanduser("~")
+    candidate_paths.extend([
+        os.path.join(home_dir, "Library", "Application Support", "com.fhl43211.Stockbar", ".stockbar_config.json"),
+        os.path.join(home_dir, ".stockbar_config.json"),
+    ])
+
+    for config_file in candidate_paths:
+        if not config_file:
+            continue
+        try:
+            config_file = os.path.expanduser(config_file)
+            if not os.path.isfile(config_file):
+                continue
             with open(config_file, 'r') as f:
                 return json.load(f)
-    except Exception as e:
-        log_error(f"Error reading config file: {e}")
+        except Exception as e:
+            log_error(f"Error reading config file: {e}")
+            return {}
+
     return {}
 
 CONFIG = get_config()

@@ -14,8 +14,11 @@ struct Trading212DataSourceSection: View {
     @State private var isTesting = false
     @State private var isPreviewing = false
     @State private var isLinking = false
+    @State private var isImportingBrokerOnly = false
     @State private var isSyncing = false
+    @State private var isReconcilingHoldings = false
     @State private var showingLinkConfirmation = false
+    @State private var showingBrokerOnlyImportConfirmation = false
     @State private var statusMessage = "Trading 212 preview has not been tested."
     @State private var preview: Trading212ImportPreview?
 
@@ -45,7 +48,15 @@ struct Trading212DataSourceSection: View {
                 linkMatchedHoldings()
             }
         } message: {
-            Text("StockBar will save broker links for the matched rows only. Manual holdings, backups, historical data, market caches, and Core Data trade rows are not changed.")
+            Text("StockBar will save broker links for exact manual matches only. Broker-only rows will not be imported by this action.")
+        }
+        .alert("Import broker-only holdings?", isPresented: $showingBrokerOnlyImportConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Import") {
+                importBrokerOnlyHoldings()
+            }
+        } message: {
+            Text("StockBar will create new holdings only for clean broker-only Trading 212 rows and save broker links so future syncs update them. Existing manual holdings, backups, historical data, and market caches are not deleted or migrated.")
         }
     }
 
@@ -123,6 +134,17 @@ struct Trading212DataSourceSection: View {
                     Toggle("Delete linked manual holdings missing from Trading 212", isOn: binding(\.deleteMissingLinkedHoldings))
                         .toggleStyle(.checkbox)
                 }
+                GridRow {
+                    Text("Portfolio changes:")
+                    Toggle("Check hourly and automatically apply Trading 212 holding changes", isOn: binding(\.autoReconcileHoldingsEnabled))
+                        .toggleStyle(.checkbox)
+                }
+                GridRow {
+                    Text("New holdings:")
+                    Toggle("Automatically import clean broker-only holdings during hourly checks", isOn: binding(\.autoImportBrokerOnlyHoldings))
+                        .toggleStyle(.checkbox)
+                        .disabled(!settings.autoReconcileHoldingsEnabled)
+                }
             }
 
             Text(settings.deleteMissingLinkedHoldings
@@ -130,6 +152,11 @@ struct Trading212DataSourceSection: View {
                  : "Disabled: removed Trading 212 positions are reported as missing and manual holdings stay in StockBar.")
                 .font(.caption)
                 .foregroundColor(settings.deleteMissingLinkedHoldings ? .orange : .secondary)
+            Text(settings.autoReconcileHoldingsEnabled
+                 ? "Hourly reconciliation uses one Trading 212 account preview to sync linked holdings and, if enabled, import clean new positions. Failed or empty broker responses never delete the whole portfolio."
+                 : "Hourly reconciliation is disabled. Use Preview Import or Sync Linked Holdings manually to apply structural changes.")
+                .font(.caption)
+                .foregroundColor(.secondary)
             Text("Linked holdings sync through one Trading 212 positions request per cycle; StockBar does not poll each ticker separately.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -242,6 +269,17 @@ struct Trading212DataSourceSection: View {
                 }
             }
             .disabled(!canRunBrokerAction || isTesting || isPreviewing || isSyncing)
+
+            Button {
+                reconcileHoldings()
+            } label: {
+                if isReconcilingHoldings {
+                    ProgressView().scaleEffect(0.6).frame(width: 130)
+                } else {
+                    Text("Reconcile Holdings Now")
+                }
+            }
+            .disabled(!canRunBrokerAction || isTesting || isPreviewing || isSyncing || isReconcilingHoldings)
         }
     }
 
@@ -282,7 +320,17 @@ struct Trading212DataSourceSection: View {
                         }
                     }
                     .disabled(!canLinkPreview(preview) || isLinking)
-                    Text("Saves broker links only; it does not replace or delete manual holdings.")
+                    Button {
+                        showingBrokerOnlyImportConfirmation = true
+                    } label: {
+                        if isImportingBrokerOnly {
+                            ProgressView().scaleEffect(0.6).frame(width: 150)
+                        } else {
+                            Text("Import Broker-Only Holdings")
+                        }
+                    }
+                    .disabled(!canImportBrokerOnly(preview) || isImportingBrokerOnly)
+                    Text("Linking saves broker links; importing creates new holdings only for broker-only rows.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -345,11 +393,17 @@ struct Trading212DataSourceSection: View {
     }
 
     private func canLinkPreview(_ preview: Trading212ImportPreview) -> Bool {
-        !preview.rows.isEmpty &&
-            preview.manualMatchCount == preview.rows.count &&
-            preview.brokerOnlyCount == 0 &&
-            preview.quantityMismatchCount == 0 &&
-            preview.needsReviewCount == 0
+        preview.rows.contains { row in
+            row.conflictStatus == .manualHoldingMatch || row.conflictStatus == .manualQuantityMismatch
+        }
+    }
+
+    private func canImportBrokerOnly(_ preview: Trading212ImportPreview) -> Bool {
+        preview.rows.contains { row in
+            row.conflictStatus == .none &&
+                row.instrumentId != nil &&
+                (row.quantity ?? 0) > 0
+        }
     }
 
     private var credentialHelpText: String {
@@ -397,9 +451,15 @@ struct Trading212DataSourceSection: View {
         refreshKeychainStatus()
     }
 
-    private func saveSettings() {
-        settingsStore.save(settings)
-        dataModel.restartTrading212LinkedSyncScheduler()
+    private func saveSettings(
+        _ settingsToSave: Trading212StoredSettings? = nil,
+        restartScheduler: Bool = true,
+        runImmediately: Bool = false
+    ) {
+        settingsStore.save(settingsToSave ?? settings)
+        if restartScheduler {
+            dataModel.restartTrading212LinkedSyncScheduler(runImmediately: runImmediately)
+        }
         refreshKeychainStatus()
     }
 
@@ -409,7 +469,7 @@ struct Trading212DataSourceSection: View {
             apiKey = ""
             apiSecret = ""
             refreshKeychainStatus()
-            dataModel.restartTrading212LinkedSyncScheduler()
+            dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             statusMessage = "Trading 212 credentials saved to Keychain. The fields were cleared intentionally."
         } catch {
             statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -422,7 +482,7 @@ struct Trading212DataSourceSection: View {
             apiKey = ""
             apiSecret = ""
             refreshKeychainStatus()
-            dataModel.restartTrading212LinkedSyncScheduler()
+            dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             statusMessage = "Trading 212 credentials cleared from Keychain."
         } catch {
             statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -443,12 +503,14 @@ struct Trading212DataSourceSection: View {
     private func testConnection() {
         do {
             let credentials = try credentialsForAction()
-            saveSettings()
+            saveSettings(restartScheduler: false)
+            dataModel.suspendTrading212LinkedSyncScheduler()
             isTesting = true
             Task {
                 let result = await coordinator.testConnection(settings: settings, credentials: credentials)
                 isTesting = false
                 refreshKeychainStatus()
+                dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
                 statusMessage = "\(result.environment.displayName): \(result.safeMessage) Positions: \(result.positionCount)."
             }
         } catch {
@@ -459,7 +521,8 @@ struct Trading212DataSourceSection: View {
     private func previewImport() {
         do {
             let credentials = try credentialsForAction()
-            saveSettings()
+            saveSettings(restartScheduler: false)
+            dataModel.suspendTrading212LinkedSyncScheduler()
             let existingManualHoldings = dataModel.realTimeTrades.map { manualHoldingSnapshot(from: $0) }
             isPreviewing = true
             Task {
@@ -476,6 +539,7 @@ struct Trading212DataSourceSection: View {
                 }
                 isPreviewing = false
                 refreshKeychainStatus()
+                dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             }
         } catch {
             statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -491,9 +555,9 @@ struct Trading212DataSourceSection: View {
         isLinking = true
         Task {
             do {
-                let result = try await brokerLinkStore.linkExactMatches(from: preview)
-                statusMessage = "Linked \(result.linkedCount) matched Trading 212 holdings. Manual holdings were not changed."
-                dataModel.restartTrading212LinkedSyncScheduler()
+                let result = try await brokerLinkStore.linkMatchedHoldings(from: preview)
+                statusMessage = "Linked \(result.linkedCount) matched Trading 212 holding(s). Broker-only rows were not imported."
+                dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             } catch {
                 statusMessage = LogRedactor.redact(error.localizedDescription)
             }
@@ -501,8 +565,29 @@ struct Trading212DataSourceSection: View {
         }
     }
 
+    private func importBrokerOnlyHoldings() {
+        guard let preview else {
+            statusMessage = "Run Preview Import before importing broker-only holdings."
+            return
+        }
+
+        isImportingBrokerOnly = true
+        Task {
+            do {
+                let result = try await dataModel.importBrokerOnlyTrading212Holdings(from: preview)
+                statusMessage = result.userMessage
+                self.preview = nil
+            } catch {
+                statusMessage = LogRedactor.redact(error.localizedDescription)
+            }
+            isImportingBrokerOnly = false
+            refreshKeychainStatus()
+        }
+    }
+
     private func syncLinkedHoldings() {
-        saveSettings()
+        saveSettings(restartScheduler: false)
+        dataModel.suspendTrading212LinkedSyncScheduler()
         isSyncing = true
         Task {
             do {
@@ -513,20 +598,48 @@ struct Trading212DataSourceSection: View {
             }
             isSyncing = false
             refreshKeychainStatus()
+            dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
+        }
+    }
+
+    private func reconcileHoldings() {
+        saveSettings(restartScheduler: false)
+        dataModel.suspendTrading212LinkedSyncScheduler()
+        isReconcilingHoldings = true
+        Task {
+            do {
+                let result = try await dataModel.reconcileTrading212Holdings(reason: "settings-manual-reconcile")
+                statusMessage = result.userMessage
+            } catch {
+                statusMessage = "\(LogRedactor.redact(error.localizedDescription)) No holdings were changed."
+            }
+            isReconcilingHoldings = false
+            refreshKeychainStatus()
+            dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
         }
     }
 
     private func refreshKeychainStatus() {
-        hasStoredCredentials = credentialStore.hasCredentials(environment: settings.environment)
-        keychainStatus = hasStoredCredentials ? "\(settings.environment.displayName) stored" : "Not stored"
+        let storageState = credentialStore.storageState(environment: settings.environment)
+        hasStoredCredentials = storageState.hasCredentials
+        switch storageState {
+        case .currentSingleItem:
+            keychainStatus = "\(settings.environment.displayName) stored"
+        case .legacySplitItems:
+            keychainStatus = "Stored in older format - test/sync once or re-save to upgrade"
+        case .notStored:
+            keychainStatus = "Not stored"
+        }
     }
 
     private func binding<Value>(_ keyPath: WritableKeyPath<Trading212StoredSettings, Value>) -> Binding<Value> {
         Binding(
             get: { settings[keyPath: keyPath] },
             set: { newValue in
-                settings[keyPath: keyPath] = newValue
-                saveSettings()
+                var updatedSettings = settings
+                updatedSettings[keyPath: keyPath] = newValue
+                settings = updatedSettings
+                saveSettings(updatedSettings, runImmediately: false)
             }
         )
     }

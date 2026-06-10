@@ -165,25 +165,37 @@ final class TradeDataMigrationService: @unchecked Sendable {
     private func backupUserDefaultsData() throws {
         Task { await logger.info("💾 MIGRATION: Creating backup of UserDefaults trade data") }
         
-        let documentDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let appSupport = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let bundlePathComponent = Bundle.main.bundleIdentifier?.isEmpty == false
+            ? Bundle.main.bundleIdentifier!
+            : "com.fhl43211.Stockbar"
+        let backupDirectory = appSupport
+            .appendingPathComponent(bundlePathComponent, isDirectory: true)
+            .appendingPathComponent("Migration Backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
         
         // Backup trades
         if let tradesData = UserDefaults.standard.data(forKey: "usertrades") {
-            let tradesBackupURL = documentDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
+            let tradesBackupURL = backupDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
             try tradesData.write(to: tradesBackupURL)
             Task { await logger.info("💾 MIGRATION: Trades backup saved to \(tradesBackupURL.path)") }
         }
         
         // Backup trading info
         if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") {
-            let tradingInfoBackupURL = documentDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
+            let tradingInfoBackupURL = backupDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
             try tradingInfoData.write(to: tradingInfoBackupURL)
             Task { await logger.info("💾 MIGRATION: Trading info backup saved to \(tradingInfoBackupURL.path)") }
         }
         
         // Backup other user data
         let userDataDict = UserDefaults.standard.dictionaryRepresentation()
-        let userDataBackupURL = documentDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
+        let userDataBackupURL = backupDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
         (userDataDict as NSDictionary).write(to: userDataBackupURL, atomically: true)
         Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
     }

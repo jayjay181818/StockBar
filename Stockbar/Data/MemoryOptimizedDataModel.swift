@@ -222,10 +222,10 @@ class MemoryOptimizedDataModel: ObservableObject {
             // Skip watchlist-only stocks from portfolio calculations
             guard !trade.trade.isWatchlistOnly else { continue }
 
-            guard !trade.realTimeInfo.currentPrice.isNaN,
-                  trade.realTimeInfo.currentPrice > 0 else { continue }
+            let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else { continue }
 
-            let currentPrice = trade.realTimeInfo.currentPrice
             let units = trade.trade.position.unitSize
             let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
 

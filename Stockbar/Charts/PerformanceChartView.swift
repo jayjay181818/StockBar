@@ -145,6 +145,12 @@ struct PerformanceChartView: View {
         .task(id: selectedChartType) {
             await loadChartData()
         }
+        .onChange(of: historicalDataManager.priceDataRevision) { _, _ in
+            guard case .individualStock = selectedChartType else { return }
+            Task {
+                await loadChartData()
+            }
+        }
         .onAppear {
             // Initialize chart interactions
             setupKeyboardShortcuts()

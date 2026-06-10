@@ -54,8 +54,9 @@ class PortfolioCalculationService {
             }
             
             // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
+            let currentPrice = realTimeTradeItem.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else {
                 Task { await logger.debug("Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
                 continue
             }
@@ -67,7 +68,6 @@ class PortfolioCalculationService {
                 continue
             }
             
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
             let units = realTimeTradeItem.trade.position.unitSize
             let currency = realTimeTradeItem.realTimeInfo.currency
             let symbol = realTimeTradeItem.trade.name
@@ -122,13 +122,13 @@ class PortfolioCalculationService {
             }
             
             // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
+            let currentPrice = realTimeTradeItem.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else {
                 Task { await logger.debug("Skipping net value calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
                 continue
             }
             
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
             let units = realTimeTradeItem.trade.position.unitSize
             let currency = realTimeTradeItem.realTimeInfo.currency
             let symbol = realTimeTradeItem.trade.name

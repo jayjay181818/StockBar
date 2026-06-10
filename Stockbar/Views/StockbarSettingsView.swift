@@ -25,7 +25,7 @@ struct StockbarSettingsView: View {
             Divider()
             content
         }
-        .frame(minWidth: 980, idealWidth: 1180, minHeight: 680, idealHeight: 820)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(preferredColorScheme)
         .sheet(isPresented: $showingRestoreSheet) {
             RestoreBackupView(isPresented: $showingRestoreSheet, dataModel: dataModel)
@@ -44,14 +44,6 @@ struct StockbarSettingsView: View {
                 .fontWeight(.semibold)
 
             Spacer()
-
-            Button {
-                NotificationCenter.default.post(name: .openStockbarWindowRequested, object: nil)
-            } label: {
-                Label("Open Stockbar", systemImage: "chart.line.uptrend.xyaxis")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 18)
@@ -118,13 +110,20 @@ struct StockbarSettingsView: View {
                 HStack(spacing: 16) {
                     SummaryMetricCard(
                         title: "Net Value",
-                        value: formatted(dataModel.calculateNetValue()),
+                        value: HoldingsSummaryAmountFormatter.format(
+                            dataModel.calculateNetValue(),
+                            dataModel: dataModel
+                        ),
                         tint: .blue
                     )
                     let gains = dataModel.calculateNetGains()
                     SummaryMetricCard(
                         title: "Total Net Gains",
-                        value: formatted(gains),
+                        value: HoldingsSummaryAmountFormatter.format(
+                            gains,
+                            dataModel: dataModel,
+                            signed: true
+                        ),
                         tint: gains.amount >= 0 ? .green : .red
                     )
                     SummaryMetricCard(
@@ -213,10 +212,21 @@ struct StockbarSettingsView: View {
                         }
                     )
                 )
+                Toggle(
+                    "Only show stock tickers when an external display is connected",
+                    isOn: $dataModel.requireExternalDisplayForMenuBarStocks
+                )
+                .disabled(dataModel.hideAllMenuBarItems)
+                .help("Temporarily hides individual stock tickers when Stockbar only detects the built-in display.")
+
                 if dataModel.hideAllMenuBarItems {
-                    Text("All menu bar items are hidden. Use the Dock icon or Open Stockbar button to access Stockbar.")
+                    Text("All menu bar items are hidden. Use the Dock icon or main Stockbar window to access Stockbar.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if dataModel.requireExternalDisplayForMenuBarStocks {
+                    Text(menuBarExternalDisplayStatusText)
+                        .font(.caption)
+                        .foregroundColor(dataModel.isExternalDisplayConnected ? .secondary : .orange)
                 }
             }
 
@@ -420,6 +430,13 @@ struct StockbarSettingsView: View {
         dataModel.realTimeTrades.filter { !$0.trade.name.isEmpty && !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }.count
     }
 
+    private var menuBarExternalDisplayStatusText: String {
+        if dataModel.isExternalDisplayConnected {
+            return "External display detected. Stock tickers can show normally."
+        }
+        return "No external display detected. Stock tickers are temporarily hidden and will return when a second display is connected."
+    }
+
     private let refreshIntervalOptions: [(String, TimeInterval)] = [
         ("1 minute", 60),
         ("5 minutes", 300),
@@ -439,10 +456,6 @@ struct StockbarSettingsView: View {
     private func syncRefreshState() {
         refreshInterval = dataModel.refreshInterval
         snapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
-    }
-
-    private func formatted(_ amount: (amount: Double, currency: String)) -> String {
-        "\(String(format: "%.2f", amount.amount)) \(amount.currency)"
     }
 
     private func formattedBackupDate(_ date: Date) -> String {

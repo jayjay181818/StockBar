@@ -1791,7 +1791,7 @@ struct PreferenceView: View {
         guard !trimmedKey.isEmpty else { return }
         
         configManager.setFMPAPIKey(trimmedKey)
-        showAPIKeyAlert(title: "API Key Saved", message: "Your API key has been saved securely to your local Documents folder.")
+        showAPIKeyAlert(title: "API Key Saved", message: "Your API key has been saved to Stockbar's Application Support folder.")
     }
     
     private func testAPIKey() {
@@ -2381,9 +2381,20 @@ struct PreferenceView: View {
             await Logger.shared.info("📋 [Debug] Generating debug report")
 
             do {
-                // Create export directory
-                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                let exportFolder = documentsPath.appendingPathComponent("Stockbar_Debug_\(Int(Date().timeIntervalSince1970))")
+                // Create export directory in app-owned storage to avoid Documents permission prompts.
+                let appSupport = try FileManager.default.url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true
+                )
+                let bundlePathComponent = Bundle.main.bundleIdentifier?.isEmpty == false
+                    ? Bundle.main.bundleIdentifier!
+                    : "com.fhl43211.Stockbar"
+                let exportRoot = appSupport
+                    .appendingPathComponent(bundlePathComponent, isDirectory: true)
+                    .appendingPathComponent("Debug Reports", isDirectory: true)
+                let exportFolder = exportRoot.appendingPathComponent("Stockbar_Debug_\(Int(Date().timeIntervalSince1970))")
                 try FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
 
                 // 1. Export current configuration
@@ -2421,10 +2432,12 @@ struct PreferenceView: View {
                 try configText.write(to: configFile, atomically: true, encoding: .utf8)
 
                 // 2. Copy log file if it exists
-                let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/stockbar.log")
-                if FileManager.default.fileExists(atPath: logPath.path) {
-                    let logDestination = exportFolder.appendingPathComponent("stockbar.log")
-                    try FileManager.default.copyItem(at: logPath, to: logDestination)
+                if let logPathString = await Logger.shared.getLogFilePath() {
+                    let logPath = URL(fileURLWithPath: logPathString)
+                    if FileManager.default.fileExists(atPath: logPath.path) {
+                        let logDestination = exportFolder.appendingPathComponent("stockbar.log")
+                        try FileManager.default.copyItem(at: logPath, to: logDestination)
+                    }
                 }
 
                 // 3. Export portfolio data

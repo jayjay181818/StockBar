@@ -99,6 +99,38 @@ class CacheCoordinatorTests: XCTestCase {
         }
     }
 
+    func testShouldRefreshWithCustomFreshnessIntervalUsesShorterCadence() async {
+        let symbol = "MU"
+        let now = Date()
+
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(-360))
+
+        let shouldRefreshDefault = await cacheCoordinator.shouldRefresh(symbol: symbol, at: now)
+        let shouldRefreshExtendedHours = await cacheCoordinator.shouldRefresh(
+            symbol: symbol,
+            at: now,
+            freshnessInterval: 300
+        )
+
+        XCTAssertFalse(shouldRefreshDefault)
+        XCTAssertTrue(shouldRefreshExtendedHours)
+    }
+
+    func testShouldRefreshWithCustomFreshnessIntervalKeepsFreshRecentFetches() async {
+        let symbol = "MU"
+        let now = Date()
+
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(-120))
+
+        let shouldRefresh = await cacheCoordinator.shouldRefresh(
+            symbol: symbol,
+            at: now,
+            freshnessInterval: 300
+        )
+
+        XCTAssertFalse(shouldRefresh)
+    }
+
     func testRecordMultipleFetchSuccesses() async {
         let symbol = "AAPL"
         let firstFetch = Date()
