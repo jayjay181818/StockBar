@@ -1,4 +1,5 @@
 import Combine
+import Combine
 import SwiftUI
 
 struct PortfolioMenuActions {
@@ -20,60 +21,14 @@ enum PortfolioMenuChartDataBuilder {
         now: Date = Date(),
         maxPoints: Int = defaultMaxPoints
     ) -> [MenuChartDataPoint] {
-        let startDate = range.startDate(from: now)
-        var points = storedPoints
-            .filter { $0.date >= startDate && $0.date <= now && $0.value.isFinite && $0.value > 0 }
-            .sorted { $0.date < $1.date }
-            .map { MenuChartDataPoint(date: $0.date, price: $0.value, symbol: "Portfolio") }
-
-        guard currentValue.isFinite, currentValue > 0 else {
-            return points.count >= 2 ? downsample(points, maxPoints: maxPoints) : []
-        }
-
-        if points.isEmpty {
-            points = [
-                MenuChartDataPoint(date: startDate, price: currentValue, symbol: "Portfolio"),
-                MenuChartDataPoint(date: now, price: currentValue, symbol: "Portfolio")
-            ]
-        } else if let last = points.last, abs(last.date.timeIntervalSince(now)) < 1 {
-            points[points.count - 1] = MenuChartDataPoint(date: now, price: currentValue, symbol: "Portfolio")
-        } else {
-            points.append(MenuChartDataPoint(date: now, price: currentValue, symbol: "Portfolio"))
-        }
-
-        if points.count == 1 {
-            points.insert(MenuChartDataPoint(date: startDate, price: points[0].price, symbol: "Portfolio"), at: 0)
-        }
-
-        return downsample(points, maxPoints: maxPoints)
-    }
-
-    static func downsample(_ points: [MenuChartDataPoint], maxPoints: Int = defaultMaxPoints) -> [MenuChartDataPoint] {
-        guard maxPoints > 1, points.count > maxPoints else {
-            return points
-        }
-
-        let lastIndex = points.count - 1
-        let step = Double(lastIndex) / Double(maxPoints - 1)
-        var sampled: [MenuChartDataPoint] = []
-        sampled.reserveCapacity(maxPoints)
-
-        for offset in 0..<maxPoints {
-            let rawIndex = Int((Double(offset) * step).rounded())
-            let index = min(rawIndex, lastIndex)
-            if sampled.last?.date != points[index].date {
-                sampled.append(points[index])
-            }
-        }
-
-        if sampled.first?.date != points.first?.date {
-            sampled.insert(points[0], at: 0)
-        }
-        if sampled.last?.date != points.last?.date {
-            sampled.append(points[lastIndex])
-        }
-
-        return sampled.count <= maxPoints ? sampled : Array(sampled.prefix(maxPoints - 1)) + [points[lastIndex]]
+        MenuChartDataBuilder.prepareValuePoints(
+            storedPoints: storedPoints,
+            currentValue: currentValue,
+            symbol: "Portfolio",
+            range: range,
+            now: now,
+            maxPoints: maxPoints
+        )
     }
 }
 
@@ -85,14 +40,27 @@ final class PortfolioMenuChartViewModel: ObservableObject {
 
     private let historicalDataManager = HistoricalDataManager.shared
     private var currentValue: Double
+    private var currentTrades: [RealTimeTrade]
+    private var preferredCurrency: String
+    private var cancellables = Set<AnyCancellable>()
 
-    init(currentValue: Double) {
+    init(currentValue: Double, currentTrades: [RealTimeTrade], preferredCurrency: String) {
         self.currentValue = currentValue
+        self.currentTrades = currentTrades
+        self.preferredCurrency = preferredCurrency
+        historicalDataManager.$priceSnapshots
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.loadChartData()
+            }
+            .store(in: &cancellables)
         loadChartData()
     }
 
-    func updateCurrentValue(_ value: Double) {
-        currentValue = value
+    func update(currentValue: Double, currentTrades: [RealTimeTrade], preferredCurrency: String) {
+        self.currentValue = currentValue
+        self.currentTrades = currentTrades
+        self.preferredCurrency = preferredCurrency
         loadChartData()
     }
 
@@ -103,7 +71,11 @@ final class PortfolioMenuChartViewModel: ObservableObject {
 
     func loadChartData() {
         isLoading = true
-        let storedPoints = historicalDataManager.getStoredPortfolioValues(for: selectedTimeRange.chartTimeRange)
+        let storedPoints = historicalDataManager.getPortfolioMenuValues(
+            for: selectedTimeRange.chartTimeRange,
+            currentTrades: currentTrades,
+            preferredCurrency: preferredCurrency
+        )
         chartData = PortfolioMenuChartDataBuilder.prepareChartPoints(
             storedPoints: storedPoints,
             currentValue: currentValue,
@@ -129,7 +101,13 @@ struct PortfolioMenuPopoverView: View {
         let summary = dataModel.calculateDisplayPortfolioSummary(
             preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
         )
-        self._viewModel = StateObject(wrappedValue: PortfolioMenuChartViewModel(currentValue: summary.totalValue))
+        self._viewModel = StateObject(
+            wrappedValue: PortfolioMenuChartViewModel(
+                currentValue: summary.totalValue,
+                currentTrades: dataModel.realTimeTrades,
+                preferredCurrency: summary.currency
+            )
+        )
     }
 
     private var summary: DisplayPortfolioSummary {
@@ -220,13 +198,25 @@ struct PortfolioMenuPopoverView: View {
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
         .onAppear {
-            viewModel.updateCurrentValue(summary.totalValue)
+            viewModel.update(
+                currentValue: summary.totalValue,
+                currentTrades: dataModel.realTimeTrades,
+                preferredCurrency: summary.currency
+            )
         }
         .onReceive(dataModel.$realTimeTrades) { _ in
-            viewModel.updateCurrentValue(summary.totalValue)
+            viewModel.update(
+                currentValue: summary.totalValue,
+                currentTrades: dataModel.realTimeTrades,
+                preferredCurrency: summary.currency
+            )
         }
         .onReceive(dataModel.$portfolioMenuBarDisplaySettings) { _ in
-            viewModel.updateCurrentValue(summary.totalValue)
+            viewModel.update(
+                currentValue: summary.totalValue,
+                currentTrades: dataModel.realTimeTrades,
+                preferredCurrency: summary.currency
+            )
         }
     }
 

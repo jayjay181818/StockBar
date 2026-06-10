@@ -3,6 +3,7 @@
 
 import Combine
 import Foundation
+import Security
 
 extension String {
     func appendToFile(url: URL) throws {
@@ -61,9 +62,13 @@ class DataModel: ObservableObject {
     private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
     private let trading212BrokerLinkStore = BrokerLinkStore.shared
     private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
+    private let trading212BrokerOnlyImportPlanner = Trading212BrokerOnlyImportPlanner()
     private var trading212BrokerSyncTask: Task<Void, Never>?
     private var trading212BrokerSyncTimer: Timer?
+    private var trading212HoldingReconciliationTask: Task<Void, Never>?
+    private var trading212HoldingReconciliationTimer: Timer?
     private var isTrading212BrokerSyncInProgress = false
+    private var isTrading212HoldingReconciliationInProgress = false
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
@@ -110,6 +115,22 @@ class DataModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(hideAllMenuBarItems, forKey: "hideAllMenuBarItems")
         }
+    }
+
+    @Published var requireExternalDisplayForMenuBarStocks: Bool = MenuBarVisibilityPolicy.loadRequireExternalDisplay() {
+        didSet {
+            MenuBarVisibilityPolicy.saveRequireExternalDisplay(requireExternalDisplayForMenuBarStocks)
+        }
+    }
+
+    @Published var isExternalDisplayConnected: Bool = false
+
+    var shouldShowStockMenuBarItems: Bool {
+        MenuBarVisibilityPolicy.shouldShowStockItems(
+            hideAllMenuBarItems: hideAllMenuBarItems,
+            requireExternalDisplay: requireExternalDisplayForMenuBarStocks,
+            isExternalDisplayConnected: isExternalDisplayConnected
+        )
     }
 
     private let logger = Logger.shared
@@ -666,18 +687,30 @@ class DataModel: ObservableObject {
         await performRefreshAllTrades()
     }
 
-    func restartTrading212LinkedSyncScheduler() {
+    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true) {
         trading212BrokerSyncTimer?.invalidate()
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
 
         let settings = trading212SettingsStore.load()
+        restartTrading212HoldingReconciliationScheduler(runImmediately: false, settings: settings)
+        let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
         guard settings.isEnabled,
               settings.autoSyncEnabled,
               settings.accountType.isSupportedByPublicAPI,
-              trading212CredentialStore.hasCredentials(environment: settings.environment)
+              credentialState.isReadyForBackgroundAccess
         else {
+            if settings.isEnabled,
+               settings.autoSyncEnabled,
+               settings.accountType.isSupportedByPublicAPI,
+               credentialState == .legacySplitItems {
+                Task {
+                    await Logger.shared.warning(
+                        "Trading 212 auto-sync not started because credentials use older split Keychain storage. Open Settings and run Test Connection or re-save credentials to upgrade."
+                    )
+                }
+            }
             return
         }
 
@@ -687,7 +720,9 @@ class DataModel: ObservableObject {
                 "Trading 212 auto-sync scheduler started: interval=\(intervalSeconds)s, environment=\(settings.environment.displayName)"
             )
         }
-        runTrading212AutoSync(reason: "auto-start")
+        if runImmediately {
+            runTrading212AutoSync(reason: "auto-start")
+        }
 
         trading212BrokerSyncTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(intervalSeconds), repeats: true) {
             [weak self] _ in
@@ -698,6 +733,60 @@ class DataModel: ObservableObject {
         trading212BrokerSyncTimer?.tolerance = min(5.0, TimeInterval(intervalSeconds) * 0.1)
     }
 
+    func suspendTrading212LinkedSyncScheduler() {
+        trading212BrokerSyncTimer?.invalidate()
+        trading212BrokerSyncTimer = nil
+        trading212BrokerSyncTask?.cancel()
+        trading212BrokerSyncTask = nil
+        trading212HoldingReconciliationTimer?.invalidate()
+        trading212HoldingReconciliationTimer = nil
+        trading212HoldingReconciliationTask?.cancel()
+        trading212HoldingReconciliationTask = nil
+    }
+
+    private func restartTrading212HoldingReconciliationScheduler(
+        runImmediately: Bool = false,
+        settings: Trading212StoredSettings? = nil
+    ) {
+        trading212HoldingReconciliationTimer?.invalidate()
+        trading212HoldingReconciliationTimer = nil
+        trading212HoldingReconciliationTask?.cancel()
+        trading212HoldingReconciliationTask = nil
+
+        let settings = settings ?? trading212SettingsStore.load()
+        let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
+        guard settings.isEnabled,
+              settings.autoReconcileHoldingsEnabled,
+              settings.accountType.isSupportedByPublicAPI,
+              credentialState.isReadyForBackgroundAccess
+        else {
+            return
+        }
+
+        let intervalSeconds = max(
+            Trading212SyncPolicy.defaultHoldingReconciliationIntervalSeconds,
+            settings.holdingReconciliationIntervalSeconds
+        )
+        Task {
+            await Logger.shared.info(
+                "Trading 212 holding reconciliation scheduler started: interval=\(intervalSeconds)s, environment=\(settings.environment.displayName)"
+            )
+        }
+        if runImmediately {
+            runTrading212HoldingReconciliation(reason: "auto-reconcile-start")
+        }
+
+        trading212HoldingReconciliationTimer = Timer.scheduledTimer(
+            withTimeInterval: TimeInterval(intervalSeconds),
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.runTrading212HoldingReconciliation(reason: "auto-reconcile")
+            }
+        }
+        trading212HoldingReconciliationTimer?.tolerance = min(60.0, TimeInterval(intervalSeconds) * 0.1)
+    }
+
     private func runTrading212AutoSync(reason: String) {
         trading212BrokerSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -705,6 +794,19 @@ class DataModel: ObservableObject {
                 _ = try await self.syncLinkedTrading212Holdings(reason: reason)
             } catch {
                 await Logger.shared.warning("Trading 212 auto-sync \(reason) failed: \(LogRedactor.redact(error.localizedDescription))")
+            }
+        }
+    }
+
+    private func runTrading212HoldingReconciliation(reason: String) {
+        trading212HoldingReconciliationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.reconcileTrading212Holdings(reason: reason)
+            } catch {
+                await Logger.shared.warning(
+                    "Trading 212 holding reconciliation \(reason) failed without applying changes: \(LogRedactor.redact(error.localizedDescription))"
+                )
             }
         }
     }
@@ -733,7 +835,23 @@ class DataModel: ObservableObject {
             )
         }
 
-        let credentials = try trading212CredentialStore.load(environment: settings.environment)
+        let allowKeychainPrompt = !reason.hasPrefix("auto")
+        let credentials: Trading212AuthConfiguration
+        do {
+            credentials = try trading212CredentialStore.load(
+                environment: settings.environment,
+                allowUserInteraction: allowKeychainPrompt
+            )
+        } catch Trading212CredentialStoreError.keychainStatus(let status)
+            where !allowKeychainPrompt && status == errSecInteractionNotAllowed {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection or Sync Linked Holdings once."
+            )
+        }
         let links = try await trading212BrokerLinkStore.loadSnapshot()
         let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
         guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
@@ -781,23 +899,233 @@ class DataModel: ObservableObject {
         return result
     }
 
-    func trading212LinkedSymbolsShouldSkipMarketRefresh() async -> Set<String> {
+    func reconcileTrading212Holdings(reason: String = "manual-reconcile") async throws -> Trading212HoldingReconciliationResult {
+        guard !isTrading212HoldingReconciliationInProgress else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 holding reconciliation is already running."
+            )
+        }
+        guard !isTrading212BrokerSyncInProgress else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 live-value sync is already running; hourly holding reconciliation skipped this cycle."
+            )
+        }
+
+        isTrading212HoldingReconciliationInProgress = true
+        defer { isTrading212HoldingReconciliationInProgress = false }
+
         let settings = trading212SettingsStore.load()
         guard settings.isEnabled,
+              settings.autoReconcileHoldingsEnabled,
+              settings.accountType.isSupportedByPublicAPI else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 hourly holding reconciliation is not enabled."
+            )
+        }
+
+        let allowKeychainPrompt = !reason.hasPrefix("auto")
+        let credentials: Trading212AuthConfiguration
+        do {
+            credentials = try trading212CredentialStore.load(
+                environment: settings.environment,
+                allowUserInteraction: allowKeychainPrompt
+            )
+        } catch Trading212CredentialStoreError.keychainStatus(let status)
+            where !allowKeychainPrompt && status == errSecInteractionNotAllowed {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection once."
+            )
+        }
+
+        let existingManualHoldings = realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) }
+        let preview = try await trading212PreviewCoordinator.preview(
+            settings: settings,
+            credentials: credentials,
+            existingManualHoldings: existingManualHoldings,
+            includeMetadata: true,
+            useCache: false
+        )
+        let links = try await trading212BrokerLinkStore.loadSnapshot()
+        let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
+
+        guard !preview.rows.isEmpty || linkedPositionsForAccount.isEmpty else {
+            let result = Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: linkedPositionsForAccount.count,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 returned no positions for an account with linked holdings. StockBar did not delete anything; run Preview Import to review."
+            )
+            await logger.warning("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
+            return result
+        }
+
+        let syncPlan = trading212BrokerSyncPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            tradingInfoBySymbol: tradingInfoBySymbol(),
+            links: links,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
+            syncedAt: Date()
+        )
+        applyTrading212BrokerSyncPlan(syncPlan)
+        if !syncPlan.deletedLinkIDs.isEmpty {
+            _ = try await trading212BrokerLinkStore.removePositions(ids: syncPlan.deletedLinkIDs)
+        }
+
+        let importPlan = settings.autoImportBrokerOnlyHoldings
+            ? trading212BrokerOnlyImportPlanner.plan(
+                existingTrades: realTimeTrades.map(\.trade),
+                preview: preview,
+                importedAt: Date()
+            )
+            : Trading212BrokerOnlyImportPlan(records: [], skippedRows: [])
+        let importedAt = Date()
+        for record in importPlan.records {
+            realTimeTrades.append(RealTimeTrade(trade: record.trade, realTimeInfo: record.tradingInfo))
+            let displayPrice = record.tradingInfo.getCurrentDisplayPrice()
+            if displayPrice.isFinite, displayPrice > 0 {
+                historicalDataManager.recordLivePriceSample(
+                    symbol: record.manualSymbol,
+                    price: displayPrice,
+                    previousClose: record.tradingInfo.prevClosePrice,
+                    timestamp: importedAt
+                )
+            }
+        }
+        if !importPlan.records.isEmpty {
+            _ = try await trading212BrokerLinkStore.upsertImportedPositions(
+                account: preview.account,
+                positions: importPlan.records.map(\.linkedPosition),
+                linkedAt: importedAt
+            )
+        }
+
+        if syncPlan.changedCount > 0 || !importPlan.records.isEmpty {
+            persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        }
+
+        let result = Trading212HoldingReconciliationResult(
+            syncedCount: syncPlan.tradeUpdates.count,
+            importedCount: importPlan.records.count,
+            deletedCount: syncPlan.deletedManualSymbols.count,
+            missingCount: syncPlan.missingLinkedSymbols.count,
+            brokerOnlyCount: syncPlan.brokerOnlyCount,
+            skippedReason: nil
+        )
+        await logger.info("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    func importBrokerOnlyTrading212Holdings(from preview: Trading212ImportPreview) async throws -> Trading212BrokerOnlyImportResult {
+        let importedAt = Date()
+        let plan = trading212BrokerOnlyImportPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            preview: preview,
+            importedAt: importedAt
+        )
+
+        guard !plan.records.isEmpty else {
+            return Trading212BrokerOnlyImportResult(
+                importedCount: 0,
+                linkedCount: 0,
+                skippedCount: plan.skippedRows.count,
+                importedSymbols: [],
+                skippedRows: plan.skippedRows
+            )
+        }
+
+        for record in plan.records {
+            realTimeTrades.append(RealTimeTrade(trade: record.trade, realTimeInfo: record.tradingInfo))
+            let displayPrice = record.tradingInfo.getCurrentDisplayPrice()
+            if displayPrice.isFinite, displayPrice > 0 {
+                historicalDataManager.recordLivePriceSample(
+                    symbol: record.manualSymbol,
+                    price: displayPrice,
+                    previousClose: record.tradingInfo.prevClosePrice,
+                    timestamp: importedAt
+                )
+            }
+        }
+
+        let linkResult = try await trading212BrokerLinkStore.upsertImportedPositions(
+            account: preview.account,
+            positions: plan.records.map(\.linkedPosition),
+            linkedAt: importedAt
+        )
+        persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        restartTrading212LinkedSyncScheduler(runImmediately: false)
+
+        let result = Trading212BrokerOnlyImportResult(
+            importedCount: plan.records.count,
+            linkedCount: linkResult.linkedCount,
+            skippedCount: plan.skippedRows.count,
+            importedSymbols: plan.records.map(\.manualSymbol),
+            skippedRows: plan.skippedRows
+        )
+        await logger.info("Trading 212 broker-only import: \(result.userMessage)")
+        return result
+    }
+
+    func trading212LinkedMarketRefreshPlan() async -> BrokerLinkedMarketRefreshPlan {
+        let settings = trading212SettingsStore.load()
+        let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
+        guard settings.isEnabled,
               settings.autoSyncEnabled,
-              trading212CredentialStore.hasCredentials(environment: settings.environment) else {
-            return []
+              credentialState.isReadyForBackgroundAccess else {
+            return .empty
         }
 
         do {
             let snapshot = try await trading212BrokerLinkStore.loadSnapshot()
             let accountKeys = Set(snapshot.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
-            return Set(snapshot.positions
-                .filter { accountKeys.contains($0.brokerAccountKey) }
-                .map { $0.manualSymbol.uppercased() })
+            let infoBySymbol = tradingInfoBySymbol()
+            let linkedPositions = snapshot.positions.filter { accountKeys.contains($0.brokerAccountKey) }
+            var skipSymbols: Set<String> = []
+            var extendedSessionSymbols: Set<String> = []
+
+            for position in linkedPositions {
+                let symbol = position.manualSymbol.uppercased()
+                let tradingInfo = infoBySymbol[symbol]
+
+                if BrokerLinkedMarketDataRefreshPolicy.shouldSkipMarketRefresh(
+                    symbol: position.manualSymbol,
+                    tradingInfo: tradingInfo
+                ) {
+                    skipSymbols.insert(symbol)
+                } else {
+                    extendedSessionSymbols.insert(symbol)
+                }
+            }
+
+            return BrokerLinkedMarketRefreshPlan(
+                skipSymbols: skipSymbols,
+                extendedSessionSymbols: extendedSessionSymbols
+            )
         } catch {
             await logger.warning("Failed to load Trading 212 links for market-refresh skip list: \(LogRedactor.redact(error.localizedDescription))")
-            return []
+            return .empty
         }
     }
 
@@ -816,11 +1144,32 @@ class DataModel: ObservableObject {
             if let update = updatesBySymbol[symbolKey], !isBenchmarkTrade(realTimeTrade) {
                 realTimeTrade.trade = update.trade
                 realTimeTrade.realTimeInfo = update.tradingInfo
+                let sampleTimestamp = update.tradingInfo.lastUpdateTime ?? 0
+                let sampleTime = sampleTimestamp > 0
+                    ? Date(timeIntervalSince1970: TimeInterval(sampleTimestamp))
+                    : Date()
+                historicalDataManager.recordLivePriceSample(
+                    symbol: update.manualSymbol,
+                    price: update.tradingInfo.getCurrentDisplayPrice(),
+                    previousClose: update.tradingInfo.prevClosePrice,
+                    timestamp: sampleTime
+                )
             }
             updatedTrades.append(realTimeTrade)
         }
 
         realTimeTrades = updatedTrades
+
+        if !plan.tradeUpdates.isEmpty || !deletedSymbols.isEmpty {
+            let summary = calculateDisplayPortfolioSummary(
+                preferredCurrency: portfolioMenuBarDisplaySettings.currencyCode
+            )
+            historicalDataManager.recordLivePortfolioSample(
+                totalValue: summary.totalValue,
+                totalGains: summary.totalGain,
+                timestamp: Date()
+            )
+        }
     }
 
     private func tradingInfoBySymbol() -> [String: TradingInfo] {
@@ -1315,54 +1664,7 @@ enum PortfolioRestoreError: LocalizedError {
 extension RealTimeTrade {
     /// Infers market state based on current time and symbol timezone
     private func inferMarketState(for symbol: String) -> String? {
-        let now = Date()
-        let calendar = Calendar.current
-
-        // Determine timezone based on symbol
-        let timeZone: TimeZone
-        timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
-
-        let components = calendar.dateComponents(in: timeZone, from: now)
-        let hour = components.hour ?? 12
-        let minute = components.minute ?? 0
-        let weekday = components.weekday ?? 1 // 1 = Sunday, 7 = Saturday
-
-        // Check if weekend
-        if weekday == 1 || weekday == 7 {
-            return "CLOSED"
-        }
-
-        if SymbolMetadata.isUKSymbol(symbol) {
-            // LSE hours (London time)
-            // Pre-market: 7:00-8:00
-            // Regular: 8:00-16:30
-            // Post-market: 16:30-17:30
-            // Closed: 17:30-7:00
-            if hour >= 7 && hour < 8 {
-                return "PRE"
-            } else if hour >= 8 && (hour < 16 || (hour == 16 && minute < 30)) {
-                return "REGULAR"
-            } else if (hour == 16 && minute >= 30) || (hour == 17 && minute < 30) {
-                return "POST"
-            } else {
-                return "CLOSED"
-            }
-        } else {
-            // US market hours (Eastern time)
-            // Pre-market: 4:00-9:30
-            // Regular: 9:30-16:00
-            // Post-market: 16:00-20:00
-            // Closed: 20:00-4:00
-            if hour >= 4 && (hour < 9 || (hour == 9 && minute < 30)) {
-                return "PRE"
-            } else if (hour == 9 && minute >= 30) || (hour >= 10 && hour < 16) {
-                return "REGULAR"
-            } else if hour >= 16 && hour < 20 {
-                return "POST"
-            } else {
-                return "CLOSED"
-            }
-        }
+        BrokerLinkedMarketDataRefreshPolicy.inferredMarketState(for: symbol)
     }
 
     @MainActor

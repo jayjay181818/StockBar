@@ -32,9 +32,12 @@ struct PythonConfiguration: Sendable {
     static func load() -> PythonConfiguration {
         let defaults = UserDefaults.standard
         let path = defaults.string(forKey: "pythonInterpreterPath") ?? defaultInterpreterPath
+        var environment: [String: String] = [:]
+        if let configPath = ConfigurationManager.shared.getConfigFilePath() {
+            environment["STOCKBAR_CONFIG_FILE"] = configPath
+        }
         
-        // We could also load environment overrides here if needed
-        return PythonConfiguration(interpreterPath: path)
+        return PythonConfiguration(interpreterPath: path, environment: environment)
     }
     
     /// Saves the configuration to UserDefaults

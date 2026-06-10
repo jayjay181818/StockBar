@@ -237,12 +237,169 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertEqual(settings.syncIntervalSeconds, 30)
     }
 
+    func testTrading212SettingsDefaultToManualHoldingReconciliation() {
+        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let settings = Trading212SettingsStore(defaults: defaults).load()
+
+        XCTAssertFalse(settings.autoReconcileHoldingsEnabled)
+        XCTAssertFalse(settings.autoImportBrokerOnlyHoldings)
+        XCTAssertEqual(settings.holdingReconciliationIntervalSeconds, 3_600)
+    }
+
+    func testTrading212SettingsStorePersistsHourlyHoldingReconciliation() {
+        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = Trading212SettingsStore(defaults: defaults)
+
+        var settings = Trading212StoredSettings.defaults
+        settings.autoReconcileHoldingsEnabled = true
+        settings.autoImportBrokerOnlyHoldings = true
+        settings.holdingReconciliationIntervalSeconds = 3_600
+        store.save(settings)
+
+        let reloaded = store.load()
+        XCTAssertTrue(reloaded.autoReconcileHoldingsEnabled)
+        XCTAssertTrue(reloaded.autoImportBrokerOnlyHoldings)
+        XCTAssertEqual(reloaded.holdingReconciliationIntervalSeconds, 3_600)
+    }
+
     func testTrading212SettingsStoreIgnoresLegacyMinuteIntervalForBrokerSyncDefault() {
         let defaults = UserDefaults(suiteName: "Trading212SyncSettingsTests.\(UUID().uuidString)")!
         defaults.set(5, forKey: "trading212.syncIntervalMinutes")
         let settings = Trading212SettingsStore(defaults: defaults).load()
 
         XCTAssertEqual(settings.syncIntervalSeconds, 30)
+    }
+
+    func testLinkedBrokerHoldingAllowsMarketRefreshDuringUSPreMarket() {
+        let preMarket = makeDate(year: 2026, month: 5, day: 13, hour: 8, minute: 0, timeZone: "America/New_York")
+
+        let shouldSkip = BrokerLinkedMarketDataRefreshPolicy.shouldSkipMarketRefresh(
+            symbol: "MU",
+            tradingInfo: TradingInfo(),
+            now: preMarket
+        )
+
+        XCTAssertFalse(shouldSkip)
+    }
+
+    func testLinkedBrokerHoldingAllowsMarketRefreshDuringUSPostMarket() {
+        let postMarket = makeDate(year: 2026, month: 5, day: 13, hour: 17, minute: 0, timeZone: "America/New_York")
+
+        let shouldSkip = BrokerLinkedMarketDataRefreshPolicy.shouldSkipMarketRefresh(
+            symbol: "MU",
+            tradingInfo: TradingInfo(),
+            now: postMarket
+        )
+
+        XCTAssertFalse(shouldSkip)
+    }
+
+    func testLinkedBrokerHoldingSkipsMarketRefreshDuringRegularSession() {
+        let regularSession = makeDate(year: 2026, month: 5, day: 13, hour: 10, minute: 0, timeZone: "America/New_York")
+
+        let shouldSkip = BrokerLinkedMarketDataRefreshPolicy.shouldSkipMarketRefresh(
+            symbol: "MU",
+            tradingInfo: TradingInfo(),
+            now: regularSession
+        )
+
+        XCTAssertTrue(shouldSkip)
+    }
+
+    func testBrokerOnlyImportPlannerCreatesLSEHoldingAndLinkWithPenceNormalization() throws {
+        let importedAt = Date(timeIntervalSince1970: 300)
+        let row = makeBrokerOnlyRow(
+            instrumentId: "LSE:COPG",
+            providerTicker: "COPGl_EQ",
+            displaySymbol: "COPG",
+            displayName: "Global X Copper Miners",
+            quantity: 80.89145669,
+            averagePrice: 4_940.8,
+            brokerPrice: 4_893.6,
+            currentValue: 3_958.50
+        )
+
+        let plan = Trading212BrokerOnlyImportPlanner().plan(
+            existingTrades: [],
+            preview: makePreview(rows: [row]),
+            importedAt: importedAt
+        )
+
+        XCTAssertEqual(plan.importedCount, 1)
+        XCTAssertTrue(plan.skippedRows.isEmpty)
+        let record = try XCTUnwrap(plan.records.first)
+        XCTAssertEqual(record.manualSymbol, "COPG.L")
+        XCTAssertEqual(record.trade.name, "COPG.L")
+        XCTAssertEqual(record.trade.position.unitSizeString, "80.89145669")
+        XCTAssertEqual(record.trade.position.positionAvgCostString, "49.408")
+        XCTAssertEqual(record.trade.position.currency, "GBP")
+        XCTAssertEqual(record.trade.position.costCurrency, "GBP")
+        XCTAssertEqual(record.tradingInfo.currentPrice, 48.936, accuracy: 0.0001)
+        XCTAssertEqual(record.tradingInfo.currency, "GBP")
+        XCTAssertEqual(record.linkedPosition.instrumentId, "LSE:COPG")
+        XCTAssertEqual(record.linkedPosition.providerTicker, "COPGl_EQ")
+        XCTAssertEqual(record.linkedPosition.manualSymbol, "COPG.L")
+    }
+
+    func testBrokerOnlyImportPlannerSkipsDuplicateManualSymbol() {
+        let row = makeBrokerOnlyRow(
+            instrumentId: "US:HIMS",
+            providerTicker: "OAC_US_EQ",
+            displaySymbol: "HIMS",
+            displayName: "Hims & Hers Health",
+            quantity: 25,
+            averagePrice: 42,
+            brokerPrice: 50,
+            currentValue: 1_250
+        )
+
+        let plan = Trading212BrokerOnlyImportPlanner().plan(
+            existingTrades: [
+                Trade(name: "HIMS", position: Position(unitSize: "50", positionAvgCost: "46.47", currency: "USD"))
+            ],
+            preview: makePreview(rows: [row]),
+            importedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertTrue(plan.records.isEmpty)
+        XCTAssertEqual(plan.skippedRows, ["OAC_US_EQ: HIMS already exists"])
+    }
+
+    func testLinkMatchedHoldingsAllowsBrokerOnlyRowsInSamePreview() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("broker-link-tests-\(UUID().uuidString)")
+            .appendingPathComponent("broker_links.json")
+        let store = BrokerLinkStore(fileURL: fileURL)
+        let matched = makePreview(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            quantity: 500,
+            averagePrice: 486.26,
+            brokerPrice: 620,
+            currentValue: 3_100
+        ).rows[0]
+        let brokerOnly = makeBrokerOnlyRow(
+            instrumentId: "US:HIMS",
+            providerTicker: "OAC_US_EQ",
+            displaySymbol: "HIMS",
+            displayName: "Hims & Hers Health",
+            quantity: 25,
+            averagePrice: 42,
+            brokerPrice: 50,
+            currentValue: 1_250
+        )
+        let preview = makePreview(rows: [matched, brokerOnly])
+
+        let result = try await store.linkMatchedHoldings(from: preview, linkedAt: Date(timeIntervalSince1970: 400))
+        let snapshot = try await store.loadSnapshot()
+
+        XCTAssertEqual(result.linkedCount, 1)
+        XCTAssertEqual(snapshot.positions.map(\.manualSymbol), ["AV.L"])
     }
 
     private func makeLinkedAccount(linkedAt: Date) -> BrokerLinkedAccount {
@@ -333,6 +490,38 @@ final class Trading212BrokerSyncTests: XCTestCase {
         )
     }
 
+    private func makeBrokerOnlyRow(
+        instrumentId: String,
+        providerTicker: String,
+        displaySymbol: String,
+        displayName: String,
+        quantity: Double,
+        averagePrice: Double,
+        brokerPrice: Double,
+        currentValue: Double
+    ) -> Trading212ImportPreviewRow {
+        Trading212ImportPreviewRow(
+            id: "Trading212|live|isa|hash|credential|account|\(instrumentId)",
+            account: makeAccount(),
+            providerTicker: providerTicker,
+            instrumentId: instrumentId,
+            displaySymbol: displaySymbol,
+            displayName: displayName,
+            quantity: quantity,
+            averagePrice: averagePrice,
+            brokerProvidedPrice: brokerPrice,
+            currentValue: currentValue,
+            unrealizedProfitLoss: nil,
+            fxImpact: nil,
+            mappingConfidence: .high,
+            manualMatch: nil,
+            additionalManualMatchCount: 0,
+            conflictStatus: .none,
+            valueSource: .brokerProvidedLivePositionData,
+            warnings: []
+        )
+    }
+
     private func makeAccount() -> BrokerAccountIdentity {
         BrokerAccountIdentity(
             broker: "Trading212",
@@ -344,5 +533,24 @@ final class Trading212BrokerSyncTests: XCTestCase {
             environment: .live,
             credentialFingerprint: "credential"
         )
+    }
+
+    private func makeDate(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        timeZone: String
+    ) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZone)!
+        return calendar.date(from: DateComponents(
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute
+        ))!
     }
 }

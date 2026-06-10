@@ -28,9 +28,11 @@ actor PythonProcessRunner: PythonProcessRunning {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
-        if !environment.isEmpty {
-            process.environment = environment
+        var processEnvironment = ProcessInfo.processInfo.environment
+        environment.forEach { key, value in
+            processEnvironment[key] = value
         }
+        process.environment = processEnvironment
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()

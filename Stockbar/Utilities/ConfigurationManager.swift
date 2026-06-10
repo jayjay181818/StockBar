@@ -1,19 +1,30 @@
 import Foundation
 
 /// Manages storage of configuration data like API keys
-/// Uses plain-text JSON file storage in user's Documents directory
+/// Uses local app support JSON storage for non-broker market-data settings.
 public final class ConfigurationManager: @unchecked Sendable {
     public static let shared = ConfigurationManager()
     private let fileManager = FileManager.default
 
     private init() {}
 
-    /// Gets the configuration file URL in the user's Documents directory
+    /// Gets the configuration file URL in Stockbar's Application Support directory.
     private func getConfigFileURL() -> URL? {
-        guard let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return nil
+        if let appSupportPath = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let bundlePathComponent = Bundle.main.bundleIdentifier?.isEmpty == false
+                ? Bundle.main.bundleIdentifier!
+                : "com.fhl43211.Stockbar"
+            let directory = appSupportPath.appendingPathComponent(bundlePathComponent, isDirectory: true)
+
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+                return directory.appendingPathComponent(".stockbar_config.json")
+            } catch {
+                Task { await Logger.shared.error("Failed to create configuration directory: \(error.localizedDescription)") }
+            }
         }
-        return documentsPath.appendingPathComponent(".stockbar_config.json")
+
+        return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stockbar_config.json")
     }
 
     // MARK: - Generic Helper

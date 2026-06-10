@@ -70,6 +70,42 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(result.currency, "USD")
     }
 
+    func testCalculateNetGainsWithPreMarketDataUsesDisplayPrice() {
+        let trade = Trade(
+            name: "MU",
+            position: Position(unitSize: "10", positionAvgCost: "150", currency: "USD", costCurrency: "USD")
+        )
+        var tradingInfo = TradingInfo()
+        tradingInfo.currentPrice = 170.0
+        tradingInfo.preMarketPrice = 180.0
+        tradingInfo.marketState = "PRE"
+        tradingInfo.currency = "USD"
+
+        trades.append(RealTimeTrade(trade: trade, realTimeInfo: tradingInfo))
+
+        let result = service.calculateNetGains(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(result.amount, 300.0, accuracy: 0.01)
+    }
+
+    func testCalculateNetGainsWithZeroPreMarketPriceFallsBackToCurrentPrice() {
+        let trade = Trade(
+            name: "BABA",
+            position: Position(unitSize: "10", positionAvgCost: "100", currency: "USD", costCurrency: "USD")
+        )
+        var tradingInfo = TradingInfo()
+        tradingInfo.currentPrice = 125.0
+        tradingInfo.preMarketPrice = 0.0
+        tradingInfo.marketState = "PRE"
+        tradingInfo.currency = "USD"
+
+        trades.append(RealTimeTrade(trade: trade, realTimeInfo: tradingInfo))
+
+        let result = service.calculateNetGains(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(result.amount, 250.0, accuracy: 0.01)
+    }
+
     func testCalculateNetGainsWithMultipleStocks() {
         // Stock 1: Profit
         let trade1 = Trade(name: "AAPL", position: Position(unitSize: "10", positionAvgCost: "150", currency: "USD", costCurrency: "USD"))
@@ -147,6 +183,42 @@ class PortfolioCalculationTests: XCTestCase {
         // Expected: 170 * 10 = 1700 USD
         XCTAssertEqual(result.amount, 1700.0, accuracy: 0.01)
         XCTAssertEqual(result.currency, "USD")
+    }
+
+    func testCalculateNetValueWithPreMarketDataUsesDisplayPrice() {
+        let trade = Trade(
+            name: "MU",
+            position: Position(unitSize: "10", positionAvgCost: "150", currency: "USD", costCurrency: "USD")
+        )
+        var tradingInfo = TradingInfo()
+        tradingInfo.currentPrice = 170.0
+        tradingInfo.preMarketPrice = 180.0
+        tradingInfo.marketState = "PRE"
+        tradingInfo.currency = "USD"
+
+        trades.append(RealTimeTrade(trade: trade, realTimeInfo: tradingInfo))
+
+        let result = service.calculateNetValue(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(result.amount, 1800.0, accuracy: 0.01)
+    }
+
+    func testCalculateNetValueWithZeroPreMarketPriceFallsBackToCurrentPrice() {
+        let trade = Trade(
+            name: "BABA",
+            position: Position(unitSize: "10", positionAvgCost: "100", currency: "USD", costCurrency: "USD")
+        )
+        var tradingInfo = TradingInfo()
+        tradingInfo.currentPrice = 125.0
+        tradingInfo.preMarketPrice = 0.0
+        tradingInfo.marketState = "PRE"
+        tradingInfo.currency = "USD"
+
+        trades.append(RealTimeTrade(trade: trade, realTimeInfo: tradingInfo))
+
+        let result = service.calculateNetValue(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(result.amount, 1250.0, accuracy: 0.01)
     }
 
     func testCalculateNetValueWithMultipleStocks() {
@@ -402,6 +474,55 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(summary.currency, "USD")
     }
 
+    func testHoldingsCurrencyFormatterUsesSymbolsSignsAndGrouping() {
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(100_123.56, currency: "USD"), "+$100,123.56")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(-2_763.66, currency: "GBP"), "-£2,763.66")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(1_234.5, currency: "EUR"), "+€1,234.50")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(987.65, currency: "CHF"), "+987.65 CHF")
+    }
+
+    func testHoldingsCurrencyFormatterAddsUsdSecondaryOnlyForNonUsdAmounts() {
+        XCTAssertEqual(
+            HoldingsCurrencyFormatter.amountWithUSDSecondary(
+                132_830.74,
+                currency: "GBP",
+                usdAmount: 179_826.22
+            ),
+            "£132,830.74 ($179,826.22)"
+        )
+        XCTAssertEqual(
+            HoldingsCurrencyFormatter.signedAmountWithUSDSecondary(
+                81_006.93,
+                currency: "GBP",
+                usdAmount: 109_657.25
+            ),
+            "+£81,006.93 (+$109,657.25)"
+        )
+        XCTAssertEqual(
+            HoldingsCurrencyFormatter.amountWithUSDSecondary(
+                1_234.56,
+                currency: "USD",
+                usdAmount: 1_234.56
+            ),
+            "$1,234.56"
+        )
+    }
+
+    func testMenuPopoverFormatterUsesCurrencySymbolsAndGroupingForCompactAmounts() {
+        XCTAssertEqual(
+            MenuPopoverFormatter.currency(103_253.42, currency: "USD", includeSign: true),
+            "+$103,253"
+        )
+        XCTAssertEqual(
+            MenuPopoverFormatter.currency(-31_088.1, currency: "GBP", includeSign: true),
+            "-£31,088"
+        )
+        XCTAssertEqual(
+            MenuPopoverFormatter.currency(1_147.72, currency: "USD"),
+            "$1,147.7"
+        )
+    }
+
     func testPortfolioMenuChartDataBuilder_WithNoHistory_CreatesFlatFallback() {
         // Given
         let now = Date(timeIntervalSince1970: 1_000_000)
@@ -459,7 +580,7 @@ class PortfolioCalculationTests: XCTestCase {
         let sampled = PortfolioMenuChartDataBuilder.prepareChartPoints(
             storedPoints: points,
             currentValue: 1300,
-            range: .day,
+            range: .month,
             now: now,
             maxPoints: 1000
         )
@@ -469,6 +590,478 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(sampled.first?.date, points.first?.date)
         XCTAssertEqual(sampled.last?.date, now)
         XCTAssertEqual(sampled.last?.price, 1300)
+    }
+
+    func testPortfolioMenuChartDataBuilder_DayRangeBucketsIntoTwoMinutePointsAndUsesCurrentEndpoint() {
+        // Given
+        let now = Date(timeIntervalSince1970: 3_600)
+        let rawPoints = [
+            ChartDataPoint(date: Date(timeIntervalSince1970: 3_005), value: 1000),
+            ChartDataPoint(date: Date(timeIntervalSince1970: 3_050), value: 1001),
+            ChartDataPoint(date: Date(timeIntervalSince1970: 3_130), value: 1002),
+            ChartDataPoint(date: Date(timeIntervalSince1970: 3_190), value: 1003)
+        ]
+
+        // When
+        let points = PortfolioMenuChartDataBuilder.prepareChartPoints(
+            storedPoints: rawPoints,
+            currentValue: 1250,
+            range: .day,
+            now: now
+        )
+
+        // Then
+        XCTAssertLessThan(points.count, rawPoints.count + 1)
+        XCTAssertEqual(points.last?.date, now)
+        XCTAssertEqual(points.last?.price, 1250)
+        XCTAssertEqual(points.map(\.price), [1001, 1003, 1250])
+    }
+
+    @MainActor
+    func testHistoricalDataManagerReturnsMemoryLivePortfolioSamplesForMenuChart() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let start = Date().addingTimeInterval(-5 * 60)
+        let expectedValues = (0..<6).map { 987_000.0 + Double($0) }
+
+        for (index, value) in expectedValues.enumerated() {
+            manager.recordLivePortfolioSample(
+                totalValue: value,
+                totalGains: value - 900_000,
+                timestamp: start.addingTimeInterval(Double(index * 30))
+            )
+        }
+
+        // When
+        let samples = manager.getStoredPortfolioValues(for: .day)
+        let sampleValues = samples.map(\.value)
+
+        // Then
+        for value in expectedValues {
+            XCTAssertTrue(
+                sampleValues.contains { abs($0 - value) < 0.0001 },
+                "Expected live portfolio value \(value) to be available to the menu chart"
+            )
+        }
+    }
+
+    @MainActor
+    func testPortfolioMenuValuesDayRangeBuildsSyntheticHistoryFromCurrentHoldings() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let symbolA = "SYNTHA-\(UUID().uuidString)"
+        let symbolB = "SYNTHB-\(UUID().uuidString)"
+        let sampleDates = [
+            now.addingTimeInterval(-20 * 60),
+            now.addingTimeInterval(-16 * 60),
+            now.addingTimeInterval(-12 * 60)
+        ]
+
+        for (index, date) in sampleDates.enumerated() {
+            manager.recordLivePriceSample(
+                symbol: symbolA,
+                price: 100 + Double(index * 10),
+                previousClose: 100,
+                timestamp: date
+            )
+            manager.recordLivePriceSample(
+                symbol: symbolB,
+                price: 200 + Double(index * 5),
+                previousClose: 200,
+                timestamp: date
+            )
+        }
+
+        let trades = [
+            makeRealTimeTrade(symbol: symbolA, units: 10, currentPrice: 140, currency: "USD"),
+            makeRealTimeTrade(symbol: symbolB, units: 5, currentPrice: 230, currency: "USD")
+        ]
+
+        // When
+        let points = manager.getPortfolioMenuValues(
+            for: .day,
+            currentTrades: trades,
+            preferredCurrency: "USD",
+            now: now,
+            scheduleMissingHistoryFetches: false
+        )
+
+        // Then
+        let syntheticValues = [2_000.0, 2_125.0, 2_250.0]
+        for expectedValue in syntheticValues {
+            XCTAssertTrue(
+                points.contains { abs($0.value - expectedValue) < 0.0001 },
+                "Expected synthetic portfolio value \(expectedValue)"
+            )
+        }
+    }
+
+    @MainActor
+    func testPortfolioMenuValuesDayRangeConvertsMixedCurrencySyntheticValues() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let usdSymbol = "SYNTHUSD-\(UUID().uuidString)"
+        let gbpSymbol = "SYNTHGBP-\(UUID().uuidString)"
+        let sampleDates = [
+            now.addingTimeInterval(-15 * 60),
+            now.addingTimeInterval(-13 * 60),
+            now.addingTimeInterval(-11 * 60)
+        ]
+
+        for sampleDate in sampleDates {
+            manager.recordLivePriceSample(symbol: usdSymbol, price: 100, previousClose: 100, timestamp: sampleDate)
+            manager.recordLivePriceSample(symbol: gbpSymbol, price: 50, previousClose: 50, timestamp: sampleDate)
+        }
+
+        let trades = [
+            makeRealTimeTrade(symbol: usdSymbol, units: 10, currentPrice: 120, currency: "USD"),
+            makeRealTimeTrade(symbol: gbpSymbol, units: 10, currentPrice: 60, currency: "GBP")
+        ]
+
+        // When
+        let points = manager.getPortfolioMenuValues(
+            for: .day,
+            currentTrades: trades,
+            preferredCurrency: "USD",
+            now: now,
+            scheduleMissingHistoryFetches: false
+        )
+
+        // Then
+        XCTAssertTrue(
+            points.contains { $0.value > 1_500 && $0.value < 1_900 },
+            "Expected mixed USD/GBP synthetic value to be converted into USD"
+        )
+    }
+
+    @MainActor
+    func testPortfolioMenuValuesDayRangeSkipsLowValueCoverageTimestamps() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let coveredSymbol = "SYNTHLOW-\(UUID().uuidString)"
+        let missingHighValueSymbol = "SYNTHHIGH-\(UUID().uuidString)"
+        let sampleDate = now.addingTimeInterval(-15 * 60)
+
+        manager.recordLivePriceSample(symbol: coveredSymbol, price: 10, previousClose: 10, timestamp: sampleDate)
+
+        let trades = [
+            makeRealTimeTrade(symbol: coveredSymbol, units: 10, currentPrice: 10, currency: "USD"),
+            makeRealTimeTrade(symbol: missingHighValueSymbol, units: 100, currentPrice: 100, currency: "USD")
+        ]
+
+        // When
+        let points = manager.getPortfolioMenuValues(
+            for: .day,
+            currentTrades: trades,
+            preferredCurrency: "USD",
+            now: now,
+            scheduleMissingHistoryFetches: false
+        )
+
+        // Then
+        XCTAssertFalse(
+            points.contains { abs($0.value - 100.0) < 0.0001 },
+            "Low coverage point should be skipped instead of drawing a misleading portfolio value"
+        )
+    }
+
+    @MainActor
+    func testPortfolioMenuValuesWeekRangeKeepsStoredPortfolioBehavior() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let symbol = "SYNTHWEEK-\(UUID().uuidString)"
+        let sampleDate = now.addingTimeInterval(-15 * 60)
+        let syntheticOnlyValue = 4_321.0
+
+        manager.recordLivePriceSample(symbol: symbol, price: syntheticOnlyValue, previousClose: syntheticOnlyValue, timestamp: sampleDate)
+        let trades = [makeRealTimeTrade(symbol: symbol, units: 1, currentPrice: syntheticOnlyValue, currency: "USD")]
+
+        // When
+        let points = manager.getPortfolioMenuValues(
+            for: .week,
+            currentTrades: trades,
+            preferredCurrency: "USD",
+            now: now,
+            scheduleMissingHistoryFetches: false
+        )
+
+        // Then
+        XCTAssertFalse(
+            points.contains { abs($0.value - syntheticOnlyValue) < 0.0001 },
+            "Week range should not synthesize portfolio values from symbol-level menu samples"
+        )
+    }
+
+    @MainActor
+    func testPortfolioMenuHistoryFetchCandidatesExcludeWatchlistRows() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let heldSymbol = "FETCHHELD-\(UUID().uuidString)"
+        let watchlistSymbol = "FETCHWATCH-\(UUID().uuidString)"
+        let trades = [
+            makeRealTimeTrade(symbol: heldSymbol, units: 10, currentPrice: 100, currency: "USD"),
+            makeRealTimeTrade(symbol: watchlistSymbol, units: 10, currentPrice: 100, currency: "USD", isWatchlistOnly: true)
+        ]
+
+        // When
+        let candidates = manager.portfolioMenuHistoryFetchCandidates(
+            currentTrades: trades,
+            startDate: now.addingTimeInterval(-24 * 60 * 60),
+            endDate: now
+        )
+
+        // Then
+        XCTAssertTrue(candidates.contains(heldSymbol))
+        XCTAssertFalse(candidates.contains(watchlistSymbol))
+    }
+
+    func testMenuChartDataBuilder_DayRangeBucketsIntoTwoMinutePointsAndUsesCurrentEndpoint() {
+        // Given
+        let now = Date(timeIntervalSince1970: 3_600)
+        let storedPoints = [
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_005), price: 100, symbol: "BABA"),
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_050), price: 101, symbol: "BABA"),
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_130), price: 102, symbol: "BABA"),
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_190), price: 103, symbol: "BABA")
+        ]
+
+        // When
+        let points = MenuChartDataBuilder.preparePricePoints(
+            storedPoints: storedPoints,
+            currentPrice: 111,
+            symbol: "BABA",
+            range: .day,
+            now: now
+        )
+
+        // Then
+        XCTAssertEqual(points.map(\.price), [101, 103, 111])
+        XCTAssertEqual(points.last?.date, now)
+    }
+
+    func testMenuChartDataBuilder_WeekRangePreservesStoredPointsAndUsesCurrentEndpoint() {
+        // Given
+        let now = Date(timeIntervalSince1970: 3_600)
+        let storedPoints = [
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_005), price: 100, symbol: "BABA"),
+            MenuChartDataPoint(date: Date(timeIntervalSince1970: 3_050), price: 101, symbol: "BABA")
+        ]
+
+        // When
+        let points = MenuChartDataBuilder.preparePricePoints(
+            storedPoints: storedPoints,
+            currentPrice: 111,
+            symbol: "BABA",
+            range: .week,
+            now: now
+        )
+
+        // Then
+        XCTAssertEqual(points.map(\.price), [100, 101, 111])
+        XCTAssertEqual(points.last?.date, now)
+    }
+
+    @MainActor
+    func testHistoricalDataManagerReturnsMemoryLiveSamplesForMenuChart() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "TESTLIVE-\(UUID().uuidString)"
+        let start = Date(timeIntervalSince1970: 10_000)
+        let end = start.addingTimeInterval(300)
+
+        for index in 0..<10 {
+            manager.recordLivePriceSample(
+                symbol: symbol,
+                price: 100 + Double(index),
+                previousClose: 100,
+                timestamp: start.addingTimeInterval(Double(index * 30))
+            )
+        }
+
+        // When
+        let samples = manager.getPriceSnapshots(for: symbol, from: start, to: end)
+
+        // Then
+        XCTAssertEqual(samples.count, 10)
+        XCTAssertEqual(samples.map(\.price), (0..<10).map { 100 + Double($0) })
+    }
+
+    @MainActor
+    func testIndividualStockChartDataIncludesMemoryLiveSamples() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "TESTCHARTLIVE-\(UUID().uuidString)"
+        let storedStart = Date().addingTimeInterval(-90 * 60)
+        let storedSnapshots = (0..<10).map { index in
+            PriceSnapshot(
+                timestamp: storedStart.addingTimeInterval(Double(index * 300)),
+                price: 100 + Double(index),
+                previousClose: 100,
+                symbol: symbol
+            )
+        }
+        manager.addImportedSnapshots(storedSnapshots, for: symbol)
+
+        manager.recordLivePriceSample(
+            symbol: symbol,
+            price: 250,
+            previousClose: 100,
+            timestamp: Date().addingTimeInterval(-60)
+        )
+        manager.recordLivePriceSample(
+            symbol: symbol,
+            price: 251,
+            previousClose: 100,
+            timestamp: Date().addingTimeInterval(-30)
+        )
+
+        // When
+        let points = manager.getChartData(for: .individualStock(symbol), timeRange: .day)
+
+        // Then
+        XCTAssertTrue(points.contains { abs($0.value - 250) < 0.0001 })
+        XCTAssertTrue(points.contains { abs($0.value - 251) < 0.0001 })
+    }
+
+    @MainActor
+    func testImportedSameDaySnapshotsMergeByTimestampNotDay() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "TESTBACKFILL-\(UUID().uuidString)"
+        let dayStart = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let afternoonStart = dayStart.addingTimeInterval(14 * 60 * 60)
+        let existingSnapshots = (0..<10).map { index in
+            PriceSnapshot(
+                timestamp: afternoonStart.addingTimeInterval(Double(index * 60)),
+                price: 200 + Double(index),
+                previousClose: 200,
+                symbol: symbol
+            )
+        }
+        manager.addImportedSnapshots(existingSnapshots, for: symbol)
+
+        let backfilledMorningSnapshots = (0..<3).map { index in
+            PriceSnapshot(
+                timestamp: dayStart.addingTimeInterval(Double(index * 60)),
+                price: 150 + Double(index),
+                previousClose: 150,
+                symbol: symbol
+            )
+        }
+
+        // When
+        manager.addImportedSnapshots(backfilledMorningSnapshots, for: symbol)
+        let snapshots = manager.getPriceSnapshots(
+            for: symbol,
+            from: dayStart,
+            to: dayStart.addingTimeInterval(24 * 60 * 60)
+        )
+
+        // Then
+        XCTAssertEqual(snapshots.count, existingSnapshots.count + backfilledMorningSnapshots.count)
+        for expectedPrice in [150.0, 151.0, 152.0] {
+            XCTAssertTrue(
+                snapshots.contains { abs($0.price - expectedPrice) < 0.0001 },
+                "Expected same-day backfilled price \(expectedPrice) to be retained"
+            )
+        }
+    }
+
+    @MainActor
+    func testMenuPriceHistoryFetchCandidateIsTrueWhenNoSnapshotsAreAvailable() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "EMPTYMENU-\(UUID().uuidString)"
+        let now = Date()
+
+        // When
+        let shouldFetch = manager.shouldFetchMenuPriceHistory(
+            for: symbol,
+            from: now.addingTimeInterval(-24 * 60 * 60),
+            to: now
+        )
+
+        // Then
+        XCTAssertTrue(shouldFetch)
+    }
+
+    @MainActor
+    func testMenuPriceHistoryFetchCandidateIsFalseWhenEnoughSnapshotsAreAvailable() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "FILLEDMENU-\(UUID().uuidString)"
+        let start = Date(timeIntervalSince1970: 20_000)
+        let end = start.addingTimeInterval(600)
+
+        for index in 0..<10 {
+            manager.recordLivePriceSample(
+                symbol: symbol,
+                price: 200 + Double(index),
+                previousClose: 200,
+                timestamp: start.addingTimeInterval(Double(index * 60))
+            )
+        }
+
+        // When
+        let shouldFetch = manager.shouldFetchMenuPriceHistory(for: symbol, from: start, to: end)
+
+        // Then
+        XCTAssertFalse(shouldFetch)
+    }
+
+    @MainActor
+    func testMenuChartSelectionSurvivesViewModelRecreationForSameSymbol() {
+        // Given
+        let manager = HistoricalDataManager.shared
+        let symbol = "RANGE-\(UUID().uuidString)"
+        let start = Date(timeIntervalSince1970: 30_000)
+
+        for index in 0..<10 {
+            manager.recordLivePriceSample(
+                symbol: symbol,
+                price: 300 + Double(index),
+                previousClose: 300,
+                timestamp: start.addingTimeInterval(Double(index * 60))
+            )
+        }
+
+        let suiteName = "StockbarTests.MenuChartRange.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let selectionStore = MenuChartTimeRangeSelectionStore(defaults: defaults)
+        let firstViewModel = MenuChartViewModel(
+            symbol: symbol,
+            currentPrice: 310,
+            benchmarkSymbol: nil,
+            timeRangeSelectionStore: selectionStore
+        )
+        firstViewModel.setTimeRange(.week)
+
+        // When
+        let recreatedViewModel = MenuChartViewModel(
+            symbol: symbol,
+            currentPrice: 311,
+            benchmarkSymbol: nil,
+            timeRangeSelectionStore: selectionStore
+        )
+
+        // Then
+        XCTAssertEqual(recreatedViewModel.selectedTimeRange, .week)
+    }
+
+    func testStockbarMainSectionIncludesSettingsDestination() {
+        // Given / When
+        let sections = StockbarMainSection.allCases
+
+        // Then
+        XCTAssertTrue(sections.contains(.settings))
+        XCTAssertEqual(StockbarMainSection.settings.title, "Settings")
+        XCTAssertEqual(StockbarMainSection.settings.systemImage, "gearshape")
     }
 
     // MARK: - Portfolio Persistence Safety
@@ -545,6 +1138,32 @@ class PortfolioCalculationTests: XCTestCase {
             trade: trade,
             realTimeInfo: makeTradingInfo(currentPrice: currentPrice, previousClose: previousClose, currency: currency)
         )
+    }
+
+    private func makeRealTimeTrade(
+        symbol: String,
+        units: Double,
+        currentPrice: Double,
+        currency: String,
+        isWatchlistOnly: Bool = false
+    ) -> RealTimeTrade {
+        var tradingInfo = TradingInfo()
+        tradingInfo.currentPrice = currentPrice
+        tradingInfo.prevClosePrice = currentPrice
+        tradingInfo.currency = currency
+
+        let trade = Trade(
+            name: symbol,
+            position: Position(
+                unitSize: String(units),
+                positionAvgCost: String(currentPrice),
+                currency: currency,
+                costCurrency: currency
+            ),
+            isWatchlistOnly: isWatchlistOnly
+        )
+
+        return RealTimeTrade(trade: trade, realTimeInfo: tradingInfo)
     }
 
     private func makeTradingInfo(

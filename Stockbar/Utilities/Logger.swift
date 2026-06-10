@@ -6,6 +6,15 @@ public enum LogLevel: String {
     case info
     case warning
     case error
+
+    fileprivate var priority: Int {
+        switch self {
+        case .debug: return 0
+        case .info: return 1
+        case .warning: return 2
+        case .error: return 3
+        }
+    }
     
     var emoji: String {
         switch self {
@@ -20,14 +29,25 @@ public enum LogLevel: String {
 /// A logging service for the application
 public actor Logger {
     public static let shared = Logger()
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
     private let dateFormatter: DateFormatter
+    private let logFileURL: URL?
     private var logCounter = 0
     
-    private init() {
+    private init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
         dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        Self.scrubPersistedLogFiles(fileManager: .default)
+        logFileURL = Self.resolveLogDirectoryURL(fileManager: fileManager)?
+            .appendingPathComponent("stockbar.log")
+        Self.scrubPersistedLogFiles(fileManager: fileManager)
+    }
+
+    public static var isDebugLoggingEnabled: Bool {
+        let environmentValue = ProcessInfo.processInfo.environment["STOCKBAR_DEBUG_LOGGING"]?.lowercased()
+        return environmentValue == "1" ||
+            environmentValue == "true" ||
+            UserDefaults.standard.bool(forKey: "stockbar.debugLoggingEnabled")
     }
     
     /// Logs a message with the specified level
@@ -44,6 +64,8 @@ public actor Logger {
         function: String = #function,
         line: Int = #line
     ) {
+        guard shouldLog(level) else { return }
+
         let timestamp = dateFormatter.string(from: Date())
         let filename = (file as NSString).lastPathComponent
         let safeMessage = LogRedactor.redact(message)
@@ -57,6 +79,13 @@ public actor Logger {
         
         // Write to file
         writeToLogFile(logMessage)
+    }
+
+    private func shouldLog(_ level: LogLevel) -> Bool {
+        if level == .debug {
+            return Self.isDebugLoggingEnabled
+        }
+        return level.priority >= LogLevel.info.priority
     }
     
     private func writeToLogFile(_ message: String) {
@@ -87,7 +116,7 @@ public actor Logger {
     }
     
     private func getLogFileURL() -> URL? {
-        return getLogDirectoryURL()?.appendingPathComponent("stockbar.log")
+        return logFileURL
     }
 
     private func getLogDirectoryURL() -> URL? {
@@ -95,7 +124,7 @@ public actor Logger {
     }
 
     private static func resolveLogDirectoryURL(fileManager: FileManager) -> URL? {
-        guard let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        guard let libraryURL = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first else {
             return nil
         }
 
@@ -105,20 +134,22 @@ public actor Logger {
         } else {
             bundlePathComponent = "Stockbar"
         }
-        let appSupportURL = baseURL.appendingPathComponent(bundlePathComponent, isDirectory: true)
+        let logsURL = libraryURL
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent(bundlePathComponent, isDirectory: true)
 
-        if !fileManager.fileExists(atPath: appSupportURL.path) {
+        if !fileManager.fileExists(atPath: logsURL.path) {
             do {
-                try fileManager.createDirectory(at: appSupportURL, withIntermediateDirectories: true, attributes: nil)
+                try fileManager.createDirectory(at: logsURL, withIntermediateDirectories: true, attributes: nil)
             } catch {
                 #if DEBUG
-                print("Logger failed to create Application Support directory: \(error.localizedDescription)")
+                print("Logger failed to create Logs directory: \(error.localizedDescription)")
                 #endif
                 return nil
             }
         }
 
-        return appSupportURL
+        return logsURL
     }
 
     private static func scrubPersistedLogFiles(fileManager: FileManager) {
@@ -313,17 +344,14 @@ public actor Logger {
                 // Rotate if file is larger than 10MB
                 if fileSize > 10_000_000 {
                     rotateLogFiles(currentLogURL: logFileURL)
+                    logCounter = 0
                     return
                 }
             }
 
-            let data = try Data(contentsOf: logFileURL)
-            let newlineCount = data.reduce(0) { count, byte in
-                byte == 10 ? count + 1 : count
-            }
-
-            if newlineCount > 10000 {
+            if logCounter >= 10_000 {
                 rotateLogFiles(currentLogURL: logFileURL)
+                logCounter = 0
             }
         } catch {
             // Silent failure to avoid logging loops

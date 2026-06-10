@@ -64,13 +64,15 @@ actor CacheCoordinator {
     // MARK: - Cache Decision Logic
 
     /// Determines if a symbol should be refreshed based on cache state
-    func shouldRefresh(symbol: String, at time: Date) -> Bool {
+    func shouldRefresh(symbol: String, at time: Date, freshnessInterval: TimeInterval? = nil) -> Bool {
+        let activeCacheInterval = max(0, freshnessInterval ?? cacheInterval)
+
         // Check if we have a recent successful fetch
         if let lastSuccess = lastSuccessfulFetch[symbol] {
             let timeSinceSuccess = time.timeIntervalSince(lastSuccess)
 
             // If cache is still fresh, don't refresh
-            if timeSinceSuccess < cacheInterval {
+            if timeSinceSuccess < activeCacheInterval {
                 return false
             }
 
