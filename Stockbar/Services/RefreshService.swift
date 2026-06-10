@@ -95,12 +95,15 @@ class RefreshService {
         let allSymbols = dataModel.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
         let candidateSymbols: [String]
 
+        let brokerRefreshPlan: BrokerLinkedMarketRefreshPlan
+
         if let targetSymbols, !targetSymbols.isEmpty {
+            brokerRefreshPlan = .empty
             let targetSet = Set(targetSymbols.map { $0.uppercased() })
             candidateSymbols = allSymbols.filter { targetSet.contains($0.uppercased()) }
         } else {
-            let linkedBrokerSymbols = await dataModel.trading212LinkedSymbolsShouldSkipMarketRefresh()
-            candidateSymbols = allSymbols.filter { !linkedBrokerSymbols.contains($0.uppercased()) }
+            brokerRefreshPlan = await dataModel.trading212LinkedMarketRefreshPlan()
+            candidateSymbols = allSymbols.filter { !brokerRefreshPlan.skipSymbols.contains($0.uppercased()) }
         }
 
         if candidateSymbols.isEmpty {
@@ -109,7 +112,11 @@ class RefreshService {
         }
 
         for symbol in candidateSymbols {
-            if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
+            let freshnessInterval = brokerRefreshPlan.extendedSessionSymbols.contains(symbol.uppercased())
+                ? refreshInterval
+                : nil
+
+            if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now, freshnessInterval: freshnessInterval) {
                 symbolsToRefresh.append(symbol)
             } else if await cacheCoordinator.shouldRetry(symbol: symbol, at: now) {
                 symbolsToForceRefresh.append(symbol)
@@ -156,9 +163,15 @@ class RefreshService {
                         successfullyRefreshedSymbols.insert(symbol.uppercased())
 
                         // Check price alerts after successful update
-                        let newPrice = dataModel.realTimeTrades[idx].realTimeInfo.currentPrice
+                        let newPrice = dataModel.realTimeTrades[idx].realTimeInfo.getCurrentDisplayPrice()
                         let prevClose = dataModel.realTimeTrades[idx].realTimeInfo.prevClosePrice
                         let currency = dataModel.realTimeTrades[idx].realTimeInfo.currency ?? "USD"
+                        dataModel.historicalDataManager.recordLivePriceSample(
+                            symbol: symbol,
+                            price: newPrice,
+                            previousClose: prevClose,
+                            timestamp: now
+                        )
                         await PriceAlertService.shared.checkAlerts(
                             symbol: symbol,
                             currentPrice: newPrice,
@@ -179,6 +192,14 @@ class RefreshService {
 
             if anySuccessfulUpdate {
                 dataModel.saveTradingInfo()
+                let summary = dataModel.calculateDisplayPortfolioSummary(
+                    preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
+                )
+                dataModel.historicalDataManager.recordLivePortfolioSample(
+                    totalValue: summary.totalValue,
+                    totalGains: summary.totalGain,
+                    timestamp: now
+                )
                 Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
 
                 let randomCheck = Int.random(in: 1...100)
@@ -222,4 +243,67 @@ class RefreshService {
     
     // Legacy support / Staggered refresh placeholders if needed
     // For now, we unify on batch refresh per the optimization plan
+}
+
+struct BrokerLinkedMarketRefreshPlan {
+    let skipSymbols: Set<String>
+    let extendedSessionSymbols: Set<String>
+
+    static let empty = BrokerLinkedMarketRefreshPlan(skipSymbols: [], extendedSessionSymbols: [])
+}
+
+enum BrokerLinkedMarketDataRefreshPolicy {
+    static func shouldSkipMarketRefresh(
+        symbol: String,
+        tradingInfo: TradingInfo?,
+        now: Date = Date()
+    ) -> Bool {
+        let knownState = normalizedState(tradingInfo?.marketState)
+        let inferredState = normalizedState(inferredMarketState(for: symbol, at: now))
+        return !isExtendedMarketState(knownState) && !isExtendedMarketState(inferredState)
+    }
+
+    static func inferredMarketState(for symbol: String, at date: Date = Date()) -> String? {
+        let timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
+        let components = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: date)
+        let hour = components.hour ?? 12
+        let minute = components.minute ?? 0
+        let weekday = components.weekday ?? 1
+
+        guard weekday != 1, weekday != 7 else {
+            return "CLOSED"
+        }
+
+        if SymbolMetadata.isUKSymbol(symbol) {
+            if hour >= 7 && hour < 8 {
+                return "PRE"
+            }
+            if hour >= 8 && (hour < 16 || (hour == 16 && minute < 30)) {
+                return "REGULAR"
+            }
+            if (hour == 16 && minute >= 30) || (hour == 17 && minute < 30) {
+                return "POST"
+            }
+            return "CLOSED"
+        }
+
+        if hour >= 4 && (hour < 9 || (hour == 9 && minute < 30)) {
+            return "PRE"
+        }
+        if (hour == 9 && minute >= 30) || (hour >= 10 && hour < 16) {
+            return "REGULAR"
+        }
+        if hour >= 16 && hour < 20 {
+            return "POST"
+        }
+        return "CLOSED"
+    }
+
+    private static func normalizedState(_ state: String?) -> String? {
+        state?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private static func isExtendedMarketState(_ state: String?) -> Bool {
+        state == "PRE" || state == "POST"
+    }
 }

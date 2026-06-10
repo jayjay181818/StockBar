@@ -341,3 +341,25 @@ extension MenuBarDisplaySettings {
         return String(format: "%+.\(decimalPlaces)f%%", percent)
     }
 }
+
+enum MenuBarVisibilityPolicy {
+    static let requireExternalDisplayKey = "menuBarRequireExternalDisplayForStocks"
+
+    static func shouldShowStockItems(
+        hideAllMenuBarItems: Bool,
+        requireExternalDisplay: Bool,
+        isExternalDisplayConnected: Bool
+    ) -> Bool {
+        guard !hideAllMenuBarItems else { return false }
+        guard requireExternalDisplay else { return true }
+        return isExternalDisplayConnected
+    }
+
+    static func loadRequireExternalDisplay(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: requireExternalDisplayKey) as? Bool ?? false
+    }
+
+    static func saveRequireExternalDisplay(_ value: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(value, forKey: requireExternalDisplayKey)
+    }
+}

@@ -68,9 +68,7 @@ class ChartAnnotationService: ObservableObject {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             storageURL = directory.appendingPathComponent("chart_annotations.json")
         } else {
-            // Fallback to documents
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            storageURL = documents.appendingPathComponent("chart_annotations.json")
+            storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("stockbar_chart_annotations.json")
         }
         
         loadAnnotations()
@@ -147,5 +145,4 @@ class ChartAnnotationService: ObservableObject {
 
 // MARK: - Annotation Entity (Stub for compilation if needed, but not used)
 // Since we cannot modify .xcdatamodeld, we use JSON storage.
-
 

@@ -33,7 +33,254 @@ struct Trading212BrokerSyncResult: Equatable {
         if let skippedReason {
             return skippedReason
         }
-        return "Synced \(updatedCount) linked holdings. Deleted \(deletedCount). Missing \(missingCount). Broker-only \(brokerOnlyCount)."
+        var message = "Synced \(updatedCount) linked holdings. Deleted \(deletedCount). Missing \(missingCount). Broker-only \(brokerOnlyCount)."
+        if brokerOnlyCount > 0 {
+            message += " Run Preview Import to import or link new Trading 212 holdings."
+        }
+        return message
+    }
+}
+
+struct Trading212HoldingReconciliationResult: Equatable {
+    let syncedCount: Int
+    let importedCount: Int
+    let deletedCount: Int
+    let missingCount: Int
+    let brokerOnlyCount: Int
+    let skippedReason: String?
+
+    var userMessage: String {
+        if let skippedReason {
+            return skippedReason
+        }
+        return "Reconciled Trading 212 holdings hourly. Synced \(syncedCount). Imported \(importedCount). Deleted \(deletedCount). Missing \(missingCount). Broker-only \(brokerOnlyCount)."
+    }
+}
+
+struct Trading212BrokerOnlyImportRecord {
+    let manualSymbol: String
+    let trade: Trade
+    let tradingInfo: TradingInfo
+    let linkedPosition: BrokerLinkedPosition
+}
+
+struct Trading212BrokerOnlyImportPlan {
+    let records: [Trading212BrokerOnlyImportRecord]
+    let skippedRows: [String]
+
+    var importedCount: Int { records.count }
+    var skippedCount: Int { skippedRows.count }
+}
+
+struct Trading212BrokerOnlyImportResult: Equatable {
+    let importedCount: Int
+    let linkedCount: Int
+    let skippedCount: Int
+    let importedSymbols: [String]
+    let skippedRows: [String]
+
+    var userMessage: String {
+        guard importedCount > 0 else {
+            if skippedCount > 0 {
+                return "No broker-only holdings were imported. \(skippedCount) row(s) need review before import."
+            }
+            return "No broker-only Trading 212 holdings were available to import."
+        }
+        let symbols = importedSymbols.joined(separator: ", ")
+        var message = "Imported \(importedCount) broker-only Trading 212 holding"
+        message += importedCount == 1 ? "" : "s"
+        message += " and saved \(linkedCount) broker link"
+        message += linkedCount == 1 ? "" : "s"
+        message += symbols.isEmpty ? "." : ": \(symbols)."
+        if skippedCount > 0 {
+            message += " \(skippedCount) row(s) still need review."
+        }
+        return message
+    }
+}
+
+struct Trading212BrokerOnlyImportPlanner {
+    func plan(
+        existingTrades: [Trade],
+        preview: Trading212ImportPreview,
+        importedAt: Date = Date()
+    ) -> Trading212BrokerOnlyImportPlan {
+        let existingSymbols = Set(existingTrades.map { $0.name.uppercased() })
+        var plannedSymbols = Set<String>()
+        var records: [Trading212BrokerOnlyImportRecord] = []
+        var skippedRows: [String] = []
+
+        for row in preview.rows where row.conflictStatus == .none {
+            guard let instrumentId = row.instrumentId else {
+                skippedRows.append("\(row.providerTicker): unresolved instrument")
+                continue
+            }
+            guard let quantity = row.quantity, quantity > 0 else {
+                skippedRows.append("\(row.providerTicker): no positive quantity")
+                continue
+            }
+            let manualSymbol = manualSymbol(for: instrumentId, fallback: row.displaySymbol)
+            let symbolKey = manualSymbol.uppercased()
+            guard !existingSymbols.contains(symbolKey), !plannedSymbols.contains(symbolKey) else {
+                skippedRows.append("\(row.providerTicker): \(manualSymbol) already exists")
+                continue
+            }
+
+            let price = Trading212BrokerValueNormalizer.normalizedBrokerPrice(row: row, instrumentId: instrumentId, manualCurrency: nil)
+            let average = Trading212BrokerValueNormalizer.normalizedBrokerAveragePrice(row: row, instrumentId: instrumentId, manualCurrency: nil)
+            let positionCurrency = average?.currency
+                ?? price?.currency
+                ?? defaultCurrency(for: instrumentId)
+
+            let trade = Trade(
+                name: manualSymbol,
+                position: Position(
+                    unitSize: Trading212BrokerValueNormalizer.format(quantity),
+                    positionAvgCost: Trading212BrokerValueNormalizer.format(average?.amount ?? 0),
+                    currency: positionCurrency,
+                    costCurrency: positionCurrency
+                )
+            )
+
+            var tradingInfo = TradingInfo()
+            tradingInfo.shortName = row.displayName ?? row.displaySymbol
+            tradingInfo.currency = price?.currency ?? positionCurrency
+            if let price {
+                tradingInfo.currentPrice = price.amount
+                tradingInfo.previousClose = price.amount
+                tradingInfo.prevClosePrice = price.amount
+            }
+            let timestamp = Int(importedAt.timeIntervalSince1970)
+            tradingInfo.lastUpdateTime = timestamp
+            tradingInfo.regularMarketTime = timestamp
+
+            let linkedPosition = BrokerLinkedPosition(
+                brokerAccountKey: row.account.brokerAccountKey,
+                instrumentId: instrumentId,
+                displaySymbol: row.displaySymbol,
+                displayName: row.displayName,
+                providerTicker: row.providerTicker,
+                manualSymbol: manualSymbol,
+                manualQuantityAtLink: quantity,
+                brokerQuantityAtLink: quantity,
+                manualAverageCostAtLink: average?.amount,
+                manualCurrency: positionCurrency,
+                linkedAt: importedAt,
+                updatedAt: importedAt
+            )
+
+            records.append(Trading212BrokerOnlyImportRecord(
+                manualSymbol: manualSymbol,
+                trade: trade,
+                tradingInfo: tradingInfo,
+                linkedPosition: linkedPosition
+            ))
+            plannedSymbols.insert(symbolKey)
+        }
+
+        return Trading212BrokerOnlyImportPlan(records: records, skippedRows: skippedRows)
+    }
+
+    private func manualSymbol(for instrumentId: String, fallback: String) -> String {
+        let parts = instrumentId.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else {
+            return fallback.uppercased()
+        }
+        let exchange = parts[0].uppercased()
+        let symbol = parts[1].uppercased()
+        switch exchange {
+        case "LSE":
+            return "\(symbol).L"
+        case "US", "NASDAQ", "NYSE", "AMEX":
+            return symbol
+        default:
+            return fallback.uppercased()
+        }
+    }
+
+    private func defaultCurrency(for instrumentId: String) -> String {
+        instrumentId.uppercased().hasPrefix("LSE:") ? "GBP" : "USD"
+    }
+}
+
+enum Trading212BrokerValueNormalizer {
+    static func normalizedBrokerPrice(
+        row: Trading212ImportPreviewRow,
+        instrumentId: String,
+        manualCurrency: String?
+    ) -> (amount: Double, currency: String)? {
+        guard let rawPrice = row.brokerProvidedPrice, rawPrice.isFinite, rawPrice > 0 else {
+            return nil
+        }
+
+        if isPencePriced(row: row, instrumentId: instrumentId, manualCurrency: manualCurrency) {
+            return (rawPrice / 100.0, "GBP")
+        }
+
+        let currency = normalizedCurrency(manualCurrency)
+            ?? (instrumentId.hasPrefix("LSE:") ? "GBP" : "USD")
+        return (rawPrice, currency == "GBX" ? "GBP" : currency)
+    }
+
+    static func normalizedBrokerAveragePrice(
+        row: Trading212ImportPreviewRow,
+        instrumentId: String,
+        manualCurrency: String?
+    ) -> (amount: Double, currency: String)? {
+        guard let rawAveragePrice = row.averagePrice, rawAveragePrice.isFinite, rawAveragePrice > 0 else {
+            return nil
+        }
+
+        if isPencePriced(row: row, instrumentId: instrumentId, manualCurrency: manualCurrency) {
+            return (rawAveragePrice / 100.0, "GBP")
+        }
+
+        let currency = normalizedCurrency(manualCurrency)
+            ?? (instrumentId.hasPrefix("LSE:") ? "GBP" : "USD")
+        return (rawAveragePrice, currency == "GBX" ? "GBP" : currency)
+    }
+
+    static func normalizedCurrency(_ currency: String?) -> String? {
+        guard let currency = currency?.trimmingCharacters(in: .whitespacesAndNewlines), !currency.isEmpty else {
+            return nil
+        }
+        return currency.uppercased()
+    }
+
+    static func format(_ value: Double) -> String {
+        guard value.isFinite else { return "0" }
+        if value.rounded() == value {
+            return String(format: "%.0f", value)
+        }
+        var text = String(format: "%.8f", value)
+        while text.last == "0" {
+            text.removeLast()
+        }
+        if text.last == "." {
+            text.removeLast()
+        }
+        return text
+    }
+
+    private static func isPencePriced(
+        row: Trading212ImportPreviewRow,
+        instrumentId: String,
+        manualCurrency: String?
+    ) -> Bool {
+        if normalizedCurrency(manualCurrency) == "GBX" {
+            return true
+        }
+        guard instrumentId.hasPrefix("LSE:"),
+              let price = row.brokerProvidedPrice,
+              let quantity = row.quantity,
+              let currentValue = row.currentValue,
+              quantity > 0
+        else {
+            return false
+        }
+        let penceValue = price * quantity / 100.0
+        let poundValue = price * quantity
+        return abs(penceValue - currentValue) < abs(poundValue - currentValue)
     }
 }
 
@@ -167,72 +414,29 @@ struct Trading212BrokerSyncPlanner {
         row: Trading212ImportPreviewRow,
         link: BrokerLinkedPosition
     ) -> (amount: Double, currency: String)? {
-        guard let rawPrice = row.brokerProvidedPrice, rawPrice.isFinite, rawPrice > 0 else {
-            return nil
-        }
-
-        if isPencePriced(row: row, link: link) {
-            return (rawPrice / 100.0, "GBP")
-        }
-
-        let currency = normalizedManualCurrency(link.manualCurrency)
-            ?? (link.instrumentId.hasPrefix("LSE:") ? "GBP" : "USD")
-        return (rawPrice, currency == "GBX" ? "GBP" : currency)
+        Trading212BrokerValueNormalizer.normalizedBrokerPrice(
+            row: row,
+            instrumentId: link.instrumentId,
+            manualCurrency: link.manualCurrency
+        )
     }
 
     private func normalizedBrokerAveragePrice(
         row: Trading212ImportPreviewRow,
         link: BrokerLinkedPosition
     ) -> (amount: Double, currency: String)? {
-        guard let rawAveragePrice = row.averagePrice, rawAveragePrice.isFinite, rawAveragePrice > 0 else {
-            return nil
-        }
-
-        if isPencePriced(row: row, link: link) {
-            return (rawAveragePrice / 100.0, "GBP")
-        }
-
-        let currency = normalizedManualCurrency(link.manualCurrency)
-            ?? (link.instrumentId.hasPrefix("LSE:") ? "GBP" : "USD")
-        return (rawAveragePrice, currency == "GBX" ? "GBP" : currency)
-    }
-
-    private func isPencePriced(row: Trading212ImportPreviewRow, link: BrokerLinkedPosition) -> Bool {
-        if normalizedManualCurrency(link.manualCurrency) == "GBX" {
-            return true
-        }
-        guard link.instrumentId.hasPrefix("LSE:"),
-              let price = row.brokerProvidedPrice,
-              let quantity = row.quantity,
-              let currentValue = row.currentValue,
-              quantity > 0
-        else {
-            return false
-        }
-        let penceValue = price * quantity / 100.0
-        let poundValue = price * quantity
-        return abs(penceValue - currentValue) < abs(poundValue - currentValue)
+        Trading212BrokerValueNormalizer.normalizedBrokerAveragePrice(
+            row: row,
+            instrumentId: link.instrumentId,
+            manualCurrency: link.manualCurrency
+        )
     }
 
     private func normalizedManualCurrency(_ currency: String?) -> String? {
-        guard let currency = currency?.trimmingCharacters(in: .whitespacesAndNewlines), !currency.isEmpty else {
-            return nil
-        }
-        return currency.uppercased()
+        Trading212BrokerValueNormalizer.normalizedCurrency(currency)
     }
 
     private func format(_ value: Double) -> String {
-        guard value.isFinite else { return "0" }
-        if value.rounded() == value {
-            return String(format: "%.0f", value)
-        }
-        var text = String(format: "%.8f", value)
-        while text.last == "0" {
-            text.removeLast()
-        }
-        if text.last == "." {
-            text.removeLast()
-        }
-        return text
+        Trading212BrokerValueNormalizer.format(value)
     }
 }

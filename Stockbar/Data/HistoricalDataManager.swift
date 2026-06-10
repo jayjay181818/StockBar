@@ -71,6 +71,7 @@ class HistoricalDataManager: ObservableObject {
     
     @Published var portfolioSnapshots: [PortfolioSnapshot] = []
     @Published var priceSnapshots: [String: [PriceSnapshot]] = [:]
+    @Published private(set) var priceDataRevision: Int = 0
     
     // MARK: - Enhanced Portfolio Storage
     
@@ -116,6 +117,16 @@ class HistoricalDataManager: ObservableObject {
     
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
+    private var livePriceSamples: [String: [PriceSnapshot]] = [:]
+    private var livePortfolioValueSamples: [ChartDataPoint] = []
+    private var livePortfolioGainSamples: [ChartDataPoint] = []
+    private var menuPriceHistoryFetchRequestTimes: [String: Date] = [:]
+    private var portfolioMenuHistoryFetchRequestTimes: [String: Date] = [:]
+    private let livePriceSampleRetention: TimeInterval = 24 * 60 * 60
+    private let maxLivePriceSamplesPerSymbol = 3_000
+    private let maxLivePortfolioSamples = 3_000
+    private let portfolioMenuHistoryFetchCooldown: TimeInterval = 10 * 60
+    private let menuPriceHistoryFetchCooldown: TimeInterval = 10 * 60
     
     // In init() or a new method, add check for retroactive calculation:
     // This check would ideally be in DataModel or AppDelegate after migration completes.
@@ -734,6 +745,148 @@ class HistoricalDataManager: ObservableObject {
         
         Task { await logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)") }
     }
+
+    /// Records a memory-only price point from live refresh/broker sync paths.
+    /// This improves intraday menu charts without changing persistent snapshot cadence.
+    func recordLivePriceSample(
+        symbol: String,
+        price: Double,
+        previousClose: Double?,
+        timestamp: Date = Date()
+    ) {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !symbolKey.isEmpty, price.isFinite, price > 0 else {
+            Task { await logger.debug("📈 Skipping live price sample for \(symbol) - invalid price \(price)") }
+            return
+        }
+
+        let previousCloseValue: Double
+        if let previousClose, previousClose.isFinite, previousClose > 0 {
+            previousCloseValue = previousClose
+        } else {
+            previousCloseValue = price
+        }
+
+        let sample = PriceSnapshot(
+            timestamp: timestamp,
+            price: price,
+            previousClose: previousCloseValue,
+            volume: nil,
+            symbol: symbolKey
+        )
+
+        var samples = livePriceSamples[symbolKey] ?? []
+        if let last = samples.last, abs(last.timestamp.timeIntervalSince(timestamp)) < 1 {
+            samples[samples.count - 1] = sample
+        } else {
+            samples.append(sample)
+        }
+
+        let cutoff = timestamp.addingTimeInterval(-livePriceSampleRetention)
+        samples = samples
+            .filter { $0.timestamp >= cutoff && $0.price.isFinite && $0.price > 0 }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        if samples.count > maxLivePriceSamplesPerSymbol {
+            samples = Array(samples.suffix(maxLivePriceSamplesPerSymbol))
+        }
+
+        livePriceSamples[symbolKey] = samples
+        notePriceDataChanged(for: symbolKey)
+    }
+
+    /// Records a memory-only portfolio value/gain point from live refresh paths.
+    /// This keeps portfolio menu charts responsive without changing persistent snapshot cadence.
+    func recordLivePortfolioSample(
+        totalValue: Double,
+        totalGains: Double,
+        timestamp: Date = Date()
+    ) {
+        guard totalValue.isFinite, totalValue > 0 else {
+            Task { await logger.debug("📈 Skipping live portfolio sample - invalid value \(totalValue)") }
+            return
+        }
+
+        livePortfolioValueSamples = appendLivePortfolioPoint(
+            ChartDataPoint(date: timestamp, value: totalValue),
+            to: livePortfolioValueSamples,
+            timestamp: timestamp
+        )
+
+        if totalGains.isFinite {
+            livePortfolioGainSamples = appendLivePortfolioPoint(
+                ChartDataPoint(date: timestamp, value: totalGains),
+                to: livePortfolioGainSamples,
+                timestamp: timestamp
+            )
+        }
+    }
+
+    /// Returns display-only portfolio menu values. For 1D, this reconstructs the
+    /// current portfolio over the last day from available symbol snapshots.
+    func getPortfolioMenuValues(
+        for timeRange: ChartTimeRange,
+        currentTrades: [RealTimeTrade],
+        preferredCurrency: String,
+        now: Date = Date(),
+        scheduleMissingHistoryFetches: Bool = true
+    ) -> [ChartDataPoint] {
+        let startDate = timeRange.startDate(from: now)
+        let storedAndLiveValues = storedAndLivePortfolioValues(from: startDate, to: now)
+
+        guard timeRange == .day else {
+            return storedAndLiveValues
+        }
+
+        let positions = portfolioMenuPositions(
+            from: currentTrades,
+            preferredCurrency: preferredCurrency
+        )
+        guard !positions.isEmpty else {
+            return storedAndLiveValues
+        }
+
+        let syntheticValues = syntheticPortfolioMenuValues(
+            positions: positions,
+            preferredCurrency: preferredCurrency,
+            startDate: startDate,
+            endDate: now
+        )
+
+        if scheduleMissingHistoryFetches {
+            schedulePortfolioMenuHistoryFetchesIfNeeded(
+                currentTrades: currentTrades,
+                startDate: startDate,
+                endDate: now,
+                syntheticPointCount: syntheticValues.count
+            )
+        }
+
+        guard syntheticValues.count >= 3 else {
+            return storedAndLiveValues
+        }
+
+        return deduplicatedSortedChartPoints(storedAndLiveValues + syntheticValues)
+    }
+
+    func portfolioMenuHistoryFetchCandidates(
+        currentTrades: [RealTimeTrade],
+        startDate: Date,
+        endDate: Date,
+        minimumPoints: Int = 3
+    ) -> [String] {
+        currentTrades
+            .filter { !$0.trade.isWatchlistOnly && $0.trade.position.unitSize > 0 }
+            .compactMap { realTimeTrade -> String? in
+                let symbol = realTimeTrade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !symbol.isEmpty else { return nil }
+
+                let snapshotCount = allPortfolioMenuPriceSnapshots(for: symbol)
+                    .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+                    .count
+                return snapshotCount < minimumPoints ? symbol : nil
+            }
+    }
     
     func getChartData(for type: ChartType, timeRange: ChartTimeRange, dataModel: DataModel? = nil) -> [ChartDataPoint] {
         switch type {
@@ -893,7 +1046,7 @@ class HistoricalDataManager: ObservableObject {
             return cachedData
         }
         
-        let allSnapshots = priceSnapshots[symbol] ?? []
+        let allSnapshots = deduplicatedSortedSnapshots(storedPriceSnapshots(for: symbol) + livePriceSamples(for: symbol))
         
         // Filter and convert to chart data points
         let filteredData = allSnapshots
@@ -914,11 +1067,7 @@ class HistoricalDataManager: ObservableObject {
         // Trigger historical data fetching if we don't have enough data
         if hasInsufficientData {
             Task { await logger.info("📊 Insufficient stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count)/\(minimumExpectedDataPoints) points. Triggering historical data fetch.") }
-            
-            // Trigger background historical data fetch
-            Task.detached(priority: .background) { [weak self] in
-                await self?.triggerHistoricalDataFetch(for: symbol, timeRange: timeRange, startDate: startDate)
-            }
+            schedulePriceHistoryFetchIfNeeded(for: symbol, timeRange: timeRange, startDate: startDate)
         }
         
         return filteredData
@@ -1630,20 +1779,15 @@ class HistoricalDataManager: ObservableObject {
             priceSnapshots[symbol] = []
         }
         
-        // Get existing days that already have data to avoid duplicates
-        let existingDays = Set(priceSnapshots[symbol]?.map { Calendar.current.startOfDay(for: $0.timestamp) } ?? [])
-        
-        Task { await logger.debug("🔍 DUPLICATE FILTER: \(symbol) has existing data for \(existingDays.count) days") }
-        if !existingDays.isEmpty {
-            let sortedExistingDays = existingDays.sorted()
-            Task { await logger.debug("🔍 DUPLICATE FILTER: First existing day: \(DateFormatter.debug.string(from: sortedExistingDays.first!))") }
-            Task { await logger.debug("🔍 DUPLICATE FILTER: Last existing day: \(DateFormatter.debug.string(from: sortedExistingDays.last!))") }
-        }
-        
-        // Filter out snapshots for days that already have data (preserve existing data)
+        // Filter exact timestamp duplicates while preserving same-day backfills.
+        let existingTimestampKeys = Set(
+            priceSnapshots[symbol]?.map { snapshotTimestampKey($0.timestamp) } ?? []
+        )
+
+        Task { await logger.debug("🔍 DUPLICATE FILTER: \(symbol) has \(existingTimestampKeys.count) existing timestamps") }
+
         let newSnapshots = snapshots.filter { snapshot in
-            let snapshotDay = Calendar.current.startOfDay(for: snapshot.timestamp)
-            return !existingDays.contains(snapshotDay)
+            !existingTimestampKeys.contains(snapshotTimestampKey(snapshot.timestamp))
         }
         
         Task { await logger.debug("🔍 DUPLICATE FILTER: Filtered \(snapshots.count) snapshots down to \(newSnapshots.count) new snapshots for \(symbol)") }
@@ -1662,6 +1806,7 @@ class HistoricalDataManager: ObservableObject {
             
             // Save the updated data
             saveHistoricalData()
+            notePriceDataChanged(for: symbol)
             
             Task { await logger.info("Added \(newSnapshots.count) new historical snapshots for \(symbol) (filtered from \(snapshots.count) total)") }
             
@@ -2453,52 +2598,449 @@ class HistoricalDataManager: ObservableObject {
         // Debug logging
         Task { await logger.debug("📊 GET PORTFOLIO VALUES: totalSnapshots=\(historicalPortfolioSnapshots.count), startDate=\(startDate), timeRange=\(timeRange.rawValue)") }
 
-        let filteredSnapshots = historicalPortfolioSnapshots
-            .filter { $0.date >= startDate }
-            .sorted { $0.date < $1.date }
+        let values = storedAndLivePortfolioValues(from: startDate, to: Date())
 
-        Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(filteredSnapshots.count)") }
+        Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(values.count)") }
 
-        return filteredSnapshots.map { snapshot in
-            ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
-        }
+        return values
     }
     
     /// Gets stored portfolio gains for chart display
     func getStoredPortfolioGains(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
         let startDate = timeRange.startDate()
         
-        let filteredSnapshots = historicalPortfolioSnapshots
+        let storedGains = historicalPortfolioSnapshots
             .filter { $0.date >= startDate }
-            .sorted { $0.date < $1.date }
-        
-        return filteredSnapshots.map { snapshot in
-            ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
-        }
+            .map { snapshot in
+                ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
+            }
+        let liveGains = livePortfolioGainSamples.filter { $0.date >= startDate }
+
+        return deduplicatedSortedChartPoints(storedGains + liveGains)
     }
     
     /// Gets price snapshots for a specific symbol within a time range
     /// Used by MenuPriceChartView for individual stock charts
     func getPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date = Date()) -> [PriceSnapshot] {
-        guard let snapshots = priceSnapshots[symbol] else {
+        let snapshots = storedPriceSnapshots(for: symbol) + livePriceSamples(for: symbol)
+        let filteredSnapshots = deduplicatedSortedSnapshots(snapshots)
+            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+
+        if shouldFetchMenuPriceHistory(for: symbol, from: startDate, to: endDate) {
+            scheduleMenuPriceHistoryFetchIfNeeded(for: symbol, startDate: startDate)
+        }
+
+        guard !snapshots.isEmpty else {
             Task { await logger.debug("📊 No price snapshots found for symbol: \(symbol)") }
             return []
         }
         
-        let filteredSnapshots = snapshots
-            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
-            .sorted { $0.timestamp < $1.timestamp }
-        
         Task { await logger.debug("📊 Retrieved \(filteredSnapshots.count) price snapshots for \(symbol) from \(startDate) to \(endDate)") }
-        
-        // If we have insufficient data, trigger background fetch
-        if filteredSnapshots.count < 10 {
+
+        return filteredSnapshots
+    }
+
+    func shouldFetchMenuPriceHistory(
+        for symbol: String,
+        from startDate: Date,
+        to endDate: Date = Date(),
+        minimumPoints: Int = 10
+    ) -> Bool {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !symbolKey.isEmpty, minimumPoints > 0 else { return false }
+
+        let snapshotCount = deduplicatedSortedSnapshots(
+            storedPriceSnapshots(for: symbolKey) + livePriceSamples(for: symbolKey)
+        )
+        .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        .count
+
+        return snapshotCount < minimumPoints
+    }
+
+    private struct PortfolioMenuPosition {
+        let symbol: String
+        let units: Double
+        let currency: String
+        let currentPrice: Double
+        let currentValueInPreferredCurrency: Double
+    }
+
+    private func storedAndLivePortfolioValues(from startDate: Date, to endDate: Date) -> [ChartDataPoint] {
+        let storedValues = historicalPortfolioSnapshots
+            .filter { $0.date >= startDate && $0.date <= endDate }
+            .map { snapshot in
+                ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
+            }
+        let liveValues = livePortfolioValueSamples.filter { $0.date >= startDate && $0.date <= endDate }
+        return deduplicatedSortedChartPoints(storedValues + liveValues)
+    }
+
+    private func portfolioMenuPositions(
+        from currentTrades: [RealTimeTrade],
+        preferredCurrency: String
+    ) -> [PortfolioMenuPosition] {
+        let converter = CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false)
+
+        return currentTrades.compactMap { realTimeTrade -> PortfolioMenuPosition? in
+            let trade = realTimeTrade.trade
+            guard !trade.isWatchlistOnly else { return nil }
+
+            let symbol = trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let units = trade.position.unitSize
+            let currentPrice = realTimeTrade.realTimeInfo.getCurrentDisplayPrice()
+            guard !symbol.isEmpty,
+                  units.isFinite,
+                  units > 0,
+                  currentPrice.isFinite,
+                  currentPrice > 0 else {
+                return nil
+            }
+
+            let currency = portfolioMenuDisplayCurrency(for: realTimeTrade)
+            let currentValue = convertPortfolioMenuValue(
+                amount: currentPrice * units,
+                from: currency,
+                to: preferredCurrency,
+                converter: converter
+            )
+            guard currentValue.isFinite, currentValue > 0 else {
+                return nil
+            }
+
+            return PortfolioMenuPosition(
+                symbol: symbol,
+                units: units,
+                currency: currency,
+                currentPrice: currentPrice,
+                currentValueInPreferredCurrency: currentValue
+            )
+        }
+    }
+
+    private func syntheticPortfolioMenuValues(
+        positions: [PortfolioMenuPosition],
+        preferredCurrency: String,
+        startDate: Date,
+        endDate: Date
+    ) -> [ChartDataPoint] {
+        let snapshotsBySymbol = Dictionary(uniqueKeysWithValues: positions.map { position in
+            (
+                position.symbol,
+                allPortfolioMenuPriceSnapshots(for: position.symbol)
+                    .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+            )
+        })
+
+        let candidateDates = latestDatesPerBucket(
+            snapshotsBySymbol.values.flatMap { snapshots in snapshots.map(\.timestamp) },
+            bucketSize: 120
+        )
+        guard !candidateDates.isEmpty else { return [] }
+
+        let converter = CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false)
+        let totalCurrentValue = positions
+            .map(\.currentValueInPreferredCurrency)
+            .reduce(0, +)
+        guard totalCurrentValue.isFinite, totalCurrentValue > 0 else { return [] }
+
+        let minimumCoveredPositionCount = max(1, Int(ceil(Double(positions.count) * 0.5)))
+        let tolerance: TimeInterval = 10 * 60
+
+        return candidateDates.compactMap { candidateDate in
+            var coveredPositionCount = 0
+            var coveredCurrentValue = 0.0
+            var syntheticValue = 0.0
+
+            for position in positions {
+                guard let snapshots = snapshotsBySymbol[position.symbol],
+                      let snapshot = latestSnapshot(in: snapshots, atOrBefore: candidateDate, tolerance: tolerance) else {
+                    continue
+                }
+
+                let price = normalizedPortfolioMenuPrice(
+                    snapshot.price,
+                    currentPrice: position.currentPrice,
+                    symbol: position.symbol
+                )
+                guard price.isFinite, price > 0 else {
+                    continue
+                }
+
+                let positionValue = convertPortfolioMenuValue(
+                    amount: price * position.units,
+                    from: position.currency,
+                    to: preferredCurrency,
+                    converter: converter
+                )
+                guard positionValue.isFinite, positionValue > 0 else {
+                    continue
+                }
+
+                coveredPositionCount += 1
+                coveredCurrentValue += position.currentValueInPreferredCurrency
+                syntheticValue += positionValue
+            }
+
+            guard coveredPositionCount >= minimumCoveredPositionCount,
+                  coveredCurrentValue / totalCurrentValue >= 0.7,
+                  syntheticValue.isFinite,
+                  syntheticValue > 0 else {
+                return nil
+            }
+
+            return ChartDataPoint(date: candidateDate, value: syntheticValue)
+        }
+    }
+
+    private func schedulePortfolioMenuHistoryFetchesIfNeeded(
+        currentTrades: [RealTimeTrade],
+        startDate: Date,
+        endDate: Date,
+        syntheticPointCount: Int
+    ) {
+        guard syntheticPointCount < 6 else { return }
+
+        let now = Date()
+        let candidates = portfolioMenuHistoryFetchCandidates(
+            currentTrades: currentTrades,
+            startDate: startDate,
+            endDate: endDate
+        )
+
+        for symbol in candidates {
+            let symbolKey = symbol.uppercased()
+            if let lastRequest = portfolioMenuHistoryFetchRequestTimes[symbolKey],
+               now.timeIntervalSince(lastRequest) < portfolioMenuHistoryFetchCooldown {
+                continue
+            }
+
+            portfolioMenuHistoryFetchRequestTimes[symbolKey] = now
             Task.detached(priority: .background) { [weak self] in
                 await self?.triggerHistoricalDataFetch(for: symbol, timeRange: .day, startDate: startDate)
             }
         }
-        
-        return filteredSnapshots
+    }
+
+    private func scheduleMenuPriceHistoryFetchIfNeeded(for symbol: String, startDate: Date) {
+        schedulePriceHistoryFetchIfNeeded(for: symbol, timeRange: .day, startDate: startDate)
+    }
+
+    private func schedulePriceHistoryFetchIfNeeded(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        startDate: Date
+    ) {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !symbolKey.isEmpty else { return }
+        let requestKey = "\(symbolKey)|\(timeRange.rawValue)"
+
+        let now = Date()
+        if let lastRequest = menuPriceHistoryFetchRequestTimes[requestKey],
+           now.timeIntervalSince(lastRequest) < menuPriceHistoryFetchCooldown {
+            return
+        }
+
+        menuPriceHistoryFetchRequestTimes[requestKey] = now
+        Task.detached(priority: .background) { [weak self] in
+            await self?.triggerHistoricalDataFetch(for: symbol, timeRange: timeRange, startDate: startDate)
+        }
+    }
+
+    private func allPortfolioMenuPriceSnapshots(for symbol: String) -> [PriceSnapshot] {
+        deduplicatedSortedSnapshots(storedPriceSnapshots(for: symbol) + livePriceSamples(for: symbol))
+    }
+
+    private func latestSnapshot(
+        in snapshots: [PriceSnapshot],
+        atOrBefore date: Date,
+        tolerance: TimeInterval
+    ) -> PriceSnapshot? {
+        guard !snapshots.isEmpty else { return nil }
+
+        var lowerBound = 0
+        var upperBound = snapshots.count - 1
+        var candidate: PriceSnapshot?
+
+        while lowerBound <= upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            let snapshot = snapshots[middle]
+
+            if snapshot.timestamp <= date {
+                candidate = snapshot
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle - 1
+            }
+        }
+
+        guard let candidate,
+              date.timeIntervalSince(candidate.timestamp) <= tolerance else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func latestDatesPerBucket(_ dates: [Date], bucketSize: TimeInterval) -> [Date] {
+        guard bucketSize > 0, !dates.isEmpty else { return dates.sorted() }
+
+        var latestByBucket: [Int: Date] = [:]
+        for date in dates {
+            let bucket = Int(floor(date.timeIntervalSince1970 / bucketSize))
+            if let existing = latestByBucket[bucket], existing > date {
+                continue
+            }
+            latestByBucket[bucket] = date
+        }
+
+        return latestByBucket.keys.sorted().compactMap { latestByBucket[$0] }
+    }
+
+    private func normalizedPortfolioMenuPrice(
+        _ price: Double,
+        currentPrice: Double,
+        symbol: String
+    ) -> Double {
+        guard price.isFinite,
+              price > 0,
+              currentPrice.isFinite,
+              currentPrice > 0,
+              SymbolMetadata.isUKSymbol(symbol) else {
+            return price
+        }
+
+        if price > currentPrice * 20.0 {
+            return price / 100.0
+        }
+        if price < currentPrice / 20.0 {
+            return price * 100.0
+        }
+        return price
+    }
+
+    private func portfolioMenuDisplayCurrency(for realTimeTrade: RealTimeTrade) -> String {
+        let symbol = realTimeTrade.trade.name
+        let currency = realTimeTrade.realTimeInfo.currency
+            ?? realTimeTrade.trade.position.currency
+            ?? realTimeTrade.trade.position.costCurrency
+            ?? "USD"
+
+        if SymbolMetadata.isUKSymbol(symbol),
+           ["GBX", "GBPENCE", "GBPENNY", "GBPEN"].contains(currency.uppercased()) || currency == "GBp" {
+            return "GBP"
+        }
+
+        return currency
+    }
+
+    private func convertPortfolioMenuValue(
+        amount: Double,
+        from currency: String,
+        to preferredCurrency: String,
+        converter: CurrencyConverter
+    ) -> Double {
+        let normalizedCurrency = currency.uppercased()
+        let normalizedPreferredCurrency = preferredCurrency.uppercased()
+
+        let amountInUSD: Double
+        if normalizedCurrency == "USD" {
+            amountInUSD = amount
+        } else if normalizedCurrency == "GBX" || normalizedCurrency == "GBPENCE" || currency == "GBp" {
+            amountInUSD = converter.convert(amount: amount / 100.0, from: "GBP", to: "USD")
+        } else {
+            amountInUSD = converter.convert(amount: amount, from: currency, to: "USD")
+        }
+
+        if normalizedPreferredCurrency == "USD" {
+            return amountInUSD
+        }
+        if normalizedPreferredCurrency == "GBX" || normalizedPreferredCurrency == "GBPENCE" || preferredCurrency == "GBp" {
+            return converter.convert(amount: amountInUSD, from: "USD", to: "GBP") * 100.0
+        }
+        return converter.convert(amount: amountInUSD, from: "USD", to: preferredCurrency)
+    }
+
+    private func storedPriceSnapshots(for symbol: String) -> [PriceSnapshot] {
+        if let snapshots = priceSnapshots[symbol] {
+            return snapshots
+        }
+
+        let normalizedSymbol = symbol.uppercased()
+        return priceSnapshots.first { $0.key.uppercased() == normalizedSymbol }?.value ?? []
+    }
+
+    private func livePriceSamples(for symbol: String) -> [PriceSnapshot] {
+        if let samples = livePriceSamples[symbol] {
+            return samples
+        }
+
+        let normalizedSymbol = symbol.uppercased()
+        return livePriceSamples.first { $0.key.uppercased() == normalizedSymbol }?.value ?? []
+    }
+
+    private func notePriceDataChanged(for symbol: String) {
+        invalidateStockDataCache(for: symbol)
+        priceDataRevision &+= 1
+    }
+
+    private func invalidateStockDataCache(for symbol: String) {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !normalizedSymbol.isEmpty else { return }
+
+        let matchingKeys = stockDataCache.keys.filter { cacheKey in
+            cacheKey.uppercased().hasPrefix("\(normalizedSymbol)-")
+        }
+
+        for cacheKey in matchingKeys {
+            stockDataCache.removeValue(forKey: cacheKey)
+            stockDataCacheTimestamp.removeValue(forKey: cacheKey)
+        }
+    }
+
+    private func snapshotTimestampKey(_ timestamp: Date) -> Int64 {
+        Int64((timestamp.timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private func appendLivePortfolioPoint(
+        _ point: ChartDataPoint,
+        to points: [ChartDataPoint],
+        timestamp: Date
+    ) -> [ChartDataPoint] {
+        var updatedPoints = points
+        if let last = updatedPoints.last, abs(last.date.timeIntervalSince(timestamp)) < 1 {
+            updatedPoints[updatedPoints.count - 1] = point
+        } else {
+            updatedPoints.append(point)
+        }
+
+        let cutoff = timestamp.addingTimeInterval(-livePriceSampleRetention)
+        updatedPoints = updatedPoints
+            .filter { $0.date >= cutoff && $0.value.isFinite }
+            .sorted { $0.date < $1.date }
+
+        if updatedPoints.count > maxLivePortfolioSamples {
+            updatedPoints = Array(updatedPoints.suffix(maxLivePortfolioSamples))
+        }
+
+        return updatedPoints
+    }
+
+    private func deduplicatedSortedChartPoints(_ points: [ChartDataPoint]) -> [ChartDataPoint] {
+        var latestByTimestamp: [Int64: ChartDataPoint] = [:]
+        for point in points where point.value.isFinite {
+            let key = Int64((point.date.timeIntervalSince1970 * 1_000).rounded())
+            latestByTimestamp[key] = point
+        }
+        return latestByTimestamp.values.sorted { $0.date < $1.date }
+    }
+
+    private func deduplicatedSortedSnapshots(_ snapshots: [PriceSnapshot]) -> [PriceSnapshot] {
+        var latestByTimestamp: [Int64: PriceSnapshot] = [:]
+        for snapshot in snapshots where snapshot.price.isFinite && snapshot.price > 0 {
+            let key = Int64((snapshot.timestamp.timeIntervalSince1970 * 1_000).rounded())
+            latestByTimestamp[key] = snapshot
+        }
+        return latestByTimestamp.values.sorted { $0.timestamp < $1.timestamp }
     }
 
 }
