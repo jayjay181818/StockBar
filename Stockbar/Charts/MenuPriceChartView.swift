@@ -20,6 +20,34 @@ struct MenuPopoverMetrics {
 }
 
 @MainActor
+final class MenuChartTimeRangeSelectionStore {
+    static let shared = MenuChartTimeRangeSelectionStore()
+
+    private let defaults: UserDefaults
+    private let keyPrefix = "menuChartTimeRange."
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func selectedTimeRange(for symbol: String) -> MenuChartTimeRange {
+        guard let rawValue = defaults.string(forKey: key(for: symbol)),
+              let range = MenuChartTimeRange(rawValue: rawValue) else {
+            return .day
+        }
+        return range
+    }
+
+    func save(_ range: MenuChartTimeRange, for symbol: String) {
+        defaults.set(range.rawValue, forKey: key(for: symbol))
+    }
+
+    private func key(for symbol: String) -> String {
+        "\(keyPrefix)\(symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())"
+    }
+}
+
+@MainActor
 class MenuChartViewModel: ObservableObject {
     @Published var chartData: [MenuChartDataPoint] = []
     @Published var benchmarkData: [MenuChartDataPoint] = []
@@ -28,31 +56,53 @@ class MenuChartViewModel: ObservableObject {
     @Published var errorMessage: String?
     
     private let symbol: String
-    private let currentPrice: Double
+    private var currentPrice: Double
     private let benchmarkSymbol: String?
+    private let timeRangeSelectionStore: MenuChartTimeRangeSelectionStore
     private let historicalDataManager = HistoricalDataManager.shared
     private let logger = Logger.shared
     private var cancellables = Set<AnyCancellable>()
 
-    init(symbol: String, currentPrice: Double, benchmarkSymbol: String?) {
+    init(
+        symbol: String,
+        currentPrice: Double,
+        benchmarkSymbol: String?,
+        timeRangeSelectionStore: MenuChartTimeRangeSelectionStore = .shared
+    ) {
         self.symbol = symbol
         self.currentPrice = currentPrice
         self.benchmarkSymbol = benchmarkSymbol
+        self.timeRangeSelectionStore = timeRangeSelectionStore
+        self.selectedTimeRange = timeRangeSelectionStore.selectedTimeRange(for: symbol)
+        historicalDataManager.$priceSnapshots
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.loadChartData()
+            }
+            .store(in: &cancellables)
         loadChartData()
     }
     
     func setTimeRange(_ range: MenuChartTimeRange) {
         selectedTimeRange = range
+        timeRangeSelectionStore.save(range, for: symbol)
+        loadChartData()
+    }
+
+    func updateCurrentPrice(_ price: Double) {
+        currentPrice = price
         loadChartData()
     }
     
     func loadChartData() {
         isLoading = true
         errorMessage = nil
+        let range = selectedTimeRange
+        let latestPrice = currentPrice
         
         Task {
                 let endDate = Date()
-                let startDate = selectedTimeRange.startDate(from: endDate)
+                let startDate = range.startDate(from: endDate)
                 
                 // Get price snapshots for the symbol within the time range
                 let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
@@ -66,27 +116,21 @@ class MenuChartViewModel: ObservableObject {
                     )
                 }.sorted { $0.date < $1.date }
 
-                if let normalizedPoints = self.normalizeChartDataIfNeeded(dataPoints),
+                if let normalizedPoints = self.normalizeChartDataIfNeeded(dataPoints, currentPrice: latestPrice),
                    normalizedPoints.count == dataPoints.count {
                     dataPoints = normalizedPoints
                 }
-                
-                // If we have very little historical data, add a simple line to current price
-                if dataPoints.count < 2 && currentPrice.isFinite && currentPrice > 0 {
-                    // If we have no data, create a simple two-point line
-                    if dataPoints.isEmpty {
-                        dataPoints = [
-                            MenuChartDataPoint(date: startDate, price: currentPrice, symbol: symbol),
-                            MenuChartDataPoint(date: endDate, price: currentPrice, symbol: symbol)
-                        ]
-                    } else {
-                        // If we have some data, add current price as endpoint
-                        dataPoints.append(MenuChartDataPoint(date: endDate, price: currentPrice, symbol: symbol))
-                    }
-                    
-                    await logger.debug("📊 Added current price endpoint for \(symbol) - using \(dataPoints.count) data points")
-                } else if !currentPrice.isFinite || currentPrice <= 0 {
-                    await logger.debug("📊 Invalid current price for \(symbol): \(currentPrice) - chart may not display properly")
+
+                dataPoints = MenuChartDataBuilder.preparePricePoints(
+                    storedPoints: dataPoints,
+                    currentPrice: latestPrice,
+                    symbol: symbol,
+                    range: range,
+                    now: endDate
+                )
+
+                if !latestPrice.isFinite || latestPrice <= 0 {
+                    await logger.debug("📊 Invalid current price for \(symbol): \(latestPrice) - chart may not display properly")
                 }
 
                 if dataPoints.count < 2 {
@@ -97,19 +141,6 @@ class MenuChartViewModel: ObservableObject {
                 var benchmarkPoints: [MenuChartDataPoint] = []
                 if let benchmarkSymbol {
                     let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(for: benchmarkSymbol, from: startDate, to: endDate)
-                    
-                    if benchmarkSnapshots.count < 2 {
-                        // Capture values to avoid actor isolation issues in detached task
-                        let fetchRange = selectedTimeRange.chartTimeRange
-                        Task.detached(priority: .background) {
-                            await HistoricalDataManager.shared.triggerHistoricalDataFetch(
-                                for: benchmarkSymbol,
-                                timeRange: fetchRange,
-                                startDate: startDate
-                            )
-                        }
-                    }
-                    
                     let validBenchmarkSnapshots = benchmarkSnapshots.filter { $0.price.isFinite && $0.price > 0 }
                     benchmarkPoints = validBenchmarkSnapshots.map { snapshot in
                         MenuChartDataPoint(
@@ -140,9 +171,9 @@ class MenuChartViewModel: ObservableObject {
                     self.isLoading = false
                     
                     if snapshots.isEmpty {
-                        Task { await logger.debug("📊 Using interpolated data for \(symbol) (current price: \(currentPrice)) - no historical snapshots available yet") }
+                        Task { await logger.debug("📊 Using interpolated data for \(symbol) (current price: \(latestPrice)) - no historical snapshots available yet") }
                     } else {
-                        Task { await logger.debug("📊 Using \(snapshots.count) real price snapshots for \(symbol)") }
+                        Task { await logger.debug("📊 Using \(snapshots.count) real price snapshots for \(symbol), rendering \(dataPoints.count) menu chart points") }
                     }
                     
                     Task { 
@@ -157,7 +188,7 @@ class MenuChartViewModel: ObservableObject {
 }
 
 private extension MenuChartViewModel {
-    func normalizeChartDataIfNeeded(_ points: [MenuChartDataPoint]) -> [MenuChartDataPoint]? {
+    func normalizeChartDataIfNeeded(_ points: [MenuChartDataPoint], currentPrice: Double) -> [MenuChartDataPoint]? {
         guard !points.isEmpty,
               SymbolMetadata.isUKSymbol(symbol),
               currentPrice.isFinite,
@@ -313,6 +344,9 @@ struct MenuPriceChartView: View {
         )
         .onAppear {
             viewModel.loadChartData()
+        }
+        .onChange(of: currentPrice) { _, newValue in
+            viewModel.updateCurrentPrice(newValue)
         }
     }
     
@@ -485,7 +519,7 @@ struct MenuPriceChartView: View {
                 NotificationCenter.default.post(name: .refreshRequested, object: nil)
             },
             onPreferences: {
-                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+                NSApp.sendAction(#selector(AppDelegate.showPreferences(_:)), to: NSApp.delegate, from: nil)
             },
             onQuit: {
                 NSApplication.shared.terminate(nil)

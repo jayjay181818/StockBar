@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import Stockbar
 
 final class LogRedactorTests: XCTestCase {
@@ -160,6 +161,65 @@ final class Trading212AuthTests: XCTestCase {
         XCTAssertFalse(store.hasCredentials(environment: .demo))
     }
 
+    func testCredentialStoreSavesAndLoadsCurrentSingleKeychainItem() throws {
+        // Given: A test-only Keychain namespace and valid fake credentials.
+        let service = "com.fhl43211.Stockbar.tests.trading212.\(UUID().uuidString)"
+        let store = Trading212CredentialStore(service: service)
+        let credentials = Trading212AuthConfiguration(apiKey: "api-key-123", apiSecret: "secret-456")
+
+        // When: StockBar saves credentials.
+        try store.save(credentials, environment: .live)
+
+        // Then: The store reports the current single-item format and can load credentials.
+        XCTAssertEqual(store.storageState(environment: .live), .currentSingleItem)
+        XCTAssertTrue(store.hasCredentials(environment: .live))
+        XCTAssertEqual(try store.load(environment: .live), credentials)
+
+        try store.delete(environment: .live)
+        XCTAssertEqual(store.storageState(environment: .live), .notStored)
+    }
+
+    func testCredentialStoreUsesSessionCacheAfterFirstSuccessfulLoad() throws {
+        // Given: A test-only Keychain namespace and valid fake credentials.
+        let service = "com.fhl43211.Stockbar.tests.trading212.\(UUID().uuidString)"
+        let store = Trading212CredentialStore(service: service)
+        let credentials = Trading212AuthConfiguration(apiKey: "api-key-123", apiSecret: "secret-456")
+        try store.save(credentials, environment: .live)
+
+        // When: The credential has already been loaded once and the Keychain item disappears externally.
+        XCTAssertEqual(try store.load(environment: .live), credentials)
+        deleteKeychainValue(service: service, account: "live.credentials.v2")
+
+        // Then: The same app session can keep syncing without another Keychain read.
+        XCTAssertEqual(try store.load(environment: .live, allowUserInteraction: false), credentials)
+
+        // And: Clearing the session cache returns to the durable Keychain state.
+        store.clearSessionCache(environment: .live)
+        XCTAssertThrowsError(try store.load(environment: .live, allowUserInteraction: false))
+    }
+
+    func testCredentialStoreMigratesLegacySplitItemsOnlyOnExplicitLoad() throws {
+        // Given: Fake credentials saved in the old two-item Keychain layout.
+        let service = "com.fhl43211.Stockbar.tests.trading212.\(UUID().uuidString)"
+        let store = Trading212CredentialStore(service: service)
+        try saveLegacyKeychainValue("legacy-key", service: service, account: "demo.apiKey")
+        try saveLegacyKeychainValue("legacy-secret", service: service, account: "demo.apiSecret")
+
+        // When: StockBar checks status without requesting the secret data.
+        XCTAssertEqual(store.storageState(environment: .demo), .legacySplitItems)
+        XCTAssertTrue(store.hasCredentials(environment: .demo))
+
+        // Then: An explicit load returns the credentials and upgrades storage to one item.
+        XCTAssertEqual(
+            try store.load(environment: .demo),
+            Trading212AuthConfiguration(apiKey: "legacy-key", apiSecret: "legacy-secret")
+        )
+        XCTAssertEqual(store.storageState(environment: .demo), .currentSingleItem)
+
+        try store.delete(environment: .demo)
+        XCTAssertEqual(store.storageState(environment: .demo), .notStored)
+    }
+
     func testPermissionPolicyRequiresAccountDataAndNeverExecuteOrders() {
         // Given: The MVP Trading 212 permission policy.
         let rows = Trading212PermissionPolicy.mvpRows
@@ -173,6 +233,31 @@ final class Trading212AuthTests: XCTestCase {
         XCTAssertEqual(accountData?.requirement, .required)
         XCTAssertEqual(metadata?.requirement, .recommended)
         XCTAssertEqual(execute?.requirement, .neverRequired)
+    }
+
+    private func saveLegacyKeychainValue(_ value: String, service: String, account: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+
+        var addQuery = query
+        addQuery[kSecValueData as String] = Data(value.utf8)
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw Trading212CredentialStoreError.keychainStatus(status)
+        }
+    }
+
+    private func deleteKeychainValue(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 

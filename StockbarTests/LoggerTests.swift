@@ -40,4 +40,32 @@ class LoggerTests: XCTestCase {
         let logs = await logger.getRecentLogs(maxLines: 5)
         XCTAssertTrue(logs.count > 0, "Should have at least one log entry")
     }
-} 
+
+    func testLogFilePathUsesUserLibraryLogs() async {
+        let logger = Logger.shared
+
+        let path = await logger.getLogFilePath() ?? ""
+
+        XCTAssertTrue(path.contains("/Library/Logs/"), "Expected log path in user Library Logs, got \(path)")
+        XCTAssertFalse(path.contains("/Documents/"), "Log path should not require Documents access: \(path)")
+        XCTAssertTrue(path.hasSuffix("stockbar.log"))
+    }
+}
+
+final class LocalFileLocationTests: XCTestCase {
+    func testConfigurationPathAvoidsDocuments() {
+        let path = ConfigurationManager.shared.getConfigFilePath() ?? ""
+
+        XCTAssertTrue(path.contains("/Library/Application Support/"), "Expected config path in Application Support, got \(path)")
+        XCTAssertFalse(path.contains("/Documents/"), "Config path should not require Documents access: \(path)")
+        XCTAssertTrue(path.hasSuffix(".stockbar_config.json"))
+    }
+
+    func testPythonConfigurationPassesConfigPathToFetcher() {
+        let config = PythonConfiguration.load()
+        let expectedPath = ConfigurationManager.shared.getConfigFilePath()
+
+        XCTAssertEqual(config.environment["STOCKBAR_CONFIG_FILE"], expectedPath)
+        XCTAssertFalse(config.environment["STOCKBAR_CONFIG_FILE"]?.contains("/Documents/") ?? true)
+    }
+}

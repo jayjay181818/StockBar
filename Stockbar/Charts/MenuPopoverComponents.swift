@@ -48,21 +48,184 @@ struct MenuChartDataPoint: Identifiable, Equatable {
     }
 }
 
-enum MenuPopoverFormatter {
-    static func currency(_ value: Double?, currency: String, includeSign: Bool = false) -> String {
-        guard let value, value.isFinite else { return "-" }
-        let displayValue = currency == "GBX" ? (value / 100.0) : value
-        let format: String
+enum MenuChartDataBuilder {
+    static let defaultMaxPoints = 1000
+    private static let dayBucketSize: TimeInterval = 120
 
-        if abs(displayValue) >= 10000 {
-            format = includeSign ? "%+.0f" : "%.0f"
-        } else if abs(displayValue) >= 1000 {
-            format = includeSign ? "%+.1f" : "%.1f"
-        } else {
-            format = includeSign ? "%+.2f" : "%.2f"
+    static func prepareValuePoints(
+        storedPoints: [ChartDataPoint],
+        currentValue: Double,
+        symbol: String,
+        range: MenuChartTimeRange,
+        now: Date = Date(),
+        maxPoints: Int = defaultMaxPoints
+    ) -> [MenuChartDataPoint] {
+        prepareMenuPoints(
+            storedPoints: storedPoints.map {
+                MenuChartDataPoint(date: $0.date, price: $0.value, symbol: symbol)
+            },
+            currentValue: currentValue,
+            symbol: symbol,
+            range: range,
+            now: now,
+            maxPoints: maxPoints
+        )
+    }
+
+    static func preparePricePoints(
+        storedPoints: [MenuChartDataPoint],
+        currentPrice: Double,
+        symbol: String,
+        range: MenuChartTimeRange,
+        now: Date = Date(),
+        maxPoints: Int = defaultMaxPoints
+    ) -> [MenuChartDataPoint] {
+        prepareMenuPoints(
+            storedPoints: storedPoints,
+            currentValue: currentPrice,
+            symbol: symbol,
+            range: range,
+            now: now,
+            maxPoints: maxPoints
+        )
+    }
+
+    private static func prepareMenuPoints(
+        storedPoints: [MenuChartDataPoint],
+        currentValue: Double,
+        symbol: String,
+        range: MenuChartTimeRange,
+        now: Date,
+        maxPoints: Int
+    ) -> [MenuChartDataPoint] {
+        let startDate = range.startDate(from: now)
+        var points = storedPoints
+            .filter { $0.date >= startDate && $0.date <= now && $0.price.isFinite && $0.price > 0 }
+            .sorted { $0.date < $1.date }
+
+        if range == .day {
+            points = latestPointPerBucket(points, bucketSize: dayBucketSize)
         }
 
-        return String(format: format, displayValue) + currencySymbol(for: currency)
+        appendCurrentEndpoint(
+            to: &points,
+            currentValue: currentValue,
+            symbol: symbol,
+            range: range,
+            startDate: startDate,
+            now: now
+        )
+
+        guard points.count >= 2 else {
+            return []
+        }
+
+        return downsample(points, maxPoints: maxPoints)
+    }
+
+    private static func appendCurrentEndpoint(
+        to points: inout [MenuChartDataPoint],
+        currentValue: Double,
+        symbol: String,
+        range: MenuChartTimeRange,
+        startDate: Date,
+        now: Date
+    ) {
+        guard currentValue.isFinite, currentValue > 0 else {
+            return
+        }
+
+        let endpoint = MenuChartDataPoint(date: now, price: currentValue, symbol: symbol)
+
+        if points.isEmpty {
+            points = [
+                MenuChartDataPoint(date: startDate, price: currentValue, symbol: symbol),
+                endpoint
+            ]
+            return
+        }
+
+        if let last = points.last {
+            if range == .day,
+               bucketIndex(for: last.date, bucketSize: dayBucketSize) == bucketIndex(for: now, bucketSize: dayBucketSize) {
+                points[points.count - 1] = endpoint
+            } else if abs(last.date.timeIntervalSince(now)) < 1 {
+                points[points.count - 1] = endpoint
+            } else {
+                points.append(endpoint)
+            }
+        }
+
+        if points.count == 1 {
+            points.insert(
+                MenuChartDataPoint(date: startDate, price: points[0].price, symbol: symbol),
+                at: 0
+            )
+        }
+    }
+
+    private static func latestPointPerBucket(
+        _ points: [MenuChartDataPoint],
+        bucketSize: TimeInterval
+    ) -> [MenuChartDataPoint] {
+        guard bucketSize > 0, !points.isEmpty else {
+            return points
+        }
+
+        var latestByBucket: [Int: MenuChartDataPoint] = [:]
+        for point in points {
+            let bucket = bucketIndex(for: point.date, bucketSize: bucketSize)
+            if let existing = latestByBucket[bucket], existing.date > point.date {
+                continue
+            }
+            latestByBucket[bucket] = point
+        }
+
+        return latestByBucket
+            .keys
+            .sorted()
+            .compactMap { latestByBucket[$0] }
+    }
+
+    private static func downsample(
+        _ points: [MenuChartDataPoint],
+        maxPoints: Int
+    ) -> [MenuChartDataPoint] {
+        guard maxPoints > 1, points.count > maxPoints else {
+            return points
+        }
+
+        let lastIndex = points.count - 1
+        let step = Double(lastIndex) / Double(maxPoints - 1)
+        var sampled: [MenuChartDataPoint] = []
+        sampled.reserveCapacity(maxPoints)
+
+        for offset in 0..<maxPoints {
+            let rawIndex = Int((Double(offset) * step).rounded())
+            let index = min(rawIndex, lastIndex)
+            if sampled.last?.date != points[index].date {
+                sampled.append(points[index])
+            }
+        }
+
+        if sampled.first?.date != points.first?.date {
+            sampled.insert(points[0], at: 0)
+        }
+        if sampled.last?.date != points.last?.date {
+            sampled.append(points[lastIndex])
+        }
+
+        return sampled.count <= maxPoints ? sampled : Array(sampled.prefix(maxPoints - 1)) + [points[lastIndex]]
+    }
+
+    private static func bucketIndex(for date: Date, bucketSize: TimeInterval) -> Int {
+        Int(floor(date.timeIntervalSince1970 / bucketSize))
+    }
+}
+
+enum MenuPopoverFormatter {
+    static func currency(_ value: Double?, currency: String, includeSign: Bool = false) -> String {
+        HoldingsCurrencyFormatter.compactAmount(value, currency: currency, includeSign: includeSign)
     }
 
     static func percent(_ value: Double?) -> String {
@@ -89,18 +252,6 @@ enum MenuPopoverFormatter {
         guard let latest else { return "Updated: -" }
         let date = Date(timeIntervalSince1970: TimeInterval(latest))
         return "Updated: \(updatedDateFormatter.string(from: date))"
-    }
-
-    static func currencySymbol(for currency: String) -> String {
-        switch currency {
-        case "USD": return "$"
-        case "GBP", "GBX", "GBp": return "£"
-        case "EUR": return "€"
-        case "JPY": return "¥"
-        case "CAD": return "C$"
-        case "AUD": return "A$"
-        default: return currency
-        }
     }
 
     private static let updatedDateFormatter: DateFormatter = {

@@ -59,6 +59,89 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         try await super.tearDown()
     }
 
+    // MARK: - Visibility Policy Tests
+
+    func testMenuBarVisibilityPolicy_ManualOffAlwaysHidesStockTickers() {
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: true,
+                requireExternalDisplay: false,
+                isExternalDisplayConnected: true
+            )
+        )
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: true,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: true
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleOffPreservesManualVisibility() {
+        XCTAssertTrue(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: false,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleHidesWithoutExternalDisplay() {
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleRestoresWithExternalDisplay() {
+        XCTAssertTrue(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: true
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_DoesNotControlPortfolioTotalSetting() {
+        let portfolioSettings = PortfolioMenuBarDisplaySettings(isEnabled: true)
+
+        XCTAssertTrue(portfolioSettings.isEnabled)
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_PersistsExternalDisplayRequirement() {
+        let suiteName = "MenuBarVisibilityPolicyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+
+        MenuBarVisibilityPolicy.saveRequireExternalDisplay(true, defaults: defaults)
+        XCTAssertTrue(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+
+        MenuBarVisibilityPolicy.saveRequireExternalDisplay(false, defaults: defaults)
+        XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+    }
+
+    func testExternalDisplayDetector_AnyNonBuiltinDisplayCountsAsExternal() {
+        XCTAssertFalse(ExternalDisplayDetector.hasExternalDisplay(builtinStates: []))
+        XCTAssertFalse(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [true]))
+        XCTAssertTrue(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [true, false]))
+        XCTAssertTrue(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [false]))
+    }
+
     // MARK: - Compact Mode Tests
 
     func testCompactMode_FormatsCorrectly() async throws {

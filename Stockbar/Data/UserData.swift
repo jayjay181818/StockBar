@@ -54,22 +54,8 @@ class RealTimeTrade: ObservableObject, Identifiable {
 }
 
 func logToFile(_ message: String) {
-    if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-        let logPath = documentsPath.appendingPathComponent("stockbar_debug.log")
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logMessage = "\(timestamp): \(message)\n"
-
-        if let data = logMessage.data(using: String.Encoding.utf8) {
-            if FileManager.default.fileExists(atPath: logPath.path) {
-                if let fileHandle = try? FileHandle(forWritingTo: logPath) {
-                    fileHandle.seekToEndOfFile()
-                    fileHandle.write(data)
-                    try? fileHandle.close()
-                }
-            } else {
-                try? logMessage.write(to: logPath, atomically: true, encoding: .utf8)
-            }
-        }
+    Task {
+        await Logger.shared.debug(message)
     }
 }
 

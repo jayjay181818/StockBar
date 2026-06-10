@@ -1,10 +1,16 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
 struct StockbarMainView: View {
     @ObservedObject var dataModel: DataModel
-    @State private var selectedSection: StockbarMainSection = .holdings
+    @ObservedObject var navigationState: StockbarMainNavigationState
+
+    init(dataModel: DataModel, navigationState: StockbarMainNavigationState) {
+        self.dataModel = dataModel
+        self.navigationState = navigationState
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -12,7 +18,7 @@ struct StockbarMainView: View {
             Divider()
             detail
         }
-        .frame(minWidth: 1280, minHeight: 680)
+        .frame(minWidth: 980, minHeight: 680)
     }
 
     private var sidebar: some View {
@@ -23,19 +29,19 @@ struct StockbarMainView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
 
-            ForEach(StockbarMainSection.allCases) { section in
+            ForEach(StockbarMainSection.primarySections) { section in
                 Button {
-                    selectedSection = section
+                    navigationState.selectedSection = section
                 } label: {
                     Label(section.title, systemImage: section.systemImage)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(selectedSection == section ? Color.accentColor.opacity(0.24) : .clear)
+                        .background(navigationState.selectedSection == section ? Color.accentColor.opacity(0.24) : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(selectedSection == section ? .primary : .secondary)
+                .foregroundStyle(navigationState.selectedSection == section ? .primary : .secondary)
                 .padding(.horizontal, 10)
             }
 
@@ -57,15 +63,17 @@ struct StockbarMainView: View {
             .padding(.horizontal, 10)
 
             Button {
-                NSApp.sendAction(#selector(AppDelegate.showPreferences(_:)), to: NSApp.delegate, from: nil)
+                navigationState.selectedSection = .settings
             } label: {
                 Label("Settings", systemImage: "gearshape")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .background(navigationState.selectedSection == .settings ? Color.accentColor.opacity(0.24) : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(navigationState.selectedSection == .settings ? .primary : .secondary)
             .padding(.horizontal, 10)
             .padding(.bottom, 14)
         }
@@ -75,7 +83,7 @@ struct StockbarMainView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch selectedSection {
+        switch navigationState.selectedSection {
         case .holdings:
             StockbarHoldingsView(dataModel: dataModel)
         case .charts:
@@ -100,6 +108,8 @@ struct StockbarMainView: View {
             StockbarDataHealthView(dataModel: dataModel)
         case .diagnostics:
             StockbarDiagnosticsView()
+        case .settings:
+            StockbarSettingsView(dataModel: dataModel)
         }
     }
 
@@ -110,7 +120,16 @@ struct StockbarMainView: View {
     }
 }
 
-private enum StockbarMainSection: String, CaseIterable, Identifiable {
+@MainActor
+final class StockbarMainNavigationState: ObservableObject {
+    @Published var selectedSection: StockbarMainSection
+
+    init(selectedSection: StockbarMainSection = .holdings) {
+        self.selectedSection = selectedSection
+    }
+}
+
+enum StockbarMainSection: String, CaseIterable, Identifiable {
     case holdings
     case charts
     case risk
@@ -119,8 +138,13 @@ private enum StockbarMainSection: String, CaseIterable, Identifiable {
     case backups
     case dataHealth
     case diagnostics
+    case settings
 
     var id: String { rawValue }
+
+    static var primarySections: [StockbarMainSection] {
+        allCases.filter { $0 != .settings }
+    }
 
     var title: String {
         switch self {
@@ -132,6 +156,7 @@ private enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .backups: "Backups"
         case .dataHealth: "Data Health"
         case .diagnostics: "Diagnostics"
+        case .settings: "Settings"
         }
     }
 
@@ -145,6 +170,7 @@ private enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .backups: "clock.arrow.circlepath"
         case .dataHealth: "externaldrive.badge.checkmark"
         case .diagnostics: "stethoscope"
+        case .settings: "gearshape"
         }
     }
 }
@@ -199,11 +225,23 @@ private struct StockbarHoldingsView: View {
             }
 
             HStack(spacing: 16) {
-                HoldingMetricCard(title: "Net Value", value: formatted(dataModel.calculateNetValue()), tint: .blue)
+                let netValue = dataModel.calculateNetValue()
+                HoldingMetricCard(
+                    title: "Net Value",
+                    value: HoldingsSummaryAmountFormatter.format(
+                        netValue,
+                        dataModel: dataModel
+                    ),
+                    tint: .blue
+                )
                 let gains = dataModel.calculateNetGains()
                 HoldingMetricCard(
                     title: "Total Net Gains",
-                    value: formatted(gains),
+                    value: HoldingsSummaryAmountFormatter.format(
+                        gains,
+                        dataModel: dataModel,
+                        signed: true
+                    ),
                     tint: gains.amount >= 0 ? .green : .red
                 )
                 HoldingMetricCard(title: "Tracked Symbols", value: "\(visibleIndices.count)", tint: .purple)
@@ -216,44 +254,54 @@ private struct StockbarHoldingsView: View {
     }
 
     private var holdingsTable: some View {
-        VStack(spacing: 0) {
-            HoldingsHeaderRow(
-                dayProfitLossDisplayMode: dayProfitLossDisplayMode,
-                totalProfitLossDisplayMode: totalProfitLossDisplayMode,
-                onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
-                onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() }
-            )
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(visibleIndices, id: \.self) { index in
-                        HoldingsEditableRow(
-                            realTimeTrade: dataModel.realTimeTrades[index],
-                            dataModel: dataModel,
-                            dayProfitLossDisplayMode: dayProfitLossDisplayMode,
-                            totalProfitLossDisplayMode: totalProfitLossDisplayMode,
-                            onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
-                            onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() },
-                            rowIndex: index,
-                            canMoveUp: index > 0,
-                            canMoveDown: index < dataModel.realTimeTrades.count - 1,
-                            onDelete: { delete(at: index) },
-                            onMove: { move(from: index, by: $0) }
-                        )
-                        .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        GeometryReader { geometry in
+            ScrollView(.horizontal) {
+                VStack(spacing: 0) {
+                    HoldingsHeaderRow(
+                        dayProfitLossDisplayMode: dayProfitLossDisplayMode,
+                        totalProfitLossDisplayMode: totalProfitLossDisplayMode,
+                        onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
+                        onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() }
+                    )
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(visibleIndices, id: \.self) { index in
+                                HoldingsEditableRow(
+                                    realTimeTrade: dataModel.realTimeTrades[index],
+                                    dataModel: dataModel,
+                                    dayProfitLossDisplayMode: dayProfitLossDisplayMode,
+                                    totalProfitLossDisplayMode: totalProfitLossDisplayMode,
+                                    onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
+                                    onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() },
+                                    rowIndex: index,
+                                    canMoveUp: index > 0,
+                                    canMoveDown: index < dataModel.realTimeTrades.count - 1,
+                                    onDelete: { delete(at: index) },
+                                    onMove: { move(from: index, by: $0) }
+                                )
+                                .background(
+                                    index.isMultiple(of: 2)
+                                    ? Color.clear
+                                    : Color(nsColor: .controlBackgroundColor).opacity(0.35)
+                                )
+                            }
+                        }
                     }
+                    .frame(maxHeight: .infinity)
                 }
+                .frame(
+                    width: max(HoldingsTableLayout.contentWidth, geometry.size.width),
+                    height: geometry.size.height,
+                    alignment: .topLeading
+                )
             }
-            .frame(maxHeight: .infinity)
         }
+        .frame(minHeight: 280, maxHeight: .infinity)
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func formatted(_ amount: (amount: Double, currency: String)) -> String {
-        "\(String(format: "%.2f", amount.amount)) \(amount.currency)"
     }
 
     private func delete(at index: Int) {
@@ -279,29 +327,29 @@ private struct HoldingsHeaderRow: View {
     let onToggleTotalProfitLossDisplayMode: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            header("Visible", width: 58)
-            header("Symbol", width: 150)
-            header("Units", width: 130)
-            header("Avg Cost", width: 140)
-            header("Currency", width: 120)
-            header("Current", width: 130)
-            header("Value", width: 145)
+        HStack(spacing: HoldingsTableLayout.spacing) {
+            header("Visible", width: HoldingsTableLayout.visibleWidth)
+            header("Symbol", width: HoldingsTableLayout.symbolWidth)
+            header("Units", width: HoldingsTableLayout.unitsWidth)
+            header("Avg Cost", width: HoldingsTableLayout.averageCostWidth)
+            header("Currency", width: HoldingsTableLayout.currencyWidth)
+            header("Current", width: HoldingsTableLayout.currentWidth)
+            header("Value", width: HoldingsTableLayout.valueWidth)
             profitLossHeader(
                 title: "Day P/L",
                 displayMode: dayProfitLossDisplayMode,
-                width: 120,
+                width: HoldingsTableLayout.dayProfitLossWidth,
                 action: onToggleDayProfitLossDisplayMode
             )
             profitLossHeader(
                 title: "Total P/L",
                 displayMode: totalProfitLossDisplayMode,
-                width: 120,
+                width: HoldingsTableLayout.totalProfitLossWidth,
                 action: onToggleTotalProfitLossDisplayMode
             )
-            header("Actions", width: 105)
+            header("Actions", width: HoldingsTableLayout.actionsWidth)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 10)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.65))
     }
@@ -351,7 +399,7 @@ private struct HoldingsEditableRow: View {
     private let currencies = ["GBX", "GBP", "USD", "EUR", "JPY"]
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: HoldingsTableLayout.spacing) {
             Toggle("", isOn: Binding(
                 get: { realTimeTrade.trade.showInMenuBar },
                 set: { newValue in
@@ -361,21 +409,21 @@ private struct HoldingsEditableRow: View {
                 }
             ))
             .labelsHidden()
-            .frame(width: 58, alignment: .leading)
+            .frame(width: HoldingsTableLayout.visibleWidth, alignment: .leading)
 
             TextField("Symbol", text: $realTimeTrade.trade.name)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 150)
+                .frame(width: HoldingsTableLayout.symbolWidth)
                 .onChange(of: realTimeTrade.trade.name) { _, _ in dataModel.triggerTradeUpdate() }
 
             TextField("Units", text: $realTimeTrade.trade.position.unitSizeString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
+                .frame(width: HoldingsTableLayout.unitsWidth)
                 .onChange(of: realTimeTrade.trade.position.unitSizeString) { _, _ in dataModel.triggerTradeUpdate() }
 
             TextField("Avg Cost", text: $realTimeTrade.trade.position.positionAvgCostString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
+                .frame(width: HoldingsTableLayout.averageCostWidth)
                 .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _, _ in dataModel.triggerTradeUpdate() }
 
             Picker("", selection: currencyBinding) {
@@ -384,14 +432,14 @@ private struct HoldingsEditableRow: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 120)
+            .frame(width: HoldingsTableLayout.currencyWidth)
 
             Text(currentPriceText)
                 .foregroundStyle(.secondary)
-                .frame(width: 130, alignment: .leading)
+                .frame(width: HoldingsTableLayout.currentWidth, alignment: .leading)
 
             Text(valueText)
-                .frame(width: 145, alignment: .leading)
+                .frame(width: HoldingsTableLayout.valueWidth, alignment: .leading)
 
             ProfitLossCell(
                 summary: profitLossSummary,
@@ -399,7 +447,7 @@ private struct HoldingsEditableRow: View {
                 displayMode: dayProfitLossDisplayMode,
                 action: onToggleDayProfitLossDisplayMode
             )
-                .frame(width: 120, alignment: .leading)
+            .frame(width: HoldingsTableLayout.dayProfitLossWidth, alignment: .leading)
 
             ProfitLossCell(
                 summary: profitLossSummary,
@@ -407,7 +455,7 @@ private struct HoldingsEditableRow: View {
                 displayMode: totalProfitLossDisplayMode,
                 action: onToggleTotalProfitLossDisplayMode
             )
-            .frame(width: 120, alignment: .leading)
+            .frame(width: HoldingsTableLayout.totalProfitLossWidth, alignment: .leading)
 
             HStack(spacing: 8) {
                 Button { onMove(-1) } label: { Image(systemName: "chevron.up") }
@@ -418,9 +466,9 @@ private struct HoldingsEditableRow: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .frame(width: 105, alignment: .leading)
+            .frame(width: HoldingsTableLayout.actionsWidth, alignment: .leading)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 8)
     }
 
@@ -500,7 +548,7 @@ private struct ProfitLossCell: View {
         switch displayMode {
         case .amount:
             guard amount.isFinite else { return "-" }
-            return String(format: "%+.2f", amount)
+            return HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency)
         case .percent:
             guard percent.isFinite else { return "-" }
             return String(format: "%+.2f%%", percent)
