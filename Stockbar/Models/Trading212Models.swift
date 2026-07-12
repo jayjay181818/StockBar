@@ -357,6 +357,56 @@ enum Trading212PreviewValueSource: Equatable {
     case unavailable
 }
 
+enum PortfolioValuationSource: String, Codable, Equatable {
+    case brokerProvided
+    case localCalculationFallback
+    case marketDataFallback
+}
+
+struct Trading212BrokerPositionValuation: Equatable {
+    let manualSymbol: String
+    let instrumentId: String
+    let brokerCurrentValue: Double
+    let brokerTotalCost: Double?
+    let brokerUnrealizedProfitLoss: Double?
+    let fxImpact: Double?
+    let currency: String
+    let updatedAt: Date
+
+    var totalGainPercent: Double {
+        guard let brokerTotalCost,
+              brokerTotalCost > 0,
+              let brokerUnrealizedProfitLoss,
+              brokerUnrealizedProfitLoss.isFinite else {
+            return .nan
+        }
+        return (brokerUnrealizedProfitLoss / brokerTotalCost) * 100.0
+    }
+}
+
+struct Trading212BrokerValuationSnapshot: Equatable {
+    let accountKey: String
+    let currency: String
+    let accountValue: Double
+    let investmentsValue: Double?
+    let cashValue: Double?
+    let totalUnrealizedProfitLoss: Double?
+    let totalCost: Double?
+    let positionsByManualSymbol: [String: Trading212BrokerPositionValuation]
+    let updatedAt: Date
+
+    func isFresh(now: Date = Date(), maxAge: TimeInterval) -> Bool {
+        guard accountValue.isFinite, accountValue >= 0 else {
+            return false
+        }
+        return now.timeIntervalSince(updatedAt) <= maxAge
+    }
+
+    func position(for manualSymbol: String) -> Trading212BrokerPositionValuation? {
+        positionsByManualSymbol[manualSymbol.uppercased()]
+    }
+}
+
 enum Trading212PreviewConflictStatus: Equatable {
     case none
     case manualHoldingMatch
@@ -397,6 +447,7 @@ struct Trading212ImportPreviewRow: Identifiable, Equatable {
     let averagePrice: Double?
     let brokerProvidedPrice: Double?
     let currentValue: Double?
+    let totalCost: Double?
     let unrealizedProfitLoss: Double?
     let fxImpact: Double?
     let mappingConfidence: InstrumentResolutionConfidence

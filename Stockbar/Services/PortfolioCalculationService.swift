@@ -17,6 +17,29 @@ struct DisplayPortfolioSummary {
     let totalCost: Double
     let ownedPositionCount: Int
     let currency: String
+    let valuationSource: PortfolioValuationSource
+
+    init(
+        totalValue: Double,
+        totalGain: Double,
+        totalGainPct: Double,
+        dayGain: Double,
+        dayGainPct: Double,
+        totalCost: Double,
+        ownedPositionCount: Int,
+        currency: String,
+        valuationSource: PortfolioValuationSource = .localCalculationFallback
+    ) {
+        self.totalValue = totalValue
+        self.totalGain = totalGain
+        self.totalGainPct = totalGainPct
+        self.dayGain = dayGain
+        self.dayGainPct = dayGainPct
+        self.totalCost = totalCost
+        self.ownedPositionCount = ownedPositionCount
+        self.currency = currency
+        self.valuationSource = valuationSource
+    }
 }
 
 struct PositionProfitLossSummary: Equatable {
@@ -41,8 +64,21 @@ class PortfolioCalculationService {
     /// Calculates the total net gains across all trades in the preferred currency
     func calculateNetGains(
         trades: [RealTimeTrade],
-        preferredCurrency: String
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
     ) -> (amount: Double, currency: String) {
+        if let brokerValuationSnapshot,
+           let brokerGain = brokerValuationSnapshot.totalUnrealizedProfitLoss,
+           brokerGain.isFinite {
+            let convertedGain = convertBrokerAmount(
+                brokerGain,
+                from: brokerValuationSnapshot.currency,
+                to: preferredCurrency
+            )
+            Task { await logger.debug("Using Trading 212 broker-provided net gains in \(preferredCurrency)") }
+            return (convertedGain, preferredCurrency)
+        }
+
         Task { await logger.debug("Calculating net gains in \(preferredCurrency)") }
         var totalGainsUSD = 0.0
         
@@ -109,8 +145,19 @@ class PortfolioCalculationService {
     /// Calculates the total portfolio value (market value) in the preferred currency
     func calculateNetValue(
         trades: [RealTimeTrade],
-        preferredCurrency: String
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
     ) -> (amount: Double, currency: String) {
+        if let brokerValuationSnapshot {
+            let convertedValue = convertBrokerAmount(
+                brokerValuationSnapshot.accountValue,
+                from: brokerValuationSnapshot.currency,
+                to: preferredCurrency
+            )
+            Task { await logger.debug("Using Trading 212 broker-provided account value in \(preferredCurrency)") }
+            return (convertedValue, preferredCurrency)
+        }
+
         Task { await logger.debug("Calculating net value in \(preferredCurrency)") }
         var totalValueUSD = 0.0
         
@@ -168,8 +215,17 @@ class PortfolioCalculationService {
     /// Calculates the menu bar portfolio summary using the same display-price semantics as symbol rows.
     func calculateDisplayPortfolioSummary(
         trades: [RealTimeTrade],
-        preferredCurrency: String
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
     ) -> DisplayPortfolioSummary {
+        if let brokerValuationSnapshot {
+            return calculateBrokerProvidedPortfolioSummary(
+                trades: trades,
+                preferredCurrency: preferredCurrency,
+                brokerValuationSnapshot: brokerValuationSnapshot
+            )
+        }
+
         Task { await logger.debug("Calculating display portfolio summary in \(preferredCurrency)") }
 
         var totalValueUSD = 0.0
@@ -225,12 +281,16 @@ class PortfolioCalculationService {
             dayGainPct: dayGainPct,
             totalCost: totalCost,
             ownedPositionCount: ownedPositionCount,
-            currency: preferredCurrency
+            currency: preferredCurrency,
+            valuationSource: .localCalculationFallback
         )
     }
 
     /// Calculates per-position day and total P/L in the position display currency.
-    func calculatePositionProfitLoss(for realTimeTrade: RealTimeTrade) -> PositionProfitLossSummary {
+    func calculatePositionProfitLoss(
+        for realTimeTrade: RealTimeTrade,
+        brokerValuation: Trading212BrokerPositionValuation? = nil
+    ) -> PositionProfitLossSummary {
         let info = realTimeTrade.realTimeInfo
         let displayPrice = info.getCurrentDisplayPrice()
         let previousClose = info.prevClosePrice
@@ -265,9 +325,26 @@ class PortfolioCalculationService {
             let totalDelta = displayPrice - averageCost
             totalAmount = totalDelta * units
             totalPercent = (totalDelta / averageCost) * 100.0
+        } else if let brokerValuation,
+                  let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
+                  brokerAmount.isFinite {
+            totalAmount = brokerAmount
+            totalPercent = brokerValuation.totalGainPercent
         } else {
             totalAmount = .nan
             totalPercent = .nan
+        }
+
+        if let brokerValuation,
+           let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
+           brokerAmount.isFinite {
+            return PositionProfitLossSummary(
+                dayAmount: dayAmount,
+                dayPercent: dayPercent,
+                totalAmount: brokerAmount,
+                totalPercent: brokerValuation.totalGainPercent,
+                currency: brokerValuation.currency
+            )
         }
 
         return PositionProfitLossSummary(
@@ -276,6 +353,55 @@ class PortfolioCalculationService {
             totalAmount: totalAmount,
             totalPercent: totalPercent,
             currency: currency
+        )
+    }
+
+    private func calculateBrokerProvidedPortfolioSummary(
+        trades: [RealTimeTrade],
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot
+    ) -> DisplayPortfolioSummary {
+        let localSummary = calculateDisplayPortfolioSummary(
+            trades: trades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: nil
+        )
+        let totalValue = convertBrokerAmount(
+            brokerValuationSnapshot.accountValue,
+            from: brokerValuationSnapshot.currency,
+            to: preferredCurrency
+        )
+        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss ?? localSummary.totalGain
+        let totalGain = convertBrokerAmount(
+            totalGainSource,
+            from: brokerValuationSnapshot.totalUnrealizedProfitLoss == nil ? preferredCurrency : brokerValuationSnapshot.currency,
+            to: preferredCurrency
+        )
+        let totalCostSource = brokerValuationSnapshot.totalCost
+            ?? (brokerValuationSnapshot.investmentsValue.flatMap { investmentsValue in
+                brokerValuationSnapshot.totalUnrealizedProfitLoss.map { investmentsValue - $0 }
+            })
+        let totalCost = totalCostSource.map {
+            convertBrokerAmount($0, from: brokerValuationSnapshot.currency, to: preferredCurrency)
+        } ?? max(totalValue - totalGain, 0)
+        let totalGainPct: Double
+        if let totalCostSource, totalCostSource > 0,
+           let unrealized = brokerValuationSnapshot.totalUnrealizedProfitLoss {
+            totalGainPct = (unrealized / totalCostSource) * 100.0
+        } else {
+            totalGainPct = localSummary.totalGainPct
+        }
+
+        return DisplayPortfolioSummary(
+            totalValue: totalValue,
+            totalGain: totalGain,
+            totalGainPct: totalGainPct,
+            dayGain: localSummary.dayGain,
+            dayGainPct: localSummary.dayGainPct,
+            totalCost: totalCost,
+            ownedPositionCount: localSummary.ownedPositionCount,
+            currency: preferredCurrency,
+            valuationSource: .brokerProvided
         )
     }
     
@@ -334,5 +460,14 @@ class PortfolioCalculationService {
         }
 
         return currencyConverter.convert(amount: amount, from: "USD", to: preferredCurrency)
+    }
+
+    private func convertBrokerAmount(_ amount: Double, from sourceCurrency: String, to targetCurrency: String) -> Double {
+        let normalizedSource = CurrencyConverter.isPenceCurrency(sourceCurrency) ? "GBP" : sourceCurrency.uppercased()
+        let normalizedTarget = CurrencyConverter.isPenceCurrency(targetCurrency) ? "GBP" : targetCurrency.uppercased()
+        let converted = normalizedSource == normalizedTarget
+            ? amount
+            : currencyConverter.convert(amount: amount, from: normalizedSource, to: normalizedTarget)
+        return CurrencyConverter.isPenceCurrency(targetCurrency) ? converted * 100.0 : converted
     }
 }
