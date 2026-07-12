@@ -160,6 +160,36 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertEqual(backToUSD, original, accuracy: 0.01, "Round-trip conversion should preserve value")
     }
 
+    func testActivatesLatestHistoricalRatesBeforeHardCodedFallback() throws {
+        let defaults = UserDefaults.standard
+        let key = "currencyRateHistory"
+        let previousData = defaults.data(forKey: key)
+        defer {
+            if let previousData {
+                defaults.set(previousData, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let historicalSnapshot = CurrencyRateSnapshot(
+            timestamp: Date(timeIntervalSince1970: 1_000_000),
+            rates: ["GBP": 0.752, "EUR": 0.91],
+            baseCurrency: "USD"
+        )
+        defaults.set(try JSONEncoder().encode([historicalSnapshot]), forKey: key)
+
+        let historicalConverter = CurrencyConverter(
+            exchangeRates: [:],
+            refreshOnInit: false,
+            loadHistoryOnInit: true
+        )
+
+        XCTAssertTrue(historicalConverter.activateLatestHistoricalRatesIfAvailable())
+        XCTAssertEqual(historicalConverter.convert(amount: 100, from: "USD", to: "GBP"), 75.2, accuracy: 0.01)
+        XCTAssertEqual(historicalConverter.lastRefreshTime, historicalSnapshot.timestamp)
+    }
+
     func testGBXRoundTripConversion() {
         // Convert GBX -> USD -> GBX should return original amount (within rounding)
         let original = 350.0 // 350 pence
