@@ -16,6 +16,7 @@ struct Trading212BrokerSyncPlan {
     let deletedLinkIDs: [String]
     let missingLinkedSymbols: [String]
     let brokerOnlyCount: Int
+    let valuationSnapshot: Trading212BrokerValuationSnapshot?
 
     var changedCount: Int {
         tradeUpdates.count + deletedManualSymbols.count
@@ -353,14 +354,118 @@ struct Trading212BrokerSyncPlanner {
             let instrumentLinkID = "\(row.account.brokerAccountKey)|\(instrumentId)"
             return !linkedIDs.contains(instrumentLinkID) && !linkedProviderTickerIDs.contains(providerTickerID)
         }.count
+        let valuationSnapshot = makeValuationSnapshot(
+            preview: preview,
+            linkedPositions: linkedPositions,
+            rowsByInstrumentLinkID: rowsByInstrumentLinkID,
+            rowsByProviderTicker: rowsByProviderTicker,
+            syncedAt: syncedAt
+        )
 
         return Trading212BrokerSyncPlan(
             tradeUpdates: updates,
             deletedManualSymbols: deletedSymbols,
             deletedLinkIDs: deletedLinkIDs,
             missingLinkedSymbols: missingSymbols,
-            brokerOnlyCount: brokerOnlyCount
+            brokerOnlyCount: brokerOnlyCount,
+            valuationSnapshot: valuationSnapshot
         )
+    }
+
+    private func makeValuationSnapshot(
+        preview: Trading212ImportPreview,
+        linkedPositions: [BrokerLinkedPosition],
+        rowsByInstrumentLinkID: [String: Trading212ImportPreviewRow],
+        rowsByProviderTicker: [String: [Trading212ImportPreviewRow]],
+        syncedAt: Date
+    ) -> Trading212BrokerValuationSnapshot? {
+        guard let accountSummary = preview.accountSummary,
+              let currency = Trading212BrokerValueNormalizer.normalizedCurrency(accountSummary.currency) else {
+            return nil
+        }
+
+        var positionsByManualSymbol: [String: Trading212BrokerPositionValuation] = [:]
+        var linkedCurrentValueTotal = 0.0
+        var linkedUnrealizedTotal = 0.0
+        var linkedTotalCost = 0.0
+        var hasLinkedCurrentValue = false
+        var hasLinkedUnrealized = false
+        var hasLinkedTotalCost = false
+
+        for link in linkedPositions {
+            let row = rowsByInstrumentLinkID[link.id]
+                ?? rowsByProviderTicker["\(link.brokerAccountKey)|\(link.providerTicker.uppercased())"]?.first
+            guard let row,
+                  let currentValue = finite(row.currentValue),
+                  let instrumentId = row.instrumentId ?? Optional(link.instrumentId) else {
+                continue
+            }
+
+            let totalCost = finite(row.totalCost)
+                ?? finite(row.currentValue.flatMap { currentValue in
+                    row.unrealizedProfitLoss.map { currentValue - $0 }
+                })
+            let unrealizedProfitLoss = finite(row.unrealizedProfitLoss)
+
+            linkedCurrentValueTotal += currentValue
+            hasLinkedCurrentValue = true
+            if let unrealizedProfitLoss {
+                linkedUnrealizedTotal += unrealizedProfitLoss
+                hasLinkedUnrealized = true
+            }
+            if let totalCost {
+                linkedTotalCost += totalCost
+                hasLinkedTotalCost = true
+            }
+
+            positionsByManualSymbol[link.manualSymbol.uppercased()] = Trading212BrokerPositionValuation(
+                manualSymbol: link.manualSymbol,
+                instrumentId: instrumentId,
+                brokerCurrentValue: currentValue,
+                brokerTotalCost: totalCost,
+                brokerUnrealizedProfitLoss: unrealizedProfitLoss,
+                fxImpact: finite(row.fxImpact),
+                currency: currency,
+                updatedAt: syncedAt
+            )
+        }
+
+        let cashValue = cashValue(from: accountSummary.cash)
+        let investmentsValue = finite(accountSummary.investments?.currentValue)
+            ?? (hasLinkedCurrentValue ? linkedCurrentValueTotal : nil)
+        let accountValue = finite(accountSummary.totalValue)
+            ?? investmentsValue.flatMap { investments in
+                (cashValue ?? 0).isFinite ? investments + (cashValue ?? 0) : nil
+            }
+        guard let accountValue, accountValue.isFinite, accountValue >= 0 else {
+            return nil
+        }
+
+        return Trading212BrokerValuationSnapshot(
+            accountKey: preview.account.brokerAccountKey,
+            currency: currency,
+            accountValue: accountValue,
+            investmentsValue: investmentsValue,
+            cashValue: cashValue,
+            totalUnrealizedProfitLoss: finite(accountSummary.investments?.unrealizedProfitLoss)
+                ?? (hasLinkedUnrealized ? linkedUnrealizedTotal : nil),
+            totalCost: finite(accountSummary.investments?.totalCost)
+                ?? (hasLinkedTotalCost ? linkedTotalCost : nil),
+            positionsByManualSymbol: positionsByManualSymbol,
+            updatedAt: syncedAt
+        )
+    }
+
+    private func cashValue(from cash: Trading212Cash?) -> Double? {
+        guard let cash else { return nil }
+        let values = [cash.availableToTrade, cash.inPies, cash.reservedForOrders].compactMap(finite)
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +)
+    }
+
+    private func finite(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return value
     }
 
     private func makeUpdate(
