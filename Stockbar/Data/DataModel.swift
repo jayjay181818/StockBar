@@ -69,6 +69,7 @@ class DataModel: ObservableObject {
     private var trading212HoldingReconciliationTimer: Timer?
     private var isTrading212BrokerSyncInProgress = false
     private var isTrading212HoldingReconciliationInProgress = false
+    @Published private(set) var trading212BrokerValuationSnapshot: Trading212BrokerValuationSnapshot?
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
@@ -880,6 +881,7 @@ class DataModel: ObservableObject {
             syncedAt: Date()
         )
 
+        trading212BrokerValuationSnapshot = plan.valuationSnapshot
         applyTrading212BrokerSyncPlan(plan)
         if !plan.deletedLinkIDs.isEmpty {
             _ = try await trading212BrokerLinkStore.removePositions(ids: plan.deletedLinkIDs)
@@ -989,6 +991,7 @@ class DataModel: ObservableObject {
             options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
             syncedAt: Date()
         )
+        trading212BrokerValuationSnapshot = syncPlan.valuationSnapshot
         applyTrading212BrokerSyncPlan(syncPlan)
         if !syncPlan.deletedLinkIDs.isEmpty {
             _ = try await trading212BrokerLinkStore.removePositions(ids: syncPlan.deletedLinkIDs)
@@ -1276,7 +1279,11 @@ class DataModel: ObservableObject {
             // Fallback if service not initialized yet
             return (0.0, preferredCurrency)
         }
-        return service.calculateNetGains(trades: realTimeTrades, preferredCurrency: preferredCurrency)
+        return service.calculateNetGains(
+            trades: realTimeTrades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
+        )
     }
 
     /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
@@ -1285,7 +1292,11 @@ class DataModel: ObservableObject {
             // Fallback if service not initialized yet
             return (0.0, preferredCurrency)
         }
-        return service.calculateNetValue(trades: realTimeTrades, preferredCurrency: preferredCurrency)
+        return service.calculateNetValue(
+            trades: realTimeTrades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
+        )
     }
 
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
@@ -1307,7 +1318,8 @@ class DataModel: ObservableObject {
 
         return service.calculateDisplayPortfolioSummary(
             trades: realTimeTrades,
-            preferredCurrency: summaryCurrency
+            preferredCurrency: summaryCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
         )
     }
 
@@ -1328,7 +1340,32 @@ class DataModel: ObservableObject {
             )
         }
 
-        return service.calculatePositionProfitLoss(for: realTimeTrade)
+        let brokerValuation = freshTrading212BrokerValuationSnapshot()?.position(for: realTimeTrade.trade.name)
+        return service.calculatePositionProfitLoss(for: realTimeTrade, brokerValuation: brokerValuation)
+    }
+
+    private func freshTrading212BrokerValuationSnapshot(now: Date = Date()) -> Trading212BrokerValuationSnapshot? {
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled,
+              settings.accountType.isSupportedByPublicAPI,
+              let snapshot = trading212BrokerValuationSnapshot else {
+            return nil
+        }
+
+        let expectedAccountPrefix = "Trading212|\(settings.environment.rawValue)|\(settings.accountType.rawValue)|"
+        guard snapshot.accountKey.hasPrefix(expectedAccountPrefix) else {
+            return nil
+        }
+
+        let maxAge = max(TimeInterval(settings.syncIntervalSeconds * 4), 120)
+        guard snapshot.isFresh(now: now, maxAge: maxAge) else {
+            Task {
+                await Logger.shared.debug("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+            }
+            return nil
+        }
+
+        return snapshot
     }
 
     func startStaggeredRefresh() {

@@ -111,6 +111,7 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
                   let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
                 Task { @MainActor [weak self] in
+                    _ = self?.activateLatestHistoricalRatesIfAvailable()
                     self?.lastRefreshSuccess = false
                 }
                 return
@@ -169,6 +170,25 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
             let snapshotCount = history.count
             Task { await Logger.shared.info("💱 [CurrencyConverter] Loaded \(snapshotCount) historical rate snapshots") }
         }
+    }
+
+    @discardableResult
+    func activateLatestHistoricalRatesIfAvailable() -> Bool {
+        guard exchangeRates.isEmpty || lastRefreshTime == Date.distantPast else {
+            return false
+        }
+        guard let latest = rateHistory
+            .filter({ $0.baseCurrency.uppercased() == "USD" && !$0.rates.isEmpty })
+            .max(by: { $0.timestamp < $1.timestamp }) else {
+            return false
+        }
+
+        exchangeRates = latest.rates
+        lastRefreshTime = latest.timestamp
+        Task {
+            await Logger.shared.warning("💱 [CurrencyConverter] Using latest saved historical exchange rates after live fetch failed.")
+        }
+        return true
     }
     
     // Get historical rate for a specific currency pair
@@ -318,7 +338,7 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
         currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
 
-    private static func isPenceCurrency(_ currency: String) -> Bool {
+    static func isPenceCurrency(_ currency: String) -> Bool {
         let trimmed = currency.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed == "GBp" || trimmed.uppercased() == "GBX"
     }

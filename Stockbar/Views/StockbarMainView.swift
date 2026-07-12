@@ -7,7 +7,7 @@ struct StockbarMainView: View {
     @ObservedObject var dataModel: DataModel
     @ObservedObject var navigationState: StockbarMainNavigationState
 
-    init(dataModel: DataModel, navigationState: StockbarMainNavigationState) {
+    init(dataModel: DataModel, navigationState: StockbarMainNavigationState = StockbarMainNavigationState()) {
         self.dataModel = dataModel
         self.navigationState = navigationState
     }

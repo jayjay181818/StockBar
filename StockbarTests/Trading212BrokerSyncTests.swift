@@ -54,6 +54,72 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
     }
 
+    func testLinkedSyncPlanCarriesBrokerValuationSnapshotFromAccountSummary() throws {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let now = Date(timeIntervalSince1970: 200)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBP",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let existingTrade = Trade(
+            name: "AV.L",
+            position: Position(unitSize: "500", positionAvgCost: "4.8626", currency: "GBP", costCurrency: "GBP")
+        )
+        let row = makePreview(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            quantity: 500,
+            averagePrice: 486.28,
+            brokerPrice: 619.80,
+            currentValue: 3_099.00
+        ).rows[0]
+        let preview = makePreview(
+            rows: [row],
+            accountSummary: Trading212AccountSummary(
+                cash: Trading212Cash(availableToTrade: 1.39, inPies: nil, reservedForOrders: nil),
+                currency: "GBP",
+                id: 123,
+                investments: Trading212Investments(
+                    currentValue: 171_343.22,
+                    realizedProfitLoss: nil,
+                    totalCost: 91_066.02,
+                    unrealizedProfitLoss: 80_277.20
+                ),
+                totalValue: 171_344.61
+            )
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [existingTrade],
+            tradingInfoBySymbol: ["AV.L": TradingInfo()],
+            links: snapshot,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: false),
+            syncedAt: now
+        )
+
+        let valuation = try XCTUnwrap(plan.valuationSnapshot)
+        XCTAssertEqual(valuation.accountValue, 171_344.61, accuracy: 0.01)
+        XCTAssertEqual(valuation.investmentsValue ?? .nan, 171_343.22, accuracy: 0.01)
+        XCTAssertEqual(valuation.cashValue ?? .nan, 1.39, accuracy: 0.01)
+        XCTAssertEqual(valuation.totalUnrealizedProfitLoss ?? .nan, 80_277.20, accuracy: 0.01)
+        XCTAssertEqual(valuation.totalCost ?? .nan, 91_066.02, accuracy: 0.01)
+        let position = try XCTUnwrap(valuation.position(for: "AV.L"))
+        XCTAssertEqual(position.brokerCurrentValue, 3_099.00, accuracy: 0.01)
+        XCTAssertEqual(position.brokerUnrealizedProfitLoss ?? .nan, 150, accuracy: 0.01)
+        XCTAssertEqual(position.currency, "GBP")
+    }
+
     func testDeletesLinkedHoldingAndLinkWhenBrokerPositionIsMissingAndDeletionEnabled() {
         let linkedAt = Date(timeIntervalSince1970: 100)
         let link = makeLink(
@@ -148,6 +214,7 @@ final class Trading212BrokerSyncTests: XCTestCase {
             averagePrice: 46.47,
             brokerProvidedPrice: 29.07,
             currentValue: 1_065.62,
+            totalCost: 1_710.90,
             unrealizedProfitLoss: -645.28,
             fxImpact: nil,
             mappingConfidence: .medium,
@@ -458,6 +525,7 @@ final class Trading212BrokerSyncTests: XCTestCase {
             averagePrice: averagePrice,
             brokerProvidedPrice: brokerPrice,
             currentValue: currentValue,
+            totalCost: currentValue - 150,
             unrealizedProfitLoss: 150,
             fxImpact: nil,
             mappingConfidence: .high,
@@ -479,10 +547,13 @@ final class Trading212BrokerSyncTests: XCTestCase {
         return makePreview(rows: [row])
     }
 
-    private func makePreview(rows: [Trading212ImportPreviewRow]) -> Trading212ImportPreview {
+    private func makePreview(
+        rows: [Trading212ImportPreviewRow],
+        accountSummary: Trading212AccountSummary? = nil
+    ) -> Trading212ImportPreview {
         Trading212ImportPreview(
             account: makeAccount(),
-            accountSummary: nil,
+            accountSummary: accountSummary,
             rows: rows,
             metadataAvailable: true,
             generatedAt: Date(timeIntervalSince1970: 200),
@@ -511,6 +582,7 @@ final class Trading212BrokerSyncTests: XCTestCase {
             averagePrice: averagePrice,
             brokerProvidedPrice: brokerPrice,
             currentValue: currentValue,
+            totalCost: nil,
             unrealizedProfitLoss: nil,
             fxImpact: nil,
             mappingConfidence: .high,

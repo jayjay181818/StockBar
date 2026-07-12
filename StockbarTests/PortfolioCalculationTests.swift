@@ -397,6 +397,99 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(summary.ownedPositionCount, 2)
     }
 
+    func testTrading212BrokerSummaryUsesAccountValueIncludingCash() {
+        // Given
+        trades = [
+            makeRealTimeTrade(symbol: "MU", units: "150", avgCost: "76.79", currentPrice: 700, previousClose: 690)
+        ]
+        let snapshot = Trading212BrokerValuationSnapshot(
+            accountKey: "Trading212|live|stocksAndSharesISA|label|credential|account",
+            currency: "GBP",
+            accountValue: 171_344.61,
+            investmentsValue: 171_343.22,
+            cashValue: 1.39,
+            totalUnrealizedProfitLoss: 80_277.20,
+            totalCost: 91_066.02,
+            positionsByManualSymbol: [:],
+            updatedAt: Date()
+        )
+
+        // When
+        let netValue = service.calculateNetValue(
+            trades: trades,
+            preferredCurrency: "GBP",
+            brokerValuationSnapshot: snapshot
+        )
+        let summary = service.calculateDisplayPortfolioSummary(
+            trades: trades,
+            preferredCurrency: "GBP",
+            brokerValuationSnapshot: snapshot
+        )
+
+        // Then
+        XCTAssertEqual(netValue.amount, 171_344.61, accuracy: 0.01)
+        XCTAssertEqual(summary.totalValue, 171_344.61, accuracy: 0.01)
+        XCTAssertEqual(summary.totalGain, 80_277.20, accuracy: 0.01)
+        XCTAssertEqual(summary.totalCost, 91_066.02, accuracy: 0.01)
+        XCTAssertEqual(summary.valuationSource, .brokerProvided)
+    }
+
+    func testTrading212BrokerSummaryDoesNotRevalueUsdHoldingsThroughLocalFxWhenBrokerGbpValuesExist() {
+        // Given: local MU valuation would be 105,000 USD * 0.79 = 82,950 GBP.
+        trades = [
+            makeRealTimeTrade(symbol: "MU", units: "150", avgCost: "76.79", currentPrice: 700, previousClose: 690)
+        ]
+        let snapshot = Trading212BrokerValuationSnapshot(
+            accountKey: "Trading212|live|stocksAndSharesISA|label|credential|account",
+            currency: "GBP",
+            accountValue: 171_344.61,
+            investmentsValue: 171_343.22,
+            cashValue: 1.39,
+            totalUnrealizedProfitLoss: 80_277.20,
+            totalCost: 91_066.02,
+            positionsByManualSymbol: [
+                "MU": Trading212BrokerPositionValuation(
+                    manualSymbol: "MU",
+                    instrumentId: "US:MU",
+                    brokerCurrentValue: 114_987,
+                    brokerTotalCost: 11_518.50,
+                    brokerUnrealizedProfitLoss: 103_468.50,
+                    fxImpact: nil,
+                    currency: "GBP",
+                    updatedAt: Date()
+                )
+            ],
+            updatedAt: Date()
+        )
+
+        // When
+        let summary = service.calculateDisplayPortfolioSummary(
+            trades: trades,
+            preferredCurrency: "GBP",
+            brokerValuationSnapshot: snapshot
+        )
+
+        // Then
+        XCTAssertEqual(summary.totalValue, 171_344.61, accuracy: 0.01)
+        XCTAssertNotEqual(summary.totalValue, 82_950.0, accuracy: 0.01)
+    }
+
+    func testTrading212BrokerSummaryFallsBackToLocalCalculationWhenSnapshotMissing() {
+        trades = [
+            makeRealTimeTrade(symbol: "AAPL", units: "10", avgCost: "150", currentPrice: 170, previousClose: 160)
+        ]
+
+        let summary = service.calculateDisplayPortfolioSummary(
+            trades: trades,
+            preferredCurrency: "USD",
+            brokerValuationSnapshot: nil
+        )
+
+        XCTAssertEqual(summary.totalValue, 1700.0, accuracy: 0.01)
+        XCTAssertEqual(summary.totalGain, 200.0, accuracy: 0.01)
+        XCTAssertEqual(summary.valuationSource, .localCalculationFallback)
+    }
+
     func testDisplayPortfolioSummary_WithUKAutoDetectedGBXCost_NormalizesToGBP() {
         // Given
         trades = [
@@ -472,6 +565,33 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(summary.totalAmount, 200.0, accuracy: 0.01)
         XCTAssertEqual(summary.totalPercent, 13.333, accuracy: 0.01)
         XCTAssertEqual(summary.currency, "USD")
+    }
+
+    func testPositionProfitLossUsesBrokerUnrealizedProfitLossWhenAvailable() {
+        let trade = makeRealTimeTrade(
+            symbol: "MU",
+            units: "150",
+            avgCost: "76.79",
+            currentPrice: 700,
+            previousClose: 690
+        )
+        let valuation = Trading212BrokerPositionValuation(
+            manualSymbol: "MU",
+            instrumentId: "US:MU",
+            brokerCurrentValue: 114_987,
+            brokerTotalCost: 11_518.50,
+            brokerUnrealizedProfitLoss: 103_468.50,
+            fxImpact: nil,
+            currency: "GBP",
+            updatedAt: Date()
+        )
+
+        let summary = service.calculatePositionProfitLoss(for: trade, brokerValuation: valuation)
+
+        XCTAssertEqual(summary.dayAmount, 1500.0, accuracy: 0.01)
+        XCTAssertEqual(summary.totalAmount, 103_468.50, accuracy: 0.01)
+        XCTAssertEqual(summary.totalPercent, 898.28, accuracy: 0.01)
+        XCTAssertEqual(summary.currency, "GBP")
     }
 
     func testHoldingsCurrencyFormatterUsesSymbolsSignsAndGrouping() {

@@ -79,6 +79,7 @@ extension Trading212ImportPreviewRow {
             averagePrice: position.averagePricePaid,
             brokerProvidedPrice: position.currentPrice,
             currentValue: position.walletImpact?.currentValue,
+            totalCost: position.walletImpact?.totalCost,
             unrealizedProfitLoss: position.walletImpact?.unrealizedProfitLoss,
             fxImpact: position.walletImpact?.fxImpact,
             mappingConfidence: resolution.confidence,

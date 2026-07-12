@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 2.4.3** | **macOS 15.4+** | **Swift 6**
+**Version 2.4.4** | **macOS 15.4+** | **Swift 6**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
@@ -230,7 +230,15 @@ python3 Stockbar/Resources/get_stock_data.py AAPL
 
 ## Release History
 
-### Version 2.4.3 (Current) - Embedded Settings & Live Menu Graph Polish
+### Version 2.4.4 (Current) - Trading 212 Broker Valuation Accuracy
+- **Broker Account Value**: Linked Trading 212 portfolios use the broker account value, including cash, for Net Value and portfolio summaries while a matching valuation snapshot is fresh.
+- **Broker P/L**: Linked position and portfolio Total P/L use Trading 212 unrealised P/L and cost data when available; Day P/L retains Stockbar's previous-close calculation.
+- **Currency Safety**: Broker values are converted from the account currency without revaluing broker-provided GBP positions through the local USD path, with GBX/GBP normalization preserved.
+- **Safe Fallbacks**: Stale, invalid, missing, or account-mismatched broker snapshots fall back to the existing local portfolio calculations.
+- **Resilient FX**: When live exchange-rate refresh fails, Stockbar activates the latest saved historical USD rate snapshot before relying on hard-coded fallback rates.
+- See [Changelogs/release_notes_v2.4.4.md](./Changelogs/release_notes_v2.4.4.md).
+
+### Version 2.4.3 - Embedded Settings & Live Menu Graph Polish
 - **Embedded Settings**: Moved Settings into the main Stockbar window as a first-class sidebar destination.
 - **Unified Settings Routing**: App menu Settings, `Cmd+,`, sidebar Settings, and menu popover Preferences now open the embedded Settings section instead of a separate popout.
 - **Menu Dropdown Graphs**: `1D` stock dropdown charts use symbol snapshots/live samples, while portfolio dropdown charts reconstruct the current portfolio over the last 24 hours from current holdings plus available symbol snapshots/live samples.
@@ -285,4 +293,4 @@ python3 Stockbar/Resources/get_stock_data.py AAPL
 
 Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-Last updated: June 10, 2026 - Version 2.4.3
+Last updated: July 12, 2026 - Version 2.4.4
