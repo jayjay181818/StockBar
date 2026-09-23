@@ -1,183 +1,85 @@
-# Stockbar Backup & Restore Scripts
+# Stockbar backup and restore scripts
 
-Complete backup and restore scripts for all Stockbar data.
+These scripts preserve the local Stockbar files needed to recover portfolio preferences and historical data. They do not include Keychain items, so a successful file restore is not proof that every credential or external data source can be recovered.
 
-## Overview
+## Before you run either script
 
-Stockbar stores data in three locations:
+Quit Stockbar and verify that no `Stockbar` process is running. The scripts fail closed when they cannot verify this, and they never stop the app automatically. This is required so the SQLite database and its `-wal`/`-shm` sidecars are copied as one consistent set.
 
-1. **UserDefaults** - Portfolio configuration, preferences, menu bar settings
-2. **Core Data** - Historical price data, OHLC snapshots (~89 MB)
-3. **Config File** - API keys (plain-text JSON since removing Keychain)
+The scripts use the current user's home directory by default. For isolated fixture tests only, set `STOCKBAR_HOME_OVERRIDE` to a temporary directory and set `STOCKBAR_DEFAULTS_COMMAND` to an executable mock. The override refuses to run without that explicit defaults command, so fixture tests cannot accidentally write the real `com.stockbar` defaults domain. Do not point either variable at a real home directory or the real `defaults` command.
 
-## Quick Start
-
-### Create a Complete Backup
+## Create a backup
 
 ```bash
-cd Scripts
-./backup_stockbar_data.sh
+bash Scripts/backup_stockbar_data.sh
 ```
 
-This creates a timestamped backup containing:
-- `UserDefaults.plist` - All app preferences and portfolio config
-- `StockbarDataModel.sqlite*` - Complete historical data database
-- `.stockbar_config.json` - API keys
-- `MANIFEST.txt` - Backup details and restore instructions
+Backups are written below:
 
-**Backup Location:** `~/Library/Application Support/Stockbar/Backups/`
+```text
+~/Library/Application Support/Stockbar/Backups/stockbar_complete_backup_YYYY-MM-DD_HHMMSS/
+```
 
-### Restore from Backup
+Each backup may contain:
+
+- `UserDefaults.plist` — portfolio configuration and app preferences
+- `StockbarDataModel.sqlite`, plus any matching `-wal` and `-shm` files
+- `.stockbar_config.json` — API keys and provider settings
+- `.stockbar_cache.json` — optional price cache (from `~/Library/Caches/stockbar-cache/quote_cache.json`, or the legacy `~/.stockbar_cache.json`)
+- `MANIFEST.txt` — captured contents, canonical paths, and restore prerequisites
+
+Existing backups are never deleted automatically. Remove an old backup only after checking its contents and confirming that it is no longer needed.
+
+The API configuration is read from the canonical path used by the app:
+
+```text
+~/Library/Application Support/com.stockbar/.stockbar_config.json
+```
+
+The previous `~/Documents/.stockbar_config.json` path is not used by these scripts. If a legacy file is still present, let Stockbar migrate it or handle that migration explicitly before backing up.
+
+## Restore a backup
 
 ```bash
-cd Scripts
-./restore_stockbar_data.sh stockbar_complete_backup_2025-10-03_102800
+bash Scripts/restore_stockbar_data.sh stockbar_complete_backup_2026-09-05_102800
 ```
 
-**⚠️ Warning:** This will overwrite your current data!
+The restore script:
 
-The script will:
-1. Prompt for confirmation
-2. Offer to quit Stockbar if running
-3. Backup current database before overwriting
-4. Restore all data from the specified backup
-5. Display manifest showing what was restored
+1. Verifies the backup name and location, then verifies that Stockbar is stopped.
+2. Requests an explicit `yes` confirmation before overwriting data.
+3. Imports `UserDefaults.plist` when present.
+4. Copies the SQLite database and matching sidecars. Existing database files are preserved in a timestamped `StockbarDataModel_pre_restore_*` directory first; stale destination sidecars are removed only after that safety copy.
+5. Restores `.stockbar_config.json` to `~/Library/Application Support/com.stockbar/.stockbar_config.json` with mode `600`.
+6. Restores the optional cache and prints the manifest.
 
-## Backup Retention
+Review the output and manifest before restarting Stockbar. Keychain items are not restored by this procedure and must be handled separately.
 
-- Automatic cleanup keeps the 10 most recent complete backups
-- Older portfolio-only backups (created by app) are not affected
-- Manual backups in custom locations are not deleted
+## What is covered
 
-## Data Storage Locations
+| Store | Location | Included |
+| --- | --- | --- |
+| UserDefaults | `~/Library/Preferences/com.stockbar.plist` (via `defaults`) | Yes |
+| Core Data | `~/Library/Application Support/Stockbar/StockbarDataModel.sqlite*` | Yes, when present |
+| API configuration | `~/Library/Application Support/com.stockbar/.stockbar_config.json` | Yes, when present |
+| Price cache | `~/Library/Caches/stockbar-cache/quote_cache.json` (legacy: `~/.stockbar_cache.json`) | Optional |
+| Keychain | macOS Keychain services | No |
 
-### 1. UserDefaults
-**Path:** `~/Library/Preferences/com.fhl43211.Stockbar.plist`
+The scripts do not publish backups, upload them, or validate provider credentials. Keep backup directories private because the configuration file contains sensitive API keys.
 
-**Contains:**
-- Portfolio trades (`usertrades`)
-- Preferred currency
-- Color coding preferences
-- Menu bar display settings
-- Last refresh timestamps
+## Run the isolated checks
 
-**Export manually:**
-```bash
-defaults export com.fhl43211.Stockbar ~/Desktop/stockbar_prefs.plist
-```
-
-### 2. Core Data Database
-**Path:** `~/Library/Application Support/Stockbar/StockbarDataModel.sqlite`
-
-**Contains:**
-- Historical price snapshots
-- Portfolio value history
-- OHLC candlestick data
-- Volume data
-
-**Size:** ~89 MB (varies with history length)
-
-**Files:**
-- `StockbarDataModel.sqlite` - Main database
-- `StockbarDataModel.sqlite-wal` - Write-ahead log
-- `StockbarDataModel.sqlite-shm` - Shared memory
-
-**Backup manually:**
-```bash
-cp -r ~/Library/Application\ Support/Stockbar/StockbarDataModel.sqlite* ~/Desktop/
-```
-
-### 3. Configuration File
-**Path:** `~/Documents/.stockbar_config.json`
-
-**Contains:**
-- FMP API key (plain-text)
-
-**Format:**
-```json
-{
-  "FMP_API_KEY": "your_api_key_here"
-}
-```
-
-**⚠️ Important:** After removing Keychain storage, this file is now plain-text. It's included in backups but contains sensitive API keys.
-
-**Backup manually:**
-```bash
-cp ~/Documents/.stockbar_config.json ~/Desktop/
-```
-
-## Migration Notes
-
-### From Keychain to File-Based Storage
-
-If you previously used Keychain storage (before this change):
-
-1. **API Key Migration:** The app automatically migrated your API key from Keychain to `~/.stockbar_config.json` on first launch
-2. **Data Loss:** You may have noticed missing data because the Keychain was storing the API key but portfolio data is in UserDefaults/Core Data
-3. **What Happened:** No data was actually lost - your portfolio is still in UserDefaults and historical data is still in Core Data
-
-### Checking Your Data
+From the repository root:
 
 ```bash
-# Check if portfolio data exists
-defaults read com.fhl43211.Stockbar usertrades
-
-# Check Core Data size
-du -h ~/Library/Application\ Support/Stockbar/StockbarDataModel.sqlite
-
-# Check API key
-cat ~/Documents/.stockbar_config.json
+python3 -m unittest discover -s Scripts/tests -v
 ```
 
-## Automated Backups
-
-To create automated daily backups, add to your crontab:
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add line (runs at 2 AM daily)
-0 2 * * * /Users/josh/Downloads/Stockbar\ Claude/Stockbar/Scripts/backup_stockbar_data.sh >> /tmp/stockbar_backup.log 2>&1
-```
-
-Or use launchd for macOS-native scheduling.
+The recovery tests use a temporary fixture home, a mocked `defaults` executable, and mocked process probes. They do not read or write your real defaults domain, database, config, cache, or Keychain.
 
 ## Troubleshooting
 
-### Backup Failed
-- Ensure Stockbar is not running during backup (not required but recommended)
-- Check disk space: `df -h ~`
-- Verify permissions: `ls -la ~/Library/Application\ Support/Stockbar/`
-
-### Restore Failed
-- Make sure Stockbar is quit before restoring
-- Check backup exists: `ls ~/Library/Application\ Support/Stockbar/Backups/`
-- Verify backup integrity: Check MANIFEST.txt in backup folder
-
-### Data Still Missing After Restore
-1. Check UserDefaults was restored: `defaults read com.fhl43211.Stockbar`
-2. Verify Core Data file exists and has data:
-   ```bash
-   ls -lh ~/Library/Application\ Support/Stockbar/StockbarDataModel.sqlite
-   sqlite3 ~/Library/Application\ Support/Stockbar/StockbarDataModel.sqlite "SELECT COUNT(*) FROM ZPRICESNAPSHOTENTITY;"
-   ```
-3. Check logs: `cat ~/Documents/stockbar.log`
-
-## Security Note
-
-⚠️ **API Key Storage:** Since moving from Keychain to file-based storage, your API keys are now stored in plain-text at `~/Documents/.stockbar_config.json`. This file is included in backups.
-
-**Recommendations:**
-- Keep backups in secure locations
-- Don't share backups publicly (they contain API keys)
-- Consider encrypting backup archives if storing externally
-- Set restrictive permissions: `chmod 600 ~/.stockbar_config.json`
-
-## Support
-
-For issues or questions:
-- Check logs: `~/Documents/stockbar.log`
-- Review MANIFEST.txt in backup folder
-- Consult CLAUDE.md for architecture details
+- If the script says Stockbar is running, quit the app and check `pgrep -x Stockbar` before retrying.
+- If a backup is missing, list `~/Library/Application Support/Stockbar/Backups/` and pass the exact directory name.
+- If a restore fails, keep the printed `StockbarDataModel_pre_restore_*` directory and inspect the manifest before attempting another restore.
+- To inspect the restored SQLite store, use a read-only command such as `sqlite3 ... '.tables'` after Stockbar remains stopped.

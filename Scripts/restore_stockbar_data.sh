@@ -1,132 +1,170 @@
 #!/bin/bash
 
-# Stockbar Complete Data Restore Script
-# Restores all Stockbar data from a complete backup
+# Stockbar data restore script.
+#
+# This restores the files captured by backup_stockbar_data.sh. It does not
+# include Keychain items, and it never stops Stockbar automatically.
 
-set -e  # Exit on error
+set -euo pipefail
+umask 077
 
-# Check if backup name was provided
-if [ -z "$1" ]; then
-    echo "Usage: $0 <backup_name>"
-    echo ""
+# STOCKBAR_HOME_OVERRIDE is intended for isolated fixture tests. In normal use
+# the script resolves paths below the current user's home directory.
+STOCKBAR_HOME="${STOCKBAR_HOME_OVERRIDE:-$HOME}"
+if [[ -n "${STOCKBAR_HOME_OVERRIDE:-}" ]]; then
+    [[ -n "${STOCKBAR_DEFAULTS_COMMAND:-}" ]] || {
+        echo "Error: STOCKBAR_HOME_OVERRIDE requires STOCKBAR_DEFAULTS_COMMAND to isolate defaults" >&2
+        exit 1
+    }
+fi
+DEFAULTS_COMMAND="${STOCKBAR_DEFAULTS_COMMAND:-defaults}"
+command -v "${DEFAULTS_COMMAND}" >/dev/null 2>&1 || {
+    echo "Error: defaults command is unavailable: ${DEFAULTS_COMMAND}" >&2
+    exit 1
+}
+APP_SUPPORT_DIR="${STOCKBAR_HOME}/Library/Application Support"
+STOCKBAR_DATA_DIR="${APP_SUPPORT_DIR}/Stockbar"
+BACKUP_DIR="${STOCKBAR_DATA_DIR}/Backups"
+CONFIG_FILE="${APP_SUPPORT_DIR}/com.stockbar/.stockbar_config.json"
+# Quote cache (optional) is restored to the 2.4.5+ Caches location; the backup
+# archive keeps the historical file name.
+CACHE_FILE="${STOCKBAR_HOME}/Library/Caches/stockbar-cache/quote_cache.json"
+
+fail() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+list_backups() {
+    local path
+    for path in "${BACKUP_DIR}"/stockbar_complete_backup_*; do
+        [[ -d "${path}" ]] || continue
+        basename "${path}"
+    done | sort -r
+}
+
+require_stockbar_stopped() {
+    command -v pgrep >/dev/null 2>&1 || fail "cannot verify whether Stockbar is running (pgrep is unavailable)"
+    set +e
+    pgrep -x "Stockbar" >/dev/null 2>&1
+    local pgrep_status=$?
+    set -e
+    case "${pgrep_status}" in
+        0) fail "Stockbar is running; quit it and rerun this restore" ;;
+        1) return ;;
+        *) fail "cannot verify whether Stockbar is running (pgrep exited ${pgrep_status})" ;;
+    esac
+}
+
+if [[ $# -ne 1 || -z "$1" ]]; then
+    echo "Usage: $0 <backup_name>" >&2
+    echo
     echo "Available backups:"
-    BACKUP_DIR="$HOME/Library/Application Support/Stockbar/Backups"
-    ls -1t "${BACKUP_DIR}" | grep "stockbar_complete_backup_"
-    echo ""
+    list_backups || true
     exit 1
 fi
 
 BACKUP_NAME="$1"
-BACKUP_DIR="$HOME/Library/Application Support/Stockbar/Backups"
-BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+if [[ ! "${BACKUP_NAME}" =~ ^stockbar_complete_backup_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$ ]]; then
+    fail "invalid backup name; pass the directory name printed by the backup script"
+fi
 
-# Verify backup exists
-if [ ! -d "${BACKUP_PATH}" ]; then
-    echo "❌ Error: Backup not found at ${BACKUP_PATH}"
-    echo ""
+BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+if [[ ! -d "${BACKUP_PATH}" ]]; then
+    echo "Error: backup not found at ${BACKUP_PATH}" >&2
+    echo
     echo "Available backups:"
-    ls -1t "${BACKUP_DIR}" | grep "stockbar_complete_backup_"
+    list_backups || true
     exit 1
 fi
 
-echo "=================================================="
-echo "Stockbar Complete Restore - $(date)"
-echo "=================================================="
-echo ""
-echo "Restoring from: ${BACKUP_PATH}"
-echo ""
+require_stockbar_stopped
 
-# Warning prompt
-read -p "⚠️  This will OVERWRITE current Stockbar data. Continue? (yes/no): " CONFIRM
-if [ "$CONFIRM" != "yes" ]; then
+echo "=================================================="
+echo "Stockbar Data Restore - $(date)"
+echo "=================================================="
+echo
+echo "Restoring from: ${BACKUP_PATH}"
+echo
+
+read -r -p "This will overwrite current Stockbar data. Continue? (yes/no): " CONFIRM
+if [[ "${CONFIRM}" != "yes" ]]; then
     echo "Restore cancelled."
     exit 0
 fi
-echo ""
+require_stockbar_stopped
+echo
 
-# Check if Stockbar is running
-if pgrep -x "Stockbar" > /dev/null; then
-    echo "⚠️  Stockbar is currently running!"
-    read -p "Do you want to quit Stockbar now? (yes/no): " QUIT
-    if [ "$QUIT" = "yes" ]; then
-        echo "Quitting Stockbar..."
-        killall Stockbar || true
-        sleep 2
-    else
-        echo "❌ Please quit Stockbar manually and run this script again."
-        exit 1
-    fi
-fi
-echo ""
-
-# 1. Restore UserDefaults
 echo "[1/4] Restoring UserDefaults..."
-if [ -f "${BACKUP_PATH}/UserDefaults.plist" ]; then
-    defaults import com.fhl43211.Stockbar "${BACKUP_PATH}/UserDefaults.plist"
-    echo "✅ UserDefaults restored"
+if [[ -f "${BACKUP_PATH}/UserDefaults.plist" ]]; then
+    "${DEFAULTS_COMMAND}" import com.stockbar "${BACKUP_PATH}/UserDefaults.plist"
+    echo "UserDefaults restored"
 else
-    echo "⚠️  UserDefaults.plist not found in backup"
+    echo "Warning: UserDefaults.plist not found in backup"
 fi
-echo ""
+echo
 
-# 2. Restore Core Data
 echo "[2/4] Restoring Core Data..."
-COREDATA_DIR="$HOME/Library/Application Support/Stockbar"
-mkdir -p "${COREDATA_DIR}"
-
-if [ -f "${BACKUP_PATH}/StockbarDataModel.sqlite" ]; then
-    # Backup current database before overwriting
-    if [ -f "${COREDATA_DIR}/StockbarDataModel.sqlite" ]; then
-        SAFETY_BACKUP="${COREDATA_DIR}/StockbarDataModel_pre_restore_$(date +%Y%m%d_%H%M%S).sqlite"
-        cp "${COREDATA_DIR}/StockbarDataModel.sqlite" "${SAFETY_BACKUP}"
-        echo "ℹ️  Current database backed up to: ${SAFETY_BACKUP}"
+mkdir -p "${STOCKBAR_DATA_DIR}"
+if [[ -f "${BACKUP_PATH}/StockbarDataModel.sqlite" ]]; then
+    RESTORE_STAMP=$(date +%Y%m%d_%H%M%S)
+    SAFETY_BACKUP="${STOCKBAR_DATA_DIR}/StockbarDataModel_pre_restore_${RESTORE_STAMP}"
+    if [[ -e "${SAFETY_BACKUP}" ]]; then
+        fail "safety backup path already exists at ${SAFETY_BACKUP}; refusing to overwrite it"
     fi
+    mkdir "${SAFETY_BACKUP}"
 
-    # Restore database files
-    cp "${BACKUP_PATH}/StockbarDataModel.sqlite" "${COREDATA_DIR}/"
-    [ -f "${BACKUP_PATH}/StockbarDataModel.sqlite-wal" ] && \
-        cp "${BACKUP_PATH}/StockbarDataModel.sqlite-wal" "${COREDATA_DIR}/"
-    [ -f "${BACKUP_PATH}/StockbarDataModel.sqlite-shm" ] && \
-        cp "${BACKUP_PATH}/StockbarDataModel.sqlite-shm" "${COREDATA_DIR}/"
+    for file in "StockbarDataModel.sqlite" "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
+        if [[ -f "${STOCKBAR_DATA_DIR}/${file}" ]]; then
+            cp "${STOCKBAR_DATA_DIR}/${file}" "${SAFETY_BACKUP}/${file}"
+        fi
+    done
+    echo "Current database files preserved in: ${SAFETY_BACKUP}"
 
-    SIZE=$(du -h "${COREDATA_DIR}/StockbarDataModel.sqlite" | cut -f1)
-    echo "✅ Core Data restored (${SIZE})"
+    cp "${BACKUP_PATH}/StockbarDataModel.sqlite" "${STOCKBAR_DATA_DIR}/"
+    for sidecar in "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
+        if [[ -f "${BACKUP_PATH}/${sidecar}" ]]; then
+            cp "${BACKUP_PATH}/${sidecar}" "${STOCKBAR_DATA_DIR}/"
+        elif [[ -f "${STOCKBAR_DATA_DIR}/${sidecar}" ]]; then
+            # The old sidecar was preserved above. Remove it so it cannot be
+            # paired with the restored main database.
+            rm -f "${STOCKBAR_DATA_DIR}/${sidecar}"
+        fi
+    done
+    echo "Core Data restored ($(du -h "${STOCKBAR_DATA_DIR}/StockbarDataModel.sqlite" | awk '{print $1}'))"
 else
-    echo "⚠️  StockbarDataModel.sqlite not found in backup"
+    echo "Warning: StockbarDataModel.sqlite not found in backup"
 fi
-echo ""
+echo
 
-# 3. Restore API config
 echo "[3/4] Restoring API configuration..."
-CONFIG_FILE="$HOME/Documents/.stockbar_config.json"
-if [ -f "${BACKUP_PATH}/.stockbar_config.json" ]; then
+if [[ -f "${BACKUP_PATH}/.stockbar_config.json" ]]; then
+    mkdir -p "$(dirname "${CONFIG_FILE}")"
     cp "${BACKUP_PATH}/.stockbar_config.json" "${CONFIG_FILE}"
-    echo "✅ Config file restored"
+    chmod 600 "${CONFIG_FILE}"
+    echo "Config file restored to ${CONFIG_FILE}"
 else
-    echo "⚠️  .stockbar_config.json not found in backup"
+    echo "Warning: .stockbar_config.json not found in backup"
 fi
-echo ""
+echo
 
-# 4. Restore cache (optional)
 echo "[4/4] Restoring cache file..."
-CACHE_FILE="$HOME/.stockbar_cache.json"
-if [ -f "${BACKUP_PATH}/.stockbar_cache.json" ]; then
+if [[ -f "${BACKUP_PATH}/.stockbar_cache.json" ]]; then
+    mkdir -p "$(dirname "${CACHE_FILE}")"
     cp "${BACKUP_PATH}/.stockbar_cache.json" "${CACHE_FILE}"
-    echo "✅ Cache file restored"
+    echo "Cache file restored"
 else
-    echo "ℹ️  Cache file not in backup (will regenerate)"
+    echo "No cache file in backup (will regenerate)"
 fi
-echo ""
+echo
 
 echo "=================================================="
-echo "Restore Complete!"
+echo "Restore Complete"
 echo "=================================================="
-echo ""
+echo
 echo "Restored from: ${BACKUP_NAME}"
-echo "Backup manifest:"
-if [ -f "${BACKUP_PATH}/MANIFEST.txt" ]; then
+echo "Keychain items were not restored; review credentials separately."
+echo "Review MANIFEST.txt before restarting Stockbar:"
+if [[ -f "${BACKUP_PATH}/MANIFEST.txt" ]]; then
     cat "${BACKUP_PATH}/MANIFEST.txt"
 fi
-echo ""
-echo "You can now start Stockbar."
-echo ""
