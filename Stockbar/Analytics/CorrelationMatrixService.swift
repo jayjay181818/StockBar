@@ -332,4 +332,51 @@ actor CorrelationMatrixService {
 
         return returnSeries
     }
+
+    /// Builds date-aligned daily return series. Each symbol contributes its
+    /// last valid price per calendar day; only days present for every symbol
+    /// are used, so return `i` covers the same interval for all series.
+    /// Pearson correlation is meaningless for series paired by index alone.
+    nonisolated static func alignedDailyReturns(
+        from snapshots: [String: [PriceSnapshot]],
+        calendar: Calendar = .current
+    ) -> (returns: [String: [Double]], commonDays: Int) {
+        var dailyPrices: [String: [Date: Double]] = [:]
+        for (symbol, prices) in snapshots {
+            var byDay: [Date: (timestamp: Date, price: Double)] = [:]
+            for snapshot in prices where snapshot.price.isFinite && snapshot.price > 0 {
+                let day = calendar.startOfDay(for: snapshot.timestamp)
+                if let existing = byDay[day], existing.timestamp > snapshot.timestamp { continue }
+                byDay[day] = (snapshot.timestamp, snapshot.price)
+            }
+            if !byDay.isEmpty {
+                dailyPrices[symbol] = byDay.mapValues(\.price)
+            }
+        }
+
+        guard dailyPrices.count > 1 else { return ([:], 0) }
+        var commonDaySet: Set<Date>?
+        for prices in dailyPrices.values {
+            let days = Set(prices.keys)
+            commonDaySet = commonDaySet.map { $0.intersection(days) } ?? days
+        }
+        let commonDays = (commonDaySet ?? []).sorted()
+        guard commonDays.count > 2 else { return ([:], commonDays.count) }
+
+        var returns: [String: [Double]] = [:]
+        for (symbol, prices) in dailyPrices {
+            let series = commonDays.compactMap { prices[$0] }
+            returns[symbol] = zip(series, series.dropFirst()).map { ($1 - $0) / $0 }
+        }
+        return (returns, commonDays.count)
+    }
+
+    /// Annualised volatility (252 trading days) of a daily return series.
+    nonisolated static func annualizedVolatility(of returns: [Double]) -> Double? {
+        guard returns.count > 1 else { return nil }
+        let mean = returns.reduce(0, +) / Double(returns.count)
+        let variance = returns.reduce(0) { $0 + pow($1 - mean, 2) } / Double(returns.count - 1)
+        let volatility = sqrt(variance) * sqrt(252)
+        return volatility.isFinite ? volatility : nil
+    }
 }

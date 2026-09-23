@@ -38,11 +38,16 @@ extension Trading212ImportPreviewRow {
         account: BrokerAccountIdentity,
         position: Trading212Position,
         resolution: InstrumentResolutionResult,
-        existingManualHoldings: [Trading212ManualHoldingSnapshot]
+        existingManualHoldings: [Trading212ManualHoldingSnapshot],
+        identityStore: InstrumentAliasStore = InstrumentAliasStore()
     ) -> Trading212ImportPreviewRow {
         let providerTicker = position.instrument.ticker
         let displaySymbol = resolution.identity?.displaySymbol ?? providerTicker
-        let manualMatches = manualMatches(for: resolution.identity?.instrumentId, in: existingManualHoldings)
+        let manualMatches = manualMatches(
+            for: resolution.identity,
+            in: existingManualHoldings,
+            identityStore: identityStore
+        )
         let manualMatch = manualMatches.first
         let quantityDelta = manualMatch.flatMap { match in
             position.quantity.map { $0 - match.quantity }
@@ -79,6 +84,7 @@ extension Trading212ImportPreviewRow {
             averagePrice: position.averagePricePaid,
             brokerProvidedPrice: position.currentPrice,
             currentValue: position.walletImpact?.currentValue,
+            totalCost: position.walletImpact?.totalCost,
             unrealizedProfitLoss: position.walletImpact?.unrealizedProfitLoss,
             fxImpact: position.walletImpact?.fxImpact,
             mappingConfidence: resolution.confidence,
@@ -93,20 +99,27 @@ extension Trading212ImportPreviewRow {
     }
 
     private static func manualMatches(
-        for instrumentId: String?,
-        in holdings: [Trading212ManualHoldingSnapshot]
+        for identity: InstrumentIdentity?,
+        in holdings: [Trading212ManualHoldingSnapshot],
+        identityStore: InstrumentAliasStore
     ) -> [Trading212ManualHoldingMatch] {
-        guard let instrumentId else {
+        guard let identity else {
             return []
         }
         let resolver = InstrumentResolver()
+        let aliasSymbols = Set(identityStore.aliases(for: identity.displaySymbol))
+        let isinPreferredSymbol = identityStore.preferredSymbol(forISIN: identity.isin)
         return holdings.compactMap { holding in
             let resolution = resolver.resolveLegacySymbol(
                 holding.symbol,
                 displayName: holding.displayName,
                 currency: holding.currency
             )
-            guard let identity = resolution.identity, identity.instrumentId == instrumentId else {
+            let normalizedHoldingSymbol = holding.symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let isDirectMatch = resolution.identity?.instrumentId == identity.instrumentId
+            let isKnownAlias = aliasSymbols.contains(normalizedHoldingSymbol)
+            let isISINMatch = isinPreferredSymbol == normalizedHoldingSymbol
+            guard isDirectMatch || isKnownAlias || isISINMatch else {
                 return nil
             }
             return Trading212ManualHoldingMatch(
@@ -117,9 +130,66 @@ extension Trading212ImportPreviewRow {
                 averageCost: holding.averageCost,
                 currency: SymbolMetadata.normalizeCurrency(holding.currency),
                 isWatchlistOnly: holding.isWatchlistOnly,
-                resolutionConfidence: resolution.confidence
+                resolutionConfidence: isDirectMatch || isISINMatch ? .high : .medium
             )
         }
+    }
+
+    func reconciledWithExistingProviderLink(
+        links: BrokerLinkStoreSnapshot,
+        existingManualHoldings: [Trading212ManualHoldingSnapshot]
+    ) -> Trading212ImportPreviewRow {
+        let providerTickerKey = providerTicker.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let link = links.positions
+            .filter({ $0.brokerAccountKey == account.brokerAccountKey && $0.normalizedProviderTicker == providerTickerKey })
+            .min(by: { $0.linkedAt < $1.linkedAt }),
+              let holding = existingManualHoldings.first(where: {
+                  $0.symbol.caseInsensitiveCompare(link.manualSymbol) == .orderedSame
+              }) else {
+            return self
+        }
+
+        let match = Trading212ManualHoldingMatch(
+            symbol: holding.symbol,
+            instrumentId: link.instrumentId,
+            displayName: holding.displayName,
+            quantity: holding.quantity,
+            averageCost: holding.averageCost,
+            currency: SymbolMetadata.normalizeCurrency(holding.currency),
+            isWatchlistOnly: holding.isWatchlistOnly,
+            resolutionConfidence: .high
+        )
+        let conflict: Trading212PreviewConflictStatus
+        if holding.isWatchlistOnly {
+            conflict = .manualWatchlistMatch
+        } else if let quantity, abs(quantity - holding.quantity) > 0.01 {
+            conflict = .manualQuantityMismatch
+        } else {
+            conflict = .manualHoldingMatch
+        }
+        var updatedWarnings = warnings
+        updatedWarnings.append("Matched existing Trading 212 provider identity to \(holding.symbol).")
+        return Trading212ImportPreviewRow(
+            id: id,
+            account: account,
+            providerTicker: providerTicker,
+            instrumentId: instrumentId,
+            displaySymbol: displaySymbol,
+            displayName: displayName,
+            quantity: quantity,
+            averagePrice: averagePrice,
+            brokerProvidedPrice: brokerProvidedPrice,
+            currentValue: currentValue,
+            totalCost: totalCost,
+            unrealizedProfitLoss: unrealizedProfitLoss,
+            fxImpact: fxImpact,
+            mappingConfidence: mappingConfidence,
+            manualMatch: match,
+            additionalManualMatchCount: 0,
+            conflictStatus: conflict,
+            valueSource: valueSource,
+            warnings: updatedWarnings
+        )
     }
 }
 
@@ -179,6 +249,7 @@ struct Trading212PreviewCoordinator {
         settings: Trading212StoredSettings,
         credentials: Trading212AuthConfiguration,
         existingManualHoldings: [Trading212ManualHoldingSnapshot],
+        existingBrokerLinks: BrokerLinkStoreSnapshot = .empty(),
         includeMetadata: Bool = true,
         useCache: Bool = true
     ) async throws -> Trading212ImportPreview {
@@ -200,6 +271,9 @@ struct Trading212PreviewCoordinator {
                 account: snapshot.account,
                 position: position,
                 resolution: resolution,
+                existingManualHoldings: existingManualHoldings
+            ).reconciledWithExistingProviderLink(
+                links: existingBrokerLinks,
                 existingManualHoldings: existingManualHoldings
             )
         }

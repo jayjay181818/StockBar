@@ -6,8 +6,8 @@
 //  Handles both batch and staggered refresh strategies
 //
 
-import Foundation
 import Combine
+import Foundation
 
 /// Service managing stock price refresh operations
 @MainActor
@@ -23,6 +23,13 @@ class RefreshService {
     private var currentSymbolIndex = 0
     private var cancellables = Set<AnyCancellable>()
     private var isRefreshing = false
+    private var lastImmediateFireAt: Date?
+
+    /// Floor between the immediate refreshes triggered by timer (re)starts.
+    /// `startRefreshTimer` is called from reactive paths — an interval change or
+    /// a connectivity flap — and firing on every one of those would hammer the
+    /// providers.
+    private static let immediateFireCooldown: TimeInterval = 30
 
     // MARK: - Configuration
     var refreshInterval: TimeInterval {
@@ -48,6 +55,8 @@ class RefreshService {
     
     private func setupConnectivityMonitoring() {
         ConnectivityMonitor.shared.$isConnected
+            .removeDuplicates()
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isConnected in
                 guard let self = self else { return }
@@ -93,23 +102,47 @@ class RefreshService {
         var symbolsToForceRefresh: [String] = []
 
         let allSymbols = dataModel.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }
-        let candidateSymbols: [String]
+        let baseCandidateSymbols: [String]
 
-        if let targetSymbols, !targetSymbols.isEmpty {
+        let brokerRefreshPlan: BrokerLinkedMarketRefreshPlan
+
+        if dataModel.isFolyncPortfolioActive {
+            brokerRefreshPlan = .empty
+            let allowed = dataModel.folyncRefreshableSymbols
+            if let targetSymbols, !targetSymbols.isEmpty {
+                let targets = Set(targetSymbols.map { $0.uppercased() })
+                baseCandidateSymbols = allSymbols.filter { allowed.contains($0.uppercased()) && targets.contains($0.uppercased()) }
+            } else {
+                baseCandidateSymbols = allSymbols.filter { allowed.contains($0.uppercased()) }
+            }
+        } else if let targetSymbols, !targetSymbols.isEmpty {
+            brokerRefreshPlan = .empty
             let targetSet = Set(targetSymbols.map { $0.uppercased() })
-            candidateSymbols = allSymbols.filter { targetSet.contains($0.uppercased()) }
+            baseCandidateSymbols = allSymbols.filter { targetSet.contains($0.uppercased()) }
         } else {
-            let linkedBrokerSymbols = await dataModel.trading212LinkedSymbolsShouldSkipMarketRefresh()
-            candidateSymbols = allSymbols.filter { !linkedBrokerSymbols.contains($0.uppercased()) }
+            brokerRefreshPlan = await dataModel.trading212LinkedMarketRefreshPlan()
+            baseCandidateSymbols = allSymbols.filter { !brokerRefreshPlan.skipSymbols.contains($0.uppercased()) }
         }
+
+        let benchmarkRouteActive = FolyncSettingsStore.shared.load()
+            .isSupplementalRouteActive(.benchmarkMarketData)
+        let candidateSymbols = Self.filterFolyncRoutedBenchmarks(
+            from: baseCandidateSymbols,
+            routeActive: benchmarkRouteActive,
+            sourceStatus: dataModel.folyncSupplementalStatuses[.benchmarkMarketData]
+        )
 
         if candidateSymbols.isEmpty {
             Task { await Logger.shared.debug("refreshAllTrades(limitedTo:) called with no matching symbols – skipping fetch") }
             return
         }
 
+        // Honour the user's "Main Refresh Interval". The small grace factor
+        // keeps timer tolerance from making each pass see a just-too-young
+        // quote and silently doubling the effective interval.
+        let freshnessInterval = Self.freshnessInterval(forRefreshInterval: refreshInterval)
         for symbol in candidateSymbols {
-            if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now) {
+            if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now, freshnessInterval: freshnessInterval) {
                 symbolsToRefresh.append(symbol)
             } else if await cacheCoordinator.shouldRetry(symbol: symbol, at: now) {
                 symbolsToForceRefresh.append(symbol)
@@ -119,11 +152,13 @@ class RefreshService {
         let finalSymbolsToRefresh = Array(Set(symbolsToRefresh + symbolsToForceRefresh))
 
         if finalSymbolsToRefresh.isEmpty {
-            await Logger.shared.info("All \(candidateSymbols.count) targeted symbols are cached or in retry cooldown, skipping network refresh")
+            await Logger.shared.debug(
+                "All \(candidateSymbols.count) targeted symbols are cached or in retry cooldown, skipping network refresh"
+            )
             return
         }
 
-        await Logger.shared.info(
+        await Logger.shared.debug(
             "About to refresh \(finalSymbolsToRefresh.count) of \(candidateSymbols.count) targeted trades: \(finalSymbolsToRefresh)"
         )
 
@@ -142,12 +177,31 @@ class RefreshService {
 
             let targetedSet = Set(finalSymbolsToRefresh.map { $0.uppercased() })
 
-            for idx in dataModel.realTimeTrades.indices {
-                let symbol = dataModel.realTimeTrades[idx].trade.name
-                guard targetedSet.contains(symbol.uppercased()) else { continue }
+            // Snapshot the symbols up front, then re-resolve each one by identity
+            // inside the loop. This method suspends on every `await`, which lets
+            // other @MainActor work (holding deletion, Trading 212 sync, a Folync
+            // portfolio swap) mutate or reorder `realTimeTrades` underneath us —
+            // a captured index would go stale and either trap or update the
+            // wrong holding.
+            let symbolsToApply = dataModel.realTimeTrades
+                .map { $0.trade.name }
+                .filter { targetedSet.contains($0.uppercased()) }
+
+            for symbol in symbolsToApply {
+                guard let idx = dataModel.realTimeTrades.firstIndex(
+                    where: { $0.trade.name == symbol }
+                ) else { continue }
 
                 if let res = resultDict[symbol.uppercased()] {
                     let wasSuccessful = dataModel.realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
+
+                    // Read everything this iteration needs while still in the same
+                    // synchronous region as the update — `idx` is only valid until
+                    // the next suspension point.
+                    let info = dataModel.realTimeTrades[idx].realTimeInfo
+                    let newPrice = info.getCurrentDisplayPrice()
+                    let prevClose = info.prevClosePrice
+                    let currency = info.currency ?? "USD"
 
                     if wasSuccessful {
                         await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
@@ -156,10 +210,13 @@ class RefreshService {
                         successfullyRefreshedSymbols.insert(symbol.uppercased())
 
                         // Check price alerts after successful update
-                        let newPrice = dataModel.realTimeTrades[idx].realTimeInfo.currentPrice
-                        let prevClose = dataModel.realTimeTrades[idx].realTimeInfo.prevClosePrice
-                        let currency = dataModel.realTimeTrades[idx].realTimeInfo.currency ?? "USD"
-                        await PriceAlertService.shared.checkAlerts(
+                        dataModel.historicalDataManager.recordLivePriceSample(
+                            symbol: symbol,
+                            price: newPrice,
+                            previousClose: prevClose,
+                            timestamp: now
+                        )
+                        PriceAlertService.shared.checkAlerts(
                             symbol: symbol,
                             currentPrice: newPrice,
                             previousPrice: prevClose,
@@ -179,22 +236,39 @@ class RefreshService {
 
             if anySuccessfulUpdate {
                 dataModel.saveTradingInfo()
-                Task { await dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
+                let summary = dataModel.calculateDisplayPortfolioSummary(
+                    preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
+                )
+                dataModel.historicalDataManager.recordLivePortfolioSample(
+                    totalValue: summary.totalValue,
+                    totalGains: summary.totalGain,
+                    timestamp: now
+                )
+                Task { dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
 
-                let randomCheck = Int.random(in: 1...100)
-
-                if randomCheck == 1 {
-                    // 1% chance trigger retroactive calculation
-                    Task {
-                        await Logger.shared.info("🔄 PERIODIC: Triggering retroactive portfolio history calculation")
-                        await dataModel.historicalDataManager.calculateRetroactivePortfolioHistory(using: dataModel)
-                    }
-                }
+                await Logger.shared.info(
+                    "Refresh completed: \(successfullyRefreshedSymbols.count)/\(finalSymbolsToRefresh.count) symbols updated"
+                )
             }
+        } catch let error as ProviderAccessError {
+            await Logger.shared.debug("Batch refresh skipped: \(error.localizedDescription)")
         } catch {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
         }
+    }
 
+    nonisolated static func freshnessInterval(forRefreshInterval interval: TimeInterval) -> TimeInterval {
+        guard interval.isFinite, interval > 0 else { return 300 }
+        return max(30, interval * 0.9)
+    }
+
+    nonisolated static func filterFolyncRoutedBenchmarks(
+        from symbols: [String],
+        routeActive: Bool,
+        sourceStatus: FolyncSupplementalSourceStatus?
+    ) -> [String] {
+        guard routeActive, sourceStatus != .legacy else { return symbols }
+        return symbols.filter { !SymbolMetadata.isBenchmarkSymbol($0) }
     }
 
     // MARK: - Refresh Timer
@@ -211,7 +285,20 @@ class RefreshService {
         }
 
         refreshTimer?.tolerance = 5.0
-        refreshTimer?.fire() // Fire immediately to start
+
+        // Fire immediately to start, but not if we just did — see cooldown note.
+        let now = Date()
+        if let last = lastImmediateFireAt,
+           now.timeIntervalSince(last) < Self.immediateFireCooldown {
+            Task {
+                await Logger.shared.debug(
+                    "Refresh timer restarted within cooldown, skipping immediate fire"
+                )
+            }
+            return
+        }
+        lastImmediateFireAt = now
+        refreshTimer?.fire()
     }
 
     /// Stops the refresh timer
@@ -222,4 +309,67 @@ class RefreshService {
     
     // Legacy support / Staggered refresh placeholders if needed
     // For now, we unify on batch refresh per the optimization plan
+}
+
+struct BrokerLinkedMarketRefreshPlan {
+    let skipSymbols: Set<String>
+    let extendedSessionSymbols: Set<String>
+
+    static let empty = BrokerLinkedMarketRefreshPlan(skipSymbols: [], extendedSessionSymbols: [])
+}
+
+enum BrokerLinkedMarketDataRefreshPolicy {
+    static func shouldSkipMarketRefresh(
+        symbol: String,
+        tradingInfo: TradingInfo?,
+        now: Date = Date()
+    ) -> Bool {
+        let knownState = normalizedState(tradingInfo?.marketState)
+        let inferredState = normalizedState(inferredMarketState(for: symbol, at: now))
+        return !isExtendedMarketState(knownState) && !isExtendedMarketState(inferredState)
+    }
+
+    static func inferredMarketState(for symbol: String, at date: Date = Date()) -> String? {
+        let timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
+        let components = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: date)
+        let hour = components.hour ?? 12
+        let minute = components.minute ?? 0
+        let weekday = components.weekday ?? 1
+
+        guard weekday != 1, weekday != 7 else {
+            return "CLOSED"
+        }
+
+        if SymbolMetadata.isUKSymbol(symbol) {
+            if hour >= 7 && hour < 8 {
+                return "PRE"
+            }
+            if hour >= 8 && (hour < 16 || (hour == 16 && minute < 30)) {
+                return "REGULAR"
+            }
+            if (hour == 16 && minute >= 30) || (hour == 17 && minute < 30) {
+                return "POST"
+            }
+            return "CLOSED"
+        }
+
+        if hour >= 4 && (hour < 9 || (hour == 9 && minute < 30)) {
+            return "PRE"
+        }
+        if (hour == 9 && minute >= 30) || (hour >= 10 && hour < 16) {
+            return "REGULAR"
+        }
+        if hour >= 16 && hour < 20 {
+            return "POST"
+        }
+        return "CLOSED"
+    }
+
+    private static func normalizedState(_ state: String?) -> String? {
+        state?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private static func isExtendedMarketState(_ state: String?) -> Bool {
+        state == "PRE" || state == "POST"
+    }
 }

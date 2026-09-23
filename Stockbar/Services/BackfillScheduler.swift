@@ -23,6 +23,8 @@ final class BackfillScheduler {
 
     private var startupTimer: Timer?
     private var dailyCheckTimer: Timer?
+    private var historyChangeTimer: Timer?
+    private weak var dataModel: DataModel?
 
     // MARK: - UserDefaults Keys
 
@@ -52,6 +54,7 @@ final class BackfillScheduler {
     /// Starts the backfill scheduler with startup timer and daily checks
     /// - Parameter dataModel: DataModel instance for executing backfill
     func start(dataModel: DataModel) {
+        self.dataModel = dataModel
         Task {
             await logger.info("📅 SCHEDULER: Starting backfill scheduler...")
 
@@ -76,9 +79,24 @@ final class BackfillScheduler {
 
         dailyCheckTimer?.invalidate()
         dailyCheckTimer = nil
+        historyChangeTimer?.invalidate()
+        historyChangeTimer = nil
 
         Task {
             await logger.info("📅 SCHEDULER: Backfill scheduler stopped")
+        }
+    }
+
+    /// Coalesces history mutations and recalculates portfolio history once the
+    /// import burst settles.
+    func historyDidChange() {
+        historyChangeTimer?.invalidate()
+        historyChangeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let dataModel = self.dataModel else { return }
+                await self.logger.info("Recalculating portfolio history after historical data changed")
+                await dataModel.calculateRetroactivePortfolioHistory(days: self.backfillDays)
+            }
         }
     }
 
@@ -249,7 +267,7 @@ final class BackfillScheduler {
     /// Checks if backfill has already run today
     /// - Returns: True if backfill ran today, false otherwise
     private func hasRunToday() -> Bool {
-        let defaults = UserDefaults.standard
+        let defaults = StockbarRuntimeStorage.userDefaults
 
         guard let lastRunTimestamp = defaults.object(forKey: UserDefaultsKey.lastBackfillTimestamp) as? Double else {
             Task {
@@ -282,7 +300,7 @@ final class BackfillScheduler {
     /// Records the current backfill run timestamp
     private func recordBackfillRun() {
         let now = Date()
-        let defaults = UserDefaults.standard
+        let defaults = StockbarRuntimeStorage.userDefaults
 
         defaults.set(now.timeIntervalSince1970, forKey: UserDefaultsKey.lastBackfillTimestamp)
 
@@ -300,6 +318,6 @@ final class BackfillScheduler {
 
     /// Returns the last backfill run date as a formatted string
     nonisolated func getLastBackfillDate() -> String? {
-        return UserDefaults.standard.string(forKey: UserDefaultsKey.lastBackfillDate)
+        return StockbarRuntimeStorage.userDefaults.string(forKey: UserDefaultsKey.lastBackfillDate)
     }
 }

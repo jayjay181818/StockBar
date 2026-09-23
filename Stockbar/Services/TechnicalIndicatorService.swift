@@ -121,7 +121,7 @@ class TechnicalIndicatorService {
 
         // Calculate MACD line (fast EMA - slow EMA)
         var macdLine: [(Date, Double)] = []
-        let _ = slowPeriod - 1 // Fix unused warning
+        _ = slowPeriod - 1 // Fix unused warning
 
         for i in 0..<slowEMA.count {
             let fastIndex = i + (fastPeriod - 1)
@@ -150,7 +150,7 @@ class TechnicalIndicatorService {
 
         // Create MACD results with histogram
         var results: [MACDResult] = []
-        let _ = signalPeriod - 1  // Signal start index (unused in simplified loop)
+        _ = signalPeriod - 1  // Signal start index (unused in simplified loop)
 
         for i in 0..<signalLine.count {
             let macdIndex = i + (signalPeriod - 1)
@@ -228,7 +228,9 @@ class TechnicalIndicatorService {
 
         for i in (period - 1)..<data.count {
             let slice = data[(i - period + 1)...i]
-            let average = slice.map { Double($0.volume) }.reduce(0, +) / Double(period)
+            let volumes = slice.compactMap(\.volume)
+            guard volumes.count == period else { continue }
+            let average = volumes.map(Double.init).reduce(0, +) / Double(period)
             result.append((data[i].timestamp, average))
         }
 
@@ -239,18 +241,19 @@ class TechnicalIndicatorService {
     /// - Parameter data: OHLC data points
     /// - Returns: Array of (date, OBV) tuples
     func calculateOBV(data: [OHLCDataPoint]) -> [(Date, Int64)] {
-        guard !data.isEmpty else { return [] }
+        guard let firstIndex = data.firstIndex(where: { $0.volume != nil }) else { return [] }
 
         var result: [(Date, Int64)] = []
         var obv: Int64 = 0
 
-        result.append((data[0].timestamp, obv))
+        result.append((data[firstIndex].timestamp, obv))
 
-        for i in 1..<data.count {
+        for i in (firstIndex + 1)..<data.count {
+            guard let volume = data[i].volume else { continue }
             if data[i].close > data[i - 1].close {
-                obv += data[i].volume
+                obv += volume
             } else if data[i].close < data[i - 1].close {
-                obv -= data[i].volume
+                obv -= volume
             }
             // If close == previous close, OBV stays the same
 

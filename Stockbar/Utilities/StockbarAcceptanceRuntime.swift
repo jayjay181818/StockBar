@@ -1,0 +1,203 @@
+import Foundation
+
+enum StockbarAcceptanceRuntimeError: Error, Equatable, LocalizedError {
+    case incompleteEnvironment
+    case liveProvidersMustBeDisabled
+    case invalidRunID
+    case unsafeRoot
+    case rootContainsUnrelatedData
+
+    var errorDescription: String? {
+        switch self {
+        case .incompleteEnvironment:
+            return "Stockbar acceptance mode requires both a root and a run identifier."
+        case .liveProvidersMustBeDisabled:
+            return "Stockbar acceptance mode requires live providers to be disabled."
+        case .invalidRunID:
+            return "The Stockbar acceptance run identifier is invalid."
+        case .unsafeRoot:
+            return "The Stockbar acceptance root is not a safe temporary directory."
+        case .rootContainsUnrelatedData:
+            return "The Stockbar acceptance root contains data from another run."
+        }
+    }
+}
+
+struct StockbarAcceptanceRuntime: Sendable {
+    static let productionFolyncKeychainService = "com.stockbar.folync"
+    static let markerName = ".stockbar-acceptance-run"
+
+    let root: URL?
+    let runID: String?
+    let folyncKeychainService: String
+    let liveProviderRequestsAllowed: Bool
+
+    var isEnabled: Bool { root != nil }
+
+    var applicationSupportRoot: URL? {
+        root?.appendingPathComponent("Application Support/Stockbar", isDirectory: true)
+    }
+
+    var bundleApplicationSupportRoot: URL? {
+        root?.appendingPathComponent("Application Support/com.stockbar", isDirectory: true)
+    }
+
+    var cacheRoot: URL? {
+        root?.appendingPathComponent("Caches/stockbar-cache", isDirectory: true)
+    }
+
+    var defaultsSuiteName: String? {
+        runID.map { "com.stockbar.acceptance.\($0)" }
+    }
+
+    var coreDataStoreURL: URL? {
+        applicationSupportRoot?.appendingPathComponent("StockbarDataModel.sqlite")
+    }
+
+    var folyncSnapshotCacheRoot: URL? {
+        applicationSupportRoot?.appendingPathComponent("Folync", isDirectory: true)
+    }
+
+    var folyncSupplementalCacheRoot: URL? {
+        applicationSupportRoot?.appendingPathComponent("FolyncSupplemental", isDirectory: true)
+    }
+
+    static func resolve(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) throws -> Self {
+        let rootValue = environment["STOCKBAR_ACCEPTANCE_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runID = environment["STOCKBAR_ACCEPTANCE_RUN_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if rootValue == nil, runID == nil {
+            return Self(
+                root: nil,
+                runID: nil,
+                folyncKeychainService: productionFolyncKeychainService,
+                liveProviderRequestsAllowed: true
+            )
+        }
+
+        guard let rootValue, !rootValue.isEmpty, let runID, !runID.isEmpty else {
+            throw StockbarAcceptanceRuntimeError.incompleteEnvironment
+        }
+        guard environment["STOCKBAR_DISABLE_LIVE_PROVIDERS"] == "1" else {
+            throw StockbarAcceptanceRuntimeError.liveProvidersMustBeDisabled
+        }
+        guard runID.range(of: #"^[A-Za-z0-9][A-Za-z0-9-]{7,63}$"#, options: .regularExpression) != nil else {
+            throw StockbarAcceptanceRuntimeError.invalidRunID
+        }
+        guard rootValue.hasPrefix("/") else {
+            throw StockbarAcceptanceRuntimeError.unsafeRoot
+        }
+
+        let root = URL(fileURLWithPath: rootValue, isDirectory: true).standardizedFileURL
+        let rootPath = root.path
+        let homePath = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL.path
+        guard rootPath != "/", rootPath != homePath else {
+            throw StockbarAcceptanceRuntimeError.unsafeRoot
+        }
+        let resolvedRootPath = root.resolvingSymlinksInPath().path
+        let resolvedTemporaryPath = fileManager.temporaryDirectory.resolvingSymlinksInPath().path
+        guard resolvedRootPath.hasPrefix(resolvedTemporaryPath + "/") else {
+            throw StockbarAcceptanceRuntimeError.unsafeRoot
+        }
+
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: rootPath, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                throw StockbarAcceptanceRuntimeError.unsafeRoot
+            }
+            let contents = try fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            if !contents.isEmpty {
+                let markerURL = root.appendingPathComponent(markerName)
+                let marker = try? String(contentsOf: markerURL, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard marker == runID else {
+                    throw StockbarAcceptanceRuntimeError.rootContainsUnrelatedData
+                }
+            }
+        }
+
+        return Self(
+            root: root,
+            runID: runID,
+            folyncKeychainService: "\(productionFolyncKeychainService).acceptance.\(runID)",
+            liveProviderRequestsAllowed: false
+        )
+    }
+
+    static func resolveCurrent(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
+        isRunningUnderXCTest: Bool? = nil
+    ) throws -> Self {
+        let hasExplicitAcceptanceEnvironment = environment["STOCKBAR_ACCEPTANCE_ROOT"] != nil
+            || environment["STOCKBAR_ACCEPTANCE_RUN_ID"] != nil
+        if hasExplicitAcceptanceEnvironment {
+            return try resolve(environment: environment, fileManager: fileManager)
+        }
+
+        let detectedXCTest = isRunningUnderXCTest
+            ?? (environment["XCTestConfigurationFilePath"] != nil
+                || environment["XCTestSessionIdentifier"] != nil
+                || NSClassFromString("XCTestCase") != nil
+                || NSClassFromString("XCTest.XCTestCase") != nil)
+        guard detectedXCTest else {
+            return try resolve(environment: environment, fileManager: fileManager)
+        }
+
+        let runID = "xctest-\(processIdentifier)"
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("Stockbar-\(runID)", isDirectory: true)
+            .standardizedFileURL
+        return Self(
+            root: root,
+            runID: runID,
+            folyncKeychainService: "\(productionFolyncKeychainService).acceptance.\(runID)",
+            liveProviderRequestsAllowed: false
+        )
+    }
+}
+
+public enum StockbarRuntimeStorage {
+    static let acceptance: StockbarAcceptanceRuntime = {
+        do {
+            return try StockbarAcceptanceRuntime.resolveCurrent()
+        } catch {
+            fatalError("Invalid Stockbar acceptance environment: \(error.localizedDescription)")
+        }
+    }()
+
+    public static var userDefaults: UserDefaults {
+        guard let suiteName = acceptance.defaultsSuiteName else { return .standard }
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            fatalError("Unable to create isolated Stockbar acceptance defaults.")
+        }
+        return defaults
+    }
+
+    static func stockbarApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
+        if let directory = acceptance.applicationSupportRoot { return directory }
+        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        return applicationSupport.appendingPathComponent("Stockbar", isDirectory: true)
+    }
+
+    static func bundleApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
+        if let directory = acceptance.bundleApplicationSupportRoot { return directory }
+        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let bundleIdentifier = Bundle.main.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "com.stockbar"
+        return applicationSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
+    }
+
+    static func cacheDirectory(fileManager: FileManager = .default) -> URL {
+        if let directory = acceptance.cacheRoot { return directory }
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        return caches.appendingPathComponent("stockbar-cache", isDirectory: true)
+    }
+}

@@ -63,7 +63,7 @@ actor AttributionAnalysisService {
         // Get all symbols across the period
         var allSymbols = Set<String>()
         for snapshot in filteredData {
-            allSymbols.formUnion(snapshot.portfolioComposition.keys)
+            allSymbols.formUnion(snapshot.portfolioComposition.keys.filter { !SymbolMetadata.isBenchmarkSymbol($0) })
         }
 
         for symbol in allSymbols {
@@ -231,7 +231,7 @@ actor AttributionAnalysisService {
         var symbolData: [String: [PriceSnapshot]] = [:]
 
         for snapshot in portfolioSnapshots {
-            for priceSnapshot in snapshot.priceSnapshots {
+            for priceSnapshot in snapshot.priceSnapshots where !SymbolMetadata.isBenchmarkSymbol(priceSnapshot.symbol) {
                 if symbolData[priceSnapshot.symbol] == nil {
                     symbolData[priceSnapshot.symbol] = []
                 }

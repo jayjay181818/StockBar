@@ -6,8 +6,8 @@
 //  Automatic portfolio backup and restore functionality
 //
 
-import Foundation
 import Cocoa
+import Foundation
 
 /// Service for managing automatic portfolio backups
 @MainActor
@@ -21,14 +21,14 @@ class BackupService {
 
     /// Default retention period in days
     var retentionDays: Int {
-        get { UserDefaults.standard.integer(forKey: "backupRetentionDays") == 0 ? 30 : UserDefaults.standard.integer(forKey: "backupRetentionDays") }
-        set { UserDefaults.standard.set(newValue, forKey: "backupRetentionDays") }
+        get { StockbarRuntimeStorage.userDefaults.integer(forKey: "backupRetentionDays") == 0 ? 30 : StockbarRuntimeStorage.userDefaults.integer(forKey: "backupRetentionDays") }
+        set { StockbarRuntimeStorage.userDefaults.set(newValue, forKey: "backupRetentionDays") }
     }
 
     /// Last successful backup date
     var lastBackupDate: Date? {
-        get { UserDefaults.standard.object(forKey: "lastBackupDate") as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: "lastBackupDate") }
+        get { StockbarRuntimeStorage.userDefaults.object(forKey: "lastBackupDate") as? Date }
+        set { StockbarRuntimeStorage.userDefaults.set(newValue, forKey: "lastBackupDate") }
     }
 
     private let logger = Logger.shared
@@ -40,8 +40,7 @@ class BackupService {
 
     /// Returns the backup directory URL, creating it if needed
     func getBackupDirectory() throws -> URL {
-        let appSupport = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let stockbarDir = appSupport.appendingPathComponent("Stockbar")
+        let stockbarDir = StockbarRuntimeStorage.stockbarApplicationSupportDirectory(fileManager: fileManager)
         let backupDir = stockbarDir.appendingPathComponent(backupDirectoryName)
 
         if !fileManager.fileExists(atPath: backupDir.path) {
@@ -133,7 +132,6 @@ class BackupService {
 
             await logger.info("Backup successful: \(filename)")
             return true
-
         } catch {
             await logger.error("Backup failed: \(error.localizedDescription)")
             return false
@@ -162,7 +160,6 @@ class BackupService {
                 .sorted { $0.date > $1.date } // Most recent first
 
             return backups
-
         } catch {
             Task { await logger.error("Failed to list backups: \(error.localizedDescription)") }
             return []

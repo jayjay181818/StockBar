@@ -1,0 +1,238 @@
+import CryptoKit
+import Foundation
+import Security
+
+struct FolyncStoredSettings: Codable, Equatable {
+    let schemaVersion: Int
+    var isEnabled: Bool
+    var baseURL: String
+    var scopeID: String
+    var pollingIntervalSeconds: Int
+    var supplemental: FolyncSupplementalSettings
+
+    init(
+        isEnabled: Bool,
+        baseURL: String,
+        scopeID: String,
+        pollingIntervalSeconds: Int,
+        supplemental: FolyncSupplementalSettings = .disabled
+    ) {
+        self.schemaVersion = 2
+        self.isEnabled = isEnabled
+        self.baseURL = baseURL
+        self.scopeID = scopeID
+        self.pollingIntervalSeconds = pollingIntervalSeconds
+        self.supplemental = supplemental
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, isEnabled, baseURL, scopeID, pollingIntervalSeconds, supplemental
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = 2
+        isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        baseURL = try container.decode(String.self, forKey: .baseURL)
+        scopeID = try container.decode(String.self, forKey: .scopeID)
+        pollingIntervalSeconds = try container.decode(Int.self, forKey: .pollingIntervalSeconds)
+        supplemental = try container.decodeIfPresent(FolyncSupplementalSettings.self, forKey: .supplemental) ?? .disabled
+    }
+
+    func isSupplementalRouteActive(_ route: FolyncSupplementalRoute) -> Bool {
+        isEnabled && supplemental.isEnabled(route)
+    }
+
+    static let defaults = FolyncStoredSettings(
+        isEnabled: false,
+        baseURL: "",
+        scopeID: "all",
+        pollingIntervalSeconds: 60
+    )
+}
+
+final class FolyncSettingsStore: @unchecked Sendable {
+    static let shared = FolyncSettingsStore()
+    private let defaults: UserDefaults
+    private let key = "folync.portfolio-source.settings.v2"
+    private let legacyKey = "folync.portfolio-source.settings.v1"
+
+    init(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        self.defaults = defaults
+    }
+
+    func load() -> FolyncStoredSettings {
+        if let data = defaults.data(forKey: key),
+           let settings = try? JSONDecoder().decode(FolyncStoredSettings.self, from: data) {
+            return settings
+        }
+        if let data = defaults.data(forKey: legacyKey),
+           let migrated = try? JSONDecoder().decode(FolyncStoredSettings.self, from: data) {
+            save(migrated)
+            return migrated
+        }
+        return .defaults
+    }
+
+    func save(_ settings: FolyncStoredSettings) {
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        var settings = load()
+        settings.isEnabled = enabled
+        save(settings)
+    }
+
+    func setSupplemental(_ supplemental: FolyncSupplementalSettings) {
+        var settings = load()
+        settings.supplemental = supplemental
+        save(settings)
+    }
+}
+
+enum FolyncCredentialStoreError: Error, LocalizedError {
+    case keychainStatus(OSStatus)
+    case missingToken
+
+    var errorDescription: String? {
+        switch self {
+        case .keychainStatus(let status): return "Folync Keychain operation failed with status \(status)."
+        case .missingToken: return "Folync client token is not stored in Keychain."
+        }
+    }
+}
+
+final class FolyncCredentialStore: @unchecked Sendable {
+    static let shared = FolyncCredentialStore()
+    private let service: String
+    private let account = "client-api-token.v1"
+
+    init(service: String = StockbarRuntimeStorage.acceptance.folyncKeychainService) {
+        self.service = service
+    }
+
+    func save(token: String) throws {
+        let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { throw FolyncCredentialStoreError.missingToken }
+        let query = baseQuery()
+        let data = Data(normalized.utf8)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else { throw FolyncCredentialStoreError.keychainStatus(status) }
+        var add = query
+        add[kSecValueData as String] = data
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { throw FolyncCredentialStoreError.keychainStatus(addStatus) }
+    }
+
+    func load() throws -> String {
+        var query = baseQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { throw FolyncCredentialStoreError.missingToken }
+        guard status == errSecSuccess, let data = item as? Data, let token = String(data: data, encoding: .utf8) else {
+            throw FolyncCredentialStoreError.keychainStatus(status)
+        }
+        return token
+    }
+
+    func delete() throws {
+        let status = SecItemDelete(baseQuery() as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw FolyncCredentialStoreError.keychainStatus(status)
+        }
+    }
+
+    func hasToken() -> Bool {
+        var query = baseQuery()
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Lookup/insert/delete predicate.
+    ///
+    /// `kSecAttrAccessible` must stay on **every** query here, not just the add.
+    /// On macOS its presence is what routes the call to the modern
+    /// data-protection keychain; removing it from lookups silently drops them to
+    /// the legacy file-based keychain (`SecKeychainSearchCopyNext`), which can
+    /// block the calling thread on an internal mutex. Pinning the store with
+    /// `kSecUseDataProtectionKeychain` instead is not an option either — it
+    /// needs a keychain-access-group entitlement the unsigned build lacks and
+    /// fails with errSecMissingEntitlement (-34018).
+    private func baseQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+    }
+}
+
+struct FolyncCachedSnapshot: Codable, Equatable {
+    let endpoint: String
+    let scopeID: String
+    let etag: String?
+    let snapshot: FolyncPortfolioSnapshot
+}
+
+actor FolyncSnapshotCache {
+    static let shared = FolyncSnapshotCache()
+    private let fileManager: FileManager
+    private let directory: URL
+
+    init(fileManager: FileManager = .default, directory: URL? = nil) {
+        self.fileManager = fileManager
+        self.directory = directory ?? StockbarRuntimeStorage
+            .stockbarApplicationSupportDirectory(fileManager: fileManager)
+            .appendingPathComponent("Folync", isDirectory: true)
+    }
+
+    func load(endpoint: String, scopeID: String) throws -> FolyncCachedSnapshot? {
+        let url = fileURL(endpoint: endpoint, scopeID: scopeID)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let cached = try JSONDecoder().decode(FolyncCachedSnapshot.self, from: Data(contentsOf: url))
+        guard cached.endpoint == endpoint, cached.scopeID == scopeID else { return nil }
+        _ = try FolyncPortfolioDecoder().decodeSnapshot(JSONEncoder().encode(cached.snapshot))
+        return cached
+    }
+
+    func save(_ cached: FolyncCachedSnapshot) throws {
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(cached)
+        try data.write(to: fileURL(endpoint: cached.endpoint, scopeID: cached.scopeID), options: .atomic)
+    }
+
+    private func fileURL(endpoint: String, scopeID: String) -> URL {
+        let digest = SHA256.hash(data: Data("\(endpoint)|\(scopeID)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent("snapshot-\(digest).json")
+    }
+}
+
+final class FolyncOverlayStore: @unchecked Sendable {
+    static let shared = FolyncOverlayStore()
+    private let defaults: UserDefaults
+    private let key = "folync.holding-overlays.v1"
+
+    init(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        self.defaults = defaults
+    }
+
+    func load() -> [String: FolyncHoldingOverlay] {
+        guard let data = defaults.data(forKey: key) else { return [:] }
+        return (try? JSONDecoder().decode([String: FolyncHoldingOverlay].self, from: data)) ?? [:]
+    }
+
+    func set(_ overlay: FolyncHoldingOverlay, for identity: String) {
+        var overlays = load()
+        overlays[identity] = overlay
+        if let data = try? JSONEncoder().encode(overlays) {
+            defaults.set(data, forKey: key)
+        }
+    }
+}

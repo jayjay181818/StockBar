@@ -25,7 +25,11 @@ struct BrokerLinkedAccount: Codable, Equatable, Identifiable {
 }
 
 struct BrokerLinkedPosition: Codable, Equatable, Identifiable {
-    var id: String { "\(brokerAccountKey)|\(instrumentId)" }
+    var id: String { "\(brokerAccountKey)|\(normalizedProviderTicker)" }
+    var instrumentLinkID: String { "\(brokerAccountKey)|\(instrumentId)" }
+    var normalizedProviderTicker: String {
+        providerTicker.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
 
     let brokerAccountKey: String
     let instrumentId: String
@@ -48,7 +52,7 @@ struct BrokerLinkStoreSnapshot: Codable, Equatable {
     var positions: [BrokerLinkedPosition]
 
     static func empty(now: Date = Date()) -> BrokerLinkStoreSnapshot {
-        BrokerLinkStoreSnapshot(schemaVersion: 1, updatedAt: now, accounts: [], positions: [])
+        BrokerLinkStoreSnapshot(schemaVersion: 2, updatedAt: now, accounts: [], positions: [])
     }
 }
 
@@ -76,6 +80,10 @@ actor BrokerLinkStore {
     }
 
     func loadSnapshot() throws -> BrokerLinkStoreSnapshot {
+        Self.normalized(try loadSnapshotPreservingDuplicates())
+    }
+
+    func loadSnapshotPreservingDuplicates() throws -> BrokerLinkStoreSnapshot {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return .empty()
         }
@@ -86,29 +94,96 @@ actor BrokerLinkStore {
         return try decoder.decode(BrokerLinkStoreSnapshot.self, from: data)
     }
 
+    func replaceSnapshot(_ snapshot: BrokerLinkStoreSnapshot) throws {
+        try save(BrokerLinkStoreSnapshot(
+            schemaVersion: 2,
+            updatedAt: snapshot.updatedAt,
+            accounts: snapshot.accounts,
+            positions: snapshot.positions
+        ))
+    }
+
+    func restoreSnapshot(_ snapshot: BrokerLinkStoreSnapshot) throws {
+        try save(snapshot)
+    }
+
     func linkExactMatches(
         from preview: Trading212ImportPreview,
         linkedAt: Date = Date()
     ) throws -> BrokerLinkSaveResult {
         try validateReadyForLinking(preview)
+        return try linkRows(preview.rows, account: preview.account, linkedAt: linkedAt)
+    }
 
+    func linkMatchedHoldings(
+        from preview: Trading212ImportPreview,
+        linkedAt: Date = Date()
+    ) throws -> BrokerLinkSaveResult {
+        let rows = preview.rows.filter { row in
+            row.conflictStatus == .manualHoldingMatch || row.conflictStatus == .manualQuantityMismatch
+        }
+        guard !rows.isEmpty else {
+            throw BrokerLinkStoreError.previewNotReady("Preview has no manual matches ready to link.")
+        }
+        return try linkRows(rows, account: preview.account, linkedAt: linkedAt)
+    }
+
+    func upsertImportedPositions(
+        account: BrokerAccountIdentity,
+        positions: [BrokerLinkedPosition],
+        linkedAt: Date = Date()
+    ) throws -> BrokerLinkSaveResult {
+        guard !positions.isEmpty else {
+            throw BrokerLinkStoreError.previewNotReady("There are no imported broker positions to link.")
+        }
+        return try linkPositions(positions, account: account, linkedAt: linkedAt)
+    }
+
+    private func linkRows(
+        _ rows: [Trading212ImportPreviewRow],
+        account: BrokerAccountIdentity,
+        linkedAt: Date
+    ) throws -> BrokerLinkSaveResult {
         var snapshot = try loadSnapshot()
-        upsertAccount(preview.account, in: &snapshot, now: linkedAt)
+        upsertAccount(account, in: &snapshot, now: linkedAt)
 
-        for row in preview.rows {
+        var positions: [BrokerLinkedPosition] = []
+        for row in rows {
             guard let position = makeLinkedPosition(from: row, linkedAt: linkedAt) else {
                 throw BrokerLinkStoreError.previewNotReady("Preview is not ready to link. Missing manual match or instrument identity.")
             }
-            upsertPosition(position, in: &snapshot)
+            positions.append(position)
         }
 
+        return try saveLinkedPositions(positions, in: &snapshot, linkedAt: linkedAt)
+    }
+
+    private func linkPositions(
+        _ positions: [BrokerLinkedPosition],
+        account: BrokerAccountIdentity,
+        linkedAt: Date
+    ) throws -> BrokerLinkSaveResult {
+        var snapshot = try loadSnapshot()
+        upsertAccount(account, in: &snapshot, now: linkedAt)
+        return try saveLinkedPositions(positions, in: &snapshot, linkedAt: linkedAt)
+    }
+
+    private func saveLinkedPositions(
+        _ positions: [BrokerLinkedPosition],
+        in snapshot: inout BrokerLinkStoreSnapshot,
+        linkedAt: Date
+    ) throws -> BrokerLinkSaveResult {
+        for position in positions {
+            upsertPosition(position, in: &snapshot)
+        }
+        snapshot = Self.normalized(snapshot)
         snapshot.positions.sort { $0.id < $1.id }
         snapshot.accounts.sort { $0.id < $1.id }
         snapshot.updatedAt = linkedAt
         try save(snapshot)
 
         return BrokerLinkSaveResult(
-            linkedCount: preview.rows.count,
+            linkedCount: positions.count,
             totalLinks: snapshot.positions.count,
             fileURL: fileURL
         )
@@ -142,10 +217,8 @@ actor BrokerLinkStore {
     }
 
     private static func defaultFileURL(fileManager: FileManager) -> URL {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        return appSupport
-            .appendingPathComponent("Stockbar", isDirectory: true)
+        StockbarRuntimeStorage
+            .stockbarApplicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("BrokerLinks", isDirectory: true)
             .appendingPathComponent("broker_links.json")
     }
@@ -223,16 +296,71 @@ actor BrokerLinkStore {
             displaySymbol: position.displaySymbol,
             displayName: position.displayName,
             providerTicker: position.providerTicker,
-            manualSymbol: position.manualSymbol,
-            manualQuantityAtLink: position.manualQuantityAtLink,
+            manualSymbol: existing?.manualSymbol ?? position.manualSymbol,
+            manualQuantityAtLink: existing?.manualQuantityAtLink ?? position.manualQuantityAtLink,
             brokerQuantityAtLink: position.brokerQuantityAtLink,
-            manualAverageCostAtLink: position.manualAverageCostAtLink,
-            manualCurrency: position.manualCurrency,
+            manualAverageCostAtLink: existing?.manualAverageCostAtLink ?? position.manualAverageCostAtLink,
+            manualCurrency: existing?.manualCurrency ?? position.manualCurrency,
             linkedAt: linkedAt,
             updatedAt: position.updatedAt
         )
         snapshot.positions.removeAll { $0.id == position.id }
         snapshot.positions.append(updated)
+    }
+
+    private static func normalized(_ snapshot: BrokerLinkStoreSnapshot) -> BrokerLinkStoreSnapshot {
+        let positions = Dictionary(grouping: snapshot.positions, by: \.id).values.flatMap { group -> [BrokerLinkedPosition] in
+            guard group.count > 1, economicallyEquivalentLinkMetadata(group) else {
+                return group
+            }
+            let earliest = group.min { $0.linkedAt < $1.linkedAt }!
+            let latest = group.max { $0.updatedAt < $1.updatedAt }!
+            return [BrokerLinkedPosition(
+                brokerAccountKey: latest.brokerAccountKey,
+                instrumentId: latest.instrumentId,
+                displaySymbol: latest.displaySymbol,
+                displayName: latest.displayName,
+                providerTicker: latest.providerTicker,
+                manualSymbol: earliest.manualSymbol,
+                manualQuantityAtLink: earliest.manualQuantityAtLink,
+                brokerQuantityAtLink: latest.brokerQuantityAtLink,
+                manualAverageCostAtLink: earliest.manualAverageCostAtLink,
+                manualCurrency: earliest.manualCurrency,
+                linkedAt: earliest.linkedAt,
+                updatedAt: latest.updatedAt
+            )]
+        }.sorted { $0.id < $1.id }
+        return BrokerLinkStoreSnapshot(
+            schemaVersion: 2,
+            updatedAt: snapshot.updatedAt,
+            accounts: snapshot.accounts,
+            positions: positions
+        )
+    }
+
+    private static func economicallyEquivalentLinkMetadata(_ positions: [BrokerLinkedPosition]) -> Bool {
+        guard let first = positions.first else { return false }
+        return positions.dropFirst().allSatisfy { position in
+            approximatelyEqual(position.manualQuantityAtLink, first.manualQuantityAtLink)
+                && optionalApproximatelyEqual(position.manualAverageCostAtLink, first.manualAverageCostAtLink)
+                && normalizedCurrency(position.manualCurrency) == normalizedCurrency(first.manualCurrency)
+        }
+    }
+
+    private static func approximatelyEqual(_ left: Double, _ right: Double) -> Bool {
+        left.isFinite && right.isFinite && abs(left - right) <= 0.00000001
+    }
+
+    private static func optionalApproximatelyEqual(_ left: Double?, _ right: Double?) -> Bool {
+        switch (left, right) {
+        case (nil, nil): return true
+        case (.some(let left), .some(let right)): return approximatelyEqual(left, right)
+        default: return false
+        }
+    }
+
+    private static func normalizedCurrency(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
     }
 
     private func save(_ snapshot: BrokerLinkStoreSnapshot) throws {

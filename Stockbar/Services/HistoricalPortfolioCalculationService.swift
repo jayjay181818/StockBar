@@ -85,7 +85,7 @@ struct HistoricalPortfolioCalculationService: Sendable {
         totalInvestmentCost: Double,
         preferredCurrency: String
     ) -> [HistoricalPortfolioSnapshot] {
-        let converter = CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false)
+        let converter = CurrencyConverter.shared
 
         return dates.compactMap { date in
             var totalValueUSD = 0.0
@@ -159,7 +159,7 @@ struct HistoricalPortfolioCalculationService: Sendable {
         composition: PortfolioComposition,
         preferredCurrency: String
     ) -> Double {
-        let converter = CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false)
+        let converter = CurrencyConverter.shared
         let totalCostUSD = composition.positions.reduce(0.0) { total, position in
             let positionCost = position.avgCost * position.units
             return total + convertToUSD(amount: positionCost, currency: position.currency, converter: converter)

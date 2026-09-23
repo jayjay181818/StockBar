@@ -66,25 +66,33 @@ actor RuntimeIssueMonitor {
 
         for log in logs {
             let lowercasedLog = log.lowercased()
+            let severity = severity(of: lowercasedLog)
 
             if LogRedactor.containsUnredactedSecret(log) {
                 secretLeakCount += 1
             }
 
-            if lowercasedLog.contains("error") ||
-                lowercasedLog.contains("failed") ||
-                lowercasedLog.contains("exception") ||
-                lowercasedLog.contains("fatal") ||
-                lowercasedLog.contains("crash") {
+            // Monitor the structured severity emitted by Logger rather than
+            // words such as "failed" in warning summaries. Ignore our own
+            // summaries so a previous scan cannot feed back into the next one.
+            guard !lowercasedLog.contains("runtimeissuemonitor.swift") else {
+                continue
+            }
+
+            if severity == .error {
                 errorCount += 1
             }
 
-            if lowercasedLog.contains("timeout") || lowercasedLog.contains("timed out") {
+            let containsTimeout =
+                lowercasedLog.contains("timeout") || lowercasedLog.contains("timed out")
+            if severity.isOperationalIssue, containsTimeout {
                 timeoutCount += 1
             }
 
-            if lowercasedLog.contains("core data store load failed") ||
-                lowercasedLog.contains("store-load-failure") {
+            let containsRecoveryEvent =
+                lowercasedLog.contains("core data store load failed") ||
+                lowercasedLog.contains("store-load-failure")
+            if severity == .error, containsRecoveryEvent {
                 recoveryEventCount += 1
             }
         }
@@ -96,6 +104,44 @@ actor RuntimeIssueMonitor {
             recoveryEventCount: recoveryEventCount,
             secretLeakCount: secretLeakCount
         )
+    }
+
+    private enum ParsedLogSeverity {
+        case debug
+        case info
+        case warning
+        case error
+        case unknown
+
+        var isOperationalIssue: Bool {
+            self == .warning || self == .error
+        }
+    }
+
+    private static func severity(of lowercasedLog: String) -> ParsedLogSeverity {
+        let trimmedLog = lowercasedLog.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if lowercasedLog.contains("[error]") ||
+            trimmedLog.hasPrefix("error ") ||
+            trimmedLog.hasPrefix("error:") {
+            return .error
+        }
+        if lowercasedLog.contains("[warning]") ||
+            trimmedLog.hasPrefix("warning ") ||
+            trimmedLog.hasPrefix("warning:") {
+            return .warning
+        }
+        if lowercasedLog.contains("[info]") ||
+            trimmedLog.hasPrefix("info ") ||
+            trimmedLog.hasPrefix("info:") {
+            return .info
+        }
+        if lowercasedLog.contains("[debug]") ||
+            trimmedLog.hasPrefix("debug ") ||
+            trimmedLog.hasPrefix("debug:") {
+            return .debug
+        }
+        return .unknown
     }
 
     private func publish(snapshot: RuntimeIssueSnapshot, logger: Logger) async {

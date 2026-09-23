@@ -17,17 +17,25 @@ protocol OHLCDataStoring: Sendable {
 
 extension OHLCDataService: OHLCDataStoring {}
 
-final class OHLCFetchService: @unchecked Sendable {
+struct OHLCFetchResult: Sendable {
+    let snapshots: [OHLCSnapshot]
+    let sourceStatus: FolyncSupplementalSourceStatus
+    let coverageLabel: String
+}
+
+final class OHLCFetchService: Sendable {
     static let shared = OHLCFetchService()
 
     private let pythonScriptPath: String
     private let processRunner: any PythonProcessRunning
     private let ohlcDataStore: any OHLCDataStoring
+    private let supplementalProvider: any FolyncSupplementalOHLCProviding
 
     init(
         pythonScriptPath: String? = nil,
         processRunner: (any PythonProcessRunning)? = nil,
-        ohlcDataStore: (any OHLCDataStoring)? = nil
+        ohlcDataStore: (any OHLCDataStoring)? = nil,
+        supplementalProvider: (any FolyncSupplementalOHLCProviding)? = nil
     ) {
         // Get path to Python script
         if let pythonScriptPath {
@@ -40,6 +48,7 @@ final class OHLCFetchService: @unchecked Sendable {
         }
         self.processRunner = processRunner ?? PythonProcessRunner(config: .load())
         self.ohlcDataStore = ohlcDataStore ?? OHLCDataService()
+        self.supplementalProvider = supplementalProvider ?? FolyncSupplementalCoordinator.shared
     }
 
     // MARK: - Public Methods
@@ -53,13 +62,63 @@ final class OHLCFetchService: @unchecked Sendable {
     func fetchOHLCData(
         symbol: String,
         period: String = "1mo",
-        interval: String = "1d"
+        interval: String = "1d",
+        from: Date? = nil,
+        to: Date? = nil
     ) async throws -> [OHLCSnapshot] {
+        try await fetchOHLCDataWithSource(
+            symbol: symbol,
+            period: period,
+            interval: interval,
+            from: from,
+            to: to
+        ).snapshots
+    }
+
+    func fetchOHLCDataWithSource(
+        symbol: String,
+        period: String = "1mo",
+        interval: String = "1d",
+        from: Date? = nil,
+        to: Date? = nil
+    ) async throws -> OHLCFetchResult {
         await Logger.shared.debug("Fetching OHLC data for \(symbol) - period: \(period), interval: \(interval)")
+
+        switch try await supplementalProvider.routeOHLC(
+            symbol: symbol,
+            period: period,
+            interval: interval,
+            from: from,
+            to: to
+        ) {
+        case .folync(let snapshots, let status, let metadata):
+            await Logger.shared.info(
+                "Using \(snapshots.count) non-persisted \(status.label) OHLC points for \(symbol)"
+            )
+            return OHLCFetchResult(
+                snapshots: snapshots,
+                sourceStatus: status,
+                coverageLabel: metadata.coverageLabel
+            )
+        case .unavailable:
+            throw OHLCFetchError.fetchFailed("Folync candlestick history is unavailable and local fallback is disabled")
+        case .legacy:
+            break
+        }
 
         guard !pythonScriptPath.isEmpty else {
             await Logger.shared.error("OHLC Python script not found in bundle")
             throw OHLCFetchError.fetchFailed("Python script not found")
+        }
+
+        // Symbol, period and interval all become argv entries.
+        guard PythonConfiguration.validateSymbol(symbol) else {
+            await Logger.shared.warning("Rejecting invalid symbol for OHLC fetch: \(symbol)")
+            throw OHLCFetchError.fetchFailed("Invalid symbol: \(symbol)")
+        }
+        guard Self.isValidPeriod(period), Self.isValidInterval(interval) else {
+            await Logger.shared.warning("Rejecting invalid OHLC period/interval: \(period)/\(interval)")
+            throw OHLCFetchError.fetchFailed("Invalid period or interval")
         }
 
         do {
@@ -85,8 +144,11 @@ final class OHLCFetchService: @unchecked Sendable {
             try await ohlcDataStore.saveSnapshots(snapshots)
 
             await Logger.shared.info("Successfully fetched \(snapshots.count) OHLC data points for \(symbol)")
-            return snapshots
-
+            return OHLCFetchResult(
+                snapshots: snapshots,
+                sourceStatus: .legacy,
+                coverageLabel: "\(snapshots.count) points · \(interval) · local provider"
+            )
         } catch NetworkError.timeout {
             await Logger.shared.error("OHLC fetch timed out for \(symbol)")
             throw OHLCFetchError.timeout
@@ -121,6 +183,16 @@ final class OHLCFetchService: @unchecked Sendable {
     }
 
     // MARK: - Private Methods
+
+    /// yfinance accepts a fixed vocabulary for these; anything else is either a
+    /// caller bug or an attempt to smuggle an argparse flag into argv.
+    static func isValidPeriod(_ period: String) -> Bool {
+        ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"].contains(period)
+    }
+
+    static func isValidInterval(_ interval: String) -> Bool {
+        ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"].contains(interval)
+    }
 
     private func parseOHLCOutput(_ output: String, symbol: String) throws -> [OHLCSnapshot] {
         guard let jsonData = output.data(using: .utf8) else {

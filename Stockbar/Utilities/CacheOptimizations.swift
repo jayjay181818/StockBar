@@ -4,7 +4,6 @@ import Foundation
 
 extension CacheManager {
     
-    
     // MARK: - Intelligent Eviction Strategies
     
     /// Perform intelligent cache cleanup based on usage patterns and memory pressure
@@ -132,51 +131,77 @@ extension CacheManager {
     // MARK: - Archive Size Management
     
     private func cleanArchiveCacheBySize(maxSize: Int) async -> Int {
-        return await archiveCacheQueue.sync {
-            let fileManager = FileManager.default
-            var totalSize = 0
-            var bytesFreed = 0
+        // Stay serialized on the archive queue, but suspend instead of
+        // blocking a Swift concurrency thread with `sync` (file I/O here can
+        // take a while for large archives).
+        let archiveDirectory = archiveCacheDirectory
+        return await withCheckedContinuation { continuation in
+            archiveCacheQueue.async {
+                continuation.resume(returning: Self.removeOldestArchiveFiles(in: archiveDirectory, maxSize: maxSize))
+            }
+        }
+    }
+
+    private static func removeOldestArchiveFiles(in archiveCacheDirectory: URL, maxSize: Int) -> Int {
+        let fileManager = FileManager.default
+        var totalSize = 0
+        var bytesFreed = 0
+
+        do {
+            let files = try fileManager.contentsOfDirectory(at: archiveCacheDirectory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [])
             
-            do {
-                let files = try fileManager.contentsOfDirectory(at: archiveCacheDirectory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [])
-                
-                // Sort by modification date (oldest first)
-                let sortedFiles = files.sorted { file1, file2 in
-                    let date1 = try? file1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? Date.distantPast
-                    let date2 = try? file2.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? Date.distantPast
-                    return date1! < date2!
+            // Sort by modification date (oldest first)
+            // `try?` must wrap only the throwing call: a file deleted between
+            // the directory listing and this sort makes resourceValues throw,
+            // and folding that into the `??` would leave nil to force-unwrap.
+            let sortedFiles = files.sorted { file1, file2 in
+                let date1 = (try? file1.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? Date.distantPast
+                let date2 = (try? file2.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? Date.distantPast
+                return date1 < date2
+            }
+
+            // A file vanishing mid-pass is normal here (this routine is itself
+            // deleting them), so skip it rather than aborting the whole cleanup.
+            func fileSize(of fileURL: URL) -> Int {
+                guard let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path) else {
+                    return 0
                 }
-                
-                // Calculate total size
+                return (attributes[.size] as? Int) ?? 0
+            }
+
+            // Calculate total size
+            for fileURL in sortedFiles {
+                totalSize += fileSize(of: fileURL)
+            }
+
+            // Remove oldest files if over limit
+            if totalSize > maxSize {
+                let targetReduction = totalSize - maxSize
+                var currentReduction = 0
+
                 for fileURL in sortedFiles {
-                    let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-                    totalSize += (attributes[.size] as? Int) ?? 0
-                }
-                
-                // Remove oldest files if over limit
-                if totalSize > maxSize {
-                    let targetReduction = totalSize - maxSize
-                    var currentReduction = 0
-                    
-                    for fileURL in sortedFiles {
-                        let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-                        let fileSize = (attributes[.size] as? Int) ?? 0
-                        
+                    let size = fileSize(of: fileURL)
+
+                    do {
                         try fileManager.removeItem(at: fileURL)
-                        currentReduction += fileSize
-                        bytesFreed += fileSize
-                        
-                        if currentReduction >= targetReduction {
-                            break
-                        }
+                    } catch {
+                        continue
+                    }
+                    currentReduction += size
+                    bytesFreed += size
+
+                    if currentReduction >= targetReduction {
+                        break
                     }
                 }
-            } catch {
-                Task { await Logger.shared.error("Failed to clean archive cache: \(error)") }
             }
-            
-            return bytesFreed
+        } catch {
+            Task { await Logger.shared.error("Failed to clean archive cache: \(error)") }
         }
+
+        return bytesFreed
     }
     
     // MARK: - Cleanup Configuration
