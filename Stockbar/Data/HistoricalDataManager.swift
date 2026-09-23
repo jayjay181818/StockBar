@@ -1,6 +1,6 @@
-import Foundation
 import Combine
 import CoreData
+import Foundation
 
 extension Array {
     func chunked(into size: Int) -> [[Element]] {
@@ -19,6 +19,41 @@ extension DateFormatter {
     }()
 }
 
+struct InstrumentAliasHistoryLookup {
+    static func combinedSnapshots(
+        for symbol: String,
+        aliases: [String],
+        storedBySymbol: [String: [PriceSnapshot]],
+        liveBySymbol: [String: [PriceSnapshot]]
+    ) -> [PriceSnapshot] {
+        let requested = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var seenAliases = Set<String>()
+        var orderedAliases = aliases
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+            .filter { !$0.isEmpty && $0 != requested && seenAliases.insert($0).inserted }
+        orderedAliases.append(requested)
+
+        var latestByTimestamp: [Int64: PriceSnapshot] = [:]
+        for alias in orderedAliases {
+            for snapshot in values(for: alias, in: storedBySymbol) + values(for: alias, in: liveBySymbol)
+                where snapshot.price.isFinite && snapshot.price > 0 {
+                let key = Int64((snapshot.timestamp.timeIntervalSince1970 * 1_000).rounded())
+                latestByTimestamp[key] = snapshot
+            }
+        }
+        return latestByTimestamp.values.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private static func values(
+        for symbol: String,
+        in valuesBySymbol: [String: [PriceSnapshot]]
+    ) -> [PriceSnapshot] {
+        valuesBySymbol[symbol]
+            ?? valuesBySymbol.first { $0.key.uppercased() == symbol }?.value
+            ?? []
+    }
+}
+
 struct ComprehensiveDataStatus: Sendable {
     let symbol: String
     let daily: Int
@@ -28,8 +63,43 @@ struct ComprehensiveDataStatus: Sendable {
     let newestDate: String
 }
 
+struct FolyncLineSeriesKey: Hashable, Sendable {
+    let symbol: String
+    let range: String
+    let customFromMilliseconds: Int64?
+    let customToMilliseconds: Int64?
+
+    init(
+        symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) {
+        self.symbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        self.range = timeRange.folyncRange
+        if timeRange == .custom {
+            self.customFromMilliseconds = customFrom.map {
+                Int64(($0.timeIntervalSince1970 * 1_000).rounded())
+            }
+            self.customToMilliseconds = customTo.map {
+                Int64(($0.timeIntervalSince1970 * 1_000).rounded())
+            }
+        } else {
+            self.customFromMilliseconds = nil
+            self.customToMilliseconds = nil
+        }
+    }
+
+    var storageKey: String {
+        "line|\(symbol)|\(range)|\(customFromMilliseconds.map(String.init) ?? "-")|\(customToMilliseconds.map(String.init) ?? "-")"
+    }
+}
+
 // CRITICAL FIX: Task timeout utility to prevent infinite processing
-func withTaskTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async -> T? {
+func withTaskTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    operation: @escaping @Sendable () async throws -> T
+) async -> T? {
     return await withTaskGroup(of: T?.self) { group in
         // Add the actual operation
         group.addTask {
@@ -52,6 +122,56 @@ func withTaskTimeout<T>(seconds: TimeInterval, operation: @escaping () async thr
     }
 }
 
+struct HistoricalFetchRequestGate {
+    private(set) var lastRequestByKey: [String: Date] = [:]
+    private(set) var inFlightKeys: Set<String> = []
+    private var emptyResponseCounts: [String: Int] = [:]
+    private var emptyRetryAfter: [String: Date] = [:]
+
+    mutating func reserve(key: String, now: Date, cooldown: TimeInterval, force: Bool = false) -> Bool {
+        guard !inFlightKeys.contains(key) else { return false }
+        let expiredKeys = lastRequestByKey.compactMap { key, date in
+            !inFlightKeys.contains(key) && now.timeIntervalSince(date) > 24 * 60 * 60 ? key : nil
+        }
+        for expiredKey in expiredKeys {
+            lastRequestByKey.removeValue(forKey: expiredKey)
+            emptyResponseCounts.removeValue(forKey: expiredKey)
+            emptyRetryAfter.removeValue(forKey: expiredKey)
+        }
+        if !force, let retryAfter = emptyRetryAfter[key], now < retryAfter { return false }
+        if !force, let lastRequest = lastRequestByKey[key],
+           now.timeIntervalSince(lastRequest) < cooldown {
+            return false
+        }
+
+        lastRequestByKey[key] = now
+        inFlightKeys.insert(key)
+        return true
+    }
+
+    mutating func complete(
+        key: String,
+        outcome: HistoricalPriceFetchOutcome = .success,
+        now: Date = Date(),
+        cooldown: TimeInterval = 600
+    ) {
+        inFlightKeys.remove(key)
+        switch outcome {
+        case .empty:
+            let count = min((emptyResponseCounts[key] ?? 0) + 1, 5)
+            emptyResponseCounts[key] = count
+            let delay = min(6 * 60 * 60, cooldown * 3 * pow(2, Double(count - 1)))
+            emptyRetryAfter[key] = now.addingTimeInterval(delay)
+        case .success, .cancelled:
+            emptyResponseCounts.removeValue(forKey: key)
+            emptyRetryAfter.removeValue(forKey: key)
+            if outcome == .cancelled { lastRequestByKey.removeValue(forKey: key) }
+        case .failed:
+            break
+        }
+    }
+}
+
 @MainActor
 class HistoricalDataManager: ObservableObject {
     static let shared = HistoricalDataManager()
@@ -68,9 +188,17 @@ class HistoricalDataManager: ObservableObject {
     private let cacheManager = CacheManager.shared
     private let coreDataService: HistoricalDataServiceProtocol
     private let migrationService = DataMigrationService.shared
+    private let instrumentAliasStore = InstrumentAliasStore()
     
     @Published var portfolioSnapshots: [PortfolioSnapshot] = []
-    @Published var priceSnapshots: [String: [PriceSnapshot]] = [:]
+    @Published var priceSnapshots: [String: [PriceSnapshot]] = [:] {
+        didSet { aliasHistoryCache.removeAll() }
+    }
+    @Published private(set) var priceDataRevision: Int = 0
+    @Published private(set) var portfolioHistoryRevision: Int = 0
+    @Published private(set) var folyncSupplementalConfigurationRevision: Int = 0
+    @Published private(set) var folyncSourceStatusBySeries: [String: FolyncSupplementalSourceStatus] = [:]
+    @Published private(set) var folyncCoverageBySeries: [String: String] = [:]
     
     // MARK: - Enhanced Portfolio Storage
     
@@ -110,12 +238,30 @@ class HistoricalDataManager: ObservableObject {
     private var stockDataCacheTimestamp: [String: Date] = [:]
     private let stockDataCacheInterval: TimeInterval = 30 // 30 seconds cache
     
-    // Core Data Era: Dramatically increased limits for decades of data retention
-    private let maxDataPoints = 25000 // 10x increase: 50+ years per stock (Core Data optimized)
-    private let maxPortfolioSnapshots = 8000 // 4x increase: 25+ years portfolio history
+    // Full history stays in Core Data; only the active working set is retained.
+    private let maxDataPoints = 1_800
+    private let maxPortfolioSnapshots = 1_800
     
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
+    private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
+        didSet { aliasHistoryCache.removeAll() }
+    }
+    private var aliasHistoryCache = AliasPriceSnapshotCache()
+    private var livePortfolioValueSamples: [ChartDataPoint] = []
+    private var livePortfolioGainSamples: [ChartDataPoint] = []
+    private let priceHistoryScheduler = HistoricalPriceFetchScheduler()
+    private var folyncPortfolioHistoryContexts: [String: String] = [:]
+    private var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
+    private var folyncPriceOverlays: [String: [PriceSnapshot]] = [:]
+    private var latestFolyncLineSeriesKeyBySymbol: [String: String] = [:]
+    private var folyncUnavailableSeries: Set<String> = []
+    private var folyncPortfolioValueOverlays: [String: [ChartDataPoint]] = [:]
+    private var folyncPortfolioGainOverlays: [String: [ChartDataPoint]] = [:]
+    private let livePriceSampleRetention: TimeInterval = 7 * 24 * 60 * 60
+    private let maxLivePriceSamplesPerSymbol = 1_000
+    private let maxLivePortfolioSamples = 1_000
+    private let menuPriceHistoryFetchCooldown: TimeInterval = 10 * 60
     
     // In init() or a new method, add check for retroactive calculation:
     // This check would ideally be in DataModel or AppDelegate after migration completes.
@@ -132,36 +278,6 @@ class HistoricalDataManager: ObservableObject {
         self.coreDataService = CoreDataHistoricalDataService()
         loadHistoricalData()
         setupPeriodicSave()
-        
-        // Perform Core Data migration if needed
-        Task {
-            await performMigrationIfNeeded()
-        }
-    }
-    
-    // MARK: - Core Data Migration
-    
-    private func performMigrationIfNeeded() async {
-        do {
-            if !migrationService.isPriceSnapshotsMigrated || !migrationService.isPortfolioSnapshotsMigrated {
-                await logger.info("🔄 Starting Core Data migration...")
-                try await migrationService.performFullMigration()
-                
-                // Verify migration success
-                let success = try await migrationService.verifyMigration()
-                if success {
-                    await logger.info("✅ Core Data migration completed successfully")
-                    // Optionally clean up legacy data after successful verification
-                    // migrationService.cleanupLegacyData()
-                } else {
-                    await logger.warning("⚠️ Core Data migration verification failed")
-                }
-            } else {
-                await logger.info("✅ Core Data migration already completed")
-            }
-        } catch {
-            await logger.error("❌ Core Data migration failed: \(error)")
-        }
     }
     
     // MARK: - Core Data Integration
@@ -280,7 +396,10 @@ class HistoricalDataManager: ObservableObject {
     // MARK: - Optimized Background Operations
     
     /// Perform heavy operations using optimized background context to prevent UI blocking
-    private func performOptimizedBackgroundOperation<T>(_ operationName: String, operation: @escaping () async throws -> T) async throws -> T {
+    private func performOptimizedBackgroundOperation<T: Sendable>(
+        _ operationName: String,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
         await logger.debug("🔄 Starting optimized background operation: \(operationName)")
         
         // Use task with specific priority for background work
@@ -292,11 +411,11 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Batch process large datasets in chunks to prevent memory spikes
-    private func processBatchOperation<T, R>(
+    private func processBatchOperation<T: Sendable, R: Sendable>(
         items: [T],
         batchSize: Int = 100,
         operationName: String,
-        operation: @escaping ([T]) async throws -> R
+        operation: @escaping @Sendable ([T]) async throws -> R
     ) async throws -> [R] {
         let batches = items.chunked(into: batchSize)
         var results: [R] = []
@@ -322,21 +441,21 @@ class HistoricalDataManager: ObservableObject {
     // MARK: - Tiered Cache Integration
     
     /// Store data in appropriate cache tier based on recency and access patterns
-    private func storeInCache<T: Codable>(_ data: T, key: String, isRecent: Bool = false) {
+    private func storeInCache<T: Codable & Sendable>(_ data: T, key: String, isRecent: Bool = false) {
         let cacheLevel: CacheManager.CacheLevel = isRecent ? .memory : 
                         (key.contains("historical") ? .archived : .disk)
         cacheManager.store(data, forKey: key, level: cacheLevel)
     }
     
     /// Retrieve data from cache with fallback to UserDefaults for migration
-    private func retrieveFromCache<T: Codable>(_ type: T.Type, key: String) -> T? {
+    private func retrieveFromCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         // Try cache first
         if let cachedData = cacheManager.retrieve(type, forKey: key) {
             return cachedData
         }
         
         // Fallback to UserDefaults for backward compatibility during migration
-        if let data = UserDefaults.standard.data(forKey: key),
+        if let data = StockbarRuntimeStorage.userDefaults.data(forKey: key),
            let decoded = try? decoder.decode(type, from: data) {
             // Migrate to cache for future access
             storeInCache(decoded, key: key)
@@ -349,14 +468,15 @@ class HistoricalDataManager: ObservableObject {
     
     /// Get recent price snapshots optimized for memory cache
     func getRecentPriceSnapshots(for symbol: String, days: Int = 30) -> [PriceSnapshot] {
-        let cacheKey = "recent_prices_\(symbol)_\(days)"
+        let aliases = instrumentAliasStore.aliases(for: symbol)
+        let cacheKey = "recent_prices_\(aliases.joined(separator: "-"))_\(days)"
         
         if let cached: [PriceSnapshot] = retrieveFromCache([PriceSnapshot].self, key: cacheKey) {
             return cached
         }
         
         // Calculate from full dataset
-        let allSnapshots = priceSnapshots[symbol] ?? []
+        let allSnapshots = aliasAwarePriceSnapshots(for: symbol)
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date.distantPast
         let recentSnapshots = allSnapshots.filter { $0.timestamp >= cutoffDate }
         
@@ -388,13 +508,20 @@ class HistoricalDataManager: ObservableObject {
     
     /// Cache portfolio analytics to avoid recalculation
     func getCachedPortfolioAnalytics(for timeRange: ChartTimeRange) -> PortfolioAnalytics? {
-        let cacheKey = "analytics_\(timeRange.rawValue)_\(Date().timeIntervalSince1970 / 3600)" // Hour-based cache
-        return retrieveFromCache(PortfolioAnalytics.self, key: cacheKey)
+        retrieveFromCache(PortfolioAnalytics.self, key: analyticsCacheKey(for: timeRange))
     }
     
     func setCachedPortfolioAnalytics(_ analytics: PortfolioAnalytics, for timeRange: ChartTimeRange) {
-        let cacheKey = "analytics_\(timeRange.rawValue)_\(Date().timeIntervalSince1970 / 3600)"
-        storeInCache(analytics, key: cacheKey, isRecent: timeRange == .day || timeRange == .week)
+        storeInCache(
+            analytics,
+            key: analyticsCacheKey(for: timeRange),
+            isRecent: timeRange == .day || timeRange == .week
+        )
+    }
+
+    private func analyticsCacheKey(for timeRange: ChartTimeRange, now: Date = Date()) -> String {
+        let hourBucket = Int(now.timeIntervalSince1970 / 3_600)
+        return "analytics_\(timeRange.rawValue)_\(hourBucket)"
     }
     
     /// Invalidate cache when data changes
@@ -409,7 +536,7 @@ class HistoricalDataManager: ObservableObject {
         // Invalidate portfolio caches
         for timeRange in ChartTimeRange.allCases {
             cacheManager.remove(forKey: "portfolio_snapshots_\(timeRange.rawValue)")
-            cacheManager.remove(forKey: "analytics_\(timeRange.rawValue)_\(Date().timeIntervalSince1970 / 3600)")
+            cacheManager.remove(forKey: analyticsCacheKey(for: timeRange))
         }
         
         Task { await logger.debug("🗑️ Invalidated caches for symbol: \(symbol ?? "all")") }
@@ -734,10 +861,168 @@ class HistoricalDataManager: ObservableObject {
         
         Task { await logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)") }
     }
+
+    /// Records a memory-only price point from live refresh/broker sync paths.
+    /// This improves intraday menu charts without changing persistent snapshot cadence.
+    func recordLivePriceSample(
+        symbol: String,
+        price: Double,
+        previousClose: Double?,
+        timestamp: Date = Date()
+    ) {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !symbolKey.isEmpty, price.isFinite, price > 0 else {
+            Task { await logger.debug("📈 Skipping live price sample for \(symbol) - invalid price \(price)") }
+            return
+        }
+
+        let previousCloseValue: Double
+        if let previousClose, previousClose.isFinite, previousClose > 0 {
+            previousCloseValue = previousClose
+        } else {
+            previousCloseValue = price
+        }
+
+        let sample = PriceSnapshot(
+            timestamp: timestamp,
+            price: price,
+            previousClose: previousCloseValue,
+            volume: nil,
+            symbol: symbolKey
+        )
+
+        var samples = livePriceSamples[symbolKey] ?? []
+        if let last = samples.last, abs(last.timestamp.timeIntervalSince(timestamp)) < 1 {
+            samples[samples.count - 1] = sample
+        } else {
+            samples.append(sample)
+        }
+
+        let cutoff = timestamp.addingTimeInterval(-livePriceSampleRetention)
+        samples = samples
+            .filter { $0.timestamp >= cutoff && $0.price.isFinite && $0.price > 0 }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        if samples.count > maxLivePriceSamplesPerSymbol {
+            samples = Array(samples.suffix(maxLivePriceSamplesPerSymbol))
+        }
+
+        livePriceSamples[symbolKey] = samples
+        notePriceDataChanged(for: symbolKey)
+    }
+
+    /// Records a memory-only portfolio value/gain point from live refresh paths.
+    /// This keeps portfolio menu charts responsive without changing persistent snapshot cadence.
+    func recordLivePortfolioSample(
+        totalValue: Double,
+        totalGains: Double,
+        timestamp: Date = Date()
+    ) {
+        guard totalValue.isFinite, totalValue > 0 else {
+            Task { await logger.debug("📈 Skipping live portfolio sample - invalid value \(totalValue)") }
+            return
+        }
+
+        livePortfolioValueSamples = appendLivePortfolioPoint(
+            ChartDataPoint(date: timestamp, value: totalValue),
+            to: livePortfolioValueSamples,
+            timestamp: timestamp
+        )
+
+        if totalGains.isFinite {
+            livePortfolioGainSamples = appendLivePortfolioPoint(
+                ChartDataPoint(date: timestamp, value: totalGains),
+                to: livePortfolioGainSamples,
+                timestamp: timestamp
+            )
+        }
+    }
+
+    /// Returns display-only portfolio menu values. For 1D, this reconstructs the
+    /// current portfolio over the last day from available symbol snapshots.
+    func getPortfolioMenuValues(
+        for timeRange: ChartTimeRange,
+        currentTrades: [RealTimeTrade],
+        preferredCurrency: String,
+        now: Date = Date(),
+        scheduleMissingHistoryFetches: Bool = true,
+        allowSyntheticPositionHistory: Bool = true
+    ) -> [ChartDataPoint] {
+        let startDate = timeRange.startDate(from: now)
+        let storedAndLiveValues = storedAndLivePortfolioValues(from: startDate, to: now)
+
+        guard timeRange == .day, allowSyntheticPositionHistory else {
+            return storedAndLiveValues
+        }
+
+        let positions = portfolioMenuPositions(
+            from: currentTrades,
+            preferredCurrency: preferredCurrency
+        )
+        guard !positions.isEmpty else {
+            return storedAndLiveValues
+        }
+
+        let syntheticValues = syntheticPortfolioMenuValues(
+            positions: positions,
+            preferredCurrency: preferredCurrency,
+            startDate: startDate,
+            endDate: now
+        )
+
+        if scheduleMissingHistoryFetches {
+            schedulePortfolioMenuHistoryFetchesIfNeeded(
+                currentTrades: currentTrades,
+                startDate: startDate,
+                endDate: now,
+                syntheticPointCount: syntheticValues.count
+            )
+        }
+
+        guard syntheticValues.count >= 3 else {
+            return storedAndLiveValues
+        }
+
+        return deduplicatedSortedChartPoints(storedAndLiveValues + syntheticValues)
+    }
+
+    func portfolioMenuHistoryFetchCandidates(
+        currentTrades: [RealTimeTrade],
+        startDate: Date,
+        endDate: Date,
+        minimumPoints: Int = 3
+    ) -> [String] {
+        currentTrades
+            .filter { !$0.trade.isWatchlistOnly && $0.trade.position.unitSize > 0 }
+            .compactMap { realTimeTrade -> String? in
+                let symbol = realTimeTrade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !symbol.isEmpty else { return nil }
+
+                let snapshotCount = allPortfolioMenuPriceSnapshots(for: symbol)
+                    .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+                    .count
+                return snapshotCount < minimumPoints ? symbol : nil
+            }
+    }
     
-    func getChartData(for type: ChartType, timeRange: ChartTimeRange, dataModel: DataModel? = nil) -> [ChartDataPoint] {
+    func getChartData(
+        for type: ChartType,
+        timeRange: ChartTimeRange,
+        dataModel: DataModel? = nil,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> [ChartDataPoint] {
         switch type {
         case .portfolioValue:
+            if let routed = folyncPortfolioOverlay(
+                kind: "portfolio-value",
+                timeRange: timeRange,
+                dataModel: dataModel,
+                customFrom: customFrom,
+                customTo: customTo
+            ) {
+                return routed
+            }
             // Note: Core Data loading is now handled in loadHistoricalData() to prevent infinite loops
             
             // NEW: Use stored portfolio snapshots if available
@@ -806,6 +1091,15 @@ class HistoricalDataManager: ObservableObject {
             return data
             
         case .portfolioGains:
+            if let routed = folyncPortfolioOverlay(
+                kind: "portfolio-gain",
+                timeRange: timeRange,
+                dataModel: dataModel,
+                customFrom: customFrom,
+                customTo: customTo
+            ) {
+                return routed
+            }
             // Note: Core Data loading is now handled in loadHistoricalData() to prevent infinite loops
             
             // NEW: Use stored portfolio gains if available
@@ -876,28 +1170,65 @@ class HistoricalDataManager: ObservableObject {
             return data
             
         case .individualStock(let symbol):
-            let startDate = timeRange.startDate(from: Date())
-            return getOptimalStockData(for: symbol, timeRange: timeRange, startDate: startDate)
+            let endDate = timeRange == .custom ? (customTo ?? Date()) : Date()
+            let startDate = timeRange == .custom
+                ? (customFrom ?? timeRange.startDate(from: endDate))
+                : timeRange.startDate(from: endDate)
+            return getOptimalStockData(
+                for: symbol,
+                timeRange: timeRange,
+                startDate: startDate,
+                endDate: endDate,
+                dataModel: dataModel
+            )
         }
     }
     
     /// Gets stock data for charts with increased data limits and caching
-    private func getOptimalStockData(for symbol: String, timeRange: ChartTimeRange, startDate: Date) -> [ChartDataPoint] {
-        let cacheKey = "\(symbol)-\(timeRange.rawValue)-\(Int(startDate.timeIntervalSince1970))"
+    private func getOptimalStockData(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        startDate: Date,
+        endDate: Date,
+        dataModel: DataModel?
+    ) -> [ChartDataPoint] {
+        let cacheKey = "\(symbol)-\(timeRange.rawValue)-\(Int(startDate.timeIntervalSince1970))-\(Int(endDate.timeIntervalSince1970))"
+        let folyncEnabled = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
+        let folyncRouteApplies = folyncEnabled
+            && dataModel?.folyncCapabilities?.isTrackedOrAllowlisted(symbol) == true
+        let folyncSeriesKeys = folyncLineSeriesKeys(
+            for: symbol,
+            timeRange: timeRange,
+            customFrom: timeRange == .custom ? startDate : nil,
+            customTo: timeRange == .custom ? endDate : nil
+        )
+        let folyncStatus = folyncSeriesKeys.compactMap { folyncSourceStatusBySeries[$0] }.first
+
+        if folyncEnabled {
+            schedulePriceHistoryFetchIfNeeded(
+                for: symbol,
+                timeRange: timeRange,
+                startDate: startDate,
+                endDate: endDate
+            )
+        }
         
         // Check cache first
-        if let cachedData = stockDataCache[cacheKey],
+        if !folyncRouteApplies || folyncStatus != nil,
+           let cachedData = stockDataCache[cacheKey],
            let cacheTime = stockDataCacheTimestamp[cacheKey],
            Date().timeIntervalSince(cacheTime) < stockDataCacheInterval {
             Task { await logger.debug("📊 CACHE HIT: Stock data for \(symbol) \(timeRange.rawValue): \(cachedData.count) points") }
             return cachedData
         }
         
-        let allSnapshots = priceSnapshots[symbol] ?? []
+        let allSnapshots = folyncRouteApplies && folyncStatus == nil
+            ? []
+            : aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: folyncSeriesKeys)
         
         // Filter and convert to chart data points
         let filteredData = allSnapshots
-            .filter { $0.timestamp >= startDate }
+            .filter { $0.timestamp >= startDate && (timeRange != .custom || $0.timestamp <= endDate) }
             .map { ChartDataPoint(date: $0.timestamp, value: $0.price, symbol: symbol) }
             .sorted { $0.date < $1.date }
         
@@ -914,11 +1245,12 @@ class HistoricalDataManager: ObservableObject {
         // Trigger historical data fetching if we don't have enough data
         if hasInsufficientData {
             Task { await logger.info("📊 Insufficient stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count)/\(minimumExpectedDataPoints) points. Triggering historical data fetch.") }
-            
-            // Trigger background historical data fetch
-            Task.detached(priority: .background) { [weak self] in
-                await self?.triggerHistoricalDataFetch(for: symbol, timeRange: timeRange, startDate: startDate)
-            }
+            schedulePriceHistoryFetchIfNeeded(
+                for: symbol,
+                timeRange: timeRange,
+                startDate: startDate,
+                endDate: endDate
+            )
         }
         
         return filteredData
@@ -947,18 +1279,74 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Triggers historical data fetching for a specific symbol and time range
-    func triggerHistoricalDataFetch(for symbol: String, timeRange: ChartTimeRange, startDate: Date) async {
+    func triggerHistoricalDataFetch(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        startDate: Date,
+        endDate: Date = Date(),
+        folyncConfigurationRevision: Int? = nil
+    ) async -> HistoricalPriceFetchOutcome {
+        guard !Task.isCancelled,
+              folyncConfigurationRevision == nil || folyncConfigurationRevision == self.folyncSupplementalConfigurationRevision
+        else { return .cancelled }
         await logger.info("🔄 Starting historical data fetch for \(symbol) from \(startDate)")
+
+        if FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts) {
+            let result = await FolyncSupplementalCoordinator.shared.routeLineHistory(
+                symbol: symbol,
+                range: timeRange.folyncRange,
+                from: timeRange == .custom ? startDate : nil,
+                to: timeRange == .custom ? endDate : nil
+            )
+            if let folyncConfigurationRevision,
+               folyncConfigurationRevision != self.folyncSupplementalConfigurationRevision {
+                await logger.info("Discarding superseded Folync history response for \(symbol)")
+                return .cancelled
+            }
+            switch result {
+            case .folync(let snapshots, let status, let identity, let metadata):
+                setFolyncPriceOverlay(
+                    snapshots,
+                    identity: identity,
+                    requestedSymbol: symbol,
+                    status: status,
+                    metadata: metadata,
+                    timeRange: timeRange,
+                    customFrom: timeRange == .custom ? startDate : nil,
+                    customTo: timeRange == .custom ? endDate : nil
+                )
+                await logger.info("Using \(snapshots.count) non-persisted \(status.label) line-chart points for \(symbol)")
+                return .success
+            case .unavailable:
+                markFolyncSeriesUnavailable(
+                    symbol,
+                    timeRange: timeRange,
+                    customFrom: timeRange == .custom ? startDate : nil,
+                    customTo: timeRange == .custom ? endDate : nil
+                )
+                await logger.warning("Folync line history is unavailable for \(symbol); local fallback is disabled")
+                return .failed
+            case .legacy:
+                clearFolyncPriceOverlayForLegacy(
+                    symbol,
+                    timeRange: timeRange,
+                    customFrom: timeRange == .custom ? startDate : nil,
+                    customTo: timeRange == .custom ? endDate : nil
+                )
+            }
+        }
         
         // Use NetworkService to fetch historical data
         guard let networkService = getNetworkService() else {
             await logger.error("❌ Cannot fetch historical data: NetworkService not available")
-            return
+            return .failed
         }
         
         do {
-            let endDate = Date()
             let historicalData = try await networkService.fetchHistoricalData(for: symbol, from: startDate, to: endDate)
+            guard !Task.isCancelled,
+                  folyncConfigurationRevision == nil || folyncConfigurationRevision == self.folyncSupplementalConfigurationRevision
+            else { return .cancelled }
             
             await logger.info("📥 Received \(historicalData.count) historical data points for \(symbol)")
             
@@ -969,9 +1357,15 @@ class HistoricalDataManager: ObservableObject {
             } else {
                 await logger.warning("⚠️ No historical data received for \(symbol)")
             }
-            
+            return historicalData.isEmpty ? .empty : .success
+        } catch NetworkError.noData {
+            await logger.info("No history available for \(symbol) in the requested interval; delaying automatic retry")
+            return .empty
+        } catch is CancellationError {
+            return .cancelled
         } catch {
             await logger.error("❌ Failed to fetch historical data for \(symbol): \(error.localizedDescription)")
+            return .failed
         }
     }
     
@@ -1132,7 +1526,8 @@ class HistoricalDataManager: ObservableObject {
     
     /// Gets performance metrics for an individual stock symbol
     func getStockPerformanceMetrics(for symbol: String, timeRange: ChartTimeRange) -> PerformanceMetrics? {
-        guard let stockSnapshots = priceSnapshots[symbol] else { return nil }
+        let stockSnapshots = aliasAwarePriceSnapshots(for: symbol)
+        guard !stockSnapshots.isEmpty else { return nil }
         
         let startDate = timeRange.startDate(from: Date())
         let relevantSnapshots = stockSnapshots.filter { $0.timestamp >= startDate }.sorted { $0.timestamp < $1.timestamp }
@@ -1270,13 +1665,12 @@ class HistoricalDataManager: ObservableObject {
         }
     }
     
-    
     private func isValidPriceData(price: Double, symbol: String) -> Bool {
         // Basic validation
         guard price > 0 && price.isFinite else { return false }
         
         // Get recent price history for this symbol
-        let recentSnapshots = priceSnapshots[symbol]?.suffix(10) ?? []
+        let recentSnapshots = aliasAwarePriceSnapshots(for: symbol).suffix(10)
         
         // If we have no history, accept the price (first data point)
         guard !recentSnapshots.isEmpty else { return true }
@@ -1396,7 +1790,6 @@ class HistoricalDataManager: ObservableObject {
                                        calculationDate: currentCalculationDate)
             }
 
-
             // We are removing the direct saving of large snapshot arrays to CacheManager here,
             // assuming they are mastered in Core Data.
             // If CacheManager was used as a staging area before Core Data saving,
@@ -1404,12 +1797,12 @@ class HistoricalDataManager: ObservableObject {
 
             // UserDefaults backup for metadata can remain for safety during transition
             if let compositionData = try? currentPortfolioComposition.map({ try encoder.encode($0) }) {
-                 UserDefaults.standard.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
+                 StockbarRuntimeStorage.userDefaults.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
             } else if currentPortfolioComposition == nil { // Explicitly clear if nil
-                 UserDefaults.standard.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+                 StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.currentPortfolioComposition)
             }
-            UserDefaults.standard.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
-            UserDefaults.standard.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+            StockbarRuntimeStorage.userDefaults.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
+            StockbarRuntimeStorage.userDefaults.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
             // Avoid saving large snapshot arrays to UserDefaults directly
             
             Task { await logger.debug("HistoricalDataManager: Saved metadata to CacheManager and UserDefaults backup.") }
@@ -1445,7 +1838,9 @@ class HistoricalDataManager: ObservableObject {
     private func setupPeriodicSave() {
         // Save data every 30 minutes to avoid too frequent writes
         Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
-            self?.saveHistoricalData()
+            Task { @MainActor [weak self] in
+                self?.saveHistoricalData()
+            }
         }
         
         // Perform aggressive cleanup every 6 hours to maintain optimal performance
@@ -1495,14 +1890,14 @@ class HistoricalDataManager: ObservableObject {
         lastRetroactiveCalculationDate = Date.distantPast
         earliestAvailableDates.removeAll()
         
-        UserDefaults.standard.removeObject(forKey: StorageKeys.portfolioSnapshots)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.priceSnapshots)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.historicalPortfolioSnapshots)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.currentPortfolioComposition)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.lastRetroactiveCalculationDate)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
-        UserDefaults.standard.removeObject(forKey: StorageKeys.earliestAvailableDates)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.portfolioSnapshots)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.priceSnapshots)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.historicalPortfolioSnapshots)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.lastRetroactiveCalculationDate)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.earliestAvailableDates)
         
         Task { await logger.info("Cleared all historical data including enhanced portfolio snapshots") }
     }
@@ -1512,9 +1907,9 @@ class HistoricalDataManager: ObservableObject {
         portfolioSnapshots.removeAll()
         cachedHistoricalPortfolioValues.removeAll()
         lastPortfolioCalculationDate = Date.distantPast
-        UserDefaults.standard.removeObject(forKey: "portfolioSnapshots")
-        UserDefaults.standard.removeObject(forKey: "cachedHistoricalPortfolioValues")
-        UserDefaults.standard.removeObject(forKey: "lastPortfolioCalculationDate")
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "portfolioSnapshots")
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "cachedHistoricalPortfolioValues")
+        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "lastPortfolioCalculationDate")
         Task { await logger.info("Cleared inconsistent portfolio historical data and cache - will rebuild with correct calculations") }
     }
 
@@ -1553,7 +1948,6 @@ class HistoricalDataManager: ObservableObject {
         Task { await logger.info("🧹 Acceptable range: £\(String(format: "%.2f", reasonableRange.lowerBound)) - £\(String(format: "%.2f", reasonableRange.upperBound))") }
         
         // Clean portfolio snapshots - be more aggressive with outliers
-        let originalPortfolioCount = portfolioSnapshots.count
         portfolioSnapshots = portfolioSnapshots.filter { snapshot in
             // Remove snapshots that are way off from current value
             let isReasonable = reasonableRange.contains(snapshot.totalValue)
@@ -1630,20 +2024,15 @@ class HistoricalDataManager: ObservableObject {
             priceSnapshots[symbol] = []
         }
         
-        // Get existing days that already have data to avoid duplicates
-        let existingDays = Set(priceSnapshots[symbol]?.map { Calendar.current.startOfDay(for: $0.timestamp) } ?? [])
-        
-        Task { await logger.debug("🔍 DUPLICATE FILTER: \(symbol) has existing data for \(existingDays.count) days") }
-        if !existingDays.isEmpty {
-            let sortedExistingDays = existingDays.sorted()
-            Task { await logger.debug("🔍 DUPLICATE FILTER: First existing day: \(DateFormatter.debug.string(from: sortedExistingDays.first!))") }
-            Task { await logger.debug("🔍 DUPLICATE FILTER: Last existing day: \(DateFormatter.debug.string(from: sortedExistingDays.last!))") }
-        }
-        
-        // Filter out snapshots for days that already have data (preserve existing data)
+        // Filter exact timestamp duplicates while preserving same-day backfills.
+        let existingTimestampKeys = Set(
+            priceSnapshots[symbol]?.map { snapshotTimestampKey($0.timestamp) } ?? []
+        )
+
+        Task { await logger.debug("🔍 DUPLICATE FILTER: \(symbol) has \(existingTimestampKeys.count) existing timestamps") }
+
         let newSnapshots = snapshots.filter { snapshot in
-            let snapshotDay = Calendar.current.startOfDay(for: snapshot.timestamp)
-            return !existingDays.contains(snapshotDay)
+            !existingTimestampKeys.contains(snapshotTimestampKey(snapshot.timestamp))
         }
         
         Task { await logger.debug("🔍 DUPLICATE FILTER: Filtered \(snapshots.count) snapshots down to \(newSnapshots.count) new snapshots for \(symbol)") }
@@ -1662,6 +2051,7 @@ class HistoricalDataManager: ObservableObject {
             
             // Save the updated data
             saveHistoricalData()
+            notePriceDataChanged(for: symbol)
             
             Task { await logger.info("Added \(newSnapshots.count) new historical snapshots for \(symbol) (filtered from \(snapshots.count) total)") }
             
@@ -1864,7 +2254,7 @@ class HistoricalDataManager: ObservableObject {
         }
         
         var portfolioValues: [ChartDataPoint] = []
-        let currencyConverter = CurrencyConverter()
+        let currencyConverter = CurrencyConverter.shared
         let preferredCurrency = dataModel.preferredCurrency
         
         // Sort dates chronologically and apply sampling if needed
@@ -1896,7 +2286,7 @@ class HistoricalDataManager: ObservableObject {
                     let symbol = trade.trade.name
                     
                     // Find the historical price for this symbol on this date
-                    let symbolSnapshots = priceSnapshots[symbol] ?? []
+                    let symbolSnapshots = aliasAwarePriceSnapshots(for: symbol)
                     
                     if !symbolSnapshots.isEmpty,
                        let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) {
@@ -2009,7 +2399,7 @@ class HistoricalDataManager: ObservableObject {
     
     /// Calculates the total amount the user invested (purchase cost) in preferred currency
     private func calculateTotalInvestmentCost(dataModel: DataModel) -> Double {
-        let currencyConverter = CurrencyConverter()
+        let currencyConverter = CurrencyConverter.shared
         var totalCostUSD = 0.0
         
         for trade in dataModel.realTimeTrades {
@@ -2058,6 +2448,26 @@ class HistoricalDataManager: ObservableObject {
         try await batchService.performDatabaseOptimization()
         
         Task { await logger.info("⚡ Data optimization completed") }
+    }
+
+    func evictMemoryCachesForPressure(critical: Bool) {
+        aliasHistoryCache.removeAll()
+        stockDataCache.removeAll(keepingCapacity: false)
+        stockDataCacheTimestamp.removeAll(keepingCapacity: false)
+        cachedHistoricalPortfolioValues.removeAll(keepingCapacity: false)
+
+        let retainedPoints = critical ? 450 : 900
+        for symbol in Array(livePriceSamples.keys) {
+            if let samples = livePriceSamples[symbol], samples.count > retainedPoints {
+                livePriceSamples[symbol] = Array(samples.suffix(retainedPoints))
+            }
+        }
+        if livePortfolioValueSamples.count > retainedPoints {
+            livePortfolioValueSamples = Array(livePortfolioValueSamples.suffix(retainedPoints))
+        }
+        if livePortfolioGainSamples.count > retainedPoints {
+            livePortfolioGainSamples = Array(livePortfolioGainSamples.suffix(retainedPoints))
+        }
     }
     
     /// Gets optimized chart data using the enhanced chart service
@@ -2250,53 +2660,47 @@ class HistoricalDataManager: ObservableObject {
         await logger.info("🔄 RETROACTIVE: Starting comprehensive portfolio history calculation (force: \(force))") 
         
         // Initialize progress tracking
-        let calculationManager = await BackgroundCalculationManager.shared
-        await calculationManager.startCalculation(operation: "Portfolio History Calculation", totalOperations: 100)
+        let calculationManager = BackgroundCalculationManager.shared
+        calculationManager.startCalculation(operation: "Portfolio History Calculation", totalOperations: 100)
         
-        do {
-            // Create current portfolio composition for tracking changes
-            await calculationManager.updateProgress(completed: 10, status: "Analyzing portfolio composition")
-            let newComposition = createPortfolioComposition(from: dataModel)
-            
-            // Check if portfolio composition has changed
-            await calculationManager.updateProgress(completed: 20, status: "Checking for portfolio changes")
-            let compositionChanged = hasPortfolioCompositionChanged(newComposition)
-            let needsFullRecalculation = force || compositionChanged
-            
-            if needsFullRecalculation {
-                if force {
-                    await logger.info("🔄 RETROACTIVE: Forced full recalculation requested")
-                } else {
-                    await logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
-                }
-                
-                await calculationManager.updateProgress(completed: 30, status: "Starting full recalculation")
-                await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
+        // Create current portfolio composition for tracking changes
+        calculationManager.updateProgress(completed: 10, status: "Analyzing portfolio composition")
+        let newComposition = createPortfolioComposition(from: dataModel)
+
+        // Check if portfolio composition has changed
+        calculationManager.updateProgress(completed: 20, status: "Checking for portfolio changes")
+        let compositionChanged = hasPortfolioCompositionChanged(newComposition)
+        let needsFullRecalculation = force || compositionChanged
+
+        if needsFullRecalculation {
+            if force {
+                await logger.info("🔄 RETROACTIVE: Forced full recalculation requested")
             } else {
-                await logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update") 
-                await calculationManager.updateProgress(completed: 30, status: "Starting incremental update")
-                await performIncrementalPortfolioUpdate(using: dataModel)
+                await logger.info("🔄 RETROACTIVE: Portfolio composition changed - full recalculation needed")
             }
             
-            // Update composition tracking
-            await calculationManager.updateProgress(completed: 90, status: "Finalizing calculation")
-            await MainActor.run {
-                self.currentPortfolioComposition = newComposition
-                self.lastRetroactiveCalculationDate = Date()
-            }
-            
-            // Save updated data
-            await calculationManager.updateProgress(completed: 95, status: "Saving data")
-            saveHistoricalData()
-            
-            // Complete the calculation
-            await calculationManager.completeCalculation()
-            await logger.info("🔄 RETROACTIVE: Portfolio history calculation completed") 
-            
-        } catch {
-            await logger.error("🔄 RETROACTIVE: Portfolio calculation failed: \(error.localizedDescription)") 
-            await calculationManager.reportError("Portfolio calculation failed: \(error.localizedDescription)")
+            calculationManager.updateProgress(completed: 30, status: "Starting full recalculation")
+            await performFullPortfolioRecalculation(using: dataModel, composition: newComposition)
+        } else {
+            await logger.info("🔄 RETROACTIVE: Portfolio composition unchanged - incremental update")
+            calculationManager.updateProgress(completed: 30, status: "Starting incremental update")
+            await performIncrementalPortfolioUpdate(using: dataModel)
         }
+
+        // Update composition tracking
+        calculationManager.updateProgress(completed: 90, status: "Finalizing calculation")
+        await MainActor.run {
+            self.currentPortfolioComposition = newComposition
+            self.lastRetroactiveCalculationDate = Date()
+        }
+
+        // Save updated data
+        calculationManager.updateProgress(completed: 95, status: "Saving data")
+        saveHistoricalData()
+
+        // Complete the calculation
+        calculationManager.completeCalculation()
+        await logger.info("🔄 RETROACTIVE: Portfolio history calculation completed")
     }
     
     /// Creates portfolio composition from current DataModel
@@ -2324,23 +2728,23 @@ class HistoricalDataManager: ObservableObject {
     private func performFullPortfolioRecalculation(using dataModel: DataModel, composition: PortfolioComposition) async {
         await logger.info("🔄 FULL RECALC: Starting full portfolio history recalculation") 
         
-        let calculationManager = await BackgroundCalculationManager.shared
+        let calculationManager = BackgroundCalculationManager.shared
         
         // Clear existing portfolio snapshots
-        await calculationManager.updateProgress(completed: 40, status: "Clearing existing data")
+        calculationManager.updateProgress(completed: 40, status: "Clearing existing data")
         await MainActor.run {
             self.historicalPortfolioSnapshots.removeAll()
         }
         
         // Find the earliest available historical data
-        await calculationManager.updateProgress(completed: 45, status: "Finding earliest data")
+        calculationManager.updateProgress(completed: 45, status: "Finding earliest data")
         let earliestDate = findEarliestHistoricalData()
         let endDate = Date()
         
         await logger.info("🔄 FULL RECALC: Calculating from \(DateFormatter.debug.string(from: earliestDate)) to \(DateFormatter.debug.string(from: endDate))") 
         
         // Calculate portfolio values for the entire historical period
-        await calculationManager.updateProgress(completed: 50, status: "Calculating portfolio values")
+        calculationManager.updateProgress(completed: 50, status: "Calculating portfolio values")
         let snapshots = await calculatePortfolioSnapshotsForPeriod(
             from: earliestDate,
             to: endDate,
@@ -2348,7 +2752,7 @@ class HistoricalDataManager: ObservableObject {
             composition: composition
         )
         
-        await calculationManager.updateProgress(completed: 85, status: "Storing portfolio snapshots")
+        calculationManager.updateProgress(completed: 85, status: "Storing portfolio snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots = snapshots.sorted { $0.date < $1.date }
         }
@@ -2358,16 +2762,16 @@ class HistoricalDataManager: ObservableObject {
     
     /// Performs incremental portfolio update for new dates only
     private func performIncrementalPortfolioUpdate(using dataModel: DataModel) async {
-        let calculationManager = await BackgroundCalculationManager.shared
+        let calculationManager = BackgroundCalculationManager.shared
         
-        await calculationManager.updateProgress(completed: 40, status: "Checking for new data")
+        calculationManager.updateProgress(completed: 40, status: "Checking for new data")
         let lastCalculatedDate = getLastPortfolioSnapshotDate()
         let endDate = Date()
         
         // Only calculate if there's a meaningful gap (more than 1 day)
         guard endDate.timeIntervalSince(lastCalculatedDate) > 86400 else {
             await logger.debug("🔄 INCREMENTAL: No significant time gap, skipping update") 
-            await calculationManager.updateProgress(completed: 85, status: "No update needed")
+            calculationManager.updateProgress(completed: 85, status: "No update needed")
             return
         }
         
@@ -2375,11 +2779,11 @@ class HistoricalDataManager: ObservableObject {
         
         guard let composition = currentPortfolioComposition else {
             await logger.warning("🔄 INCREMENTAL: Missing portfolio composition, skipping incremental update")
-            await calculationManager.updateProgress(completed: 85, status: "No portfolio composition")
+            calculationManager.updateProgress(completed: 85, status: "No portfolio composition")
             return
         }
 
-        await calculationManager.updateProgress(completed: 50, status: "Calculating new portfolio values")
+        calculationManager.updateProgress(completed: 50, status: "Calculating new portfolio values")
         let newSnapshots = await calculatePortfolioSnapshotsForPeriod(
             from: lastCalculatedDate,
             to: endDate,
@@ -2387,7 +2791,7 @@ class HistoricalDataManager: ObservableObject {
             composition: composition
         )
         
-        await calculationManager.updateProgress(completed: 80, status: "Adding new snapshots")
+        calculationManager.updateProgress(completed: 80, status: "Adding new snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
             self.historicalPortfolioSnapshots.sort { $0.date < $1.date }
@@ -2453,54 +2857,796 @@ class HistoricalDataManager: ObservableObject {
         // Debug logging
         Task { await logger.debug("📊 GET PORTFOLIO VALUES: totalSnapshots=\(historicalPortfolioSnapshots.count), startDate=\(startDate), timeRange=\(timeRange.rawValue)") }
 
-        let filteredSnapshots = historicalPortfolioSnapshots
-            .filter { $0.date >= startDate }
-            .sorted { $0.date < $1.date }
+        let values = storedAndLivePortfolioValues(from: startDate, to: Date())
 
-        Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(filteredSnapshots.count)") }
+        Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(values.count)") }
 
-        return filteredSnapshots.map { snapshot in
-            ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
-        }
+        return values
     }
     
     /// Gets stored portfolio gains for chart display
     func getStoredPortfolioGains(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
         let startDate = timeRange.startDate()
         
-        let filteredSnapshots = historicalPortfolioSnapshots
+        let storedGains = historicalPortfolioSnapshots
             .filter { $0.date >= startDate }
-            .sorted { $0.date < $1.date }
-        
-        return filteredSnapshots.map { snapshot in
-            ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
-        }
+            .map { snapshot in
+                ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
+            }
+        let liveGains = livePortfolioGainSamples.filter { $0.date >= startDate }
+
+        return deduplicatedSortedChartPoints(storedGains + liveGains)
     }
     
-    /// Gets price snapshots for a specific symbol within a time range
-    /// Used by MenuPriceChartView for individual stock charts
+    /// Pure read of sorted history. Display formatting must never start provider work.
     func getPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date = Date()) -> [PriceSnapshot] {
-        guard let snapshots = priceSnapshots[symbol] else {
-            Task { await logger.debug("📊 No price snapshots found for symbol: \(symbol)") }
-            return []
-        }
-        
-        let filteredSnapshots = snapshots
+        aliasAwarePriceSnapshots(for: symbol)
             .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
-            .sorted { $0.timestamp < $1.timestamp }
-        
-        Task { await logger.debug("📊 Retrieved \(filteredSnapshots.count) price snapshots for \(symbol) from \(startDate) to \(endDate)") }
-        
-        // If we have insufficient data, trigger background fetch
-        if filteredSnapshots.count < 10 {
-            Task.detached(priority: .background) { [weak self] in
-                await self?.triggerHistoricalDataFetch(for: symbol, timeRange: .day, startDate: startDate)
-            }
-        }
-        
-        return filteredSnapshots
     }
 
+    /// Chart consumers explicitly request missing history after reading their current slice.
+    func requestPriceHistoryIfNeeded(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        from startDate: Date,
+        to endDate: Date,
+        availablePointCount: Int,
+        force: Bool = false
+    ) {
+        let folyncEnabled = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
+        guard force || folyncEnabled || availablePointCount < 10 else { return }
+        schedulePriceHistoryFetchIfNeeded(
+            for: symbol, timeRange: timeRange, startDate: startDate, endDate: endDate, force: force
+        )
+    }
+
+    func folyncSourceStatus(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> FolyncSupplementalSourceStatus? {
+        folyncLineSeriesKeys(
+            for: symbol,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        ).compactMap { folyncSourceStatusBySeries[$0] }.first
+    }
+
+    func folyncCoverage(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> String? {
+        folyncLineSeriesKeys(
+            for: symbol,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        ).compactMap { folyncCoverageBySeries[$0] }.first
+    }
+
+    func folyncPortfolioSourceStatus(
+        kind: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> FolyncSupplementalSourceStatus? {
+        folyncSourceStatusBySeries[folyncPortfolioSeriesKey(
+            kind: kind,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        )]
+    }
+
+    func folyncPortfolioCoverage(
+        kind: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> String? {
+        folyncCoverageBySeries[folyncPortfolioSeriesKey(
+            kind: kind,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        )]
+    }
+
+    func clearFolyncSupplementalOverlays() {
+        folyncPriceOverlays.removeAll()
+        latestFolyncLineSeriesKeyBySymbol.removeAll()
+        folyncUnavailableSeries.removeAll()
+        folyncPortfolioHistoryContexts.removeAll()
+        folyncPortfolioHistoryFetchRequestTimes.removeAll()
+        folyncPortfolioValueOverlays.removeAll()
+        folyncPortfolioGainOverlays.removeAll()
+        folyncSourceStatusBySeries.removeAll()
+        folyncCoverageBySeries.removeAll()
+        stockDataCache.removeAll()
+        stockDataCacheTimestamp.removeAll()
+        folyncSupplementalConfigurationRevision &+= 1
+        priceDataRevision &+= 1
+    }
+
+    func noteFolyncSupplementalConfigurationChanged() {
+        folyncSupplementalConfigurationRevision &+= 1
+        priceDataRevision &+= 1
+    }
+
+    func shouldFetchMenuPriceHistory(
+        for symbol: String,
+        from startDate: Date,
+        to endDate: Date = Date(),
+        minimumPoints: Int = 10
+    ) -> Bool {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !symbolKey.isEmpty, minimumPoints > 0 else { return false }
+
+        let snapshotCount = getPriceSnapshots(for: symbolKey, from: startDate, to: endDate).count
+
+        return snapshotCount < minimumPoints
+    }
+
+    private struct PortfolioMenuPosition {
+        let symbol: String
+        let units: Double
+        let currency: String
+        let currentPrice: Double
+        let currentValueInPreferredCurrency: Double
+    }
+
+    private func storedAndLivePortfolioValues(from startDate: Date, to endDate: Date) -> [ChartDataPoint] {
+        let storedValues = historicalPortfolioSnapshots
+            .filter { $0.date >= startDate && $0.date <= endDate }
+            .map { snapshot in
+                ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
+            }
+        let liveValues = livePortfolioValueSamples.filter { $0.date >= startDate && $0.date <= endDate }
+        return deduplicatedSortedChartPoints(storedValues + liveValues)
+    }
+
+    private func portfolioMenuPositions(
+        from currentTrades: [RealTimeTrade],
+        preferredCurrency: String
+    ) -> [PortfolioMenuPosition] {
+        let converter = CurrencyConverter.shared
+
+        return currentTrades.compactMap { realTimeTrade -> PortfolioMenuPosition? in
+            let trade = realTimeTrade.trade
+            guard !trade.isWatchlistOnly else { return nil }
+
+            let symbol = trade.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let units = trade.position.unitSize
+            let currentPrice = realTimeTrade.realTimeInfo.getCurrentDisplayPrice()
+            guard !symbol.isEmpty,
+                  units.isFinite,
+                  units > 0,
+                  currentPrice.isFinite,
+                  currentPrice > 0 else {
+                return nil
+            }
+
+            let currency = portfolioMenuDisplayCurrency(for: realTimeTrade)
+            let currentValue = convertPortfolioMenuValue(
+                amount: currentPrice * units,
+                from: currency,
+                to: preferredCurrency,
+                converter: converter
+            )
+            guard currentValue.isFinite, currentValue > 0 else {
+                return nil
+            }
+
+            return PortfolioMenuPosition(
+                symbol: symbol,
+                units: units,
+                currency: currency,
+                currentPrice: currentPrice,
+                currentValueInPreferredCurrency: currentValue
+            )
+        }
+    }
+
+    private func syntheticPortfolioMenuValues(
+        positions: [PortfolioMenuPosition],
+        preferredCurrency: String,
+        startDate: Date,
+        endDate: Date
+    ) -> [ChartDataPoint] {
+        let snapshotsBySymbol = Dictionary(uniqueKeysWithValues: positions.map { position in
+            (
+                position.symbol,
+                allPortfolioMenuPriceSnapshots(for: position.symbol)
+                    .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+            )
+        })
+
+        let candidateDates = latestDatesPerBucket(
+            snapshotsBySymbol.values.flatMap { snapshots in snapshots.map(\.timestamp) },
+            bucketSize: 120
+        )
+        guard !candidateDates.isEmpty else { return [] }
+
+        let converter = CurrencyConverter.shared
+        let totalCurrentValue = positions
+            .map(\.currentValueInPreferredCurrency)
+            .reduce(0, +)
+        guard totalCurrentValue.isFinite, totalCurrentValue > 0 else { return [] }
+
+        let minimumCoveredPositionCount = max(1, Int(ceil(Double(positions.count) * 0.5)))
+        let tolerance: TimeInterval = 10 * 60
+
+        return candidateDates.compactMap { candidateDate in
+            var coveredPositionCount = 0
+            var coveredCurrentValue = 0.0
+            var syntheticValue = 0.0
+
+            for position in positions {
+                guard let snapshots = snapshotsBySymbol[position.symbol],
+                      let snapshot = latestSnapshot(in: snapshots, atOrBefore: candidateDate, tolerance: tolerance) else {
+                    continue
+                }
+
+                let price = normalizedPortfolioMenuPrice(
+                    snapshot.price,
+                    currentPrice: position.currentPrice,
+                    symbol: position.symbol
+                )
+                guard price.isFinite, price > 0 else {
+                    continue
+                }
+
+                let positionValue = convertPortfolioMenuValue(
+                    amount: price * position.units,
+                    from: position.currency,
+                    to: preferredCurrency,
+                    converter: converter
+                )
+                guard positionValue.isFinite, positionValue > 0 else {
+                    continue
+                }
+
+                coveredPositionCount += 1
+                coveredCurrentValue += position.currentValueInPreferredCurrency
+                syntheticValue += positionValue
+            }
+
+            guard coveredPositionCount >= minimumCoveredPositionCount,
+                  coveredCurrentValue / totalCurrentValue >= 0.7,
+                  syntheticValue.isFinite,
+                  syntheticValue > 0 else {
+                return nil
+            }
+
+            return ChartDataPoint(date: candidateDate, value: syntheticValue)
+        }
+    }
+
+    private func schedulePortfolioMenuHistoryFetchesIfNeeded(
+        currentTrades: [RealTimeTrade],
+        startDate: Date,
+        endDate: Date,
+        syntheticPointCount: Int
+    ) {
+        guard syntheticPointCount < 6 else { return }
+
+        let candidates = portfolioMenuHistoryFetchCandidates(
+            currentTrades: currentTrades,
+            startDate: startDate,
+            endDate: endDate
+        )
+
+        for symbol in candidates {
+            schedulePriceHistoryFetchIfNeeded(
+                for: symbol,
+                timeRange: .day,
+                startDate: startDate,
+                endDate: endDate
+            )
+        }
+    }
+
+    private func schedulePriceHistoryFetchIfNeeded(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        startDate: Date,
+        endDate: Date = Date(),
+        force: Bool = false
+    ) {
+        let symbolKey = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !symbolKey.isEmpty else { return }
+        let configurationRevision = folyncSupplementalConfigurationRevision
+        let customKey = timeRange == .custom
+            ? "|\(startDate.timeIntervalSince1970)|\(endDate.timeIntervalSince1970)"
+            : ""
+        let requestKey = "price|\(symbolKey)|\(timeRange.rawValue)\(customKey)|revision:\(configurationRevision)"
+
+        priceHistoryScheduler.schedule(key: requestKey, force: force) { [weak self] in
+            guard let self else { return .cancelled }
+            return await self.triggerHistoricalDataFetch(
+                for: symbol,
+                timeRange: timeRange,
+                startDate: startDate,
+                endDate: endDate,
+                folyncConfigurationRevision: configurationRevision
+            )
+        }
+    }
+
+    private func allPortfolioMenuPriceSnapshots(for symbol: String) -> [PriceSnapshot] {
+        aliasAwarePriceSnapshots(for: symbol)
+    }
+
+    private func latestSnapshot(
+        in snapshots: [PriceSnapshot],
+        atOrBefore date: Date,
+        tolerance: TimeInterval
+    ) -> PriceSnapshot? {
+        guard !snapshots.isEmpty else { return nil }
+
+        var lowerBound = 0
+        var upperBound = snapshots.count - 1
+        var candidate: PriceSnapshot?
+
+        while lowerBound <= upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            let snapshot = snapshots[middle]
+
+            if snapshot.timestamp <= date {
+                candidate = snapshot
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle - 1
+            }
+        }
+
+        guard let candidate,
+              date.timeIntervalSince(candidate.timestamp) <= tolerance else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func latestDatesPerBucket(_ dates: [Date], bucketSize: TimeInterval) -> [Date] {
+        guard bucketSize > 0, !dates.isEmpty else { return dates.sorted() }
+
+        var latestByBucket: [Int: Date] = [:]
+        for date in dates {
+            let bucket = Int(floor(date.timeIntervalSince1970 / bucketSize))
+            if let existing = latestByBucket[bucket], existing > date {
+                continue
+            }
+            latestByBucket[bucket] = date
+        }
+
+        return latestByBucket.keys.sorted().compactMap { latestByBucket[$0] }
+    }
+
+    private func normalizedPortfolioMenuPrice(
+        _ price: Double,
+        currentPrice: Double,
+        symbol: String
+    ) -> Double {
+        UKPriceScale.normalized(price, reference: currentPrice, symbol: symbol)
+    }
+
+    private func portfolioMenuDisplayCurrency(for realTimeTrade: RealTimeTrade) -> String {
+        let symbol = realTimeTrade.trade.name
+        let currency = realTimeTrade.realTimeInfo.currency
+            ?? realTimeTrade.trade.position.currency
+            ?? realTimeTrade.trade.position.costCurrency
+            ?? "USD"
+
+        if SymbolMetadata.isUKSymbol(symbol),
+           ["GBX", "GBPENCE", "GBPENNY", "GBPEN"].contains(currency.uppercased()) || currency == "GBp" {
+            return "GBP"
+        }
+
+        return currency
+    }
+
+    private func convertPortfolioMenuValue(
+        amount: Double,
+        from currency: String,
+        to preferredCurrency: String,
+        converter: CurrencyConverter
+    ) -> Double {
+        let normalizedCurrency = currency.uppercased()
+        let normalizedPreferredCurrency = preferredCurrency.uppercased()
+
+        let amountInUSD: Double
+        if normalizedCurrency == "USD" {
+            amountInUSD = amount
+        } else if normalizedCurrency == "GBX" || normalizedCurrency == "GBPENCE" || currency == "GBp" {
+            amountInUSD = converter.convert(amount: amount / 100.0, from: "GBP", to: "USD")
+        } else {
+            amountInUSD = converter.convert(amount: amount, from: currency, to: "USD")
+        }
+
+        if normalizedPreferredCurrency == "USD" {
+            return amountInUSD
+        }
+        if normalizedPreferredCurrency == "GBX" || normalizedPreferredCurrency == "GBPENCE" || preferredCurrency == "GBp" {
+            return converter.convert(amount: amountInUSD, from: "USD", to: "GBP") * 100.0
+        }
+        return converter.convert(amount: amountInUSD, from: "USD", to: preferredCurrency)
+    }
+
+    private func storedPriceSnapshots(for symbol: String) -> [PriceSnapshot] {
+        if let snapshots = priceSnapshots[symbol] {
+            return snapshots
+        }
+
+        let normalizedSymbol = symbol.uppercased()
+        return priceSnapshots.first { $0.key.uppercased() == normalizedSymbol }?.value ?? []
+    }
+
+    private func livePriceSamples(for symbol: String) -> [PriceSnapshot] {
+        if let samples = livePriceSamples[symbol] {
+            return samples
+        }
+
+        let normalizedSymbol = symbol.uppercased()
+        return livePriceSamples.first { $0.key.uppercased() == normalizedSymbol }?.value ?? []
+    }
+
+    private func aliasAwarePriceSnapshots(
+        for symbol: String,
+        folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil
+    ) -> [PriceSnapshot] {
+        let aliases = instrumentAliasStore.aliases(for: symbol)
+        let aliasKeys = Set(([symbol] + aliases).map(normalizedSeriesKey))
+        let seriesKeys = requestedSeriesKeys ?? Set(aliasKeys.compactMap { latestFolyncLineSeriesKeyBySymbol[$0] })
+        if let overlay = seriesKeys.compactMap({ folyncPriceOverlays[$0] }).first {
+            return overlay
+        }
+        if !seriesKeys.isDisjoint(with: folyncUnavailableSeries) {
+            return []
+        }
+        let stored = priceSnapshots
+        let live = livePriceSamples
+        return aliasHistoryCache.snapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
+            InstrumentAliasHistoryLookup.combinedSnapshots(
+                for: symbol, aliases: aliases, storedBySymbol: stored, liveBySymbol: live
+            )
+        }
+    }
+
+    private func setFolyncPriceOverlay(
+        _ snapshots: [PriceSnapshot],
+        identity: FolyncInstrumentIdentity,
+        requestedSymbol: String,
+        status: FolyncSupplementalSourceStatus,
+        metadata: FolyncSeriesMetadata,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) {
+        let aliases = Set((identity.aliases + [
+            identity.canonicalTicker,
+            identity.displayTicker,
+            identity.quoteSymbol,
+            requestedSymbol
+        ]).map(normalizedSeriesKey))
+        for alias in aliases {
+            let key = FolyncLineSeriesKey(
+                symbol: alias,
+                timeRange: timeRange,
+                customFrom: customFrom,
+                customTo: customTo
+            ).storageKey
+            folyncPriceOverlays[key] = snapshots
+            folyncUnavailableSeries.remove(key)
+            folyncSourceStatusBySeries[key] = status
+            folyncCoverageBySeries[key] = metadata.coverageLabel
+            latestFolyncLineSeriesKeyBySymbol[alias] = key
+            invalidateStockDataCache(for: alias)
+        }
+        priceDataRevision &+= 1
+    }
+
+    private func markFolyncSeriesUnavailable(
+        _ symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) {
+        let aliases = Set(([symbol] + instrumentAliasStore.aliases(for: symbol)).map(normalizedSeriesKey))
+        for alias in aliases {
+            let key = FolyncLineSeriesKey(
+                symbol: alias,
+                timeRange: timeRange,
+                customFrom: customFrom,
+                customTo: customTo
+            ).storageKey
+            folyncPriceOverlays.removeValue(forKey: key)
+            folyncUnavailableSeries.insert(key)
+            folyncSourceStatusBySeries[key] = .unavailable
+            folyncCoverageBySeries.removeValue(forKey: key)
+            latestFolyncLineSeriesKeyBySymbol[alias] = key
+            invalidateStockDataCache(for: alias)
+        }
+        priceDataRevision &+= 1
+    }
+
+    private func clearFolyncPriceOverlayForLegacy(
+        _ symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) {
+        let aliases = Set(([symbol] + instrumentAliasStore.aliases(for: symbol)).map(normalizedSeriesKey))
+        for alias in aliases {
+            let key = FolyncLineSeriesKey(
+                symbol: alias,
+                timeRange: timeRange,
+                customFrom: customFrom,
+                customTo: customTo
+            ).storageKey
+            folyncPriceOverlays.removeValue(forKey: key)
+            folyncUnavailableSeries.remove(key)
+            folyncSourceStatusBySeries[key] = .legacy
+            folyncCoverageBySeries.removeValue(forKey: key)
+            latestFolyncLineSeriesKeyBySymbol[alias] = key
+            invalidateStockDataCache(for: alias)
+        }
+        priceDataRevision &+= 1
+    }
+
+    private func folyncLineSeriesKeys(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) -> Set<String> {
+        Set(([symbol] + instrumentAliasStore.aliases(for: symbol)).map {
+            FolyncLineSeriesKey(
+                symbol: $0,
+                timeRange: timeRange,
+                customFrom: customFrom,
+                customTo: customTo
+            ).storageKey
+        })
+    }
+
+    private func normalizedSeriesKey(_ symbol: String) -> String {
+        symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private func folyncPortfolioOverlay(
+        kind: String,
+        timeRange: ChartTimeRange,
+        dataModel: DataModel?,
+        customFrom: Date?,
+        customTo: Date?
+    ) -> [ChartDataPoint]? {
+        guard dataModel?.isFolyncPortfolioActive == true else { return nil }
+        let key = folyncPortfolioSeriesKey(
+            kind: kind,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        )
+        let expectedScope = dataModel?.folyncPortfolioSnapshot?.scope.id ?? FolyncSettingsStore.shared.load().scopeID
+        let expectedCurrency = dataModel?.preferredCurrency ?? "USD"
+        let context = "\(expectedScope)|\(expectedCurrency)|\(timeRange.folyncRange)"
+        if folyncPortfolioHistoryContexts[key] != context {
+            folyncPortfolioValueOverlays.removeValue(forKey: key)
+            folyncPortfolioGainOverlays.removeValue(forKey: key)
+        }
+        scheduleFolyncPortfolioHistoryIfNeeded(
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo, expectedScope: expectedScope, expectedCurrency: expectedCurrency
+        )
+        if let overlay = kind == "portfolio-value"
+            ? folyncPortfolioValueOverlays[key]
+            : folyncPortfolioGainOverlays[key] {
+            return overlay
+        }
+        if folyncUnavailableSeries.contains(key) { return [] }
+        if folyncSourceStatusBySeries[key] == .legacy { return [] }
+        // An enabled Folync route owns the whole series while its first request
+        // is pending; do not flash or splice the pre-existing local series.
+        return []
+    }
+
+    private func scheduleFolyncPortfolioHistoryIfNeeded(
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?, expectedScope: String, expectedCurrency: String
+    ) {
+        let customKey = timeRange == .custom
+            ? "|\(customFrom?.timeIntervalSince1970 ?? 0)|\(customTo?.timeIntervalSince1970 ?? 0)"
+            : ""
+        let key = "portfolio|\(expectedScope)|\(expectedCurrency)|\(timeRange.folyncRange)\(customKey)"
+        let now = Date()
+        if let lastRequest = folyncPortfolioHistoryFetchRequestTimes[key],
+           now.timeIntervalSince(lastRequest) < menuPriceHistoryFetchCooldown {
+            return
+        }
+        folyncPortfolioHistoryFetchRequestTimes[key] = now
+        let configurationRevision = folyncSupplementalConfigurationRevision
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await FolyncSupplementalCoordinator.shared.routePortfolioHistory(
+                range: timeRange.folyncRange,
+                from: timeRange == .custom ? customFrom : nil,
+                to: timeRange == .custom ? customTo : nil
+            )
+            guard configurationRevision == self.folyncSupplementalConfigurationRevision else { return }
+            let validated: FolyncRoutedPortfolioResult
+            if case .folync(let history, _) = result,
+               (history.scope.id != expectedScope || history.currency?.uppercased() != expectedCurrency.uppercased()
+                || history.range != (timeRange == .custom ? "custom" : timeRange.folyncRange)) {
+                validated = .unavailable
+            } else { validated = result }
+            self.applyFolyncPortfolioHistory(
+                validated,
+                timeRange: timeRange,
+                customFrom: customFrom,
+                customTo: customTo
+            )
+        }
+    }
+
+    private func applyFolyncPortfolioHistory(
+        _ result: FolyncRoutedPortfolioResult,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) {
+        let valueKey = folyncPortfolioSeriesKey(
+            kind: "portfolio-value",
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        )
+        let gainKey = folyncPortfolioSeriesKey(
+            kind: "portfolio-gain",
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        )
+        switch result {
+        case .folync(let history, let status):
+            let context = "\(history.scope.id)|\(history.currency ?? "")|\(timeRange.folyncRange)"
+            folyncPortfolioHistoryContexts[valueKey] = context
+            folyncPortfolioHistoryContexts[gainKey] = context
+            let values = history.portfolioSeries.compactMap(Self.chartPoint).sorted { $0.date < $1.date }
+            let gains = history.gainSeries.compactMap(Self.chartPoint).sorted { $0.date < $1.date }
+            folyncPortfolioValueOverlays[valueKey] = values
+            folyncPortfolioGainOverlays[gainKey] = gains
+            folyncUnavailableSeries.remove(valueKey)
+            folyncUnavailableSeries.remove(gainKey)
+            folyncSourceStatusBySeries[valueKey] = status
+            folyncSourceStatusBySeries[gainKey] = status
+            let completeness = history.coverage.complete.map { $0 ? "complete coverage" : "partial coverage" } ?? "coverage unavailable"
+            let coverage = "\(history.coverage.pointCount) points · \(history.interval) · \(completeness)"
+            folyncCoverageBySeries[valueKey] = coverage
+            folyncCoverageBySeries[gainKey] = coverage
+        case .unavailable:
+            folyncPortfolioValueOverlays.removeValue(forKey: valueKey)
+            folyncPortfolioGainOverlays.removeValue(forKey: gainKey)
+            folyncUnavailableSeries.insert(valueKey)
+            folyncUnavailableSeries.insert(gainKey)
+            folyncSourceStatusBySeries[valueKey] = .unavailable
+            folyncSourceStatusBySeries[gainKey] = .unavailable
+            folyncCoverageBySeries.removeValue(forKey: valueKey)
+            folyncCoverageBySeries.removeValue(forKey: gainKey)
+        case .legacy:
+            folyncPortfolioValueOverlays.removeValue(forKey: valueKey)
+            folyncPortfolioGainOverlays.removeValue(forKey: gainKey)
+            folyncUnavailableSeries.remove(valueKey)
+            folyncUnavailableSeries.remove(gainKey)
+            folyncSourceStatusBySeries[valueKey] = .legacy
+            folyncSourceStatusBySeries[gainKey] = .legacy
+            folyncCoverageBySeries.removeValue(forKey: valueKey)
+            folyncCoverageBySeries.removeValue(forKey: gainKey)
+        }
+        portfolioHistoryRevision &+= 1
+        objectWillChange.send()
+    }
+
+    private func folyncPortfolioSeriesKey(
+        kind: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date?,
+        customTo: Date?
+    ) -> String {
+        let bounds = timeRange == .custom
+            ? "|\(customFrom.map { Int64(($0.timeIntervalSince1970 * 1_000).rounded()) } ?? 0)|\(customTo.map { Int64(($0.timeIntervalSince1970 * 1_000).rounded()) } ?? 0)"
+            : ""
+        return "\(kind)|\(timeRange.folyncRange)\(bounds)"
+    }
+
+    private static func chartPoint(_ point: FolyncPortfolioHistory.SeriesPoint) -> ChartDataPoint? {
+        let date = FolyncSupplementalDateParser.instant(point.date)
+            ?? FolyncSupplementalDateParser.day(point.date)
+        guard let date, point.value.isFinite else { return nil }
+        return ChartDataPoint(date: date, value: point.value)
+    }
+
+    private func notePriceDataChanged(for symbol: String) {
+        invalidateStockDataCache(for: symbol)
+        priceDataRevision &+= 1
+    }
+
+    /// Drops in-memory price data for symbols whose stored snapshots changed
+    /// underneath (e.g. after a data migration) so every view reloads them.
+    func invalidatePriceData(for symbols: Set<String>) {
+        guard !symbols.isEmpty else { return }
+        let keys = Set(symbols.map { $0.uppercased() })
+        for key in priceSnapshots.keys where keys.contains(key.uppercased()) {
+            priceSnapshots.removeValue(forKey: key)
+        }
+        symbols.forEach { invalidateStockDataCache(for: $0) }
+        priceDataRevision &+= 1
+    }
+
+    private func invalidateStockDataCache(for symbol: String) {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !normalizedSymbol.isEmpty else { return }
+
+        let matchingKeys = stockDataCache.keys.filter { cacheKey in
+            cacheKey.uppercased().hasPrefix("\(normalizedSymbol)-")
+        }
+
+        for cacheKey in matchingKeys {
+            stockDataCache.removeValue(forKey: cacheKey)
+            stockDataCacheTimestamp.removeValue(forKey: cacheKey)
+        }
+    }
+
+    private func snapshotTimestampKey(_ timestamp: Date) -> Int64 {
+        Int64((timestamp.timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private func appendLivePortfolioPoint(
+        _ point: ChartDataPoint,
+        to points: [ChartDataPoint],
+        timestamp: Date
+    ) -> [ChartDataPoint] {
+        var updatedPoints = points
+        if let last = updatedPoints.last, abs(last.date.timeIntervalSince(timestamp)) < 1 {
+            updatedPoints[updatedPoints.count - 1] = point
+        } else {
+            updatedPoints.append(point)
+        }
+
+        let cutoff = timestamp.addingTimeInterval(-livePriceSampleRetention)
+        updatedPoints = updatedPoints
+            .filter { $0.date >= cutoff && $0.value.isFinite }
+            .sorted { $0.date < $1.date }
+
+        if updatedPoints.count > maxLivePortfolioSamples {
+            updatedPoints = Array(updatedPoints.suffix(maxLivePortfolioSamples))
+        }
+
+        return updatedPoints
+    }
+
+    private func deduplicatedSortedChartPoints(_ points: [ChartDataPoint]) -> [ChartDataPoint] {
+        var latestByTimestamp: [Int64: ChartDataPoint] = [:]
+        for point in points where point.value.isFinite {
+            let key = Int64((point.date.timeIntervalSince1970 * 1_000).rounded())
+            latestByTimestamp[key] = point
+        }
+        return latestByTimestamp.values.sorted { $0.date < $1.date }
+    }
+
+    private func deduplicatedSortedSnapshots(_ snapshots: [PriceSnapshot]) -> [PriceSnapshot] {
+        var latestByTimestamp: [Int64: PriceSnapshot] = [:]
+        for snapshot in snapshots where snapshot.price.isFinite && snapshot.price > 0 {
+            let key = Int64((snapshot.timestamp.timeIntervalSince1970 * 1_000).rounded())
+            latestByTimestamp[key] = snapshot
+        }
+        return latestByTimestamp.values.sorted { $0.timestamp < $1.timestamp }
+    }
 }
 
 struct PerformanceMetrics {

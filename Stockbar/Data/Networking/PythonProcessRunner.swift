@@ -11,13 +11,21 @@ protocol PythonProcessRunning: Sendable {
 }
 
 actor PythonProcessRunner: PythonProcessRunning {
+    /// Grace period between SIGTERM and SIGKILL when a run times out.
+    private static let terminationGraceNanoseconds: UInt64 = 5_000_000_000
+
     private let executablePath: String
     private let environment: [String: String]
+    private let providerPolicy: StockbarProviderAccessPolicy
     private let logger = Logger.shared
 
-    init(config: PythonConfiguration = .load()) {
+    init(
+        config: PythonConfiguration = .load(),
+        providerPolicy: StockbarProviderAccessPolicy = .current
+    ) {
         self.executablePath = config.interpreterPath
         self.environment = config.environment
+        self.providerPolicy = providerPolicy
     }
 
     func run(
@@ -25,12 +33,15 @@ actor PythonProcessRunner: PythonProcessRunning {
         timeoutSeconds: TimeInterval,
         logContext: String
     ) async throws -> PythonProcessResult {
+        try providerPolicy.authorize(.python)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
-        if !environment.isEmpty {
-            process.environment = environment
+        var processEnvironment = ProcessInfo.processInfo.environment
+        environment.forEach { key, value in
+            processEnvironment[key] = value
         }
+        process.environment = processEnvironment
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -65,13 +76,22 @@ actor PythonProcessRunner: PythonProcessRunning {
             )
 
             process.terminationHandler = { proc in
-                let remainingOutput = outputPipe.fileHandleForReading.availableData
-                if !remainingOutput.isEmpty {
+                // Drain to EOF rather than taking a single `availableData`
+                // snapshot: readabilityHandler callbacks are delivered
+                // asynchronously and may still be pending when the process
+                // exits, so a single read can truncate large payloads (a
+                // multi-symbol --batch-ohlc response is easily megabytes) and
+                // surface as an intermittent JSON parse failure.
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
+
+                if let remainingOutput = try? outputPipe.fileHandleForReading.readToEnd(),
+                   !remainingOutput.isEmpty {
                     outputBuffer.append(remainingOutput)
                 }
 
-                let remainingError = errorPipe.fileHandleForReading.availableData
-                if !remainingError.isEmpty {
+                if let remainingError = try? errorPipe.fileHandleForReading.readToEnd(),
+                   !remainingError.isEmpty {
                     errorBuffer.append(remainingError)
                 }
 
@@ -92,10 +112,20 @@ actor PythonProcessRunner: PythonProcessRunning {
             timeoutTask = Task {
                 let timeoutNanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                guard process.isRunning else { return }
+
+                timeoutState.markTimedOut()
+                await logger.warning("\(logContext) timeout reached, terminating process")
+                process.terminate()
+
+                // SIGTERM alone is not enough: a child blocked in a syscall
+                // inside a C extension can ignore it, in which case
+                // terminationHandler never fires and the continuation never
+                // resumes — the caller would hang forever despite the timeout.
+                try? await Task.sleep(nanoseconds: Self.terminationGraceNanoseconds)
                 if process.isRunning {
-                    timeoutState.markTimedOut()
-                    await logger.warning("\(logContext) timeout reached, terminating process")
-                    process.terminate()
+                    await logger.error("\(logContext) ignored SIGTERM, sending SIGKILL")
+                    kill(process.processIdentifier, SIGKILL)
                 }
             }
         }

@@ -30,16 +30,32 @@ struct PythonConfiguration: Sendable {
     
     /// Loads configuration from UserDefaults or environment, falling back to defaults
     static func load() -> PythonConfiguration {
-        let defaults = UserDefaults.standard
+        let defaults = StockbarRuntimeStorage.userDefaults
         let path = defaults.string(forKey: "pythonInterpreterPath") ?? defaultInterpreterPath
+        var environment: [String: String] = [:]
+        if let configPath = ConfigurationManager.shared.getConfigFilePath() {
+            environment["STOCKBAR_CONFIG_FILE"] = configPath
+        }
+        // Quote cache lives in the (acceptance-aware) app cache folder rather
+        // than the home directory; the script migrates a legacy file once.
+        environment["STOCKBAR_CACHE_FILE"] = StockbarRuntimeStorage.cacheDirectory()
+            .appendingPathComponent("quote_cache.json").path
+        let refreshInterval = defaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300
+        environment["STOCKBAR_QUOTE_CACHE_SECONDS"] = String(Int(quoteCacheSeconds(forRefreshInterval: refreshInterval)))
         
-        // We could also load environment overrides here if needed
-        return PythonConfiguration(interpreterPath: path)
+        return PythonConfiguration(interpreterPath: path, environment: environment)
     }
     
+    /// The script's quote cache must not outlive the user's refresh interval,
+    /// otherwise a shorter interval only re-reads cached quotes.
+    static func quoteCacheSeconds(forRefreshInterval interval: TimeInterval) -> TimeInterval {
+        guard interval.isFinite, interval > 0 else { return 300 }
+        return min(300, max(15, (interval * 0.9).rounded(.down)))
+    }
+
     /// Saves the configuration to UserDefaults
     func save() {
-        UserDefaults.standard.set(interpreterPath, forKey: "pythonInterpreterPath")
+        StockbarRuntimeStorage.userDefaults.set(interpreterPath, forKey: "pythonInterpreterPath")
     }
     
     // MARK: - Validation
@@ -66,6 +82,12 @@ struct PythonConfiguration: Sendable {
     
     /// Runs a simple execution test (python3 --version)
     private func testExecution() async -> Bool {
+        do {
+            try StockbarProviderAccessPolicy.current.authorize(.python)
+        } catch {
+            await Logger.shared.warning("Python validation blocked: \(error.localizedDescription)")
+            return false
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: interpreterPath)
         process.arguments = ["--version"]
@@ -96,18 +118,32 @@ struct PythonConfiguration: Sendable {
     
     // MARK: - Helper Methods
     
-    /// Validates a stock symbol to prevent command injection
-    /// Allows A-Z, 0-9, dots, carets, equals, hyphens.
+    private static let allowedSymbolCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.^=-"
+
+    /// Validates a stock symbol before it is passed to the Python bridge.
+    ///
+    /// Symbols become `argv` entries, so no shell is involved — but they are
+    /// parsed by `argparse`, which treats a leading `-` as a flag. A symbol like
+    /// `--start-date` would consume the next symbol as its value, and an
+    /// unrecognised flag makes argparse exit(2), failing the whole batch rather
+    /// than one ticker. Empty strings are rejected for the same reason.
+    ///
+    /// Allows A-Z, 0-9, dots, carets, equals, hyphens (e.g. ^GSPC, BRK.B, USD=X).
     static func validateSymbol(_ symbol: String) -> Bool {
-        // Allow basic alphanumeric, plus common ticker symbols (e.g. ^GSPC, BRK.B, USD=X)
-        let allowedCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.^=-")
+        guard !symbol.isEmpty, !symbol.hasPrefix("-") else { return false }
+        let allowedCharacters = CharacterSet(charactersIn: allowedSymbolCharacters)
         return symbol.rangeOfCharacter(from: allowedCharacters.inverted) == nil
     }
-    
-    /// Sanitizes a symbol for safe command line usage
-    static func sanitizeSymbol(_ symbol: String) -> String {
-        // Uppercase and filter only allowed characters
-        let allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.^=-"
-        return symbol.uppercased().filter { allowed.contains($0) }
+
+    /// Sanitizes a symbol for safe command line usage.
+    /// Returns nil when nothing usable survives, so callers must decide what to
+    /// do rather than silently passing an empty argument.
+    static func sanitizeSymbol(_ symbol: String) -> String? {
+        var sanitized = symbol.uppercased().filter { allowedSymbolCharacters.contains($0) }
+        // Strip leading hyphens so the result can never look like a flag.
+        while sanitized.hasPrefix("-") {
+            sanitized.removeFirst()
+        }
+        return sanitized.isEmpty ? nil : sanitized
     }
 }

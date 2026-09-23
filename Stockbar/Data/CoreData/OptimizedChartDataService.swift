@@ -1,5 +1,5 @@
-import Foundation
 import CoreData
+import Foundation
 import OSLog
 
 /// Highly optimized service for fetching chart data with performance optimizations

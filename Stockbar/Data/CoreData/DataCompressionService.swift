@@ -1,5 +1,5 @@
-import Foundation
 import CoreData
+import Foundation
 import OSLog
 
 /// Statistics about compression status
@@ -141,7 +141,6 @@ actor DataCompressionService {
                 try context.save()
                 
                 Task { await self.logger.info("🗜️ Deleted \(deletedPriceCount) old price snapshots and \(deletedPortfolioCount) old portfolio snapshots") }
-                
             } catch {
                 Task { await self.logger.error("🗜️ Failed to remove very old data: \(error)") }
             }
@@ -173,7 +172,6 @@ actor DataCompressionService {
                 }
                 
                 try context.save()
-                
             } catch {
                 Task { await self.logger.error("🗜️ Failed to aggregate ancient data: \(error)") }
             }
@@ -207,7 +205,6 @@ actor DataCompressionService {
                 
                 try context.save()
                 Task { await self.logger.info("🗜️ Compressed \(totalCompressed) data points") }
-                
             } catch {
                 Task { await self.logger.error("🗜️ Failed to compress old data: \(error)") }
             }
@@ -227,7 +224,6 @@ actor DataCompressionService {
                 
                 // Optimize Core Data storage
                 try context.save()
-                
             } catch {
                 Task { await self.logger.error("🗜️ Failed to optimize recent data: \(error)") }
             }
@@ -278,7 +274,6 @@ actor DataCompressionService {
             }
             
             Task { await logger.debug("🗜️ Aggregated \(toDelete.count) snapshots for \(symbol) into weekly summaries") }
-            
         } catch {
             Task { await logger.error("🗜️ Failed to aggregate weekly data for \(symbol): \(error)") }
         }
@@ -316,11 +311,10 @@ actor DataCompressionService {
                 context.delete(snapshot)
             }
             
-            Task { await logger.debug("🗜️ Compressed \(toDelete.count) snapshots for \(symbol)") }
+            logger.post(.debug, "🗜️ Compressed \(toDelete.count) snapshots for \(symbol)")
             return toDelete.count
-            
         } catch {
-            Task { await logger.error("🗜️ Failed to compress data for \(symbol): \(error)") }
+            logger.post(.error, "🗜️ Failed to compress data for \(symbol): \(error)")
             return 0
         }
     }
@@ -381,7 +375,6 @@ actor DataCompressionService {
             }
             
             Task { await logger.debug("🗜️ Removed \(duplicatePortfolioSnapshots.count) duplicate portfolio snapshots") }
-            
         } catch {
             Task { await logger.error("🗜️ Failed to remove duplicate entries: \(error)") }
         }

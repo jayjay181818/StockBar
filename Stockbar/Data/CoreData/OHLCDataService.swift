@@ -6,8 +6,8 @@
 //  OHLC (Open, High, Low, Close) data management service
 //
 
-import Foundation
 import CoreData
+import Foundation
 
 /// Service for managing OHLC candlestick data in Core Data
 /// Provides storage, retrieval, and cleanup operations for chart data
@@ -96,7 +96,9 @@ actor OHLCDataService {
                 entity.highPrice = snapshot.high
                 entity.lowPrice = snapshot.low
                 entity.closePrice = snapshot.close
-                entity.volume = snapshot.volume
+                // Folync overlays are never passed to this persistence path. Keep
+                // the legacy Core Data model non-optional for local-provider rows.
+                entity.volume = snapshot.volume ?? 0
             }
 
             try context.save()
@@ -329,7 +331,8 @@ struct OHLCSnapshot: Codable, Identifiable, Sendable {
     let high: Double
     let low: Double
     let close: Double
-    let volume: Int64
+    /// Nil for a non-persisted provider overlay when volume is unavailable.
+    let volume: Int64?
 
     init(
         id: UUID = UUID(),
@@ -339,7 +342,7 @@ struct OHLCSnapshot: Codable, Identifiable, Sendable {
         high: Double,
         low: Double,
         close: Double,
-        volume: Int64
+        volume: Int64?
     ) {
         self.id = id
         self.symbol = symbol

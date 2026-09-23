@@ -26,16 +26,27 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         
         // Configure the store for optimal performance
         let description = container.persistentStoreDescriptions.first
+        if let description {
+            do {
+                try Self.configureStoreDescription(
+                    description,
+                    runtime: StockbarRuntimeStorage.acceptance,
+                    isRunningUnderXCTest: Self.isRunningUnderXCTest
+                )
+            } catch {
+                fatalError("Unable to configure Stockbar persistence safely: \(error.localizedDescription)")
+            }
+        }
         description?.shouldInferMappingModelAutomatically = true
         description?.shouldMigrateStoreAutomatically = true
         description?.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description?.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
         
-        // Performance optimizations for SQLite
-        description?.setOption("WAL" as NSString, forKey: "journal_mode")
-        description?.setOption("1000" as NSString, forKey: "cache_size") 
-        description?.setOption("NORMAL" as NSString, forKey: "synchronous")
-        description?.setOption("10000" as NSString, forKey: "temp_store_directory")
+        // SQLite pragmas must be supplied as one dictionary under the documented
+        // Core Data option key; arbitrary top-level keys are ignored.
+        if let description {
+            Self.applySQLiteOptions(to: description)
+        }
         
         // Enable query optimization (NSPersistentStoreFileProtectionKey is iOS-only, skip on macOS)
         
@@ -57,6 +68,45 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         
         return container
     }()
+
+    private static var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+            || NSClassFromString("XCTest.XCTestCase") != nil
+    }
+
+    static func configureStoreDescription(
+        _ description: NSPersistentStoreDescription,
+        runtime: StockbarAcceptanceRuntime,
+        isRunningUnderXCTest: Bool,
+        fileManager: FileManager = .default
+    ) throws {
+        if isRunningUnderXCTest {
+            description.type = NSInMemoryStoreType
+            description.url = nil
+            return
+        }
+
+        guard let storeURL = runtime.coreDataStoreURL,
+              let applicationSupportRoot = runtime.applicationSupportRoot else {
+            return
+        }
+        try fileManager.createDirectory(at: applicationSupportRoot, withIntermediateDirectories: true)
+        description.type = NSSQLiteStoreType
+        description.url = storeURL
+    }
+
+    static func applySQLiteOptions(to description: NSPersistentStoreDescription) {
+        guard description.type == NSSQLiteStoreType else { return }
+        description.setOption(
+            [
+                "journal_mode": "WAL",
+                "synchronous": "NORMAL",
+                "cache_size": "-8000"
+            ] as NSDictionary,
+            forKey: NSSQLitePragmasOption
+        )
+    }
     
     // MARK: - Contexts
     

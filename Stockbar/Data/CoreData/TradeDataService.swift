@@ -1,5 +1,5 @@
-import Foundation
 import CoreData
+import Foundation
 
 private actor TradeDataWriteGate {
     static let shared = TradeDataWriteGate()
