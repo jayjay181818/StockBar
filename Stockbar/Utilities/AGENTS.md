@@ -1,24 +1,6 @@
-# STOCKBAR UTILITIES KNOWLEDGE BASE
+# Utilities
 
-**Architecture:** Infrastructure & Cross-Cutting Services
-**Domain:** Logging, caching, performance monitoring, configuration.
-
-## OVERVIEW
-Shared utilities are leaf dependencies: thread-safe, minimal imports, reusable across Data/Services/Views without pulling UI or business logic into this layer.
-
-## STRUCTURE
-- **Logger.swift**: Actor-based async logging with file rotation.
-- **CacheManager.swift**: Tiered cache (Memory/Disk/Archive) with LRU eviction.
-- **PerformanceMonitor.swift**: Actor for timing and memory alerts.
-- **ConfigurationManager.swift**: Singleton for API keys and provider settings.
-- **ExportManager.swift**: CSV/PDF portfolio export.
-- **Color+Hex.swift**: Color parsing extensions.
-
-## CONVENTIONS
-- **Actor/Singleton**: Use `await` on Logger/PerformanceMonitor; access managers via `.shared`.
-- **No High-Level Imports**: Utilities must not import SwiftUI views or Services logic.
-- **File IO**: Prefer Logger/CacheManager instead of ad-hoc FileManager writes.
-
-## ANTI-PATTERNS
-- UI controllers or view logic in Utilities.
-- Portfolio calculations or network logic here.
+- Use `Logger` and `LogRedactor` for app logging; extend redaction tests for new secret-bearing fields.
+- `StockbarRuntimeStorage` owns defaults and writable paths. `StockbarAcceptanceRuntime` and `StockbarProviderAccessPolicy` must fail closed for invalid acceptance settings.
+- `ConfigurationManager` stores market-data config under bundle Application Support; broker/Folync credentials use their Keychain stores.
+- Follow each utility's existing synchronization. New `@unchecked Sendable` conformances need a justification and the validator allowlist update.

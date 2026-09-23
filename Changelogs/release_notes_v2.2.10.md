@@ -901,7 +901,7 @@ All new settings use sensible defaults:
 
 **Option B: Increase Refresh Interval (Permanent Fix)**
 ```bash
-defaults write com.fhl43211.Stockbar refreshInterval 600
+defaults write com.stockbar refreshInterval 600
 ```
 *(Changes interval from 5 minutes to 10 minutes)*
 
