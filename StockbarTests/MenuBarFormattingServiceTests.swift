@@ -1,6 +1,7 @@
 import XCTest
 @testable import Stockbar
 import AppKit
+import Combine
 
 private extension MenuBarFormattingService {
     func formatStockTitle(
@@ -59,6 +60,152 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testMenuBarSymbolPresentationUsesTickerInsteadOfFolyncDisplayLabel() {
+        XCTAssertEqual(MenuBarSymbolPresentation.title(for: " CARD.L "), "CARD.L")
+    }
+
+    func testMenuBarContentUpdatesPreserveInitialEventAndLaterContentChanges() {
+        let contentChanges = PassthroughSubject<Void, Never>()
+        var receivedEventCount = 0
+        var cancellables = Set<AnyCancellable>()
+
+        MenuBarContentUpdates.effectiveContentPublisher(contentChanges)
+            .sink { _ in receivedEventCount += 1 }
+            .store(in: &cancellables)
+
+        XCTAssertEqual(receivedEventCount, 1)
+
+        contentChanges.send(())
+        contentChanges.send(())
+
+        XCTAssertEqual(receivedEventCount, 3)
+    }
+
+    func testMenuPriceChangeCalculatorUsesRollingDayBaselineWhenHistoryExists() {
+        let summary = MenuPriceChangeCalculator.rollingDaySummary(
+            currentPrice: 8.02,
+            previousClose: 8.72,
+            units: 275,
+            historicalPrices: [5.77, 6.10, 8.02],
+            symbol: "ATAI"
+        )
+
+        XCTAssertEqual(summary.change, 2.25, accuracy: 0.0001)
+        XCTAssertEqual(summary.percent, 38.9948, accuracy: 0.0001)
+        XCTAssertEqual(summary.positionPnL, 618.75, accuracy: 0.0001)
+    }
+
+    func testMenuPriceChangeCalculatorFallsBackToPreviousCloseWithoutHistory() {
+        let summary = MenuPriceChangeCalculator.rollingDaySummary(
+            currentPrice: 8.02,
+            previousClose: 8.72,
+            units: 275,
+            historicalPrices: [],
+            symbol: "ATAI"
+        )
+
+        XCTAssertEqual(summary.change, -0.70, accuracy: 0.0001)
+        XCTAssertEqual(summary.percent, -8.0275, accuracy: 0.0001)
+        XCTAssertEqual(summary.positionPnL, -192.50, accuracy: 0.0001)
+    }
+
+    func testMenuPriceChangeCalculatorNormalizesLegacyUKPenceHistory() {
+        let summary = MenuPriceChangeCalculator.rollingDaySummary(
+            currentPrice: 0.82,
+            previousClose: 0.80,
+            units: 100,
+            historicalPrices: [79.60, 81.00],
+            symbol: "TW.L"
+        )
+
+        XCTAssertEqual(summary.change, 0.024, accuracy: 0.0001)
+        XCTAssertEqual(summary.percent, 3.0151, accuracy: 0.0001)
+        XCTAssertEqual(summary.positionPnL, 2.40, accuracy: 0.0001)
+    }
+
+    // MARK: - Visibility Policy Tests
+
+    func testMenuBarVisibilityPolicy_ManualOffAlwaysHidesStockTickers() {
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: true,
+                requireExternalDisplay: false,
+                isExternalDisplayConnected: true
+            )
+        )
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: true,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: true
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleOffPreservesManualVisibility() {
+        XCTAssertTrue(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: false,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleHidesWithoutExternalDisplay() {
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_ExternalDisplayRuleRestoresWithExternalDisplay() {
+        XCTAssertTrue(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: true
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_DoesNotControlPortfolioTotalSetting() {
+        let portfolioSettings = PortfolioMenuBarDisplaySettings(isEnabled: true)
+
+        XCTAssertTrue(portfolioSettings.isEnabled)
+        XCTAssertFalse(
+            MenuBarVisibilityPolicy.shouldShowStockItems(
+                hideAllMenuBarItems: false,
+                requireExternalDisplay: true,
+                isExternalDisplayConnected: false
+            )
+        )
+    }
+
+    func testMenuBarVisibilityPolicy_PersistsExternalDisplayRequirement() {
+        let suiteName = "MenuBarVisibilityPolicyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+
+        MenuBarVisibilityPolicy.saveRequireExternalDisplay(true, defaults: defaults)
+        XCTAssertTrue(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+
+        MenuBarVisibilityPolicy.saveRequireExternalDisplay(false, defaults: defaults)
+        XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
+    }
+
+    func testExternalDisplayDetector_AnyNonBuiltinDisplayCountsAsExternal() {
+        XCTAssertFalse(ExternalDisplayDetector.hasExternalDisplay(builtinStates: []))
+        XCTAssertFalse(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [true]))
+        XCTAssertTrue(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [true, false]))
+        XCTAssertTrue(ExternalDisplayDetector.hasExternalDisplay(builtinStates: [false]))
+    }
+
     // MARK: - Compact Mode Tests
 
     func testCompactMode_FormatsCorrectly() async throws {
@@ -108,6 +255,89 @@ final class MenuBarFormattingServiceTests: XCTestCase {
     }
 
     // MARK: - Expanded Mode Tests
+
+    func testDefaultDisplayModeUsesCurrentPriceAndPercentage() {
+        // Given: Fresh menu bar display settings
+        let settings = MenuBarDisplaySettings()
+
+        // Then: The default explicitly shows current price and percentage change
+        XCTAssertEqual(settings.displayMode, .priceAndPercentage)
+        XCTAssertEqual(settings.effectiveTemplate, "{symbol} {price} {changePct}")
+    }
+
+    func testCurrentPriceModesAreAvailableInDisplayModePicker() {
+        // Given: The modes rendered by the settings picker
+        let modes = MenuBarDisplaySettings.DisplayMode.allCases
+
+        // Then: Both explicit current-price choices are available with clear labels
+        XCTAssertTrue(modes.contains(.priceAndPercentage))
+        XCTAssertTrue(modes.contains(.priceAndShareChange))
+        XCTAssertEqual(MenuBarDisplaySettings.DisplayMode.priceAndPercentage.description, "Current price + % change")
+        XCTAssertEqual(
+            MenuBarDisplaySettings.DisplayMode.priceAndShareChange.description,
+            "Current price + per-share change"
+        )
+    }
+
+    func testPriceAndPercentageModeShowsPriceAndPercentage() async throws {
+        // Given: The explicit price and percentage display mode
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .priceAndPercentage
+
+        // When: A positive stock title is formatted
+        let result = await service.formatStockTitle(
+            symbol: "AAPL",
+            price: 175.23,
+            change: 4.29,
+            changePct: 2.45,
+            currency: "USD",
+            settings: settings,
+            useColorCoding: false
+        )
+
+        // Then: It includes the current price and percentage change
+        XCTAssertEqual(result.string, "AAPL $175.23 +2.45%")
+    }
+
+    func testPriceAndShareChangeModeShowsPositivePerShareChange() async throws {
+        // Given: The explicit price and per-share change display mode
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .priceAndShareChange
+
+        // When: A positive stock title is formatted
+        let result = await service.formatStockTitle(
+            symbol: "AAPL",
+            price: 175.23,
+            change: 4.29,
+            changePct: 2.45,
+            currency: "USD",
+            settings: settings,
+            useColorCoding: false
+        )
+
+        // Then: It includes the current price and signed per-share change
+        XCTAssertEqual(result.string, "AAPL $175.23 +$4.29")
+    }
+
+    func testPriceAndShareChangeModePreservesNegativeSign() async throws {
+        // Given: The explicit price and per-share change display mode
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .priceAndShareChange
+
+        // When: A negative stock title is formatted
+        let result = await service.formatStockTitle(
+            symbol: "TSLA",
+            price: 250.00,
+            change: -10.50,
+            changePct: -4.03,
+            currency: "USD",
+            settings: settings,
+            useColorCoding: false
+        )
+
+        // Then: The per-share change keeps its negative sign
+        XCTAssertEqual(result.string, "TSLA $250.00 -$10.50")
+    }
 
     func testExpandedMode_FormatsCorrectly() async throws {
         // Given: Expanded mode settings
@@ -379,6 +609,31 @@ final class MenuBarFormattingServiceTests: XCTestCase {
 
     // MARK: - Color Coding Tests
 
+    func testColorCodingChangesWithoutWaitingForCachedPricesToExpire() async {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .priceAndPercentage
+
+        for change in [2.0, -2.0] {
+            let plain = await service.formatStockTitle(
+                symbol: "AAPL", price: 100, change: change, changePct: change,
+                currency: "USD", settings: settings, useColorCoding: false
+            )
+            let colored = await service.formatStockTitle(
+                symbol: "AAPL", price: 100, change: change, changePct: change,
+                currency: "USD", settings: settings, useColorCoding: true
+            )
+            let plainAgain = await service.formatStockTitle(
+                symbol: "AAPL", price: 100, change: change, changePct: change,
+                currency: "USD", settings: settings, useColorCoding: false
+            )
+            XCTAssertEqual(plain.string, colored.string)
+            XCTAssertNil(plain.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+            let color = colored.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            XCTAssertEqual(color, change > 0 ? NSColor.systemGreen : NSColor.systemRed)
+            XCTAssertNil(plainAgain.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        }
+    }
+
     func testColorCoding_PositiveChange() async throws {
         // Given: Positive change with color coding
         var settings = MenuBarDisplaySettings()
@@ -579,5 +834,62 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Then: Should contain GBP symbol
         let string = result.string
         XCTAssertTrue(string.contains("£") || string.contains("GBP"), "Should contain GBP symbol")
+    }
+}
+
+final class MenuPopoverUnitsFormattingTests: XCTestCase {
+    func testUnitsDisplayPreservesFractionalShares() {
+        let locale = Locale(identifier: "en_GB")
+        XCTAssertEqual(MenuPopoverFormatter.units(80.89145668, locale: locale), "80.89145668")
+        XCTAssertEqual(MenuPopoverFormatter.units(1_250, locale: locale), "1,250")
+        XCTAssertEqual(MenuPopoverFormatter.editableUnits(1_250.5, locale: locale), "1250.5")
+    }
+
+    func testParseUnitsAcceptsLocaleDecimalAndRejectsInvalidInput() throws {
+        let german = Locale(identifier: "de_DE")
+        XCTAssertEqual(try XCTUnwrap(MenuPopoverFormatter.parseUnits("10,5", locale: german)), 10.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(MenuPopoverFormatter.parseUnits(" 10.25 ", locale: Locale(identifier: "en_US"))), 10.25, accuracy: 1e-9)
+        XCTAssertNil(MenuPopoverFormatter.parseUnits("", locale: german))
+        XCTAssertNil(MenuPopoverFormatter.parseUnits("abc", locale: german))
+        XCTAssertNil(MenuPopoverFormatter.parseUnits("0", locale: german))
+        XCTAssertNil(MenuPopoverFormatter.parseUnits("-3", locale: german))
+    }
+}
+
+final class PortfolioMenuBarTitleFormatterTests: XCTestCase {
+    private let locale = Locale(identifier: "en_GB")
+
+    func testDayGainFormatIsHonoured() {
+        var settings = PortfolioMenuBarDisplaySettings(isEnabled: true, currencyCode: "GBP", dayGainFormat: .both, decimalPlaces: 2)
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 10_234.56, dayGain: -123.45, dayGainPercent: -1.21, settings: settings, locale: locale),
+            "£10,234.56 -£123.45 (-1.21%)"
+        )
+
+        settings.dayGainFormat = .currency
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 10_234.56, dayGain: 123.45, dayGainPercent: 1.21, settings: settings, locale: locale),
+            "£10,234.56 +£123.45"
+        )
+
+        settings.dayGainFormat = .percentage
+        settings.decimalPlaces = 0
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 10_234.56, dayGain: 123.45, dayGainPercent: 1.21, settings: settings, locale: locale),
+            "£10,235 +1.21%"
+        )
+    }
+
+    func testSettingsPreviewUsesTheSameFormatter() {
+        let settings = PortfolioMenuBarDisplaySettings(isEnabled: true, currencyCode: "USD", dayGainFormat: .both, decimalPlaces: 2)
+        XCTAssertEqual(settings.samplePreview(locale: Locale(identifier: "en_US")), "$10,234.56 +$123.45 (+1.21%)")
+    }
+
+    func testExchangeDisplayNames() {
+        XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "IAG.L"), "London Stock Exchange")
+        XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "AAPL"), "US Market")
+        XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "^GSPC"), "Index")
+        XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "SHOP.TO"), "Toronto Stock Exchange")
+        XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "BTC-USD"), "Crypto")
     }
 }

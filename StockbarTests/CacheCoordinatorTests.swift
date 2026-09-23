@@ -4,14 +4,24 @@ import XCTest
 class CacheCoordinatorTests: XCTestCase {
 
     var cacheCoordinator: CacheCoordinator!
+    private var suiteName: String!
+    private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        cacheCoordinator = CacheCoordinator()
+        // CacheCoordinator now persists across launches, so each test needs its
+        // own defaults suite or state would leak between tests and from the
+        // developer's real app data.
+        suiteName = "CacheCoordinatorTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        cacheCoordinator = CacheCoordinator(defaults: defaults)
     }
 
     override func tearDown() {
         cacheCoordinator = nil
+        defaults = nil
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        suiteName = nil
         super.tearDown()
     }
 
@@ -97,6 +107,38 @@ class CacheCoordinatorTests: XCTestCase {
         } else {
             XCTFail("Expected fresh status after recording success, got \(status.description)")
         }
+    }
+
+    func testShouldRefreshWithCustomFreshnessIntervalUsesShorterCadence() async {
+        let symbol = "MU"
+        let now = Date()
+
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(-360))
+
+        let shouldRefreshDefault = await cacheCoordinator.shouldRefresh(symbol: symbol, at: now)
+        let shouldRefreshExtendedHours = await cacheCoordinator.shouldRefresh(
+            symbol: symbol,
+            at: now,
+            freshnessInterval: 300
+        )
+
+        XCTAssertFalse(shouldRefreshDefault)
+        XCTAssertTrue(shouldRefreshExtendedHours)
+    }
+
+    func testShouldRefreshWithCustomFreshnessIntervalKeepsFreshRecentFetches() async {
+        let symbol = "MU"
+        let now = Date()
+
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now.addingTimeInterval(-120))
+
+        let shouldRefresh = await cacheCoordinator.shouldRefresh(
+            symbol: symbol,
+            at: now,
+            freshnessInterval: 300
+        )
+
+        XCTAssertFalse(shouldRefresh)
     }
 
     func testRecordMultipleFetchSuccesses() async {
@@ -334,6 +376,136 @@ class CacheCoordinatorTests: XCTestCase {
         // If case-sensitive: statuses will differ
         // If case-insensitive: statuses will match
         XCTAssertTrue(lowerStatus.isFresh || upperStatus.isFresh, "Should handle case consistently")
+    }
+
+    // MARK: - Query Purity
+
+    func testGetCacheStatus_AfterSuspensionExpires_DoesNotResetFailureCount() async {
+        // Given a symbol suspended by the circuit breaker
+        let symbol = "AAPL"
+        let now = Date()
+        for _ in 0..<5 {
+            await cacheCoordinator.setFailedFetch(for: symbol, at: now)
+        }
+        let afterTimeout = now.addingTimeInterval(3601)
+
+        // When the status is read after the suspension has expired
+        _ = await cacheCoordinator.getCacheStatus(for: symbol, at: afterTimeout)
+
+        // Then the failure count survives, so backoff stays at its longest rung
+        // and the breaker re-trips on the very next failure.
+        let retryInterval = await cacheCoordinator.getRetryInterval(for: symbol)
+        XCTAssertEqual(retryInterval, 600, "Reading status must not reset exponential backoff")
+    }
+
+    func testClearOldCacheEntries_ReapsExpiredSuspensions() async {
+        // Given a suspended symbol
+        let symbol = "AAPL"
+        let now = Date()
+        for _ in 0..<5 {
+            await cacheCoordinator.setFailedFetch(for: symbol, at: now)
+        }
+        let isSuspended = await cacheCoordinator.isSuspended(symbol: symbol, at: now)
+        XCTAssertTrue(isSuspended)
+
+        // When cleanup runs after the suspension timeout
+        await cacheCoordinator.clearOldCacheEntries(now: now.addingTimeInterval(3601))
+
+        // Then the suspension and its failure count are cleared
+        let retryInterval = await cacheCoordinator.getRetryInterval(for: symbol)
+        XCTAssertEqual(retryInterval, 60, "Expired suspensions should reset backoff")
+    }
+
+    // MARK: - Persistence
+
+    func testCacheState_SurvivesReconstruction() async {
+        // Given recorded success and failure state
+        let now = Date()
+        await cacheCoordinator.setSuccessfulFetch(for: "AAPL", at: now)
+        for _ in 0..<3 {
+            await cacheCoordinator.setFailedFetch(for: "TSLA", at: now)
+        }
+
+        // When a new coordinator is built over the same defaults (app relaunch)
+        let reloaded = CacheCoordinator(defaults: defaults)
+
+        // Then the cache and backoff state are restored rather than reset
+        let appleStatus = await reloaded.getCacheStatus(for: "AAPL", at: now.addingTimeInterval(60))
+        XCTAssertTrue(appleStatus.isFresh, "A fresh cache entry should survive relaunch")
+
+        let teslaRetry = await reloaded.getRetryInterval(for: "TSLA")
+        XCTAssertEqual(teslaRetry, 300, "Consecutive failure count should survive relaunch")
+    }
+
+    func testSuspension_SurvivesReconstruction() async {
+        // Given a symbol suspended by the circuit breaker
+        let now = Date()
+        for _ in 0..<5 {
+            await cacheCoordinator.setFailedFetch(for: "TSLA", at: now)
+        }
+
+        // When the app restarts
+        let reloaded = CacheCoordinator(defaults: defaults)
+
+        // Then the symbol is still suspended, so a relaunch cannot be used to
+        // bypass provider rate limiting.
+        let stillSuspended = await reloaded.isSuspended(symbol: "TSLA", at: now.addingTimeInterval(60))
+        XCTAssertTrue(stillSuspended)
+    }
+    // MARK: - Circuit breaker gating
+
+    func testFailingNeverSuccessfulSymbolIsGovernedByBackoff() async {
+        let symbol = "TYPO"
+        let now = Date()
+        await cacheCoordinator.setFailedFetch(for: symbol, at: now)
+
+        let refreshSoon = await cacheCoordinator.shouldRefresh(symbol: symbol, at: now.addingTimeInterval(10))
+        let retrySoon = await cacheCoordinator.shouldRetry(symbol: symbol, at: now.addingTimeInterval(10))
+        let retryLater = await cacheCoordinator.shouldRetry(symbol: symbol, at: now.addingTimeInterval(61))
+
+        XCTAssertFalse(refreshSoon)
+        XCTAssertFalse(retrySoon)
+        XCTAssertTrue(retryLater)
+    }
+
+    func testSuspendedSymbolIsNotRefreshedEvenWhenCacheExpired() async {
+        let symbol = "AAPL"
+        let start = Date()
+        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: start)
+        for i in 0..<5 {
+            await cacheCoordinator.setFailedFetch(for: symbol, at: start.addingTimeInterval(Double(1_000 + i)))
+        }
+        let checkTime = start.addingTimeInterval(2_000)
+
+        let shouldRefresh = await cacheCoordinator.shouldRefresh(symbol: symbol, at: checkTime, freshnessInterval: 60)
+        let shouldRetry = await cacheCoordinator.shouldRetry(symbol: symbol, at: checkTime)
+
+        XCTAssertFalse(shouldRefresh)
+        XCTAssertFalse(shouldRetry)
+    }
+
+    func testPruningDropsOrphanedFailureCountsButKeepsActiveSuspensions() {
+        let now = Date()
+        let state = CacheCoordinator.PersistedState(
+            lastSuccessfulFetch: [:],
+            lastFailedFetch: ["OLD": now.addingTimeInterval(-7_200), "SUS": now.addingTimeInterval(-7_200)],
+            consecutiveFailures: ["OLD": 2, "SUS": 5],
+            suspendedSymbols: ["SUS": now.addingTimeInterval(-600)]
+        )
+
+        let pruned = CacheCoordinator.prunedState(state, now: now)
+
+        XCTAssertNil(pruned.consecutiveFailures["OLD"])
+        XCTAssertEqual(pruned.consecutiveFailures["SUS"], 5)
+        XCTAssertNotNil(pruned.suspendedSymbols["SUS"])
+    }
+
+    func testRefreshFreshnessHonoursUserInterval() {
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 60), 54, accuracy: 0.001)
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 900), 810, accuracy: 0.001)
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 10), 30, accuracy: 0.001)
+        XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 60), 54, accuracy: 0.001)
+        XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 3_600), 300, accuracy: 0.001)
     }
 }
 
