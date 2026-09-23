@@ -1,11 +1,10 @@
 # Python Dependencies for Stockbar
 # Install with: pip3 install -r requirements.txt
 
-# Stock data fetching
-yfinance>=0.2.0
-
-# HTTP requests (dependency of yfinance)
-requests>=2.25.0
+# Stock data fetching and the /usr/bin/python3 3.9/LibreSSL-compatible HTTP stack
+yfinance==1.2.0
+requests==2.32.5
+urllib3==1.26.20
 
 # Minimum Python version: 3.8+
-# Tested with: Python 3.9, 3.10, 3.11, 3.12
+# Runtime compatibility target: Apple's /usr/bin/python3 3.9 with LibreSSL
