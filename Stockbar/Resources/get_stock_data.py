@@ -11,6 +11,9 @@ import csv
 import io
 import math
 import re
+import fcntl
+import tempfile
+from contextlib import contextmanager
 
 try:
     import requests
@@ -31,9 +34,46 @@ except ImportError:
     YFINANCE_AVAILABLE = False
     print("Warning: yfinance not available, falling back to FMP for real-time data", file=sys.stderr)
 
-# Use a cache file in the user's home directory
-CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
-CACHE_DURATION_SECONDS = 300  # 5 minutes
+# Keep the cache injectable so tests and acceptance runs never touch production.
+# The app passes STOCKBAR_CACHE_FILE; the default matches the app's cache folder.
+DEFAULT_CACHE_FILE = os.path.expanduser("~/Library/Caches/stockbar-cache/quote_cache.json")
+LEGACY_CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
+CACHE_FILE = os.path.expanduser(os.getenv("STOCKBAR_CACHE_FILE") or DEFAULT_CACHE_FILE)
+
+
+def migrate_legacy_cache(cache_file, default_file=DEFAULT_CACHE_FILE, legacy_file=LEGACY_CACHE_FILE):
+    """Move the pre-2.4.5 home-folder cache into the Caches folder once.
+
+    Only applies to the default location, so injected test/acceptance paths
+    never read or move the user's real cache. Best effort: a failure simply
+    leaves the legacy file in place and the cache starts empty.
+    """
+    try:
+        if os.path.realpath(cache_file) != os.path.realpath(default_file):
+            return False
+        if os.path.exists(cache_file) or not os.path.isfile(legacy_file):
+            return False
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        os.replace(legacy_file, cache_file)
+        try:
+            os.unlink(legacy_file + ".lock")
+        except OSError:
+            pass
+        return True
+    except OSError:
+        return False
+
+
+migrate_legacy_cache(CACHE_FILE)
+def quote_cache_seconds(raw_value, default=300):
+    """Quote cache lifetime; the app lowers it to match short refresh intervals."""
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return min(default, max(15, value))
+
+CACHE_DURATION_SECONDS = quote_cache_seconds(os.getenv("STOCKBAR_QUOTE_CACHE_SECONDS"))
 PREV_CLOSE_CACHE_KEY = "_prev_close_cache"
 PREV_CLOSE_CACHE_MAX_AGE_SECONDS = 18 * 60 * 60
 
@@ -43,10 +83,10 @@ TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 STOOQ_BASE_URL = "https://stooq.com/q/d/l"
 
 SECRET_REDACTION_PATTERNS = [
-    (re.compile(r"(?i)([?&](?:apikey|api_key|access_token|token|key)=)[^&\s\"'<>)\]]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)[^\s,;\"')\]]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)([?&](?:apikey|api_key|access_token|token|key)=)(?!\[REDACTED\])[^&\s\"'<>)\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)(?!\[REDACTED\])[^\s,;\"')\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
 ]
 
 def sanitize_log_message(message):
@@ -54,22 +94,37 @@ def sanitize_log_message(message):
     sanitized = str(message)
     for pattern, replacement in SECRET_REDACTION_PATTERNS:
         sanitized = pattern.sub(replacement, sanitized)
-    return sanitized
+    return re.sub(r"\[REDACTED\]\]+", "[REDACTED]", sanitized)
 
 def log_error(message):
     print(sanitize_log_message(message), file=sys.stderr)
 
 def get_config():
     """Read the entire configuration file"""
-    try:
-        home_dir = os.path.expanduser("~")
-        config_file = os.path.join(home_dir, "Documents", ".stockbar_config.json")
-        
-        if os.path.exists(config_file):
+    candidate_paths = []
+    configured_path = os.getenv("STOCKBAR_CONFIG_FILE")
+    if configured_path:
+        candidate_paths.append(configured_path)
+
+    home_dir = os.path.expanduser("~")
+    candidate_paths.extend([
+        os.path.join(home_dir, "Library", "Application Support", "com.stockbar", ".stockbar_config.json"),
+        os.path.join(home_dir, ".stockbar_config.json"),
+    ])
+
+    for config_file in candidate_paths:
+        if not config_file:
+            continue
+        try:
+            config_file = os.path.expanduser(config_file)
+            if not os.path.isfile(config_file):
+                continue
             with open(config_file, 'r') as f:
                 return json.load(f)
-    except Exception as e:
-        log_error(f"Error reading config file: {e}")
+        except Exception as e:
+            log_error(f"Error reading config file: {e}")
+            return {}
+
     return {}
 
 CONFIG = get_config()
@@ -89,41 +144,105 @@ def get_api_key(key_name, env_name=None):
 FMP_API_KEY = get_api_key("FMP_API_KEY", "FMP_API_KEY")
 TWELVE_DATA_API_KEY = get_api_key("TWELVE_DATA_API_KEY", "TWELVE_DATA_API_KEY")
 
-# Load cache from file
-if os.path.exists(CACHE_FILE):
-    with open(CACHE_FILE, 'r') as f:
-        try:
-            cache = json.load(f)
-        except Exception:
-            cache = {}
-else:
-    cache = {}
+cache = {}
 
-def save_cache():
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(cache, f)
+def finite_positive_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+def is_valid_quote(quote):
+    if not isinstance(quote, dict):
+        return False
+
+    display_price = finite_positive_number(quote.get('price'))
+    regular_price = finite_positive_number(
+        quote.get('regularMarketPrice', quote.get('price'))
+    )
+    previous_close = finite_positive_number(quote.get('previousClose'))
+    timestamp = finite_positive_number(quote.get('timestamp'))
+    return all(
+        value is not None
+        for value in (display_price, regular_price, previous_close, timestamp)
+    )
+
+@contextmanager
+def cache_lock():
+    cache_directory = os.path.dirname(CACHE_FILE) or "."
+    os.makedirs(cache_directory, exist_ok=True)
+    lock_path = CACHE_FILE + ".lock"
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+def load_cache_unlocked():
+    if not os.path.isfile(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r") as cache_file:
+            loaded = json.load(cache_file)
+            return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+def save_cache_unlocked(value):
+    cache_directory = os.path.dirname(CACHE_FILE) or "."
+    file_descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".stockbar-cache-",
+        suffix=".tmp",
+        dir=cache_directory,
+    )
+    try:
+        with os.fdopen(file_descriptor, "w") as temporary_file:
+            json.dump(make_json_safe(value), temporary_file, allow_nan=False)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, CACHE_FILE)
+        directory_descriptor = os.open(cache_directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
 
 def get_cached(symbol):
-    entry = cache.get(symbol)
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        entry = current_cache.get(symbol)
     if entry:
         ts = entry.get('timestamp')
         if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
             cached_result = entry.get('result')
-            return apply_previous_close_backfill(symbol, cached_result)
+            cached_result = apply_previous_close_backfill(symbol, cached_result)
+            if is_valid_quote(cached_result):
+                return cached_result
+            with cache_lock():
+                current_cache = load_cache_unlocked()
+                current_cache.pop(symbol, None)
+                save_cache_unlocked(current_cache)
     return None
 
 def set_cache(symbol, result):
-    cache[symbol] = {
-        'timestamp': time.time(),
-        'result': result
-    }
-    save_cache()
-
-def _prev_close_cache():
-    entry = cache.get(PREV_CLOSE_CACHE_KEY)
-    if not isinstance(entry, dict):
-        cache[PREV_CLOSE_CACHE_KEY] = {}
-    return cache[PREV_CLOSE_CACHE_KEY]
+    if not is_valid_quote(result):
+        return False
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        current_cache[symbol] = {
+            'timestamp': time.time(),
+            'result': make_json_safe(result)
+        }
+        save_cache_unlocked(current_cache)
+    return True
 
 def market_date_for_symbol(symbol):
     tz = None
@@ -142,7 +261,9 @@ def market_date_for_symbol(symbol):
     return now.date().isoformat()
 
 def get_cached_prev_close(symbol):
-    prev_cache = _prev_close_cache()
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        prev_cache = current_cache.get(PREV_CLOSE_CACHE_KEY, {})
     entry = prev_cache.get(symbol)
     if not isinstance(entry, dict):
         return None
@@ -161,13 +282,18 @@ def get_cached_prev_close(symbol):
     return value
 
 def set_cached_prev_close(symbol, value):
-    prev_cache = _prev_close_cache()
-    prev_cache[symbol] = {
-        'date': market_date_for_symbol(symbol),
-        'timestamp': time.time(),
-        'value': value
-    }
-    save_cache()
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        prev_cache = current_cache.get(PREV_CLOSE_CACHE_KEY)
+        if not isinstance(prev_cache, dict):
+            prev_cache = {}
+            current_cache[PREV_CLOSE_CACHE_KEY] = prev_cache
+        prev_cache[symbol] = {
+            'date': market_date_for_symbol(symbol),
+            'timestamp': time.time(),
+            'value': value
+        }
+        save_cache_unlocked(current_cache)
 
 def make_request(url, params=None, headers=None):
     """Generic request helper handling requests/urllib differences"""
@@ -277,6 +403,8 @@ def handle_twelvedata_symbol(symbol):
     # For LSE, it often uses just the ticker if exchange is specified, or ticker.L
     # We'll try to map common suffixes to exchanges if needed, or just pass through
     upper = resolve_symbol_alias(symbol)
+    if upper == '^FTSE':
+        return 'FTSE', None
     if upper.endswith('.XC'):
         upper = upper.replace('.XC', '.L')
     if upper.endswith('.L') or upper.endswith('.LON'):
@@ -926,17 +1054,43 @@ def fetch_previous_close_yfinance(symbol):
             print(f"Prev close: mapping {symbol} -> {history_symbol} for yfinance history", file=sys.stderr)
         ticker = yf.Ticker(history_symbol)
         daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
-        if daily_hist.empty:
+        market_date = datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
+        previous_close = None
+
+        if not daily_hist.empty:
+            daily_hist = daily_hist.sort_index()
+            complete_days = daily_hist[daily_hist.index.to_series().dt.date < market_date]
+            for raw_close in reversed(complete_days['Close'].tolist()):
+                previous_close = finite_positive_number(raw_close)
+                if previous_close is not None:
+                    break
+
+        # Some index tickers intermittently expose a NaN/null daily close while
+        # their intraday history remains intact. Use the last finite close from
+        # the latest completed market session before giving up on the provider.
+        if previous_close is None:
+            hourly_hist = ticker.history(
+                period="5d",
+                interval="1h",
+                prepost=False,
+                auto_adjust=False
+            )
+            if not hourly_hist.empty:
+                hourly_hist = hourly_hist.sort_index()
+                completed_hours = hourly_hist[
+                    hourly_hist.index.to_series().dt.date < market_date
+                ]
+                for raw_close in reversed(completed_hours['Close'].tolist()):
+                    previous_close = finite_positive_number(raw_close)
+                    if previous_close is not None:
+                        print(
+                            f"Prev close: using completed-session hourly fallback for {symbol}",
+                            file=sys.stderr
+                        )
+                        break
+
+        if previous_close is None:
             return None
-
-        daily_hist = daily_hist.sort_index()
-        today = datetime.now().date()
-        complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
-
-        if not complete_days.empty:
-            previous_close = float(complete_days.iloc[-1]['Close'])
-        else:
-            previous_close = float(daily_hist.iloc[-1]['Close'])
 
         currency = None
         try:
@@ -949,8 +1103,6 @@ def fetch_previous_close_yfinance(symbol):
         if uses_pence:
             previous_close /= 100.0
 
-        if not math.isfinite(previous_close) or previous_close <= 0:
-            return None
         return previous_close
     except Exception as e:
         log_error(f"yfinance previous close fetch failed for {symbol}: {e}")
@@ -1036,31 +1188,40 @@ def apply_previous_close_backfill(symbol, quote):
         set_cached_prev_close(symbol, fetched_prev)
     return quote
 
+def validated_provider_quote(symbol, provider, quote):
+    quote = apply_previous_close_backfill(symbol, quote)
+    if is_valid_quote(quote):
+        print(f"Using {provider} for real-time data: {symbol}", file=sys.stderr)
+        return quote
+    if quote is not None:
+        print(
+            f"{provider} returned an incomplete quote for {symbol}; trying the next provider",
+            file=sys.stderr
+        )
+    return None
+
 def fetch_real_time_quote(symbol):
     """Fetch real-time quote using yfinance first, FMP as fallback"""
     # TODO: Make real-time priority configurable too? 
     # For now sticking to yfinance -> FMP as requested, only historical has deep problems
     if YFINANCE_AVAILABLE:
         result = fetch_real_time_quote_yfinance(symbol)
-        if result:
-            print(f"Using yfinance for real-time data: {symbol}", file=sys.stderr)
-            return apply_previous_close_backfill(symbol, result)
-        else:
-            print(f"yfinance failed for {symbol}, falling back to FMP", file=sys.stderr)
+        result = validated_provider_quote(symbol, "yfinance", result)
+        if result is not None:
+            return result
 
     twelvedata_result = fetch_real_time_quote_twelvedata(symbol)
-    if twelvedata_result:
-        print(f"Using Twelve Data for real-time data: {symbol}", file=sys.stderr)
-        return apply_previous_close_backfill(symbol, twelvedata_result)
+    twelvedata_result = validated_provider_quote(symbol, "Twelve Data", twelvedata_result)
+    if twelvedata_result is not None:
+        return twelvedata_result
 
     yahoo_result = fetch_real_time_quote_yahoo_api(symbol)
-    if yahoo_result:
-        print(f"Using Yahoo quote API for real-time data: {symbol}", file=sys.stderr)
-        return apply_previous_close_backfill(symbol, yahoo_result)
+    yahoo_result = validated_provider_quote(symbol, "Yahoo quote API", yahoo_result)
+    if yahoo_result is not None:
+        return yahoo_result
 
-    print(f"Using FMP for real-time data: {symbol}", file=sys.stderr)
     fmp_result = fetch_real_time_quote_fmp(symbol)
-    return apply_previous_close_backfill(symbol, fmp_result)
+    return validated_provider_quote(symbol, "FMP", fmp_result)
 
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
@@ -1164,37 +1325,22 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
     return historical_data
 
 def get_fetch_priority(symbol):
-    """Get the priority list of fetch methods for historical data"""
-    # Default priority
+    """Return the configured provider order for historical data.
+
+    DATA_SOURCE_PRIORITY may be a list or a JSON-encoded list; a plain string is
+    treated as a single provider. The user's order is respected for all symbols
+    (including LSE listings, where a paid FMP plan may be available).
+    """
     default_priority = ["yfinance", "fmp"]
-    
-    # Read configured priority
-    # Expecting list of strings in config like ["yfinance", "twelvedata", "stooq", "fmp"]
     config_priority = CONFIG.get("DATA_SOURCE_PRIORITY")
-    
-    # Normalize config priority if string or json string
+
     if isinstance(config_priority, str):
         try:
             config_priority = json.loads(config_priority)
-        except:
+        except (TypeError, ValueError):
             config_priority = [config_priority]
-            
-    priority = config_priority if isinstance(config_priority, list) else default_priority
-    
-    # Filter out unavailable methods or auto-optimize
-    # e.g. skip FMP for LSE if key is not present or free? 
-    # Actually the task says "skip FMP for LSE if free".
-    # We don't easily know if the key is free or paid here without checking headers/response.
-    # But we can respect the user's configured order.
-    
-    # Special handling for LSE to avoid FMP 403 spam if user hasn't configured it
-    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
-        # If FMP is in the list, and we know it's likely to fail for LSE on free tier,
-        # we might want to deprioritize it or remove it, BUT user might have paid tier.
-        # So we respect user order.
-        pass
-        
-    return priority
+
+    return config_priority if isinstance(config_priority, list) else default_priority
 
 def fetch_historical_data(symbol, start_date, end_date):
     """Fetch historical data using configured priority sources"""
@@ -1295,7 +1441,7 @@ def fetch_batch(symbols):
                 
             # Fetch from API using enhanced method
             quote_data = fetch_real_time_quote(symbol)
-            if quote_data:
+            if is_valid_quote(quote_data):
                 # Return the enhanced quote data directly (JSON format)
                 set_cache(symbol, quote_data)
                 results[symbol] = quote_data
@@ -1311,6 +1457,19 @@ def fetch_batch(symbols):
             results[symbol] = None
     
     return results
+
+def make_json_safe(value):
+    """Recursively replace non-finite floats so emitted JSON is standards compliant."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(item) for item in value]
+    return value
+
+def print_json(value):
+    print(json.dumps(make_json_safe(value), allow_nan=False))
 
 def fetch_single(symbol):
     """Fallback to single fetch logic"""
@@ -1339,7 +1498,7 @@ def output_error(error_code, message, symbol=None, retry_after=None):
     if retry_after:
         error_obj['retry_after'] = retry_after
 
-    print(json.dumps(error_obj))
+    print_json(error_obj)
 
 def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
     """Fetch OHLC data using yfinance"""
@@ -1422,6 +1581,7 @@ def main():
     parser.add_argument('--historical', action='store_true', help='Fetch historical price data')
     parser.add_argument('--ohlc', action='store_true', help='Fetch OHLC (candlestick) data')
     parser.add_argument('--batch-ohlc', action='store_true', help='Fetch OHLC data for multiple symbols')
+    parser.add_argument('--json', action='store_true', help='Emit the unified per-symbol JSON response')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
@@ -1458,16 +1618,16 @@ def main():
             else:
                 message = f"Unknown service: {service}"
                 
-            print(json.dumps({
+            print_json({
                 'success': result,
                 'message': message
-            }))
+            })
             
         except Exception as e:
-            print(json.dumps({
+            print_json({
                 'success': False,
                 'message': f"Exception during verification: {str(e)}"
-            }))
+            })
         sys.exit(0)
 
     if args.ohlc or args.batch_ohlc:
@@ -1485,12 +1645,12 @@ def main():
                 for symbol, data in ohlc_results.items():
                     if data:
                         output_data[symbol] = data
-                print(json.dumps(output_data))
+                print_json(output_data)
             else:
                 symbol = symbols[0]
                 ohlc_data = fetch_ohlc_data(symbol, period=args.period, interval=args.interval)
                 if ohlc_data:
-                    print(json.dumps(ohlc_data))
+                    print_json(ohlc_data)
                 else:
                     output_error('NO_DATA', f'No OHLC data available for {symbol}', symbol=symbol)
         except Exception as e:
@@ -1514,7 +1674,7 @@ def main():
         try:
             historical_data = fetch_historical_data(symbol, args.start_date, args.end_date)
             if historical_data:
-                print(json.dumps(historical_data))
+                print_json(historical_data)
             else:
                 output_error('NO_DATA', f'No historical data available for {symbol}', symbol=symbol)
         
@@ -1555,6 +1715,8 @@ def main():
                 for symbol, res in batch_results.items():
                     if res:
                         results[symbol] = res
+                    elif args.json:
+                        results[symbol] = None
                     else:
                         single_res = fetch_single(symbol)
                         if single_res:
@@ -1567,7 +1729,27 @@ def main():
                 output_error('NETWORK_ERROR', f'Network error: {str(e)}')
                 sys.exit(1)
 
-        if len(symbols) == 1:
+        if args.json:
+            envelopes = []
+            for symbol in symbols:
+                result = results.get(symbol)
+                if is_valid_quote(result):
+                    envelopes.append({
+                        'symbol': symbol,
+                        'success': True,
+                        'quote': result,
+                    })
+                else:
+                    envelopes.append({
+                        'symbol': symbol,
+                        'success': False,
+                        'error': {
+                            'error_code': 'NO_DATA',
+                            'message': f'No data received for {symbol}',
+                        },
+                    })
+            print_json(envelopes)
+        elif len(symbols) == 1:
             symbol = symbols[0]
             res = results.get(symbol)
             if res:
@@ -1597,7 +1779,7 @@ def main():
                     })
 
             if json_results:
-                print(json.dumps(json_results))
+                print_json(json_results)
             else:
                 output_error('NO_DATA', 'No data received for any symbols')
 
