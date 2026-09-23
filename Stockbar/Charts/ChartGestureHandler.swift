@@ -176,7 +176,6 @@ private struct ScrollWheelHandler: NSViewRepresentable {
 
         override func magnify(with event: NSEvent) {
             // Handle trackpad pinch-to-zoom
-            let zoomFactor = 1.0 + event.magnification
             let fakeScrollEvent = NSEvent.otherEvent(
                 with: .scrollWheel,
                 location: event.locationInWindow,
@@ -206,7 +205,7 @@ struct CrosshairOverlay: View {
     let chartBounds: CGRect
 
     var body: some View {
-        GeometryReader { geometry in
+        GeometryReader { _ in
             ZStack {
                 // Vertical line
                 Path { path in

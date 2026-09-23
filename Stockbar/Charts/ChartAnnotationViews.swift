@@ -5,8 +5,8 @@
 //  Views for displaying and editing chart annotations.
 //
 
-import SwiftUI
 import Charts
+import SwiftUI
 
 // MARK: - Annotation Editor
 struct AnnotationEditorView: View {
@@ -74,4 +74,3 @@ struct AnnotationEditorView: View {
         }
     }
 }
-

@@ -1,10 +1,17 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
 struct StockbarMainView: View {
     @ObservedObject var dataModel: DataModel
-    @State private var selectedSection: StockbarMainSection = .holdings
+    @ObservedObject var navigationState: StockbarMainNavigationState
+    @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode = "system"
+
+    init(dataModel: DataModel, navigationState: StockbarMainNavigationState? = nil) {
+        self.dataModel = dataModel
+        self.navigationState = navigationState ?? StockbarMainNavigationState()
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -12,77 +19,98 @@ struct StockbarMainView: View {
             Divider()
             detail
         }
-        .frame(minWidth: 1280, minHeight: 680)
+        .frame(minWidth: 1060, minHeight: 680)
+        .preferredColorScheme(appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil)
     }
 
+    @State private var isRefreshing = false
+    @State private var lastManualRefresh: Date?
+
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Stockbar")
-                .font(.title3)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
-
-            ForEach(StockbarMainSection.allCases) { section in
-                Button {
-                    selectedSection = section
-                } label: {
-                    Label(section.title, systemImage: section.systemImage)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(selectedSection == section ? Color.accentColor.opacity(0.24) : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(selectedSection == section ? .primary : .secondary)
-                .padding(.horizontal, 10)
+        List(selection: Binding(
+            get: { Optional(navigationState.selectedSection) },
+            set: { newValue in
+                if let newValue { navigationState.selectedSection = newValue }
             }
-
-            Spacer()
-
-            Divider()
-                .padding(.horizontal, 12)
-
-            Button {
-                Task { await dataModel.refreshAllTrades() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+        )) {
+            Section("Portfolio") {
+                sidebarRows(StockbarMainSection.portfolioSections)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-
-            Button {
-                NSApp.sendAction(#selector(AppDelegate.showPreferences(_:)), to: NSApp.delegate, from: nil)
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+            Section("Analysis") {
+                sidebarRows(StockbarMainSection.analysisSections)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 14)
+            Section("Maintenance") {
+                sidebarRows(StockbarMainSection.maintenanceSections)
+            }
+            Section {
+                sidebarRows([.settings])
+            }
         }
-        .frame(width: 190)
-        .background(.bar)
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            refreshControl
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+        }
+        .frame(width: 210)
+    }
+
+    private func sidebarRows(_ sections: [StockbarMainSection]) -> some View {
+        ForEach(sections) { section in
+            Label(section.title, systemImage: section.systemImage)
+                .tag(section)
+        }
+    }
+
+    private var refreshControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                guard !isRefreshing else { return }
+                isRefreshing = true
+                Task {
+                    await dataModel.refreshAllTrades()
+                    isRefreshing = false
+                    lastManualRefresh = Date()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    Text(isRefreshing ? "Refreshing…" : "Refresh Prices")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .disabled(isRefreshing)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Refresh market prices now (⌘R). Prices refreshed recently may be served from cache.")
+
+            if let lastManualRefresh {
+                Text("Requested \(lastManualRefresh, style: .relative) ago")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     @ViewBuilder
     private var detail: some View {
-        switch selectedSection {
+        switch navigationState.selectedSection {
+        case .overview:
+            StockbarOverviewView(dataModel: dataModel, navigationState: navigationState)
         case .holdings:
             StockbarHoldingsView(dataModel: dataModel)
         case .charts:
-            ScrollView {
-                PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
-                    .padding(24)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Performance").font(.largeTitle).fontWeight(.semibold)
+                ScrollView {
+                    PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
+                }
             }
+            .padding(26)
         case .risk:
             RiskAnalyticsView(dataModel: dataModel)
                 .padding(24)
@@ -100,6 +128,8 @@ struct StockbarMainView: View {
             StockbarDataHealthView(dataModel: dataModel)
         case .diagnostics:
             StockbarDiagnosticsView()
+        case .settings:
+            StockbarSettingsView(dataModel: dataModel)
         }
     }
 
@@ -110,7 +140,23 @@ struct StockbarMainView: View {
     }
 }
 
-private enum StockbarMainSection: String, CaseIterable, Identifiable {
+@MainActor
+final class StockbarMainNavigationState: ObservableObject {
+    @Published var selectedSection: StockbarMainSection {
+        didSet { defaults.set(selectedSection.rawValue, forKey: "mainWindow.selectedSection") }
+    }
+    private let defaults: UserDefaults
+
+    init(selectedSection: StockbarMainSection? = nil, defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        self.defaults = defaults
+        self.selectedSection = selectedSection
+            ?? defaults.string(forKey: "mainWindow.selectedSection").flatMap(StockbarMainSection.init(rawValue:))
+            ?? .overview
+    }
+}
+
+enum StockbarMainSection: String, CaseIterable, Identifiable {
+    case overview
     case holdings
     case charts
     case risk
@@ -119,32 +165,49 @@ private enum StockbarMainSection: String, CaseIterable, Identifiable {
     case backups
     case dataHealth
     case diagnostics
+    case settings
 
     var id: String { rawValue }
 
+    static var portfolioSections: [StockbarMainSection] {
+        [.overview, .holdings, .alerts]
+    }
+
+    static var analysisSections: [StockbarMainSection] {
+        [.charts, .risk, .allocation]
+    }
+
+    static var maintenanceSections: [StockbarMainSection] {
+        [.backups, .dataHealth, .diagnostics]
+    }
+
     var title: String {
         switch self {
+        case .overview: "Overview"
         case .holdings: "Holdings"
-        case .charts: "Charts"
+        case .charts: "Performance"
         case .risk: "Risk"
         case .allocation: "Allocation"
         case .alerts: "Alerts"
         case .backups: "Backups"
         case .dataHealth: "Data Health"
         case .diagnostics: "Diagnostics"
+        case .settings: "Settings"
         }
     }
 
     var systemImage: String {
         switch self {
+        case .overview: "chart.xyaxis.line"
         case .holdings: "tablecells"
         case .charts: "chart.line.uptrend.xyaxis"
-        case .risk: "exclamationmark.triangle"
+        case .risk: "waveform.path.ecg"
         case .allocation: "chart.pie"
         case .alerts: "bell"
         case .backups: "clock.arrow.circlepath"
         case .dataHealth: "externaldrive.badge.checkmark"
         case .diagnostics: "stethoscope"
+        case .settings: "gearshape"
         }
     }
 }
@@ -168,27 +231,52 @@ private enum ProfitLossDisplayMode {
 @MainActor
 private struct StockbarHoldingsView: View {
     @ObservedObject var dataModel: DataModel
+    @ObservedObject private var currencyConverter = CurrencyConverter.shared
+    @State private var searchText = ""
+    @State private var isEditing = false
+    @State private var selectedHoldingID: UUID?
+    @State private var sortOrder: [KeyPathComparator<RealTimeTrade>] = []
     @State private var dayProfitLossDisplayMode: ProfitLossDisplayMode = .amount
     @State private var totalProfitLossDisplayMode: ProfitLossDisplayMode = .amount
 
     private var visibleIndices: [Int] {
         dataModel.realTimeTrades.indices.filter {
             !SymbolMetadata.isBenchmarkSymbol(dataModel.realTimeTrades[$0].trade.name)
+                && (searchText.isEmpty || dataModel.realTimeTrades[$0].trade.name.localizedCaseInsensitiveContains(searchText))
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if currencyConverter.isUsingFallbackRates {
+                // Converted values are estimates until a live FX refresh lands —
+                // never present them as if they were live figures.
+                Label(
+                    "Live exchange rates unavailable — converted values are approximate.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.callout)
+                .foregroundStyle(.orange)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityLabel("Warning: live exchange rates unavailable, converted values are approximate")
+            }
+
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Holdings")
                         .font(.title)
                         .fontWeight(.semibold)
-                    Text("Edit positions, menu bar visibility, cost basis, and watchlist status.")
+                    Text(dataModel.isFolyncPortfolioActive
+                         ? "Read-only Folync holdings. Visibility and alerts remain local to Stockbar."
+                         : "Edit positions, menu bar visibility, cost basis, and watchlist status.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
+                    isEditing = true
+                    searchText = ""
                     dataModel.realTimeTrades.append(emptyRealTimeTrade())
                     dataModel.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
                 } label: {
@@ -196,55 +284,146 @@ private struct StockbarHoldingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(dataModel.isFolyncPortfolioActive)
             }
 
             HStack(spacing: 16) {
-                HoldingMetricCard(title: "Net Value", value: formatted(dataModel.calculateNetValue()), tint: .blue)
+                let netValue = dataModel.calculateNetValue()
+                HoldingMetricCard(
+                    title: "Net Value",
+                    value: HoldingsSummaryAmountFormatter.format(
+                        netValue,
+                        dataModel: dataModel
+                    ),
+                    tint: .blue
+                )
                 let gains = dataModel.calculateNetGains()
                 HoldingMetricCard(
                     title: "Total Net Gains",
-                    value: formatted(gains),
-                    tint: gains.amount >= 0 ? .green : .red
+                    value: HoldingsSummaryAmountFormatter.format(
+                        gains,
+                        dataModel: dataModel,
+                        signed: true
+                    ),
+                    tint: gains.amount > 0 ? .green : (gains.amount < 0 ? .red : .secondary)
                 )
-                HoldingMetricCard(title: "Tracked Symbols", value: "\(visibleIndices.count)", tint: .purple)
+                HoldingMetricCard(title: "Tracked Symbols", value: "\(dataModel.realTimeTrades.filter { !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }.count)", tint: .purple)
             }
 
-            holdingsTable
+            HStack {
+                TextField("Search holdings", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 320)
+                    .accessibilityLabel("Search holdings")
+                Spacer()
+                if !dataModel.isFolyncPortfolioActive {
+                    Toggle("Edit positions", isOn: $isEditing).toggleStyle(.button)
+                }
+            }
+            if isEditing && !dataModel.isFolyncPortfolioActive {
+                holdingsTable
+            } else {
+                compactTable
+            }
         }
         .padding(26)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var holdingsTable: some View {
-        VStack(spacing: 0) {
-            HoldingsHeaderRow(
-                dayProfitLossDisplayMode: dayProfitLossDisplayMode,
-                totalProfitLossDisplayMode: totalProfitLossDisplayMode,
-                onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
-                onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() }
-            )
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(visibleIndices, id: \.self) { index in
-                        HoldingsEditableRow(
-                            realTimeTrade: dataModel.realTimeTrades[index],
-                            dataModel: dataModel,
-                            dayProfitLossDisplayMode: dayProfitLossDisplayMode,
-                            totalProfitLossDisplayMode: totalProfitLossDisplayMode,
-                            onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
-                            onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() },
-                            rowIndex: index,
-                            canMoveUp: index > 0,
-                            canMoveDown: index < dataModel.realTimeTrades.count - 1,
-                            onDelete: { delete(at: index) },
-                            onMove: { move(from: index, by: $0) }
-                        )
-                        .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .controlBackgroundColor).opacity(0.35))
-                    }
+    private var compactTable: some View {
+        Table(visibleIndices.map { dataModel.realTimeTrades[$0] }.sorted(using: sortOrder),
+              selection: $selectedHoldingID, sortOrder: $sortOrder) {
+            TableColumn("Instrument", value: \.trade.name) { trade in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(trade.trade.name).fontWeight(.medium)
+                    Text(trade.displayLabel ?? trade.realTimeInfo.shortName)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }
-            .frame(maxHeight: .infinity)
+                .padding(.vertical, 5)
+            }.width(min: 130, ideal: 180)
+            TableColumn("Price", value: \.realTimeInfo.currentPrice) { trade in
+                Text(HoldingsCurrencyFormatter.amount(trade.realTimeInfo.getCurrentDisplayPrice(),
+                                                      currency: trade.realTimeInfo.currency ?? ""))
+                    .monospacedDigit()
+            }.width(min: 85, ideal: 100)
+            TableColumn("Value") { trade in
+                if trade.trade.isWatchlistOnly {
+                    // No position: a $0.00 value would read as a real holding.
+                    Text("—").foregroundStyle(.secondary).help("Watchlist only")
+                } else {
+                    let value = dataModel.calculatePositionValue(for: trade)
+                    Text(HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
+                        .monospacedDigit()
+                }
+            }.width(min: 95, ideal: 115)
+            TableColumn("Today") { trade in
+                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: trade), kind: .day,
+                               displayMode: dayProfitLossDisplayMode, action: { dayProfitLossDisplayMode.toggle() })
+            }.width(min: 90, ideal: 110)
+            TableColumn("Total P&L") { trade in
+                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: trade), kind: .total,
+                               displayMode: totalProfitLossDisplayMode, action: { totalProfitLossDisplayMode.toggle() })
+            }.width(min: 100, ideal: 120)
+            TableColumn("Menu bar") { trade in
+                Toggle("Show \(trade.trade.name) in menu bar", isOn: Binding(
+                    get: { trade.trade.showInMenuBar },
+                    set: { dataModel.setPositionMenuBarVisibility($0, for: trade) }
+                )).labelsHidden()
+            }.width(60)
         }
+        .overlay {
+            if visibleIndices.isEmpty {
+                ContentUnavailableView(searchText.isEmpty ? "No holdings yet" : "No matching holdings",
+                                       systemImage: "tablecells",
+                                       description: Text(searchText.isEmpty ? "Add a holding or connect a portfolio in Settings." : "Try another symbol."))
+            }
+        }
+    }
+
+    private var holdingsTable: some View {
+        GeometryReader { geometry in
+            ScrollView(.horizontal) {
+                VStack(spacing: 0) {
+                    HoldingsHeaderRow(
+                        dayProfitLossDisplayMode: dayProfitLossDisplayMode,
+                        totalProfitLossDisplayMode: totalProfitLossDisplayMode,
+                        onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
+                        onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() }
+                    )
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(visibleIndices, id: \.self) { index in
+                                HoldingsEditableRow(
+                                    realTimeTrade: dataModel.realTimeTrades[index],
+                                    dataModel: dataModel,
+                                    dayProfitLossDisplayMode: dayProfitLossDisplayMode,
+                                    totalProfitLossDisplayMode: totalProfitLossDisplayMode,
+                                    onToggleDayProfitLossDisplayMode: { dayProfitLossDisplayMode.toggle() },
+                                    onToggleTotalProfitLossDisplayMode: { totalProfitLossDisplayMode.toggle() },
+                                    rowIndex: index,
+                                    canMoveUp: index > 0,
+                                    canMoveDown: index < dataModel.realTimeTrades.count - 1,
+                                    onDelete: { delete(at: index) },
+                                    onMove: { move(from: index, by: $0) }
+                                )
+                                .background(
+                                    index.isMultiple(of: 2)
+                                    ? Color.clear
+                                    : Color(nsColor: .controlBackgroundColor).opacity(0.35)
+                                )
+                            }
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+                .frame(
+                    width: max(HoldingsTableLayout.contentWidth, geometry.size.width),
+                    height: geometry.size.height,
+                    alignment: .topLeading
+                )
+            }
+        }
+        .frame(minHeight: 280, maxHeight: .infinity)
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
@@ -252,11 +431,10 @@ private struct StockbarHoldingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func formatted(_ amount: (amount: Double, currency: String)) -> String {
-        "\(String(format: "%.2f", amount.amount)) \(amount.currency)"
-    }
-
     private func delete(at index: Int) {
+        // The row index can be stale if the portfolio was replaced between render
+        // and tap (e.g. a Folync activation swapping the whole array).
+        guard dataModel.realTimeTrades.indices.contains(index) else { return }
         dataModel.realTimeTrades.remove(at: index)
         dataModel.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
     }
@@ -279,29 +457,29 @@ private struct HoldingsHeaderRow: View {
     let onToggleTotalProfitLossDisplayMode: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            header("Visible", width: 58)
-            header("Symbol", width: 150)
-            header("Units", width: 130)
-            header("Avg Cost", width: 140)
-            header("Currency", width: 120)
-            header("Current", width: 130)
-            header("Value", width: 145)
+        HStack(spacing: HoldingsTableLayout.spacing) {
+            header("Visible", width: HoldingsTableLayout.visibleWidth)
+            header("Symbol", width: HoldingsTableLayout.symbolWidth)
+            header("Units", width: HoldingsTableLayout.unitsWidth)
+            header("Avg Cost", width: HoldingsTableLayout.averageCostWidth)
+            header("Currency", width: HoldingsTableLayout.currencyWidth)
+            header("Current", width: HoldingsTableLayout.currentWidth)
+            header("Value", width: HoldingsTableLayout.valueWidth)
             profitLossHeader(
                 title: "Day P/L",
                 displayMode: dayProfitLossDisplayMode,
-                width: 120,
+                width: HoldingsTableLayout.dayProfitLossWidth,
                 action: onToggleDayProfitLossDisplayMode
             )
             profitLossHeader(
                 title: "Total P/L",
                 displayMode: totalProfitLossDisplayMode,
-                width: 120,
+                width: HoldingsTableLayout.totalProfitLossWidth,
                 action: onToggleTotalProfitLossDisplayMode
             )
-            header("Actions", width: 105)
+            header("Actions", width: HoldingsTableLayout.actionsWidth)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 10)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.65))
     }
@@ -348,34 +526,92 @@ private struct HoldingsEditableRow: View {
     let onDelete: () -> Void
     let onMove: (Int) -> Void
 
+    /// An empty field is still being typed into, so only flag real violations.
+    private var isSymbolAcceptable: Bool {
+        let name = realTimeTrade.trade.name
+        return name.isEmpty || PythonConfiguration.validateSymbol(name)
+    }
+
+    private var isDuplicateSymbol: Bool {
+        dataModel.hasDuplicateSymbol(realTimeTrade)
+    }
+
+    private var symbolHelp: String {
+        if !isSymbolAcceptable {
+            return "Only A–Z, 0–9, . ^ = - are allowed, and a symbol cannot start with '-'"
+        }
+        if isDuplicateSymbol {
+            return "This symbol is already in your portfolio. Only the first row is kept when saved — combine the units into one row."
+        }
+        return "Ticker symbol"
+    }
+
     private let currencies = ["GBX", "GBP", "USD", "EUR", "JPY"]
 
+    private var financialFieldsReadOnly: Bool {
+        dataModel.positionFinancialFieldsReadOnly(for: realTimeTrade)
+    }
+
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: HoldingsTableLayout.spacing) {
             Toggle("", isOn: Binding(
                 get: { realTimeTrade.trade.showInMenuBar },
                 set: { newValue in
-                    realTimeTrade.trade.showInMenuBar = newValue
-                    dataModel.triggerTradeUpdate()
-                    NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
+                    dataModel.setPositionMenuBarVisibility(newValue, for: realTimeTrade)
                 }
             ))
             .labelsHidden()
-            .frame(width: 58, alignment: .leading)
+            .frame(width: HoldingsTableLayout.visibleWidth, alignment: .leading)
 
-            TextField("Symbol", text: $realTimeTrade.trade.name)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 150)
-                .onChange(of: realTimeTrade.trade.name) { _, _ in dataModel.triggerTradeUpdate() }
+            if let displayLabel = realTimeTrade.displayLabel, realTimeTrade.sourceIdentity != nil {
+                Text(displayLabel)
+                    .lineLimit(2)
+                    .frame(width: HoldingsTableLayout.symbolWidth, alignment: .leading)
+            } else {
+                TextField("Symbol", text: $realTimeTrade.trade.name)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: HoldingsTableLayout.symbolWidth)
+                    .foregroundStyle(isSymbolAcceptable && !isDuplicateSymbol ? Color.primary : Color.red)
+                    .overlay(alignment: .trailing) {
+                        if isDuplicateSymbol {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .padding(.trailing, 6)
+                                .accessibilityLabel("Duplicate symbol")
+                        }
+                    }
+                    .help(symbolHelp)
+                    .onChange(of: realTimeTrade.trade.name) { _, newValue in
+                        // Normalise as the user types so an unusable ticker never
+                        // reaches the Python bridge in the first place.
+                        let normalized = newValue.uppercased()
+                        if normalized != newValue {
+                            realTimeTrade.trade.name = normalized
+                            return
+                        }
+                        dataModel.triggerTradeUpdate()
+                    }
+            }
 
+            if financialFieldsReadOnly {
+                Text(realTimeTrade.trade.position.unitSize, format: .number.precision(.fractionLength(0...6)))
+                    .monospacedDigit()
+                    .frame(width: HoldingsTableLayout.unitsWidth, alignment: .leading)
+                Text(realTimeTrade.trade.position.getNormalizedAvgCost(for: realTimeTrade.trade.name),
+                     format: .number.precision(.fractionLength(2...4)))
+                    .monospacedDigit()
+                    .frame(width: HoldingsTableLayout.averageCostWidth, alignment: .leading)
+                Text(realTimeTrade.realTimeInfo.currency ?? "—")
+                    .frame(width: HoldingsTableLayout.currencyWidth, alignment: .leading)
+            } else {
             TextField("Units", text: $realTimeTrade.trade.position.unitSizeString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
+                .frame(width: HoldingsTableLayout.unitsWidth)
                 .onChange(of: realTimeTrade.trade.position.unitSizeString) { _, _ in dataModel.triggerTradeUpdate() }
 
             TextField("Avg Cost", text: $realTimeTrade.trade.position.positionAvgCostString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
+                .frame(width: HoldingsTableLayout.averageCostWidth)
                 .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _, _ in dataModel.triggerTradeUpdate() }
 
             Picker("", selection: currencyBinding) {
@@ -384,14 +620,16 @@ private struct HoldingsEditableRow: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 120)
+            .frame(width: HoldingsTableLayout.currencyWidth)
+
+            }
 
             Text(currentPriceText)
                 .foregroundStyle(.secondary)
-                .frame(width: 130, alignment: .leading)
+                .frame(width: HoldingsTableLayout.currentWidth, alignment: .leading)
 
             Text(valueText)
-                .frame(width: 145, alignment: .leading)
+                .frame(width: HoldingsTableLayout.valueWidth, alignment: .leading)
 
             ProfitLossCell(
                 summary: profitLossSummary,
@@ -399,7 +637,7 @@ private struct HoldingsEditableRow: View {
                 displayMode: dayProfitLossDisplayMode,
                 action: onToggleDayProfitLossDisplayMode
             )
-                .frame(width: 120, alignment: .leading)
+            .frame(width: HoldingsTableLayout.dayProfitLossWidth, alignment: .leading)
 
             ProfitLossCell(
                 summary: profitLossSummary,
@@ -407,20 +645,37 @@ private struct HoldingsEditableRow: View {
                 displayMode: totalProfitLossDisplayMode,
                 action: onToggleTotalProfitLossDisplayMode
             )
-            .frame(width: 120, alignment: .leading)
+            .frame(width: HoldingsTableLayout.totalProfitLossWidth, alignment: .leading)
 
             HStack(spacing: 8) {
+                Button {
+                    realTimeTrade.trade.isWatchlistOnly.toggle()
+                    dataModel.triggerTradeUpdate()
+                } label: {
+                    Image(systemName: realTimeTrade.trade.isWatchlistOnly ? "eye.fill" : "eye")
+                }
+                .help(realTimeTrade.trade.isWatchlistOnly
+                      ? "Watchlist only — excluded from portfolio totals. Click to track as a holding."
+                      : "Track as watchlist only (price shown, excluded from portfolio totals)")
+                .accessibilityLabel(realTimeTrade.trade.isWatchlistOnly ? "Track as holding" : "Mark as watchlist only")
                 Button { onMove(-1) } label: { Image(systemName: "chevron.up") }
                     .disabled(!canMoveUp)
+                    .help("Move up")
+                    .accessibilityLabel("Move \(realTimeTrade.trade.name) up")
                 Button { onMove(1) } label: { Image(systemName: "chevron.down") }
                     .disabled(!canMoveDown)
+                    .help("Move down")
+                    .accessibilityLabel("Move \(realTimeTrade.trade.name) down")
                 Button(action: onDelete) { Image(systemName: "trash") }
+                    .help("Remove holding")
+                    .accessibilityLabel("Remove \(realTimeTrade.trade.name)")
             }
             .buttonStyle(.borderless)
+            .disabled(financialFieldsReadOnly)
             .foregroundStyle(.secondary)
-            .frame(width: 105, alignment: .leading)
+            .frame(width: HoldingsTableLayout.actionsWidth, alignment: .leading)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 8)
     }
 
@@ -449,9 +704,8 @@ private struct HoldingsEditableRow: View {
     }
 
     private var valueText: String {
-        guard currentPrice.isFinite else { return "-" }
-        let value = currentPrice * realTimeTrade.trade.position.unitSize
-        return "\(String(format: "%.2f", value)) \(realTimeTrade.realTimeInfo.currency ?? "")"
+        let value = dataModel.calculatePositionValue(for: realTimeTrade)
+        return HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency)
     }
 
     private var profitLossSummary: PositionProfitLossSummary {
@@ -500,7 +754,7 @@ private struct ProfitLossCell: View {
         switch displayMode {
         case .amount:
             guard amount.isFinite else { return "-" }
-            return String(format: "%+.2f", amount)
+            return HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency)
         case .percent:
             guard percent.isFinite else { return "-" }
             return String(format: "%+.2f%%", percent)
@@ -508,8 +762,8 @@ private struct ProfitLossCell: View {
     }
 
     private var foregroundStyle: Color {
-        guard amount.isFinite else { return .secondary }
-        return amount >= 0 ? .green : .red
+        guard amount.isFinite, amount != 0 else { return .secondary }
+        return amount > 0 ? .green : .red
     }
 
     private var helpText: String {
@@ -538,12 +792,8 @@ private struct HoldingMetricCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(tint.opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(tint.opacity(0.35), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .monospacedDigit()
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 

@@ -1,5 +1,5 @@
-import SwiftUI
 import Combine
+import SwiftUI
 
 struct DataSourcesSettingsView: View {
     @ObservedObject var dataModel: DataModel
@@ -143,7 +143,18 @@ struct DataSourcesSettingsView: View {
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
                 .cornerRadius(8)
 
+                FolyncDataSourceSection(dataModel: dataModel)
+
                 Trading212DataSourceSection(dataModel: dataModel)
+                    .disabled(dataModel.isFolyncPortfolioActive)
+                    .overlay(alignment: .topTrailing) {
+                        if dataModel.isFolyncPortfolioActive {
+                            Text("Inactive while Folync is authoritative")
+                                .font(.caption)
+                                .padding(6)
+                                .background(.thinMaterial, in: Capsule())
+                        }
+                    }
                 
                 // MARK: - Priority Section
                 VStack(alignment: .leading, spacing: 12) {

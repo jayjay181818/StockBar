@@ -21,6 +21,10 @@ struct PortfolioAnalyticsView: View {
     @State private var topCorrelations: [CorrelationMatrixService.CorrelationPair] = []
     @State private var bottomCorrelations: [CorrelationMatrixService.CorrelationPair] = []
     @State private var showAttributionSheet = false
+    @State private var analyticsCurrency = "USD"
+    @State private var analyticsCoverage = 0
+    @State private var completeDayCoverage = false
+    @State private var analyticsRevision = 0
 
     private let correlationService = CorrelationMatrixService()
     private let sectorService = SectorAnalysisService()
@@ -89,6 +93,15 @@ struct PortfolioAnalyticsView: View {
             Task {
                 await calculateAnalytics()
             }
+        }
+        .onChange(of: dataModel.preferredCurrency) { _, _ in
+            Task { await calculateAnalytics() }
+        }
+        .onReceive(dataModel.$realTimeTrades) { _ in
+            Task { await calculateAnalytics() }
+        }
+        .onReceive(dataModel.$folyncPortfolioSnapshot) { _ in
+            Task { await calculateAnalytics() }
         }
     }
 
@@ -162,7 +175,7 @@ struct PortfolioAnalyticsView: View {
                             Spacer()
 
                             VStack(alignment: .trailing, spacing: 2) {
-                                Text("$\(allocation.totalValue, specifier: "%.2f")")
+                                Text("\(analyticsCurrency) \(allocation.totalValue, specifier: "%.2f")")
                                     .font(.subheadline)
                                     .fontWeight(.medium)
 
@@ -171,7 +184,7 @@ struct PortfolioAnalyticsView: View {
                                     .foregroundColor(.secondary)
                             }
 
-                            Text("\(allocation.dayChangePercent >= 0 ? "+" : "")\(allocation.dayChangePercent, specifier: "%.2f")%")
+                            Text(completeDayCoverage ? "\(allocation.dayChangePercent >= 0 ? "+" : "")\(allocation.dayChangePercent, specifier: "%.2f")%" : "—")
                                 .font(.caption)
                                 .foregroundColor(allocation.dayChangePercent >= 0 ? .green : .red)
                                 .frame(width: 70, alignment: .trailing)
@@ -193,7 +206,7 @@ struct PortfolioAnalyticsView: View {
             Text("Diversification Analysis")
                 .font(.headline)
 
-            if let analysis = diversificationAnalysis {
+            if let analysis = diversificationAnalysis, analysis.isAvailable {
                 // Diversification Score
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -245,6 +258,10 @@ struct PortfolioAnalyticsView: View {
                     .background(Color.gray.opacity(0.05))
                     .cornerRadius(8)
                 }
+            } else {
+                Text(analyticsCoverage == 0 ? "No valued positions available" : "Diversification unavailable: some prices or exchange rates are missing")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -299,6 +316,10 @@ struct PortfolioAnalyticsView: View {
                         )
                     }
                 }
+            } else {
+                Text("Not enough shared price history. Correlation needs at least \(Self.minimumCorrelationDays) common trading days for two or more holdings.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -471,6 +492,8 @@ struct PortfolioAnalyticsView: View {
     // MARK: - Analytics Calculation
 
     private func calculateAnalytics() async {
+        let revision = analyticsRevision + 1
+        analyticsRevision = revision
         isLoading = true
         defer { isLoading = false }
 
@@ -478,16 +501,53 @@ struct PortfolioAnalyticsView: View {
         var positions: [String: Double] = [:]
         var dayChanges: [String: Double] = [:]
 
-        for trade in dataModel.realTimeTrades {
-            let currentPrice = trade.realTimeInfo.currentPrice
+        let preferredCurrency = dataModel.preferredCurrency
+        var covered = 0
+        var dayCovered = 0
+        let eligibleCount: Int
+        if let snapshot = dataModel.folyncPortfolioSnapshot {
+            eligibleCount = snapshot.displayHoldings.count
+        } else {
+            eligibleCount = dataModel.realTimeTrades.filter {
+                !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
+            }.count
+        }
+        if let snapshot = dataModel.folyncPortfolioSnapshot {
+            for holding in snapshot.displayHoldings {
+                guard let value = holding.marketValue, value.isFinite, value > 0 else { continue }
+                let sourceCurrency = holding.resolvedValueCurrency.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !sourceCurrency.isEmpty,
+                      let converted = convertAnalyticsAmount(value, from: sourceCurrency, to: preferredCurrency), converted > 0 else { continue }
+                positions[holding.resolvedDisplayTicker, default: 0] += converted
+                if let dayGain = holding.dayGain,
+                   let convertedDayGain = convertAnalyticsAmount(dayGain, from: sourceCurrency, to: preferredCurrency) {
+                    dayChanges[holding.resolvedDisplayTicker, default: 0] += convertedDayGain
+                    dayCovered += 1
+                }
+                covered += 1
+            }
+        } else {
+          for trade in dataModel.realTimeTrades {
+            guard !trade.trade.isWatchlistOnly,
+                  !SymbolMetadata.isBenchmarkSymbol(trade.trade.name) else { continue }
+            let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
             let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
             let units = trade.trade.position.unitSize
-
-            let currentValue = currentPrice * units
-            positions[trade.trade.name] = currentValue
-
-            let dayChange = (currentPrice - previousClose) * units
-            dayChanges[trade.trade.name] = dayChange
+            guard currentPrice.isFinite, currentPrice > 0, units.isFinite, units > 0 else { continue }
+            guard let rawCurrency = trade.realTimeInfo.currency ?? trade.trade.position.currency,
+                  let sourceCurrency = SymbolMetadata.normalizeCurrency(rawCurrency),
+                  !sourceCurrency.isEmpty else { continue }
+            guard let currentValue = convertAnalyticsAmount(currentPrice * units, from: sourceCurrency, to: preferredCurrency), currentValue > 0 else { continue }
+            positions[trade.trade.name, default: 0] += currentValue
+            if previousClose.isFinite, previousClose > 0 {
+                let rawChange = (currentPrice - previousClose) * units
+                if let convertedChange = convertAnalyticsAmount(rawChange, from: sourceCurrency, to: preferredCurrency) {
+                    dayChanges[trade.trade.name, default: 0] += convertedChange
+                    dayCovered += 1
+                }
+            }
+            covered += 1
+          }
         }
 
         let sectors = await sectorService.calculateSectorAllocations(
@@ -498,56 +558,86 @@ struct PortfolioAnalyticsView: View {
         let diversification = await sectorService.analyzeDiversification(
             sectorAllocations: sectors
         )
+        let completeCoverage = eligibleCount > 0 && covered == eligibleCount
+        let completeDay = eligibleCount > 0 && dayCovered == eligibleCount
 
         await MainActor.run {
-            self.sectorAllocations = sectors
-            self.diversificationAnalysis = diversification
+            guard self.analyticsRevision == revision else { return }
+            self.sectorAllocations = completeCoverage ? sectors : []
+            self.diversificationAnalysis = completeCoverage ? diversification : nil
+            self.analyticsCurrency = preferredCurrency
+            self.analyticsCoverage = covered
+            self.completeDayCoverage = completeCoverage && completeDay
         }
 
-        // Calculate correlation matrix (requires historical data)
-        // For now, use a simplified version with returns from current positions
-        // In production, this would fetch historical price data
+        // Correlation uses stored daily price history aligned by date.
+        let symbols = dataModel.realTimeTrades
+            .filter { !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }
+            .map { $0.trade.name }
 
-        let symbols = dataModel.realTimeTrades.map { $0.trade.name }
-
-        // Fetch historical data for correlation
-        if let historicalData = await fetchHistoricalDataForCorrelation(symbols: symbols) {
-            let returnSeries = await correlationService.extractReturnSeries(from: historicalData)
-
-            let matrix = await correlationService.calculateCorrelationMatrix(returns: returnSeries)
-
-            // Calculate weights and volatilities
-            let totalValue = positions.values.reduce(0, +)
-            var weights: [String: Double] = [:]
-            var volatilities: [String: Double] = [:]
-
-            for (symbol, value) in positions {
-                weights[symbol] = totalValue > 0 ? value / totalValue : 0
-                volatilities[symbol] = 0.20  // Placeholder: 20% annualized volatility
-            }
-
-            let metrics = await correlationService.calculateDiversificationMetrics(
-                correlationMatrix: matrix,
-                weights: weights,
-                volatilities: volatilities
-            )
-
-            let top = await correlationService.findTopCorrelations(correlationMatrix: matrix, count: 5)
-            let bottom = await correlationService.findBottomCorrelations(correlationMatrix: matrix, count: 5)
-
+        let historicalData = fetchHistoricalDataForCorrelation(symbols: symbols)
+        let aligned = CorrelationMatrixService.alignedDailyReturns(from: historicalData)
+        guard aligned.commonDays >= Self.minimumCorrelationDays, aligned.returns.count > 1 else {
             await MainActor.run {
-                self.correlationMatrix = matrix
-                self.diversificationMetrics = metrics
-                self.topCorrelations = top
-                self.bottomCorrelations = bottom
+                guard self.analyticsRevision == revision else { return }
+                self.correlationMatrix = nil
+                self.diversificationMetrics = nil
+                self.topCorrelations = []
+                self.bottomCorrelations = []
             }
+            return
+        }
+
+        let matrix = await correlationService.calculateCorrelationMatrix(returns: aligned.returns)
+        let correlatedPositions = positions.filter { aligned.returns[$0.key] != nil }
+        let totalValue = correlatedPositions.values.reduce(0, +)
+        var weights: [String: Double] = [:]
+        var volatilities: [String: Double] = [:]
+        for (symbol, value) in correlatedPositions {
+            weights[symbol] = totalValue > 0 ? value / totalValue : 0
+            volatilities[symbol] = aligned.returns[symbol].flatMap(CorrelationMatrixService.annualizedVolatility(of:))
+        }
+
+        let metrics = await correlationService.calculateDiversificationMetrics(
+            correlationMatrix: matrix,
+            weights: weights,
+            volatilities: volatilities
+        )
+        let top = await correlationService.findTopCorrelations(correlationMatrix: matrix, count: 5)
+        let bottom = await correlationService.findBottomCorrelations(correlationMatrix: matrix, count: 5)
+
+        await MainActor.run {
+            guard self.analyticsRevision == revision else { return }
+            self.correlationMatrix = matrix
+            self.diversificationMetrics = metrics
+            self.topCorrelations = top
+            self.bottomCorrelations = bottom
         }
     }
 
-    private func fetchHistoricalDataForCorrelation(symbols: [String]) async -> [String: [PriceSnapshot]]? {
-        // This would fetch from HistoricalDataManager in production
-        // For now, return nil to avoid errors until integrated
-        return nil
+    private static let minimumCorrelationDays = 20
+    private static let correlationLookbackDays = 180
+
+    private func fetchHistoricalDataForCorrelation(symbols: [String]) -> [String: [PriceSnapshot]] {
+        let end = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -Self.correlationLookbackDays, to: end) ?? end
+        var history: [String: [PriceSnapshot]] = [:]
+        for symbol in Set(symbols) {
+            let snapshots = HistoricalDataManager.shared.getPriceSnapshots(for: symbol, from: start, to: end)
+            if !snapshots.isEmpty {
+                history[symbol] = snapshots
+            }
+        }
+        return history
+    }
+
+    /// Convert only with a current, known FX rate; fallback constants are not suitable for allocation claims.
+    private func convertAnalyticsAmount(_ amount: Double, from: String, to: String) -> Double? {
+        guard amount.isFinite else { return nil }
+        let info = dataModel.currencyConverter.getExchangeRateInfo(from: from, to: to)
+        guard info.rate.isFinite, !info.isFallback else { return nil }
+        let converted = dataModel.currencyConverter.convert(amount: amount, from: from, to: to)
+        return converted.isFinite ? converted : nil
     }
 
     // MARK: - Attribution Analysis Section (v2.3.1)

@@ -22,6 +22,9 @@
 		04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */; };
 		04C0FFEE0000000000000028 /* HistoricalPortfolioCalculationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000029 /* HistoricalPortfolioCalculationServiceTests.swift */; };
 		04C0FFEE0000000000000030 /* Trading212BrokerSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */; };
+		04C0FFEE0000000000000032 /* StockbarAcceptanceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */; };
+		04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */; };
+		04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,11 +45,36 @@
 		04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OHLCFetchServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000029 /* HistoricalPortfolioCalculationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalPortfolioCalculationServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Trading212BrokerSyncTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptanceRuntimeTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarProviderAccessPolicyTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptancePreflightTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		04C0FFEE0000000000000100 /* Exceptions for "Stockbar" folder in "Stockbar" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"AGENTS.md",
+				"Analytics/AGENTS.md",
+				"Charts/AGENTS.md",
+				"Data/AGENTS.md",
+				"Data/CoreData/AGENTS.md",
+				"Data/Networking/AGENTS.md",
+				"Resources/AGENTS.md",
+				"Services/AGENTS.md",
+				"Utilities/AGENTS.md",
+				"Views/AGENTS.md",
+			);
+			target = 0346FE0F2DB7E7DA00F3488D /* Stockbar */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0346FE122DB7E7DA00F3488D /* Stockbar */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				04C0FFEE0000000000000100 /* Exceptions for "Stockbar" folder in "Stockbar" target */,
+			);
 			path = Stockbar;
 			sourceTree = "<group>";
 		};
@@ -106,6 +134,9 @@
 				04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */,
 				04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */,
 				04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */,
+				04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */,
+				04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */,
+				04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */,
 			);
 			path = StockbarTests;
 			sourceTree = "<group>";
@@ -248,6 +279,9 @@
 				04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */,
 				04C0FFEE000000000000001E /* TechnicalIndicatorServiceTests.swift in Sources */,
 				04C0FFEE0000000000000030 /* Trading212BrokerSyncTests.swift in Sources */,
+				04C0FFEE0000000000000032 /* StockbarAcceptanceRuntimeTests.swift in Sources */,
+				04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */,
+				04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,6 +416,7 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = complete;
 			};
 			name = Release;
 		};
@@ -393,18 +428,20 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 242;
+				CURRENT_PROJECT_VERSION = 244;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 2.4.2;
-					PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.Stockbar;
+				MARKETING_VERSION = 2.4.4;
+					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					REGISTER_APP_GROUPS = YES;
 					SWIFT_EMIT_LOC_STRINGS = YES;
@@ -421,21 +458,25 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 242;
+				CURRENT_PROJECT_VERSION = 244;
 				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 2.4.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.Stockbar;
+				MARKETING_VERSION = 2.4.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -453,7 +494,7 @@
 					"@loader_path/../Frameworks",
 				);
 					MACOSX_DEPLOYMENT_TARGET = 15.4;
-					PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.StockbarTests;
+					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					SWIFT_STRICT_CONCURRENCY = complete;
 					SWIFT_VERSION = 5.0;
@@ -475,8 +516,9 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				PRODUCT_BUNDLE_IDENTIFIER = com.fhl43211.StockbarTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockbar.app/Contents/MacOS/Stockbar";
 				TEST_TARGET_NAME = Stockbar;
