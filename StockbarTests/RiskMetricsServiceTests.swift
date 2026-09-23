@@ -364,4 +364,41 @@ final class RiskMetricsServiceTests: XCTestCase {
 
         return values
     }
+
+    // MARK: - Missing observations
+
+    func testMaxDrawdown_IgnoresMissingZeroAndNonFiniteValues() async throws {
+        let values = [100.0, 110.0, 0.0, .nan, 99.0, 105.0]
+
+        let result = await service.calculateMaxDrawdown(portfolioValues: values)
+        let metrics = try XCTUnwrap(result)
+
+        XCTAssertEqual(metrics.maxDrawdown, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(metrics.peak, 110, accuracy: 0.0001)
+        XCTAssertEqual(metrics.trough, 99, accuracy: 0.0001)
+    }
+
+    func testDrawdownPeriods_ReportDeepestTroughNotLastPointBeforeRecovery() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let dates = (0..<6).map { start.addingTimeInterval(Double($0) * 86_400) }
+        let values = [100.0, 80.0, 70.0, 95.0, 101.0, 0.0]
+
+        let periods = await service.findDrawdownPeriods(portfolioValues: values, dates: dates, threshold: 0.05)
+
+        let period = try XCTUnwrap(periods.first)
+        XCTAssertEqual(periods.count, 1)
+        XCTAssertEqual(period.troughValue, 70, accuracy: 0.0001)
+        XCTAssertEqual(period.drawdownPercent, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(period.endDate, dates[2])
+        XCTAssertEqual(period.durationDays, 2)
+    }
+
+    func testComprehensiveMetrics_MissingValueDoesNotCreateFullLoss() async throws {
+        let values = [100.0, 101.0, 0.0, 102.0, 103.0]
+
+        let result = await service.calculateComprehensiveRiskMetrics(portfolioValues: values)
+        let metrics = try XCTUnwrap(result)
+
+        XCTAssertEqual(metrics.maxDrawdown, 0, accuracy: 0.0001)
+    }
 }

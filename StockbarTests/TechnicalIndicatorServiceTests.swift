@@ -121,6 +121,22 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
         XCTAssertTrue(ema.isEmpty, "EMA should return empty for insufficient data")
     }
 
+    func testOBVIsUnavailableWhenEveryVolumeIsMissing() {
+        let data = (0..<3).map { index in
+            OHLCDataPoint(
+                timestamp: Date(timeIntervalSince1970: Double(index)),
+                open: 10,
+                high: 11,
+                low: 9,
+                close: 10 + Double(index),
+                volume: nil
+            )
+        }
+
+        XCTAssertTrue(service.calculateOBV(data: data).isEmpty)
+        XCTAssertTrue(service.calculateVolumeMA(data: data, period: 2).isEmpty)
+    }
+
     // MARK: - RSI (Relative Strength Index) Tests
 
     func testRSI_WithTrendingUpData() {

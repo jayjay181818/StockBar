@@ -2,6 +2,26 @@ import XCTest
 @testable import Stockbar
 
 final class PortfolioAnalyticsServicesTests: XCTestCase {
+    func testAttributionExcludesBenchmarksFromPositionContributions() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = start.addingTimeInterval(86400)
+        func snapshot(at date: Date, price: Double) -> HistoricalPortfolioSnapshot {
+            let composition = ["AAPL", "^GSPC", "^FTSE"].reduce(into: [String: PositionSnapshot]()) { result, symbol in
+                result[symbol] = PositionSnapshot(symbol: symbol, units: 1, priceAtDate: price,
+                                                  valueAtDate: price, currency: "USD")
+            }
+            return HistoricalPortfolioSnapshot(date: date, totalValue: price, totalGains: price - 100,
+                                               totalCost: 100, currency: "USD", portfolioComposition: composition)
+        }
+        let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
+            startDate: start, endDate: end,
+            historicalSnapshots: [snapshot(at: start, price: 100), snapshot(at: end, price: 110)]
+        )
+        let attribution = try XCTUnwrap(result)
+        XCTAssertEqual(attribution.stockContributions.map(\.symbol), ["AAPL"])
+        XCTAssertEqual(attribution.stockContributions[0].dollarContribution, 10, accuracy: 0.001)
+    }
+
     func testCorrelationMatrix_WithPerfectCorrelation() async throws {
         // Given: Two identical return series.
         let service = CorrelationMatrixService()
@@ -147,6 +167,26 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         XCTAssertTrue(allocations.isEmpty)
     }
 
+    func testSectorAllocations_ExcludesNonFiniteAndNonPositiveValues() async {
+        let service = SectorAnalysisService()
+        let allocations = await service.calculateSectorAllocations(
+            positions: ["AAPL": 100, "MSFT": .nan, "JPM": .infinity, "TSLA": 0, "GSK": -10],
+            dayChanges: [:]
+        )
+
+        XCTAssertEqual(allocations.count, 1)
+        XCTAssertEqual(allocations[0].totalValue, 100, accuracy: 0.001)
+        XCTAssertEqual(allocations[0].percentageOfPortfolio, 100, accuracy: 0.001)
+    }
+
+    func testSectorDiversification_WithEmptyAllocations_IsUnavailable() async {
+        let service = SectorAnalysisService()
+        let analysis = await service.analyzeDiversification(sectorAllocations: [])
+
+        XCTAssertFalse(analysis.isAvailable)
+        XCTAssertTrue(analysis.score.isNaN)
+    }
+
     func testSectorDiversification_WithDominantSector_ProducesRecommendations() async throws {
         // Given: One dominant sector.
         let service = SectorAnalysisService()
@@ -225,5 +265,44 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         let mean = values.reduce(0, +) / Double(values.count)
         let variance = values.reduce(0) { $0 + pow($1 - mean, 2) } / Double(values.count - 1)
         return sqrt(variance)
+    }
+
+    func testAlignedDailyReturnsUsesOnlySharedDays() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        func day(_ offset: Int, hour: Double = 12) -> Date {
+            calendar.startOfDay(for: start).addingTimeInterval(Double(offset) * 86_400 + hour * 3_600)
+        }
+        let history: [String: [PriceSnapshot]] = [
+            "AAA": [
+                PriceSnapshot(timestamp: day(0), price: 100, previousClose: 100, symbol: "AAA"),
+                PriceSnapshot(timestamp: day(1, hour: 10), price: 999, previousClose: 100, symbol: "AAA"),
+                PriceSnapshot(timestamp: day(1, hour: 16), price: 110, previousClose: 100, symbol: "AAA"),
+                PriceSnapshot(timestamp: day(2), price: 121, previousClose: 110, symbol: "AAA"),
+                PriceSnapshot(timestamp: day(3), price: 0, previousClose: 121, symbol: "AAA")
+            ],
+            "BBB": [
+                PriceSnapshot(timestamp: day(0), price: 50, previousClose: 50, symbol: "BBB"),
+                PriceSnapshot(timestamp: day(1), price: 55, previousClose: 50, symbol: "BBB"),
+                PriceSnapshot(timestamp: day(2), price: 60.5, previousClose: 55, symbol: "BBB"),
+                PriceSnapshot(timestamp: day(3), price: 70, previousClose: 60.5, symbol: "BBB")
+            ]
+        ]
+
+        let aligned = CorrelationMatrixService.alignedDailyReturns(from: history, calendar: calendar)
+
+        XCTAssertEqual(aligned.commonDays, 3)
+        XCTAssertEqual(aligned.returns["AAA"]?.count, 2)
+        XCTAssertEqual(aligned.returns["AAA"]?.first ?? .nan, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(aligned.returns["BBB"]?.last ?? .nan, 0.1, accuracy: 1e-9)
+    }
+
+    func testAnnualizedVolatilityRejectsTooShortSeries() {
+        XCTAssertNil(CorrelationMatrixService.annualizedVolatility(of: [0.01]))
+        XCTAssertEqual(
+            CorrelationMatrixService.annualizedVolatility(of: [0.01, -0.01]) ?? .nan,
+            0.01414213562 * sqrt(252),
+            accuracy: 1e-6
+        )
     }
 }

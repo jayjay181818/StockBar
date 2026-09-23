@@ -40,4 +40,31 @@ class LoggerTests: XCTestCase {
         let logs = await logger.getRecentLogs(maxLines: 5)
         XCTAssertTrue(logs.count > 0, "Should have at least one log entry")
     }
-} 
+
+    func testLoggerDoesNotPersistDuringXCTest() async {
+        let logger = Logger.shared
+
+        let path = await logger.getLogFilePath()
+
+        XCTAssertNil(path, "XCTest must not write into a persistent Stockbar log")
+    }
+}
+
+final class LocalFileLocationTests: XCTestCase {
+    func testConfigurationPathAvoidsDocuments() {
+        let path = ConfigurationManager.shared.getConfigFilePath() ?? ""
+        let expectedRoot = StockbarRuntimeStorage.bundleApplicationSupportDirectory().path
+
+        XCTAssertTrue(path.hasPrefix(expectedRoot + "/"), "Expected config path under the active Application Support root, got \(path)")
+        XCTAssertFalse(path.contains("/Documents/"), "Config path should not require Documents access: \(path)")
+        XCTAssertTrue(path.hasSuffix(".stockbar_config.json"))
+    }
+
+    func testPythonConfigurationPassesConfigPathToFetcher() {
+        let config = PythonConfiguration.load()
+        let expectedPath = ConfigurationManager.shared.getConfigFilePath()
+
+        XCTAssertEqual(config.environment["STOCKBAR_CONFIG_FILE"], expectedPath)
+        XCTAssertFalse(config.environment["STOCKBAR_CONFIG_FILE"]?.contains("/Documents/") ?? true)
+    }
+}
