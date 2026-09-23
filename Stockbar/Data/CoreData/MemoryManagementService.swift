@@ -1,13 +1,18 @@
-@preconcurrency import Foundation
 @preconcurrency import CoreData
+@preconcurrency import Foundation
 import OSLog
+
+private enum MemoryPressureLevel {
+    case normal
+    case warning
+    case critical
+}
 
 /// Advanced memory management service for chart data and Core Data operations
 actor MemoryManagementService {
     static let shared = MemoryManagementService()
     
     private let logger = Logger.shared
-    private let coreDataStack = CoreDataStack.shared
     
     // Memory thresholds (in MB)
     private var memoryWarningThreshold: Double = 150
@@ -17,26 +22,45 @@ actor MemoryManagementService {
     // Cache management
     private var chartDataMemoryCache: [String: MemoryCachedData] = [:]
     private var maxCacheSize: Int = 50
-    private var lastMemoryWarning: Date?
     
     // Memory monitoring
-    private var memoryPressureObserver: NSObjectProtocol?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var lastSystemPressureLevel: MemoryPressureLevel = .normal
+    private var lastUsagePressureLevel: MemoryPressureLevel = .normal
     private var memoryUsageHistory: [MemoryUsageSnapshot] = []
     private let maxHistorySize = 100
+    private var memoryMonitoringTask: Task<Void, Never>?
+
+    /// Poll cadence for the memory history/threshold sweep.
+    ///
+    /// Actual pressure detection is kernel-pushed via `DispatchSourceMemoryPressure`
+    /// below, so this loop only maintains the usage history and does proactive
+    /// threshold cleanup — it does not need 30s granularity. At 120s it costs a
+    /// quarter of the wakeups (720/day rather than 2,880).
+    private let memoryMonitoringInterval: UInt64 = 120_000_000_000
     
-    private init() {
-        Task {
-            await setupMemoryPressureMonitoring()
-        }
-    }
+    private init() {}
     
     deinit {
-        if let observer = memoryPressureObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        memoryMonitoringTask?.cancel()
+        memoryPressureSource?.cancel()
     }
     
     // MARK: - Public Interface
+
+    func startMonitoring() {
+        guard memoryPressureSource == nil else { return }
+        setupMemoryPressureMonitoring()
+    }
+
+    func stopMonitoring() {
+        memoryMonitoringTask?.cancel()
+        memoryMonitoringTask = nil
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
+        lastSystemPressureLevel = .normal
+        lastUsagePressureLevel = .normal
+    }
     
     /// Gets current memory usage statistics
     func getMemoryStats() -> MemoryStats {
@@ -61,12 +85,10 @@ actor MemoryManagementService {
         Task { await logger.info("🧹 Memory cleanup - Current usage: \(String(format: "%.1f", currentUsage))MB") }
         
         if forced || currentUsage > memoryWarningThreshold {
-            await performCacheCleanup()
-            await performCoreDataCleanup()
-            await performLowMemoryOptimizations()
+            await performCacheCleanup(dropAll: forced || currentUsage > memoryCriticalThreshold)
             
             let newUsage = getCurrentMemoryUsage()
-            let saved = currentUsage - newUsage
+            let saved = max(0, currentUsage - newUsage)
             Task { await logger.info("🧹 Memory cleanup completed - Freed \(String(format: "%.1f", saved))MB") }
         }
     }
@@ -173,17 +195,31 @@ actor MemoryManagementService {
     // MARK: - Private Implementation
     
     private func setupMemoryPressureMonitoring() {
-        // macOS doesn't have a direct memory warning notification like iOS
-        // Instead, we'll rely on periodic monitoring and manual triggers
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.normal, .warning, .critical],
+            queue: DispatchQueue(label: "com.stockbar.memory-pressure", qos: .utility)
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let event = source.data
+            Task {
+                await self?.handleSystemMemoryPressure(
+                    normal: event.contains(.normal),
+                    critical: event.contains(.critical)
+                )
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
         
         // Start periodic memory monitoring
-        Task {
-            await startMemoryMonitoring()
+        memoryMonitoringTask = Task { [weak self] in
+            await self?.startMemoryMonitoring()
         }
     }
     
     private func startMemoryMonitoring() async {
-        while true {
+        while !Task.isCancelled {
             let usage = getCurrentMemoryUsage()
             
             // Record usage history
@@ -203,40 +239,62 @@ actor MemoryManagementService {
             
             // Check for memory pressure
             if usage > memoryCriticalThreshold {
-                Task { await logger.warning("🚨 Critical memory usage: \(String(format: "%.1f", usage))MB") }
+                if lastUsagePressureLevel != .critical {
+                    await logger.warning("🚨 Critical memory usage: \(String(format: "%.1f", usage))MB")
+                    lastUsagePressureLevel = .critical
+                }
                 await performMemoryCleanup()
             } else if usage > memoryWarningThreshold {
-                Task { await logger.info("⚠️ High memory usage: \(String(format: "%.1f", usage))MB") }
+                if lastUsagePressureLevel == .normal {
+                    await logger.info("⚠️ High memory usage: \(String(format: "%.1f", usage))MB")
+                    lastUsagePressureLevel = .warning
+                }
                 await optimizeChartDataMemory()
+            } else if lastUsagePressureLevel != .normal {
+                lastUsagePressureLevel = .normal
+                await logger.info("Memory usage returned to normal: \(String(format: "%.1f", usage))MB")
             }
             
-            // Wait before next check
-            try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+            // Wait before next check. Task.sleep throws on cancellation, which
+            // the loop condition then observes.
+            do {
+                try await Task.sleep(nanoseconds: memoryMonitoringInterval)
+            } catch {
+                return
+            }
         }
     }
     
-    private func handleMemoryWarning() async {
-        Task { await logger.warning("🚨 Memory warning received") }
-        lastMemoryWarning = Date()
-        
+    private func handleSystemMemoryPressure(normal: Bool, critical: Bool) async {
+        if normal {
+            if lastSystemPressureLevel != .normal {
+                await logger.info("System memory pressure returned to normal")
+                lastSystemPressureLevel = .normal
+            }
+            return
+        }
+
+        let level: MemoryPressureLevel = critical ? .critical : .warning
+        if lastSystemPressureLevel != level {
+            await logger.warning(critical ? "System memory pressure is critical" : "System memory pressure warning")
+            lastSystemPressureLevel = level
+        }
+
         await performMemoryCleanup(forced: true)
-        
-        // Reduce cache size temporarily
-        let originalMaxSize = maxCacheSize
-        maxCacheSize = max(10, maxCacheSize / 2)
-        
-        // Restore cache size after a delay
-        try? await Task.sleep(nanoseconds: 60_000_000_000) // 1 minute
-        maxCacheSize = originalMaxSize
+        CacheManager.shared.clearMemoryCache()
+        await OptimizedChartDataService.shared.clearCache()
+        await HistoricalDataManager.shared.evictMemoryCachesForPressure(critical: critical)
     }
     
-    private func performCacheCleanup() async {
+    private func performCacheCleanup(dropAll: Bool = false) async {
         Task { await logger.debug("🧹 Performing cache cleanup") }
         
         let currentUsage = getCurrentMemoryUsage()
         
         // More aggressive cleanup under memory pressure
-        if currentUsage > memoryCriticalThreshold {
+        if dropAll {
+            chartDataMemoryCache.removeAll(keepingCapacity: false)
+        } else if currentUsage > memoryCriticalThreshold {
             // Remove all but high priority cache entries
             chartDataMemoryCache = chartDataMemoryCache.filter { $0.value.priority == .high }
         } else if currentUsage > memoryWarningThreshold {
@@ -247,40 +305,6 @@ actor MemoryManagementService {
         // Remove expired entries
         let now = Date()
         chartDataMemoryCache = chartDataMemoryCache.filter { !$0.value.isExpired(at: now) }
-    }
-    
-    private func performCoreDataCleanup() async {
-        Task { await logger.debug("🧹 Performing Core Data cleanup") }
-        
-        let context = coreDataStack.newBackgroundContext()
-        
-        await context.perform {
-            // Clear the row cache
-            context.refreshAllObjects()
-            
-            // Reset context to clear persistent store cache
-            context.reset()
-        }
-    }
-    
-    private func performLowMemoryOptimizations() async {
-        Task { await logger.debug("🧹 Performing low memory optimizations") }
-        
-        // Trigger garbage collection
-        // Note: In Swift, there's no explicit garbage collection, but we can help by clearing references
-        
-        // Clear any temporary data structures
-        if memoryUsageHistory.count > 50 {
-            memoryUsageHistory = Array(memoryUsageHistory.suffix(50))
-        }
-        
-        // Request system memory optimization
-        Task.detached(priority: .utility) {
-            // Perform any CPU-intensive cleanup on a background thread
-            autoreleasepool {
-                // This helps release any autorelease objects
-            }
-        }
     }
     
     private func makeRoomForData(estimatedSize: Double) async {

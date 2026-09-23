@@ -12,6 +12,7 @@ protocol HistoricalDataServiceProtocol: Sendable {
     func deletePriceSnapshots(for symbol: String, before date: Date) async throws
     func deletePortfolioSnapshots(before date: Date) async throws
     func getDataCount(for symbol: String) async throws -> Int
+    func getTotalPriceSnapshotCount() async throws -> Int
     func getPortfolioSnapshotCount() async throws -> Int
 }
 
@@ -256,6 +257,13 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
     func getPortfolioSnapshotCount() async throws -> Int {
         return try await coreDataStack.performBackgroundTask { context in
             let fetchRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
+            return try context.count(for: fetchRequest)
+        }
+    }
+
+    func getTotalPriceSnapshotCount() async throws -> Int {
+        try await coreDataStack.performBackgroundTask { context in
+            let fetchRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
             return try context.count(for: fetchRequest)
         }
     }

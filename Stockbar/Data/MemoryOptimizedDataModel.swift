@@ -1,7 +1,8 @@
-import Foundation
 import Combine
+import Foundation
 
 /// Memory-optimized data model that reduces memory footprint through intelligent caching
+@MainActor
 class MemoryOptimizedDataModel: ObservableObject {
     
     // MARK: - Memory Management Configuration
@@ -16,9 +17,7 @@ class MemoryOptimizedDataModel: ObservableObject {
     // MARK: - Properties
     
     private let logger = Logger.shared
-    private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var cacheCleanupTimer: Timer?
-    private var lastMemoryWarning = Date.distantPast
     
     // Cache tracking
     private var symbolAccessTimes: [String: Date] = [:]
@@ -28,45 +27,11 @@ class MemoryOptimizedDataModel: ObservableObject {
     // MARK: - Initialization
     
     init() {
-        setupMemoryPressureMonitoring()
         setupPeriodicCacheCleanup()
     }
     
-    deinit {
-        memoryPressureSource?.cancel()
+    isolated deinit {
         cacheCleanupTimer?.invalidate()
-    }
-    
-    // MARK: - Memory Pressure Monitoring
-    
-    private func setupMemoryPressureMonitoring() {
-        memoryPressureSource = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: DispatchQueue.global(qos: .utility)
-        )
-        
-        memoryPressureSource?.setEventHandler { [weak self] in
-            Task {
-                await self?.handleMemoryPressure()
-            }
-        }
-        
-        memoryPressureSource?.resume()
-    }
-    
-    private func handleMemoryPressure() async {
-        await logger.warning("⚠️ Memory pressure detected - performing cleanup")
-        
-        let now = Date()
-        guard now.timeIntervalSince(lastMemoryWarning) > 30 else {
-            await logger.debug("Skipping memory cleanup - too recent")
-            return
-        }
-        
-        lastMemoryWarning = now
-        
-        // Perform aggressive cache cleanup
-        await performMemoryCleanup(aggressive: true)
     }
     
     // MARK: - Cache Management
@@ -84,8 +49,6 @@ class MemoryOptimizedDataModel: ObservableObject {
     }
     
     private func performMemoryCleanup(aggressive: Bool) async {
-        let threshold = aggressive ? 0.5 : 0.8 // Clean more aggressively under pressure
-        
         await logger.debug("🧹 Starting cache cleanup (aggressive: \(aggressive))")
         
         // Sort symbols by last access time (least recently used first)
@@ -222,10 +185,10 @@ class MemoryOptimizedDataModel: ObservableObject {
             // Skip watchlist-only stocks from portfolio calculations
             guard !trade.trade.isWatchlistOnly else { continue }
 
-            guard !trade.realTimeInfo.currentPrice.isNaN,
-                  trade.realTimeInfo.currentPrice > 0 else { continue }
+            let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else { continue }
 
-            let currentPrice = trade.realTimeInfo.currentPrice
             let units = trade.trade.position.unitSize
             let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
 
@@ -288,6 +251,7 @@ private func mach_task_basic_info() -> mach_task_basic_info_data_t {
             task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
         }
     }
-    
-    return info
+
+    // A failed query leaves `info` partially written; report zeros instead.
+    return result == KERN_SUCCESS ? info : mach_task_basic_info_data_t()
 }

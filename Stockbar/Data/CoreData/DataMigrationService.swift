@@ -1,13 +1,49 @@
-@preconcurrency import Foundation
 @preconcurrency import CoreData // Ensure CoreData is imported
+@preconcurrency import Foundation
+
+struct MigrationVerificationReport: Equatable, Sendable {
+    let sourcePriceSnapshots: Int
+    let sourcePortfolioSnapshots: Int
+    let sourceHadTrades: Bool
+    let sourceHadTradingInfo: Bool
+    let destinationPriceSnapshots: Int
+    let destinationPortfolioSnapshots: Int
+    let tradesValid: Bool
+
+    var succeeded: Bool {
+        destinationPriceSnapshots >= sourcePriceSnapshots
+            && destinationPortfolioSnapshots >= sourcePortfolioSnapshots
+            && (!sourceHadTrades || tradesValid)
+    }
+}
+
+private actor MigrationExecutionGate {
+    private var inFlight: Task<Void, Error>?
+
+    func run(_ operation: @escaping @Sendable () async throws -> Void) async throws {
+        if let inFlight {
+            return try await inFlight.value
+        }
+        let task = Task { try await operation() }
+        inFlight = task
+        do {
+            try await task.value
+            inFlight = nil
+        } catch {
+            inFlight = nil
+            throw error
+        }
+    }
+}
 
 final class DataMigrationService: @unchecked Sendable {
     static let shared = DataMigrationService()
     
     private let coreDataService: HistoricalDataServiceProtocol
     private let tradeDataMigrationService = TradeDataMigrationService()
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults = StockbarRuntimeStorage.userDefaults
     private let coreDataStack = CoreDataStack.shared // Added for direct context access
+    private let executionGate = MigrationExecutionGate()
     
     private init(coreDataService: HistoricalDataServiceProtocol = CoreDataHistoricalDataService()) {
         self.coreDataService = coreDataService
@@ -59,6 +95,12 @@ final class DataMigrationService: @unchecked Sendable {
     // MARK: - Full Migration
     
     func performFullMigration() async throws {
+        try await executionGate.run { [self] in
+            try await performFullMigrationUnlocked()
+        }
+    }
+
+    private func performFullMigrationUnlocked() async throws {
         Task { await Logger.shared.info("DataMigrationService: Starting full migration check. Stored version: \(migrationVersionStored), Current app version: \(currentMigrationVersion)") }
         
         // Check if we have UserDefaults data that needs migration regardless of version
@@ -66,14 +108,16 @@ final class DataMigrationService: @unchecked Sendable {
         let tradingInfoDataContent = userDefaults.data(forKey: "tradingInfoData")
         let hasUserTrades = userTradesData != nil
         let hasTradingInfo = tradingInfoDataContent != nil
-        let needsDataMigration = hasUserTrades || hasTradingInfo
+        let needsDataMigration =
+            (hasUserTrades && !userDefaults.bool(forKey: MigrationKeys.tradesMigrated))
+            || (hasTradingInfo && !userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated))
         
         Task { await Logger.shared.info("DataMigrationService: UserDefaults data check - usertrades: \(hasUserTrades) (size: \(userTradesData?.count ?? 0)), tradingInfoData: \(hasTradingInfo) (size: \(tradingInfoDataContent?.count ?? 0)), needsDataMigration: \(needsDataMigration)") }
         
         // Debug: List all UserDefaults keys to see what's available
         let allKeys = userDefaults.dictionaryRepresentation().keys.sorted()
         let tradeKeys = allKeys.filter { $0.contains("trade") || $0.contains("info") }
-        Task { await Logger.shared.info("DataMigrationService: Available UserDefaults keys: \(tradeKeys)") }
+        Task { await Logger.shared.debug("DataMigrationService: Available UserDefaults keys: \(tradeKeys)") }
         
         if migrationVersionStored >= currentMigrationVersion && !needsDataMigration {
             Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)) and no UserDefaults data found. No full migration needed.") }
@@ -110,7 +154,6 @@ final class DataMigrationService: @unchecked Sendable {
             // Migrate price snapshots from UserDefaults (if not done and older version)
             if !userDefaults.bool(forKey: MigrationKeys.priceSnapshotsMigrated) && migrationVersionStored < currentMigrationVersion {
                 try await migratePriceSnapshots()
-                userDefaults.set(true, forKey: MigrationKeys.priceSnapshotsMigrated)
             }
             
             // Portfolio snapshots from UserDefaults (if not done and older version)
@@ -123,7 +166,6 @@ final class DataMigrationService: @unchecked Sendable {
             // this will effectively populate with UD data, which will then be stored with the new (correct) structure.
             if !userDefaults.bool(forKey: MigrationKeys.portfolioSnapshotsMigrated) && migrationVersionStored < currentMigrationVersion {
                 try await migratePortfolioSnapshots() // This will now use the corrected CoreDataExtensions
-                userDefaults.set(true, forKey: MigrationKeys.portfolioSnapshotsMigrated)
             }
             
             // Migrate trades from UserDefaults
@@ -132,20 +174,29 @@ final class DataMigrationService: @unchecked Sendable {
             if (!userDefaults.bool(forKey: MigrationKeys.tradesMigrated) || (hasUserTrades && !hasCoreDataTrades))
                 && (migrationVersionStored < currentMigrationVersion || hasUserTrades) {
                 try await migrateTrades()
-                userDefaults.set(true, forKey: MigrationKeys.tradesMigrated)
             }
             
             // Migrate trading info from UserDefaults
             let hasTradingInfo = userDefaults.data(forKey: "tradingInfoData") != nil
             if !userDefaults.bool(forKey: MigrationKeys.tradingInfoMigrated) && (migrationVersionStored < currentMigrationVersion || hasTradingInfo) {
                 try await migrateTradingInfo()
-                userDefaults.set(true, forKey: MigrationKeys.tradingInfoMigrated)
             }
-            
-            // Update migration version
+
+            let report = try await verifyMigration()
+            guard report.succeeded else {
+                throw NSError(
+                    domain: "DataMigrationService",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Migration copy verification failed"]
+                )
+            }
+
+            userDefaults.set(true, forKey: MigrationKeys.priceSnapshotsMigrated)
+            userDefaults.set(true, forKey: MigrationKeys.portfolioSnapshotsMigrated)
+            userDefaults.set(true, forKey: MigrationKeys.tradesMigrated)
+            userDefaults.set(true, forKey: MigrationKeys.tradingInfoMigrated)
             userDefaults.set(currentMigrationVersion, forKey: MigrationKeys.migrationVersion)
             Task { await Logger.shared.info("DataMigrationService: Migration to version \(currentMigrationVersion) completed successfully.") }
-            
         } catch {
             Task { await Logger.shared.error("DataMigrationService: Migration failed: \(error)") }
             throw error
@@ -155,14 +206,26 @@ final class DataMigrationService: @unchecked Sendable {
     private func deleteOldPortfolioSnapshotEntities() async throws {
         let context = coreDataStack.newBackgroundContext()
         try await context.perform {
-            let fetchRequest: NSFetchRequest<NSFetchRequestResult> = PortfolioSnapshotEntity.fetchRequest()
-            let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-            deleteRequest.resultType = .resultTypeCount // Get count of deleted items
-
             do {
-                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
-                let deletedCount = result?.result as? Int ?? 0
-                try context.save()
+                let storeType = context.persistentStoreCoordinator?.persistentStores.first?.type
+                let deletedCount: Int
+
+                if storeType == NSInMemoryStoreType {
+                    let fetchRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
+                    let snapshots = try context.fetch(fetchRequest)
+                    snapshots.forEach(context.delete)
+                    deletedCount = snapshots.count
+                } else {
+                    let fetchRequest: NSFetchRequest<NSFetchRequestResult> = PortfolioSnapshotEntity.fetchRequest()
+                    let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+                    deleteRequest.resultType = .resultTypeCount
+                    let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                    deletedCount = result?.result as? Int ?? 0
+                }
+
+                if context.hasChanges {
+                    try context.save()
+                }
                 Task { await Logger.shared.info("DataMigrationService: Deleted \(deletedCount) old PortfolioSnapshotEntity instances for schema migration.") }
             } catch {
                 Task { await Logger.shared.error("DataMigrationService: Failed to delete old PortfolioSnapshotEntity instances: \(error)") }
@@ -350,22 +413,37 @@ final class DataMigrationService: @unchecked Sendable {
     
     // MARK: - Verification
     
-    func verifyMigration() async throws -> Bool {
+    func verifyMigration() async throws -> MigrationVerificationReport {
         Task { await Logger.shared.info("Verifying migration...") }
-        
-        // Check that data exists in Core Data
+
+        let sourcePriceCount = loadPriceSnapshotsFromUserDefaults().count
+        let sourcePortfolioCount = loadPortfolioSnapshotsFromUserDefaults().count
+        let sourceHadTrades = userDefaults.data(forKey: "usertrades") != nil
+        let sourceHadTradingInfo = userDefaults.data(forKey: "tradingInfoData") != nil
         let portfolioCount = try await coreDataService.getPortfolioSnapshotCount()
-        
-        // Get count of price snapshots for all symbols
-        let totalPriceSnapshots = 0
-        // This is a simplified check - in a real implementation you'd want to check specific symbols
-        
-        // Check trade data migration
-        let tradesValid = (try? await tradeDataMigrationService.validateMigration()) ?? false
-        
-        Task { await Logger.shared.info("Verification: \(portfolioCount) portfolio snapshots, \(totalPriceSnapshots) price snapshots, trades valid: \(tradesValid)") }
-        
-        return (portfolioCount > 0 || totalPriceSnapshots > 0) && tradesValid
+        let totalPriceSnapshots = try await coreDataService.getTotalPriceSnapshotCount()
+        let tradesValid: Bool
+        if sourceHadTrades {
+            tradesValid = (try? await tradeDataMigrationService.validateMigration()) ?? false
+        } else {
+            tradesValid = true
+        }
+        let report = MigrationVerificationReport(
+            sourcePriceSnapshots: sourcePriceCount,
+            sourcePortfolioSnapshots: sourcePortfolioCount,
+            sourceHadTrades: sourceHadTrades,
+            sourceHadTradingInfo: sourceHadTradingInfo,
+            destinationPriceSnapshots: totalPriceSnapshots,
+            destinationPortfolioSnapshots: portfolioCount,
+            tradesValid: tradesValid
+        )
+
+        Task {
+            await Logger.shared.info(
+                "Migration verification: source prices=\(sourcePriceCount), destination prices=\(totalPriceSnapshots), source portfolio=\(sourcePortfolioCount), destination portfolio=\(portfolioCount), trades valid=\(tradesValid)"
+            )
+        }
+        return report
     }
 }
 

@@ -278,12 +278,17 @@ struct TradingInfo: Codable {
         // Return the most relevant price based on market state
         switch marketState {
         case "PRE":
-            return preMarketPrice ?? currentPrice
+            return validExtendedSessionPrice(preMarketPrice) ?? currentPrice
         case "POST":
-            return postMarketPrice ?? currentPrice
+            return validExtendedSessionPrice(postMarketPrice) ?? currentPrice
         default:
             return currentPrice
         }
+    }
+
+    private func validExtendedSessionPrice(_ price: Double?) -> Double? {
+        guard let price, price.isFinite, price > 0 else { return nil }
+        return price
     }
     
     func getCurrentDisplayPriceString() -> String {

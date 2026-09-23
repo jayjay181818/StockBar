@@ -1,12 +1,18 @@
 import Foundation
 
 struct PriceSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let timestamp: Date
     let price: Double
     let previousClose: Double
     let volume: Double?
     let symbol: String
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp, price, previousClose, volume, symbol
+    }
     
     init(timestamp: Date, price: Double, previousClose: Double, volume: Double? = nil, symbol: String) {
         self.timestamp = timestamp
@@ -27,12 +33,18 @@ struct PriceSnapshot: Codable, Identifiable, Sendable {
 }
 
 struct PortfolioSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let timestamp: Date
     let totalValue: Double
     let totalGains: Double
     let currency: String
     let priceSnapshots: [PriceSnapshot]
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp, totalValue, totalGains, currency, priceSnapshots
+    }
     
     init(timestamp: Date, totalValue: Double, totalGains: Double, currency: String, priceSnapshots: [PriceSnapshot]) {
         self.timestamp = timestamp
@@ -43,7 +55,7 @@ struct PortfolioSnapshot: Codable, Identifiable, Sendable {
     }
 }
 
-enum ChartTimeRange: String, CaseIterable {
+enum ChartTimeRange: String, CaseIterable, Sendable {
     case day = "1D"
     case week = "1W"
     case month = "1M"
@@ -101,9 +113,22 @@ enum ChartTimeRange: String, CaseIterable {
         case .month: return "1h"
         case .threeMonths: return "1d"
         case .sixMonths: return "1d"
-        case .year: return "1wk"
-        case .all: return "1wk"
+        case .year: return "1d"
+        case .all: return "1d"
         case .custom: return "1d"
+        }
+    }
+
+    var folyncRange: String {
+        switch self {
+        case .day: "1d"
+        case .week: "1w"
+        case .month: "1m"
+        case .threeMonths: "3m"
+        case .sixMonths: "6m"
+        case .year: "1y"
+        case .all: "all"
+        case .custom: "custom"
         }
     }
 
@@ -123,10 +148,16 @@ enum ChartTimeRange: String, CaseIterable {
 }
 
 struct ChartDataPoint: Identifiable, Codable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let date: Date
     let value: Double
     let symbol: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case date, value, symbol
+    }
     
     init(date: Date, value: Double, symbol: String? = nil) {
         self.date = date
@@ -138,6 +169,8 @@ struct ChartDataPoint: Identifiable, Codable, Sendable {
 // MARK: - Enhanced Portfolio Snapshot Structures
 
 struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let date: Date
     let totalValue: Double
@@ -145,6 +178,10 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
     let totalCost: Double // Initial investment amount
     let currency: String
     let portfolioComposition: [String: PositionSnapshot] // Track individual positions
+
+    private enum CodingKeys: String, CodingKey {
+        case date, totalValue, totalGains, totalCost, currency, portfolioComposition
+    }
     
     init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: [String: PositionSnapshot]) {
         self.date = date
@@ -162,14 +199,6 @@ struct PositionSnapshot: Codable, Sendable {
     let priceAtDate: Double
     let valueAtDate: Double
     let currency: String
-    
-    init(symbol: String, units: Double, priceAtDate: Double, valueAtDate: Double, currency: String) {
-        self.symbol = symbol
-        self.units = units
-        self.priceAtDate = priceAtDate
-        self.valueAtDate = valueAtDate
-        self.currency = currency
-    }
 }
 
 // MARK: - Portfolio Composition Tracking
@@ -196,13 +225,6 @@ struct PortfolioPosition: Codable, Hashable, Sendable {
     let units: Double
     let avgCost: Double
     let currency: String
-    
-    init(symbol: String, units: Double, avgCost: Double, currency: String) {
-        self.symbol = symbol
-        self.units = units
-        self.avgCost = avgCost
-        self.currency = currency
-    }
 }
 
 enum ChartType {

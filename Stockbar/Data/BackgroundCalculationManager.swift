@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 /// Manages background portfolio calculation progress and state
 @MainActor

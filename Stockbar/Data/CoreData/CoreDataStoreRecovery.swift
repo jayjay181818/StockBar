@@ -102,11 +102,8 @@ struct CoreDataStoreRecovery {
     }
 
     private static func defaultRecoveryRoot(fileManager: FileManager) -> URL {
-        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let bundleIdentifier = Bundle.main.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? "Stockbar"
-        return applicationSupport
-            .appendingPathComponent(bundleIdentifier, isDirectory: true)
+        StockbarRuntimeStorage
+            .bundleApplicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("StoreRecovery", isDirectory: true)
     }
 
