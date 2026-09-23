@@ -254,5 +254,5 @@ Before each release:
 ## Contact
 
 For performance issues or questions:
-- Check logs: `~/Library/Application Support/com.fhl43211.Stockbar/stockbar.log`
+- Check logs: `~/Library/Application Support/com.stockbar/stockbar.log`
 - Review Debug tab in preferences for real-time metrics
