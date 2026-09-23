@@ -1,5 +1,5 @@
-import SwiftUI
 import Charts
+import SwiftUI
 
 /// Comprehensive risk analytics dashboard displaying portfolio risk metrics
 /// Shows VaR, Sharpe ratio, beta, maximum drawdown, and other risk measures
@@ -10,6 +10,8 @@ struct RiskAnalyticsView: View {
     @State private var riskMetrics: RiskMetricsService.RiskMetrics?
     @State private var drawdownPeriods: [RiskMetricsService.DrawdownPeriod] = []
     @State private var errorMessage: String?
+    /// Missing history is an expected state, not a failure.
+    @State private var insufficientDataMessage: String?
     @State private var selectedTimeRange: TimeRange = .oneYear
 
     enum TimeRange: String, CaseIterable {
@@ -49,6 +51,13 @@ struct RiskAnalyticsView: View {
                 if isCalculating {
                     ProgressView("Calculating risk metrics...")
                         .frame(maxWidth: .infinity, minHeight: 200)
+                } else if let insufficientDataMessage {
+                    ContentUnavailableView(
+                        "Not enough history",
+                        systemImage: "chart.line.uptrend.xyaxis",
+                        description: Text(insufficientDataMessage)
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 300)
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
@@ -525,6 +534,7 @@ struct RiskAnalyticsView: View {
             await MainActor.run {
                 isCalculating = true
                 errorMessage = nil
+                insufficientDataMessage = nil
             }
 
             // Convert TimeRange to ChartTimeRange
@@ -547,7 +557,7 @@ struct RiskAnalyticsView: View {
 
             guard !snapshots.isEmpty else {
                 await MainActor.run {
-                    errorMessage = "No portfolio history available for selected time range"
+                    insufficientDataMessage = "Risk metrics appear once Stockbar has recorded portfolio values for this time range."
                     isCalculating = false
                 }
                 return
@@ -576,7 +586,7 @@ struct RiskAnalyticsView: View {
                 }
             } else {
                 await MainActor.run {
-                    errorMessage = "Insufficient data to calculate risk metrics"
+                    insufficientDataMessage = "At least two recorded portfolio values are needed in this time range."
                     isCalculating = false
                 }
             }
@@ -588,7 +598,7 @@ struct RiskAnalyticsView: View {
     private func formatCurrency(_ value: Double) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
-        formatter.currencySymbol = dataModel.preferredCurrency
+        formatter.currencyCode = dataModel.preferredCurrency
         formatter.maximumFractionDigits = 2
         return formatter.string(from: NSNumber(value: value)) ?? "\(dataModel.preferredCurrency)\(String(format: "%.2f", value))"
     }
@@ -626,47 +636,27 @@ struct RiskAnalyticsView: View {
     // MARK: - Interpretation Functions
 
     private func sharpeInterpretation(_ sharpe: Double) -> String {
-        if sharpe > 3.0 { return "Exceptional" }
-        else if sharpe > 2.0 { return "Very good" }
-        else if sharpe > 1.0 { return "Good" }
-        else if sharpe > 0.5 { return "Adequate" }
-        else if sharpe > 0 { return "Below average" }
-        else { return "Poor" }
+        if sharpe > 3.0 { return "Exceptional" } else if sharpe > 2.0 { return "Very good" } else if sharpe > 1.0 { return "Good" } else if sharpe > 0.5 { return "Adequate" } else if sharpe > 0 { return "Below average" } else { return "Poor" }
     }
 
     private func sharpeColor(_ sharpe: Double) -> Color {
-        if sharpe > 2.0 { return .green }
-        else if sharpe > 1.0 { return .blue }
-        else if sharpe > 0.5 { return .orange }
-        else { return .red }
+        if sharpe > 2.0 { return .green } else if sharpe > 1.0 { return .blue } else if sharpe > 0.5 { return .orange } else { return .red }
     }
 
     private func sortinoColor(_ sortino: Double) -> Color {
-        if sortino > 2.0 { return .green }
-        else if sortino > 1.0 { return .blue }
-        else if sortino > 0.5 { return .orange }
-        else { return .red }
+        if sortino > 2.0 { return .green } else if sortino > 1.0 { return .blue } else if sortino > 0.5 { return .orange } else { return .red }
     }
 
     private func betaInterpretation(_ beta: Double) -> String {
-        if beta > 1.2 { return "High volatility" }
-        else if beta > 0.8 { return "Market-like" }
-        else if beta > 0.5 { return "Low volatility" }
-        else { return "Very defensive" }
+        if beta > 1.2 { return "High volatility" } else if beta > 0.8 { return "Market-like" } else if beta > 0.5 { return "Low volatility" } else { return "Very defensive" }
     }
 
     private func betaColor(_ beta: Double) -> Color {
-        if beta > 1.2 { return .red }
-        else if beta > 0.8 { return .blue }
-        else { return .green }
+        if beta > 1.2 { return .red } else if beta > 0.8 { return .blue } else { return .green }
     }
 
     private func volatilityInterpretation(_ volatility: Double) -> String {
-        if volatility > 0.30 { return "Very high" }
-        else if volatility > 0.20 { return "High" }
-        else if volatility > 0.15 { return "Moderate" }
-        else if volatility > 0.10 { return "Low" }
-        else { return "Very low" }
+        if volatility > 0.30 { return "Very high" } else if volatility > 0.20 { return "High" } else if volatility > 0.15 { return "Moderate" } else if volatility > 0.10 { return "Low" } else { return "Very low" }
     }
 }
 

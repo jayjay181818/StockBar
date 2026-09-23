@@ -6,8 +6,8 @@
 //  Candlestick chart visualization using Swift Charts
 //
 
-import SwiftUI
 import Charts
+import SwiftUI
 
 // MARK: - Candlestick Chart View
 
@@ -25,6 +25,8 @@ struct CandlestickChartView: View {
     @State private var showBollingerBands: Bool = false
     @State private var showRSI: Bool = false
     @State private var showMACD: Bool = false
+    @State private var showGridLines: Bool
+    @State private var showCrosshair: Bool
 
     // Interaction features (v2.3.1)
     @StateObject private var interactionManager = ChartInteractionManager()
@@ -41,12 +43,14 @@ struct CandlestickChartView: View {
         self.currency = currency
         self.settings = settings
         self.symbol = symbol
+        _showGridLines = State(initialValue: settings.showGrid)
+        _showCrosshair = State(initialValue: settings.showCrosshair)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             // Indicator toggles
-            indicatorControlsView
+            chartToolbar
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
@@ -76,35 +80,41 @@ struct CandlestickChartView: View {
 
     // MARK: - Indicator Controls
 
-    private var indicatorControlsView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Toggle("SMA 20", isOn: $showSMA20)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
+    private var chartToolbar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Section("Moving averages") {
+                    Toggle("SMA 20", isOn: $showSMA20)
+                    Toggle("SMA 50", isOn: $showSMA50)
+                    Toggle("EMA 12", isOn: $showEMA12)
+                }
 
-                Toggle("SMA 50", isOn: $showSMA50)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Toggle("EMA 12", isOn: $showEMA12)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Toggle("Bollinger", isOn: $showBollingerBands)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Toggle("RSI", isOn: $showRSI)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-
-                Toggle("MACD", isOn: $showMACD)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
+                Section("Bands and panels") {
+                    Toggle("Bollinger Bands", isOn: $showBollingerBands)
+                    Toggle("RSI", isOn: $showRSI)
+                    Toggle("MACD", isOn: $showMACD)
+                }
+            } label: {
+                Label("Indicators", systemImage: "chart.xyaxis.line")
             }
-            .buttonStyle(.bordered)
+            .menuStyle(.borderedButton)
+            .controlSize(.small)
+
+            Menu {
+                Text("Style: \(settings.style.description)")
+                Text("Volume: \(settings.volumeDisplay.description)")
+                Divider()
+                Toggle("Grid lines", isOn: $showGridLines)
+                Toggle("Crosshair", isOn: $showCrosshair)
+            } label: {
+                Label("Options", systemImage: "slider.horizontal.3")
+            }
+            .menuStyle(.borderedButton)
+            .controlSize(.small)
+
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Price Chart
@@ -175,9 +185,10 @@ struct CandlestickChartView: View {
                 ForEach(Array(sma20.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
-                        y: .value("SMA20", point.1)
+                        y: .value("SMA20", point.1),
+                        series: .value("Series", "SMA 20")
                     )
-                    .foregroundStyle(.blue)
+                        .foregroundStyle(.blue)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
             }
@@ -188,9 +199,10 @@ struct CandlestickChartView: View {
                 ForEach(Array(sma50.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
-                        y: .value("SMA50", point.1)
+                        y: .value("SMA50", point.1),
+                        series: .value("Series", "SMA 50")
                     )
-                    .foregroundStyle(.orange)
+                        .foregroundStyle(.orange)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
             }
@@ -201,9 +213,10 @@ struct CandlestickChartView: View {
                 ForEach(Array(ema12.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
-                        y: .value("EMA12", point.1)
+                        y: .value("EMA12", point.1),
+                        series: .value("Series", "EMA 12")
                     )
-                    .foregroundStyle(.purple)
+                        .foregroundStyle(.purple)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
             }
@@ -215,25 +228,28 @@ struct CandlestickChartView: View {
                     // Upper band
                     LineMark(
                         x: .value("Time", band.timestamp),
-                        y: .value("Upper", band.upper)
+                        y: .value("Upper", band.upper),
+                        series: .value("Series", "Bollinger upper")
                     )
-                    .foregroundStyle(.blue.opacity(0.5))
+                        .foregroundStyle(.blue.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
                     // Middle band
                     LineMark(
                         x: .value("Time", band.timestamp),
-                        y: .value("Middle", band.middle)
+                        y: .value("Middle", band.middle),
+                        series: .value("Series", "Bollinger middle")
                     )
-                    .foregroundStyle(.blue.opacity(0.7))
+                        .foregroundStyle(.blue.opacity(0.7))
                     .lineStyle(StrokeStyle(lineWidth: 1))
 
                     // Lower band
                     LineMark(
                         x: .value("Time", band.timestamp),
-                        y: .value("Lower", band.lower)
+                        y: .value("Lower", band.lower),
+                        series: .value("Series", "Bollinger lower")
                     )
-                    .foregroundStyle(.blue.opacity(0.5))
+                        .foregroundStyle(.blue.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 }
             }
@@ -241,7 +257,7 @@ struct CandlestickChartView: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 if let date = value.as(Date.self) {
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: settings.showGrid ? 0.5 : 0))
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: showGridLines ? 0.5 : 0))
                         .foregroundStyle(.secondary.opacity(0.2))
                     AxisTick()
                     AxisValueLabel {
@@ -254,7 +270,7 @@ struct CandlestickChartView: View {
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 6)) { value in
                 if let price = value.as(Double.self) {
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: settings.showGrid ? 0.5 : 0))
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: showGridLines ? 0.5 : 0))
                         .foregroundStyle(.secondary.opacity(0.2))
                     AxisTick()
                     AxisValueLabel {
@@ -293,32 +309,32 @@ struct CandlestickChartView: View {
         }
         .overlay {
             // Crosshair overlay (v2.3.1)
-            if let position = interactionManager.crosshairPosition {
+            if showCrosshair, let position = interactionManager.crosshairPosition {
                 CrosshairOverlay(position: position, chartBounds: .zero)
             }
         }
         .chartGestures(interactionManager: interactionManager)
         .contextMenu {
             Button("Add Annotation") {
-                if let position = interactionManager.crosshairPosition,
-                   let currentSymbol = symbol {
-                    // We need to convert position to Date/Price.
-                    // InteractionManager should ideally have mapped this, 
-                    // or we need ChartProxy here.
-                    // Without ChartProxy access in context menu action, it's hard.
-                    // BUT interactionManager tracks crosshairPosition. 
-                    // We can use selectedCandle if available as the anchor.
-                    
-                    if let candle = selectedCandle {
-                        let annotation = ChartAnnotation(
-                            type: .text,
-                            date: candle.timestamp,
-                            price: candle.close, // or high/low
-                            text: "New Note",
-                            symbol: currentSymbol
-                        )
-                        annotationService.addAnnotation(annotation)
-                    }
+                guard let currentSymbol = symbol,
+                      let candle = selectedCandle ?? data.last else { return }
+
+                let annotation = ChartAnnotation(
+                    type: .text,
+                    date: candle.timestamp,
+                    price: candle.close,
+                    text: "New Note",
+                    symbol: currentSymbol
+                )
+                annotationService.addAnnotation(annotation)
+                selectedAnnotation = annotation
+                showAnnotationEditor = true
+            }
+            .disabled(symbol == nil || data.isEmpty)
+
+            if selectedAnnotation != nil {
+                Button("Edit Selected Annotation") {
+                    showAnnotationEditor = true
                 }
             }
             Button("Clear Annotations") {
@@ -350,11 +366,13 @@ struct CandlestickChartView: View {
 
     private var volumeChartView: some View {
         Chart(data) { candle in
-            BarMark(
-                x: .value("Time", candle.timestamp),
-                y: .value("Volume", candle.volume)
-            )
-            .foregroundStyle(candle.isBullish ? settings.bullishSwiftUIColor.opacity(0.6) : settings.bearishSwiftUIColor.opacity(0.6))
+            if let volume = candle.volume {
+                BarMark(
+                    x: .value("Time", candle.timestamp),
+                    y: .value("Volume", volume)
+                )
+                .foregroundStyle(candle.isBullish ? settings.bullishSwiftUIColor.opacity(0.6) : settings.bearishSwiftUIColor.opacity(0.6))
+            }
         }
         .chartXAxis(.hidden)
         .chartYAxis {
@@ -381,7 +399,8 @@ struct CandlestickChartView: View {
             ForEach(Array(rsiData.enumerated()), id: \.offset) { _, point in
                 LineMark(
                     x: .value("Time", point.0),
-                    y: .value("RSI", point.1)
+                    y: .value("RSI", point.1),
+                    series: .value("Series", "RSI")
                 )
                 .foregroundStyle(.purple)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -437,7 +456,8 @@ struct CandlestickChartView: View {
                 // MACD line
                 LineMark(
                     x: .value("Time", point.timestamp),
-                    y: .value("MACD", point.macdLine)
+                    y: .value("MACD", point.macdLine),
+                    series: .value("Series", "MACD")
                 )
                 .foregroundStyle(.blue)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -445,7 +465,8 @@ struct CandlestickChartView: View {
                 // Signal line
                 LineMark(
                     x: .value("Time", point.timestamp),
-                    y: .value("Signal", point.signalLine)
+                    y: .value("Signal", point.signalLine),
+                    series: .value("Series", "Signal")
                 )
                 .foregroundStyle(.orange)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -525,7 +546,7 @@ struct CandlestickChartView: View {
                 }
             }
 
-            Text("Vol: \(formatVolume(candle.volume))")
+            Text("Vol: \(candle.volume.map(formatVolume) ?? "Unavailable")")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }

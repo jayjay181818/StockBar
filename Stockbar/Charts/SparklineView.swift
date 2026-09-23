@@ -1,5 +1,5 @@
-import SwiftUI
 import Charts
+import SwiftUI
 
 /// Compact sparkline chart for displaying mini price trends in menus
 struct SparklineView: View {

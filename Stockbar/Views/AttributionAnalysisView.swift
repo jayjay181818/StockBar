@@ -5,8 +5,8 @@
 //  Created by Stockbar Development Team on 10/4/25.
 //
 
-import SwiftUI
 import Charts
+import SwiftUI
 
 struct AttributionAnalysisView: View {
 
@@ -372,41 +372,34 @@ struct AttributionAnalysisView: View {
         let endDate = Date()
         let startDate = Date(timeIntervalSince1970: endDate.timeIntervalSince1970 - selectedTimeRange.timeInterval)
 
-        do {
-            // Fetch historical portfolio snapshots from Core Data (has actual position data)
-            let historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
+        // Fetch historical portfolio snapshots from Core Data (has actual position data)
+        let historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
 
-            // Check if we have enough data
-            guard historicalSnapshots.count >= 2 else {
-                await MainActor.run {
-                    self.errorMessage = "Insufficient historical data. Please allow the app to collect data over time."
-                    self.isLoading = false
-                }
-                return
-            }
-
-            // Calculate attribution using historical snapshots (more accurate - has position data)
-            let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
-                startDate: startDate,
-                endDate: endDate,
-                historicalSnapshots: historicalSnapshots,
-                cashFlows: [] // TODO: Add cash flow tracking in future version
-            )
-
+        // Check if we have enough data
+        guard historicalSnapshots.count >= 2 else {
             await MainActor.run {
-                if let result = result {
-                    self.attributionResult = result
-                    self.errorMessage = nil
-                } else {
-                    self.errorMessage = "Unable to calculate attribution. Please try a different time range."
-                }
+                self.errorMessage = "Insufficient historical data. Please allow the app to collect data over time."
                 self.isLoading = false
             }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Error loading attribution data: \(error.localizedDescription)"
-                self.isLoading = false
+            return
+        }
+
+        // Calculate attribution using historical snapshots (more accurate - has position data)
+        let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
+            startDate: startDate,
+            endDate: endDate,
+            historicalSnapshots: historicalSnapshots,
+            cashFlows: [] // TODO: Add cash flow tracking in future version
+        )
+
+        await MainActor.run {
+            if let result = result {
+                self.attributionResult = result
+                self.errorMessage = nil
+            } else {
+                self.errorMessage = "Unable to calculate attribution. Please try a different time range."
             }
+            self.isLoading = false
         }
     }
 

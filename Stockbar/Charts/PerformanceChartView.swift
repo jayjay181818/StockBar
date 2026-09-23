@@ -1,6 +1,6 @@
-import SwiftUI
-import Charts
 import AppKit
+import Charts
+import SwiftUI
 
 // MARK: - Chart Visualization Style
 
@@ -33,9 +33,10 @@ struct PerformanceChartView: View {
     @State private var customStartDate = Date().addingTimeInterval(-30 * 24 * 60 * 60) // 30 days ago
     @State private var customEndDate = Date()
     // CRITICAL FIX: Replace caching with proper state management for UI responsiveness
+    @State private var chartRequestGeneration = 0
     @State private var displayableChartData: [ChartDataPoint] = []
     @State private var isLoadingData = false
-    @State private var chartError: String? = nil
+    @State private var chartError: String?
 
     // Comparison Mode state variables
     @State private var comparisonMode: Bool = false
@@ -53,6 +54,9 @@ struct PerformanceChartView: View {
     @State private var candlestickSettings = CandlestickChartSettings.load()
     @State private var ohlcData: [OHLCDataPoint] = []
     @State private var isLoadingOHLC = false
+    @State private var ohlcSourceStatus: FolyncSupplementalSourceStatus?
+    @State private var ohlcCoverageLabel: String?
+    @State private var ohlcRequestGeneration: Int = 0
 
     // Interaction features (v2.3.1)
     @StateObject private var interactionManager = ChartInteractionManager()
@@ -104,7 +108,12 @@ struct PerformanceChartView: View {
             
             // Performance Metrics Toggle
             if !displayableChartData.isEmpty {
-                metricsSection
+                if isFolyncPortfolioChart {
+                    Text("Folync valuation history. Return and risk metrics are unavailable here; local snapshot metrics do not apply to this series.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    metricsSection
+                }
             }
             
             // Data Filters
@@ -121,7 +130,7 @@ struct PerformanceChartView: View {
             if !displayableChartData.isEmpty && dataModel != nil {
                 switch selectedChartType {
                 case .portfolioValue, .portfolioGains:
-                    portfolioReturnAnalysisSection
+                    if !isFolyncPortfolioChart { portfolioReturnAnalysisSection }
                 case .individualStock(let symbol):
                     stockReturnAnalysisSection(for: symbol)
                 }
@@ -141,9 +150,40 @@ struct PerformanceChartView: View {
         // CRITICAL FIX: Use .task to load data asynchronously when dependencies change
         .task(id: selectedTimeRange) {
             await loadChartData()
+            if comparisonMode {
+                for symbol in selectedComparisonSymbols.sorted() {
+                    await loadComparisonData(for: symbol)
+                }
+            }
         }
         .task(id: selectedChartType) {
             await loadChartData()
+        }
+        .onChange(of: historicalDataManager.priceDataRevision) { _, _ in
+            guard case .individualStock = selectedChartType else { return }
+            Task {
+                await loadChartData()
+                if comparisonMode {
+                    for symbol in selectedComparisonSymbols.sorted() {
+                        await loadComparisonData(for: symbol)
+                    }
+                }
+            }
+        }
+        .onChange(of: historicalDataManager.portfolioHistoryRevision) { _, _ in
+            guard isFolyncPortfolioChart else { return }
+            Task { await loadChartData() }
+        }
+        .onChange(of: historicalDataManager.folyncSupplementalConfigurationRevision) { _, _ in
+            Task { await loadChartData() }
+            ohlcRequestGeneration &+= 1
+            ohlcData = []
+            ohlcSourceStatus = nil
+            ohlcCoverageLabel = nil
+            isLoadingOHLC = false
+            if chartVisualizationStyle == .candlestick {
+                Task { await loadOHLCData() }
+            }
         }
         .onAppear {
             // Initialize chart interactions
@@ -157,20 +197,16 @@ struct PerformanceChartView: View {
     }
     
     private var chartTypePicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    chartTypeChip(for: .portfolioValue, label: "Portfolio Value")
-                    chartTypeChip(for: .portfolioGains, label: "Portfolio Gains")
-
-                    ForEach(availableSymbols, id: \.self) { symbol in
-                        chartTypeChip(for: .individualStock(symbol), label: symbol)
-                    }
+        HStack {
+            Picker("Chart", selection: $selectedChartType) {
+                Text("Portfolio Value").tag(ChartType.portfolioValue)
+                Text("Portfolio Gains").tag(ChartType.portfolioGains)
+                ForEach(availableSymbols, id: \.self) { symbol in
+                    Text(symbol).tag(ChartType.individualStock(symbol))
                 }
-                .padding(.vertical, 4)
-                .padding(.horizontal, 2)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 340)
+            Spacer()
         }
     }
 
@@ -336,6 +372,7 @@ struct PerformanceChartView: View {
                             if customEndDate < customStartDate {
                                 customEndDate = customStartDate
                             }
+                            refreshCustomRangeIfNeeded()
                         }
                 }
 
@@ -350,6 +387,7 @@ struct PerformanceChartView: View {
                             if customEndDate < customStartDate {
                                 customStartDate = customEndDate
                             }
+                            refreshCustomRangeIfNeeded()
                         }
                 }
 
@@ -490,32 +528,32 @@ struct PerformanceChartView: View {
                     }
                 }
                 .pickerStyle(SegmentedPickerStyle())
+                .labelsHidden()
                 .frame(width: 180)
             }
 
-            HStack(spacing: 6) {
-                Text("Line:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Slider(value: $lineThickness, in: 1...3, step: 0.5)
-                    .frame(width: 80)
-                Text("\(Int(lineThickness))pt")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(width: 25)
-            }
-            .opacity(chartVisualizationStyle == .line ? 1.0 : 0.3)
-
-            Toggle("Grid", isOn: $showGridLines)
-                .toggleStyle(SwitchToggleStyle())
-                .font(.caption)
-
-            Toggle("Gradient", isOn: $useGradientFill)
-                .toggleStyle(SwitchToggleStyle())
-                .font(.caption)
-                .opacity(chartVisualizationStyle == .line ? 1.0 : 0.3)
+            Menu("Chart options") {
+                Toggle("Grid lines", isOn: $showGridLines)
+                Toggle("Gradient fill", isOn: $useGradientFill)
+                    .disabled(chartVisualizationStyle != .line)
+                Picker("Line width", selection: $lineThickness) {
+                    ForEach([1.0, 1.5, 2.0, 2.5, 3.0], id: \.self) { width in
+                        Text("\(width, specifier: "%.1f") pt").tag(width)
+                    }
+                }.disabled(chartVisualizationStyle != .line)
+            }.fixedSize()
 
             Spacer()
+            if let status = selectedSeriesSourceStatus {
+                Label(status.label, systemImage: sourceIcon(status))
+                    .font(.caption)
+                    .foregroundStyle(status == .unavailable ? .red : .secondary)
+            }
+            if let coverage = selectedSeriesCoverage {
+                Text(coverage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -526,58 +564,64 @@ struct PerformanceChartView: View {
     // MARK: - Comparison Data Loading
 
     private func loadComparisonData(for symbol: String) async {
-        do {
-            let data = await historicalDataManager.getChartData(
-                for: .individualStock(symbol),
-                timeRange: selectedTimeRange,
-                dataModel: dataModel
-            )
+        let data = historicalDataManager.getChartData(
+            for: .individualStock(symbol),
+            timeRange: selectedTimeRange,
+            dataModel: dataModel,
+            customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+            customTo: selectedTimeRange == .custom ? customEndDate : nil
+        )
 
-            await MainActor.run {
-                comparisonChartData[symbol] = data
-                print("📊 Loaded \(data.count) data points for comparison symbol: \(symbol)")
-            }
-        } catch {
-            await MainActor.run {
-                print("⚠️ Failed to load comparison data for \(symbol): \(error.localizedDescription)")
-            }
+        await MainActor.run {
+            comparisonChartData[symbol] = data
         }
+        await Logger.shared.debug("📊 Loaded \(data.count) data points for comparison symbol: \(symbol)")
     }
 
     // CRITICAL FIX: Replaced synchronous computed property with async function
     private func loadChartData() async {
+        chartRequestGeneration &+= 1
+        let generation = chartRequestGeneration
         isLoadingData = true
         chartError = nil
         
-        do {
-            // Run data fetching in background task to avoid blocking UI
-            let data = await withTaskGroup(of: [ChartDataPoint].self) { group in
-                group.addTask {
-                    await historicalDataManager.getChartData(for: selectedChartType, timeRange: selectedTimeRange, dataModel: dataModel)
-                }
-                return await group.next() ?? []
+        // Run data fetching in background task to avoid blocking UI
+        let data = await withTaskGroup(of: [ChartDataPoint].self) { group in
+            group.addTask {
+                await historicalDataManager.getChartData(
+                    for: selectedChartType,
+                    timeRange: selectedTimeRange,
+                    dataModel: dataModel,
+                    customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                    customTo: selectedTimeRange == .custom ? customEndDate : nil
+                )
             }
-            
-            // Apply filtering and downsampling on background task
-            let processedData = await processChartData(data)
-            
-            // Update UI state on main actor
-            await MainActor.run {
-                displayableChartData = processedData
-                isLoadingData = false
-                print("📊 Loaded \(processedData.count) chart data points for \(selectedChartType.title) (\(selectedTimeRange.rawValue))")
-            }
-        } catch {
-            await MainActor.run {
-                chartError = "Failed to load chart data: \(error.localizedDescription)"
-                isLoadingData = false
-                displayableChartData = []
-            }
+            return await group.next() ?? []
         }
+
+        // Apply filtering and downsampling on background task
+        let processedData = await processChartData(data)
+
+        // Update UI state on main actor
+        let chartTypeTitle = selectedChartType.title
+        let timeRangeLabel = selectedTimeRange.rawValue
+        await MainActor.run {
+            guard !Task.isCancelled, generation == chartRequestGeneration else { return }
+            displayableChartData = processedData
+            isLoadingData = false
+        }
+        await Logger.shared.debug("📊 Loaded \(processedData.count) chart data points for \(chartTypeTitle) (\(timeRangeLabel))")
     }
 
     private func loadOHLCData() async {
+        ohlcRequestGeneration &+= 1
+        let requestGeneration = ohlcRequestGeneration
+        let configurationRevision = historicalDataManager.folyncSupplementalConfigurationRevision
         guard case .individualStock(let symbol) = selectedChartType else {
+            ohlcData = []
+            ohlcSourceStatus = nil
+            ohlcCoverageLabel = nil
+            isLoadingOHLC = false
             return
         }
 
@@ -588,27 +632,36 @@ struct PerformanceChartView: View {
             let period = selectedTimeRange.yfinancePeriod
             let interval = selectedTimeRange.suggestedInterval
 
-            // Try to load from cache first
-            let cachedData = try await ohlcFetchService.getCachedOHLCData(symbol: symbol)
+            let useFolyncRoute = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts)
+            if !useFolyncRoute {
+                // Existing local OHLC remains untouched and is used whenever the Folync route is off.
+                let cachedData = try await ohlcFetchService.getCachedOHLCData(symbol: symbol)
 
-            if !cachedData.isEmpty {
-                await MainActor.run {
-                    ohlcData = cachedData
-                    isLoadingOHLC = false
+                if !cachedData.isEmpty {
+                    await MainActor.run {
+                        guard requestGeneration == ohlcRequestGeneration,
+                              configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
+                        ohlcData = cachedData
+                        ohlcSourceStatus = .legacy
+                        ohlcCoverageLabel = "\(cachedData.count) points · local cache"
+                        isLoadingOHLC = false
+                    }
+                    await Logger.shared.info("Loaded \(cachedData.count) cached OHLC data points for \(symbol)")
+                    return
                 }
-                await Logger.shared.info("Loaded \(cachedData.count) cached OHLC data points for \(symbol)")
-                return
             }
 
             // Fetch fresh data from yfinance
-            let snapshots = try await ohlcFetchService.fetchOHLCData(
+            let result = try await ohlcFetchService.fetchOHLCDataWithSource(
                 symbol: symbol,
                 period: period,
-                interval: interval
+                interval: interval,
+                from: selectedTimeRange == .custom ? customStartDate : nil,
+                to: selectedTimeRange == .custom ? customEndDate : nil
             )
 
             // Convert to OHLCDataPoint
-            let dataPoints = snapshots.map { snapshot in
+            let dataPoints = result.snapshots.map { snapshot in
                 OHLCDataPoint(
                     timestamp: snapshot.timestamp,
                     open: snapshot.open,
@@ -620,18 +673,110 @@ struct PerformanceChartView: View {
             }
 
             await MainActor.run {
+                guard requestGeneration == ohlcRequestGeneration,
+                      configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                 ohlcData = dataPoints
+                ohlcSourceStatus = result.sourceStatus
+                ohlcCoverageLabel = result.coverageLabel
                 isLoadingOHLC = false
             }
 
             await Logger.shared.info("Loaded \(dataPoints.count) OHLC data points for \(symbol)")
-
         } catch {
             await MainActor.run {
+                guard requestGeneration == ohlcRequestGeneration,
+                      configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                 isLoadingOHLC = false
                 ohlcData = []
+                if FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts) {
+                    ohlcSourceStatus = .unavailable
+                    ohlcCoverageLabel = nil
+                }
             }
             await Logger.shared.error("Failed to load OHLC data: \(error)")
+        }
+    }
+
+    private func refreshCustomRangeIfNeeded() {
+        guard selectedTimeRange == .custom else { return }
+        Task {
+            await loadChartData()
+            if chartVisualizationStyle == .candlestick {
+                await loadOHLCData()
+            }
+            if comparisonMode {
+                for symbol in selectedComparisonSymbols {
+                    await loadComparisonData(for: symbol)
+                }
+            }
+        }
+    }
+
+    private var selectedSeriesSourceStatus: FolyncSupplementalSourceStatus? {
+        if chartVisualizationStyle == .candlestick, case .individualStock = selectedChartType {
+            return ohlcSourceStatus
+        }
+        switch selectedChartType {
+        case .individualStock(let symbol):
+            return historicalDataManager.folyncSourceStatus(
+                for: symbol,
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        case .portfolioValue:
+            return historicalDataManager.folyncPortfolioSourceStatus(
+                kind: "portfolio-value",
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        case .portfolioGains:
+            return historicalDataManager.folyncPortfolioSourceStatus(
+                kind: "portfolio-gain",
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        }
+    }
+
+    private var selectedSeriesCoverage: String? {
+        if chartVisualizationStyle == .candlestick, case .individualStock = selectedChartType {
+            return ohlcCoverageLabel
+        }
+        switch selectedChartType {
+        case .individualStock(let symbol):
+            return historicalDataManager.folyncCoverage(
+                for: symbol,
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        case .portfolioValue:
+            return historicalDataManager.folyncPortfolioCoverage(
+                kind: "portfolio-value",
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        case .portfolioGains:
+            return historicalDataManager.folyncPortfolioCoverage(
+                kind: "portfolio-gain",
+                timeRange: selectedTimeRange,
+                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                customTo: selectedTimeRange == .custom ? customEndDate : nil
+            )
+        }
+    }
+
+    private func sourceIcon(_ status: FolyncSupplementalSourceStatus) -> String {
+        switch status {
+        case .current: "checkmark.circle"
+        case .partial: "circle.lefthalf.filled"
+        case .stale: "clock.badge.exclamationmark"
+        case .unavailable: "exclamationmark.triangle"
+        case .legacy: "internaldrive"
         }
     }
 
@@ -668,7 +813,7 @@ struct PerformanceChartView: View {
             if filtered.count > 1000 {
                 let strideValue = filtered.count / 800 // Target ~800 points for smooth rendering
                 filtered = Array(stride(from: 0, to: filtered.count, by: max(1, strideValue)).map { filtered[$0] })
-                print("📊 Downsampled chart data from \(data.count) to \(filtered.count) points for performance")
+                Logger.shared.post(.debug, "📊 Downsampled chart data from \(data.count) to \(filtered.count) points for performance")
             }
 
             return filtered
@@ -699,7 +844,10 @@ struct PerformanceChartView: View {
     
     private var chartView: some View {
         Group {
-            if isLoadingData {
+            if chartVisualizationStyle == .candlestick && !(comparisonMode && !selectedComparisonSymbols.isEmpty) {
+                // OHLC has its own loading and empty states, independent of line history.
+                candlestickChartPlaceholder
+            } else if isLoadingData {
                 ProgressView("Loading chart data...")
                     .frame(height: 300)
             } else if let error = chartError {
@@ -711,9 +859,6 @@ struct PerformanceChartView: View {
             } else if comparisonMode && !selectedComparisonSymbols.isEmpty {
                 // COMPARISON MODE: Multi-series chart
                 comparisonChartContent
-            } else if chartVisualizationStyle == .candlestick {
-                // CANDLESTICK CHART: Requires OHLC data
-                candlestickChartPlaceholder
             } else {
                 // SINGLE SERIES: Standard line chart
                 Chart(displayableChartData) { dataPoint in
@@ -776,7 +921,7 @@ struct PerformanceChartView: View {
                         }
                     }
                     .chartXAxis {
-                        AxisMarks(values: .automatic(desiredCount: 6)) { value in
+                        AxisMarks(values: .automatic(desiredCount: 6)) { _ in
                             if showGridLines {
                                 AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
                             }
@@ -785,7 +930,7 @@ struct PerformanceChartView: View {
                         }
                     }
                     .chartYAxis {
-                        AxisMarks(values: .automatic(desiredCount: 8)) { value in
+                        AxisMarks(values: .automatic(desiredCount: 8)) { _ in
                             if showGridLines {
                                 AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
                             }
@@ -871,7 +1016,7 @@ struct PerformanceChartView: View {
                     Text("Candlestick Chart")
                         .font(.headline)
 
-                    Text("Fetching OHLC data...")
+                    Text("No candlestick data is available for this selection.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
 
@@ -908,14 +1053,14 @@ struct PerformanceChartView: View {
                 .frame(height: 400)
             }
         }
-        .onChange(of: selectedChartType) { _ in
+        .onChange(of: selectedChartType) {
             if chartVisualizationStyle == .candlestick {
                 Task {
                     await loadOHLCData()
                 }
             }
         }
-        .onChange(of: selectedTimeRange) { _ in
+        .onChange(of: selectedTimeRange) {
             if chartVisualizationStyle == .candlestick {
                 Task {
                     await loadOHLCData()
@@ -989,9 +1134,30 @@ struct PerformanceChartView: View {
                         Circle()
                             .fill(colorForSymbol(symbol))
                             .frame(width: 10, height: 10)
-                        Text(symbol)
-                            .font(.caption)
-                            .foregroundColor(.primary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(symbol)
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                            if let status = comparisonSourceStatus(for: symbol) {
+                                Text(status.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(status == .unavailable ? .red : .secondary)
+                            } else {
+                                Text("Folync · loading")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let coverage = historicalDataManager.folyncCoverage(
+                                for: symbol,
+                                timeRange: selectedTimeRange,
+                                customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+                                customTo: selectedTimeRange == .custom ? customEndDate : nil
+                            ) {
+                                Text(coverage)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
@@ -1003,6 +1169,23 @@ struct PerformanceChartView: View {
     }
 
     // MARK: - Comparison Helper Functions
+
+    private func comparisonSourceStatus(for symbol: String) -> FolyncSupplementalSourceStatus? {
+        if let status = historicalDataManager.folyncSourceStatus(
+            for: symbol,
+            timeRange: selectedTimeRange,
+            customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+            customTo: selectedTimeRange == .custom ? customEndDate : nil
+        ) {
+            return status
+        }
+        let settings = FolyncSettingsStore.shared.load()
+        guard settings.isSupplementalRouteActive(.historicalLineCharts),
+              dataModel?.folyncCapabilities?.isTrackedOrAllowlisted(symbol) == true else {
+            return .legacy
+        }
+        return nil
+    }
 
     private func normalizeData(_ data: [ChartDataPoint]) -> [ChartDataPoint] {
         guard let firstValue = data.first?.value, firstValue != 0 else { return data }
@@ -1436,7 +1619,7 @@ struct PerformanceChartView: View {
     private func calculateTotalPurchaseValue() -> (amount: Double, currency: String) {
         guard let model = dataModel else { return (0, "USD") }
         
-        let currencyConverter = CurrencyConverter()
+        let currencyConverter = CurrencyConverter.shared
         var totalCostUSD = 0.0
         
         for trade in model.realTimeTrades {
@@ -1496,9 +1679,10 @@ struct PerformanceChartView: View {
     }
     
     private func formatCurrency(_ amount: Double, currency: String) -> String {
+        guard amount.isFinite else { return "Unavailable" }
         // For individual stock charts, don't apply currency conversion - just format with the native currency
         switch selectedChartType {
-        case .individualStock(_):
+        case .individualStock:
             // For individual stocks, always display in the stock's native currency without conversion
             let formatter = NumberFormatter()
             formatter.numberStyle = .currency
@@ -1518,7 +1702,7 @@ struct PerformanceChartView: View {
             }
             
             let preferredCurrency = model.preferredCurrency
-            let currencyConverter = CurrencyConverter()
+            let currencyConverter = CurrencyConverter.shared
             
             let formatter = NumberFormatter()
             formatter.numberStyle = .currency
@@ -1548,6 +1732,7 @@ struct PerformanceChartView: View {
             }
             
             // Primary display currency
+            guard convertedAmount.isFinite else { return "Unavailable" }
             formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
             let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
             
@@ -1556,6 +1741,7 @@ struct PerformanceChartView: View {
             if preferredCurrency == "USD" {
                 // Show GBP in brackets
                 let gbpAmount = currencyConverter.convert(amount: convertedAmount, from: "USD", to: "GBP")
+                guard gbpAmount.isFinite else { return primaryString }
                 let gbpFormatter = NumberFormatter()
                 gbpFormatter.numberStyle = .currency
                 gbpFormatter.currencyCode = "GBP"
@@ -1565,6 +1751,7 @@ struct PerformanceChartView: View {
                 // Show USD in brackets
                 let baseAmount = preferredCurrency == "GBX" ? convertedAmount / 100.0 : convertedAmount
                 let usdAmount = currencyConverter.convert(amount: baseAmount, from: "GBP", to: "USD")
+                guard usdAmount.isFinite else { return primaryString }
                 let usdFormatter = NumberFormatter()
                 usdFormatter.numberStyle = .currency
                 usdFormatter.currencyCode = "USD"
@@ -1636,7 +1823,17 @@ struct PerformanceChartView: View {
     // MARK: - Helper Functions
     
     /// Gets the appropriate performance metrics based on the selected chart type
+    private var isFolyncPortfolioChart: Bool {
+        guard dataModel?.isFolyncPortfolioActive == true else { return false }
+        switch selectedChartType {
+        case .portfolioValue, .portfolioGains: return true
+        case .individualStock: return false
+        }
+    }
+
     private func getRelevantPerformanceMetrics() -> PerformanceMetrics? {
+        // Legacy snapshot metrics are not returns on the authoritative Folync series.
+        guard !isFolyncPortfolioChart else { return nil }
         switch selectedChartType {
         case .portfolioValue, .portfolioGains:
             return historicalDataManager.getPerformanceMetrics(for: selectedTimeRange)
@@ -2012,7 +2209,6 @@ struct PerformanceChartView: View {
         .cornerRadius(8)
         .shadow(radius: 2)
     }
-    
 }
 
 // MARK: - Enhanced Chart Interaction View

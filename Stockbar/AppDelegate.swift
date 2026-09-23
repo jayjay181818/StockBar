@@ -4,6 +4,12 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var stockMenuBarController: StockMenuBarController?
     private var dataModel: DataModel!
+    private var automaticBackupTimer: Timer?
+
+    private static let dependencyCheckInterpreterKey = "pythonDependencyCheck.interpreterPath"
+    private static let dependencyCheckTimeoutSeconds: TimeInterval = 20
+    /// Long-running menu-bar sessions re-check the once-a-day backup on this cadence.
+    private static let automaticBackupCheckInterval: TimeInterval = 6 * 60 * 60
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         guard !ProcessInfo.processInfo.isRunningUnitTests else {
@@ -17,16 +23,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Perform legacy cleanup on first launch
         LegacyCleanupService.shared.performCleanupIfNeeded()
 
-        // Perform Core Data migration before initializing the UI
-        Task {
-            do {
-                try await DataMigrationService.shared.performFullMigration()
-                await Logger.shared.info("AppDelegate: Core Data migration completed successfully")
-            } catch {
-                await Logger.shared.error("AppDelegate: Core Data migration failed: \(error)")
-            }
-        }
-
         stockMenuBarController = StockMenuBarController(data: dataModel)
         stockMenuBarController?.showStockbarWindow(nil)
 
@@ -35,10 +31,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await checkPythonDependencies()
         }
 
-        // Schedule automatic daily backup
+        // Automatic daily backup: once at launch, then periodically so a
+        // long-running menu-bar session still gets one backup per day.
         Task {
             await scheduleAutomaticBackup()
         }
+        startAutomaticBackupTimer()
 
         Task {
             await RuntimeIssueMonitor.shared.start()
@@ -56,9 +54,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             stockMenuBarController?.showStockbarWindow(nil)
         } else {
             // Windows exist, bring them to front
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         }
         return true
+    }
+
+    private func startAutomaticBackupTimer() {
+        automaticBackupTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.automaticBackupCheckInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.scheduleAutomaticBackup() }
+        }
+        timer.tolerance = 10 * 60
+        automaticBackupTimer = timer
     }
 
     /// Performs automatic backup if needed (once per day)
@@ -86,8 +93,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    /// Lets queued Core Data saves finish (bounded) before the process exits.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let dataModel else { return .terminateNow }
+        let reply = TerminationReply(application: sender)
+        Task { @MainActor in
+            await dataModel.flushPendingPersistence()
+            reply.send()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            reply.send()
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ aNotification: Notification) {
-        // Clean up if needed
+        automaticBackupTimer?.invalidate()
     }
 
     @objc func showPreferences(_ sender: Any?) {
@@ -100,39 +122,98 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMainMenu() {
         let mainMenu = NSMenu()
-        let appMenuItem = NSMenuItem()
-        let appMenu = NSMenu()
+        mainMenu.addItem(submenuItem(makeApplicationMenu()))
+        mainMenu.addItem(submenuItem(makeEditMenu()))
 
-        mainMenu.addItem(appMenuItem)
-        appMenuItem.submenu = appMenu
+        let windowMenu = makeWindowMenu()
+        mainMenu.addItem(submenuItem(windowMenu))
 
-        let openItem = NSMenuItem(
-            title: "Open Stockbar",
-            action: #selector(showStockbarWindow(_:)),
-            keyEquivalent: "o"
+        let helpMenu = NSMenu(title: "Help")
+        mainMenu.addItem(submenuItem(helpMenu))
+
+        NSApp.mainMenu = mainMenu
+        NSApp.windowsMenu = windowMenu
+        // An empty Help menu still provides the system menu-search field.
+        NSApp.helpMenu = helpMenu
+    }
+
+    private func submenuItem(_ menu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: menu.title, action: nil, keyEquivalent: "")
+        item.submenu = menu
+        return item
+    }
+
+    private func makeApplicationMenu() -> NSMenu {
+        let appMenu = NSMenu(title: "Stockbar")
+        appMenu.addItem(
+            withTitle: "About Stockbar",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
         )
+        appMenu.addItem(.separator())
+
+        let openItem = NSMenuItem(title: "Open Stockbar", action: #selector(showStockbarWindow(_:)), keyEquivalent: "o")
         openItem.target = self
         appMenu.addItem(openItem)
 
-        let settingsItem = NSMenuItem(
-            title: "Settings…",
-            action: #selector(showPreferences(_:)),
-            keyEquivalent: ","
-        )
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showPreferences(_:)), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
 
-        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(.separator())
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: "Services")
+        servicesItem.submenu = servicesMenu
+        NSApp.servicesMenu = servicesMenu
+        appMenu.addItem(servicesItem)
 
-        let quitItem = NSMenuItem(
-            title: "Quit Stockbar",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Stockbar", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(
+            withTitle: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
         )
-        quitItem.target = NSApp
-        appMenu.addItem(quitItem)
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(
+            withTitle: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
 
-        NSApp.mainMenu = mainMenu
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit Stockbar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return appMenu
+    }
+
+    /// Standard editing commands. Without these menu items AppKit text fields
+    /// receive no Cut/Copy/Paste/Select All/Undo key equivalents.
+    private func makeEditMenu() -> NSMenu {
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        return editMenu
+    }
+
+    private func makeWindowMenu() -> NSMenu {
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(
+            withTitle: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: ""
+        )
+        return windowMenu
     }
 
     private func presentCoreDataRecoveryNoticeIfNeeded() {
@@ -149,13 +230,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         alert.addButton(withTitle: "OK")
 
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn,
-              let backupDirectory = notice.backupDirectory else {
+        // A sheet, not runModal(): an app-modal loop would stall @MainActor
+        // startup work (trade loading, first refresh) until dismissed.
+        presentAlert(alert) { response in
+            guard response == .alertFirstButtonReturn,
+                  let backupDirectory = notice.backupDirectory else {
+                return
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([backupDirectory])
+        }
+    }
+
+    /// Presents an alert as a sheet on the main Stockbar window (never on a
+    /// status-bar or popover window), falling back to a modal alert only when
+    /// no main window can be created.
+    private func presentAlert(_ alert: NSAlert, handler: @escaping @MainActor (NSApplication.ModalResponse) -> Void) {
+        guard let window = stockMenuBarController?.mainWindowForPresentation() else {
+            handler(alert.runModal())
             return
         }
-
-        NSWorkspace.shared.activateFileViewerSelecting([backupDirectory])
+        alert.beginSheetModal(for: window) { response in
+            MainActor.assumeIsolated { handler(response) }
+        }
     }
 
     // MARK: - Python Dependency Management
@@ -163,96 +259,210 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Checks if required Python dependencies are installed on first launch
     @MainActor
     private func checkPythonDependencies() async {
-        // Check if we've already shown the dependency check
-        let hasChecked = UserDefaults.standard.bool(forKey: "hasCheckedPythonDependencies")
-        guard !hasChecked else { return }
+        // Re-check whenever the configured interpreter changes.
+        let interpreterPath = PythonConfiguration.load().interpreterPath
+        let checkedInterpreter = StockbarRuntimeStorage.userDefaults.string(forKey: Self.dependencyCheckInterpreterKey)
+        let providerPolicy = StockbarProviderAccessPolicy.current
+        guard Self.shouldCheckPythonDependencies(
+            hasChecked: checkedInterpreter == interpreterPath,
+            providerPolicy: providerPolicy
+        ) else {
+            if !providerPolicy.liveRequestsAllowed {
+                await Logger.shared.info("Skipping Python dependency check because live providers are disabled.")
+            }
+            return
+        }
 
         await Logger.shared.info("🐍 Checking Python dependencies...")
 
-        // Check if yfinance is available
-        let isYfinanceAvailable = await checkYfinanceInstalled()
+        let dependenciesAreCompatible = await checkPythonPackageVersions()
 
-        if !isYfinanceAvailable {
-            await Logger.shared.warning("⚠️ yfinance not found - showing installation instructions")
+        // Mark as checked *before* presenting, so the prompt cannot re-appear on
+        // every launch if the user leaves it unanswered.
+        StockbarRuntimeStorage.userDefaults.set(interpreterPath, forKey: Self.dependencyCheckInterpreterKey)
+
+        if !dependenciesAreCompatible {
+            await Logger.shared.warning("Python packages are missing or do not match the supported versions")
             showPythonDependencyAlert()
         } else {
             await Logger.shared.info("✅ Python dependencies verified")
         }
-
-        // Mark as checked
-        UserDefaults.standard.set(true, forKey: "hasCheckedPythonDependencies")
     }
 
-    /// Checks if yfinance is installed by running a simple import test
-    private func checkYfinanceInstalled() async -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", "import yfinance; print('OK')"]
+    nonisolated static func shouldCheckPythonDependencies(
+        hasChecked: Bool,
+        providerPolicy: StockbarProviderAccessPolicy
+    ) -> Bool {
+        !hasChecked && providerPolicy.liveRequestsAllowed
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+    /// Parses the pinned `name==version` requirements shipped in the bundle.
+    ///
+    /// The expected versions used to be hardcoded here as well as in
+    /// requirements.txt, so bumping one without the other produced a false
+    /// "dependencies required" alert on every launch with no hint why. The
+    /// shipped file is now the single source of truth.
+    nonisolated static func parsePinnedRequirements(_ contents: String) -> [String: String] {
+        var pins: [String: String] = [:]
+        for rawLine in contents.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let parts = line.components(separatedBy: "==")
+            guard parts.count == 2 else { continue }
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            let version = parts[1].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !version.isEmpty else { continue }
+            pins[name] = version
+        }
+        return pins
+    }
 
+    private func expectedPythonPackageVersions() -> [String: String] {
+        guard let url = Bundle.main.url(forResource: "requirements", withExtension: "txt"),
+              let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            return [:]
+        }
+        return Self.parsePinnedRequirements(contents)
+    }
+
+    private func checkPythonPackageVersions() async -> Bool {
         do {
-            try process.run()
-            process.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8), output.contains("OK") {
-                return true
-            }
+            try StockbarProviderAccessPolicy.current.authorize(.python)
         } catch {
-            await Logger.shared.error("Failed to check yfinance: \(error)")
+            await Logger.shared.warning("Python dependency check blocked: \(error.localizedDescription)")
+            return false
         }
 
-        return false
+        let expected = expectedPythonPackageVersions()
+        guard !expected.isEmpty else {
+            await Logger.shared.error("Could not read pinned requirements from the bundle; skipping version check")
+            return true
+        }
+
+        let names = expected.keys.sorted()
+        let nameList = names.map { "\"\($0)\"" }.joined(separator: ", ")
+        // Embedded Python. Writes to stdout via sys.stdout.write so the
+        // Swift-side logging ban in Scripts/validate_invariants.sh does not
+        // need a special case for this string literal.
+        let script = """
+            import json, sys
+            from importlib import metadata
+            names = (\(nameList),)
+            out = {}
+            for name in names:
+                try:
+                    out[name] = metadata.version(name)
+                except Exception:
+                    out[name] = None
+            sys.stdout.write(json.dumps(out))
+            """
+
+        // Run through the shared runner: off the main actor, with pipe
+        // draining and a timeout so a hanging interpreter cannot stall startup.
+        let result: PythonProcessResult
+        do {
+            result = try await PythonProcessRunner().run(
+                arguments: ["-c", script],
+                timeoutSeconds: Self.dependencyCheckTimeoutSeconds,
+                logContext: "python dependency check"
+            )
+        } catch {
+            await Logger.shared.error("Failed to check Python package versions: \(error.localizedDescription)")
+            return false
+        }
+
+        guard result.exitCode == 0,
+              let installed = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
+            return false
+        }
+
+        for (name, requiredVersion) in expected {
+            guard let installedVersion = installed[name] as? String else {
+                await Logger.shared.warning("Python package '\(name)' is not installed")
+                return false
+            }
+            guard installedVersion == requiredVersion else {
+                await Logger.shared.warning(
+                    "Python package '\(name)' is \(installedVersion), expected \(requiredVersion)"
+                )
+                return false
+            }
+        }
+        return true
     }
 
-    /// Shows alert with Python dependency installation instructions
+    /// Shows alert with Python dependency installation instructions.
+    ///
+    /// Presented as a **window-modal sheet**, never `runModal()`. An application
+    /// modal spins a nested run loop in `.modalPanel` mode, which does not
+    /// service `@MainActor` continuations scheduled in the default mode — so a
+    /// blocking alert here silently froze the rest of startup (trade loading,
+    /// the first refresh pass, every UI update) until it was dismissed.
     @MainActor
     private func showPythonDependencyAlert() {
+        let installCommand = Self.pythonInstallCommand(
+            interpreterPath: PythonConfiguration.load().interpreterPath,
+            requirementsPath: Bundle.main.url(forResource: "requirements", withExtension: "txt")?.path
+        )
+
         let alert = NSAlert()
         alert.messageText = "Python Dependencies Required"
         alert.informativeText = """
-        Stockbar requires the 'yfinance' Python package to fetch stock data.
+        Stockbar needs its pinned Python packages for the configured interpreter.
 
-        To install it, open Terminal and run:
-        pip3 install yfinance
+        To install them, open Terminal and run:
+        \(installCommand)
 
-        Or install all requirements:
-        pip3 install -r requirements.txt
-
-        (The requirements.txt file is in the app bundle)
-
-        Minimum Python version: 3.8+
+        If pip reports an "externally managed environment" (common with Homebrew Python), create a virtual environment, then point Stockbar at it and relaunch:
+        defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Copy Command")
         alert.addButton(withTitle: "Open Terminal")
         alert.addButton(withTitle: "Dismiss")
 
-        let response = alert.runModal()
-
-        switch response {
-        case .alertFirstButtonReturn: // Copy Command
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString("pip3 install yfinance", forType: .string)
-
-            // Show confirmation
-            let confirmAlert = NSAlert()
-            confirmAlert.messageText = "Command Copied"
-            confirmAlert.informativeText = "The installation command has been copied to your clipboard. Paste it into Terminal to install."
-            confirmAlert.alertStyle = .informational
-            confirmAlert.addButton(withTitle: "OK")
-            confirmAlert.runModal()
-
-        case .alertSecondButtonReturn: // Open Terminal
-            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
-
-        default: // Dismiss
-            break
+        presentAlert(alert) { response in
+            switch response {
+            case .alertFirstButtonReturn:
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(installCommand, forType: .string)
+                Task { await Logger.shared.info("Python install command copied to clipboard") }
+            case .alertSecondButtonReturn:
+                if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+                    NSWorkspace.shared.open(terminal)
+                }
+            default:
+                break
+            }
         }
+    }
+
+    /// Shell command using absolute, quoted paths so it works from any
+    /// Terminal working directory.
+    nonisolated static func pythonInstallCommand(interpreterPath: String, requirementsPath: String?) -> String {
+        func quoted(_ value: String) -> String {
+            "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        let requirements = requirementsPath.map(quoted) ?? "requirements.txt"
+        return "\(quoted(interpreterPath)) -m pip install -r \(requirements)"
+    }
+}
+
+/// Replies to a deferred termination exactly once (flush or timeout).
+@MainActor
+private final class TerminationReply {
+    private let application: NSApplication
+    private var hasReplied = false
+
+    init(application: NSApplication) {
+        self.application = application
+    }
+
+    func send() {
+        guard !hasReplied else { return }
+        hasReplied = true
+        application.reply(toApplicationShouldTerminate: true)
     }
 }
 
