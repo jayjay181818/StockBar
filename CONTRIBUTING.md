@@ -1,6 +1,6 @@
 # Contributing to Stockbar
 
-Thank you for your interest in contributing to Stockbar! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to Stockbar! This is a human contribution guide. Agents use [AGENTS.md](AGENTS.md); canonical commands and current operational details are in [Docs/Development.md](Docs/Development.md). Read the sections relevant to your contribution.
 
 ---
 
@@ -57,7 +57,7 @@ Before contributing, ensure you have:
 **New to open source?** Here's how to get started:
 
 1. **Browse Issues:** Look for issues labeled `good first issue` or `help wanted`
-2. **Read Documentation:** Familiarize yourself with `CLAUDE.md` and `Docs/UserGuide.md`
+2. **Read Documentation:** Read `AGENTS.md`, `Docs/Development.md`, and user documentation relevant to the change
 3. **Ask Questions:** Don't hesitate to ask for clarification on issues
 4. **Start Small:** Begin with documentation fixes or minor bug fixes
 
@@ -76,10 +76,7 @@ cd stockbar
 ### 2. Install Python Dependencies
 
 ```bash
-# Install yfinance for stock data fetching
-pip3 install yfinance
-
-# Or install all requirements
+# Install the project dependency pins in the intended environment
 pip3 install -r Stockbar/Resources/requirements.txt
 ```
 
@@ -125,7 +122,7 @@ git checkout -b fix/bug-description
 ### Swift Code Style
 
 #### 1. Language Version
-- **Swift 6.0** - Use modern Swift features
+- **Swift toolchain/language mode** - Follow the Xcode project settings and strict concurrency checks
 - **Concurrency:** Use async/await and actors
 - **Type Inference:** Prefer explicit types for public APIs
 
@@ -210,7 +207,7 @@ do {
 
 #### 6. Memory Management
 
-**Always use weak self in closures:**
+**Use weak captures when reference ownership would otherwise create a retain cycle:**
 ```swift
 URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
     guard let self = self else { return }
@@ -345,7 +342,7 @@ except Exception as e:
 
 **Via Command Line:**
 ```bash
-xcodebuild test -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
+bash script/develop.sh test
 ```
 
 ### Writing Tests
@@ -390,7 +387,7 @@ class MyComponentTests: XCTestCase {
 #### Testing Guidelines
 
 1. **Test Naming:** Use descriptive names: `testCurrencyConversionWithUSD()`
-2. **One Assertion Per Test:** Focus tests on single behaviors
+2. **Coherent Behavior:** Use enough assertions to establish one behavior
 3. **Mock External Dependencies:** Don't hit real APIs in tests
 4. **Edge Cases:** Test boundary conditions, nil values, errors
 5. **Floating-Point Comparisons:** Use `accuracy` parameter:
@@ -407,16 +404,7 @@ class MyComponentTests: XCTestCase {
 
 ### Python Testing
 
-```bash
-# Test single stock
-python3 Stockbar/Resources/get_stock_data.py AAPL
-
-# Test multiple stocks
-python3 Stockbar/Resources/get_stock_data.py AAPL GOOGL MSFT
-
-# Test UK stock (GBX handling)
-python3 Stockbar/Resources/get_stock_data.py VOD.L
-```
+Run offline syntax and unit checks with `bash script/develop.sh python-tests`. Direct ticker commands contact live providers and are not unit tests. If a live protocol check is explicitly intended, use `--json`.
 
 ---
 
@@ -424,12 +412,12 @@ python3 Stockbar/Resources/get_stock_data.py VOD.L
 
 ### Before Submitting
 
-1. **Create an Issue First:** Discuss significant changes before coding
+1. **Agree Scope:** Follow the requested change; discuss unresolved significant design choices
 2. **Follow Code Style:** Adhere to guidelines above
-3. **Write Tests:** Add tests for new functionality
+3. **Write Tests:** Add meaningful regression coverage for changed behavior where appropriate
 4. **Update Documentation:** Modify user guides if behavior changes
-5. **Test Thoroughly:** Run all tests and verify app works
-6. **Check Logs:** Review `~/Documents/stockbar.log` for errors
+5. **Verify:** Run affected checks during iteration and required CI gates before submission
+6. **Check Logs:** Review `~/Library/Logs/<bundle-id>/stockbar.log` for errors
 
 ### Commit Messages
 
@@ -568,7 +556,7 @@ What actually happened
 If applicable, add screenshots
 
 ## Logs
-Paste relevant logs from ~/Documents/stockbar.log
+Paste relevant logs from ~/Library/Logs/<bundle-id>/stockbar.log
 
 ## Debug Report
 Attach debug report export if helpful
@@ -620,12 +608,12 @@ Stockbar/
 ├── Stockbar/                   # Main app code
 │   ├── Data/                   # Data models and CoreData
 │   ├── Services/               # Business logic services
-│   ├── UI/                     # SwiftUI views and controllers
+│   ├── Views/                  # SwiftUI views
 │   ├── Resources/              # Python scripts, assets
-│   └── Supporting Files/       # Plist, entitlements
+│   └── Utilities/              # Runtime, logging, configuration
 ├── StockbarTests/              # Unit tests
 ├── Docs/                       # User documentation
-├── CLAUDE.md                   # Architecture documentation
+├── AGENTS.md                   # Shared project instructions
 └── CONTRIBUTING.md             # This file
 ```
 
@@ -645,7 +633,7 @@ Stockbar/
 
 ### Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive architecture overview
+- **[Architecture](Docs/Architecture.md)** - Shared architecture reference
 - **[User Guide](Docs/UserGuide.md)** - End-user documentation
 - **[FAQ](Docs/FAQ.md)** - Common questions and solutions
 

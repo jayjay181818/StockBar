@@ -1,0 +1,65 @@
+# Stockbar architecture
+
+Reference material; read the relevant section when needed. Shared working instructions are in [AGENTS.md](../AGENTS.md). Implementation details may change; inspect the linked source of truth before relying on exact values.
+
+## Architecture Overview
+
+macOS portfolio tracker with Swift/Python integration. `LSUIElement = false`: the app has a Dock-visible window and menu bar controls.
+
+### Lifecycle
+`main.swift` → acceptance preflight hooks → `AppDelegate` → `StockMenuBarController` (owns `DataModel`, `StockStatusBar`, and `StockbarMainWindowController`).
+
+`main.swift` intercepts `--acceptance-preflight` / `--acceptance-bootstrap` and exits before `NSApplicationMain` — keep that block first.
+
+### Data flow (MVVM + Combine)
+```
+DataModel (@MainActor ObservableObject)  central state hub
+  ├── @Published realTimeTrades: [RealTimeTrade]   ← drives menu bar + all views
+  ├── RefreshCoordinator (actor)                   ← serializes refresh passes
+  ├── RefreshService                              ← refresh scheduling
+  ├── CacheCoordinator (actor)                     ← TTL + backoff + circuit breaker
+  ├── PythonNetworkService → python3 subprocess → get_stock_data.py
+  ├── Trading212BrokerSyncService / Trading212Provider   ← broker-linked holdings
+  ├── FolyncPortfolioSource / FolyncSupplementalData     ← self-hosted portfolio source
+  └── Core Data (historical prices, OHLC, snapshots) + UserDefaults
+```
+
+### Portfolio sources (mutually layered, not alternatives)
+Three sources coexist and must stay non-destructive to each other:
+1. **Local/manual** trades in UserDefaults + Core Data — the base layer, always preserved.
+2. **Trading 212** — broker-linked holdings; linked positions take quantity/price/avg-cost/P&L from the broker and deliberately *skip* market-data providers. Credentials live in Keychain only. Read-only; no order execution.
+3. **Folync** — a self-hosted instance acting as authoritative read-only portfolio source. When active, `legacyPortfolioTrades` holds the shadowed local portfolio so switching back restores it. Folync-backed financial fields are read-only; watchlists, alerts, and menu-bar prefs stay Stockbar-owned. Supplemental routes (line history, OHLCV, benchmarks, FX) are independently toggled and **never splice Folync and legacy points into one series**.
+
+`InstrumentResolver` maps provider tickers (esp. Trading 212's) to canonical instrument identities; `SymbolMetadata` distinguishes benchmark symbols (`^GSPC`, `^FTSE`) from holdings, and `Trade.isWatchlistOnly` marks symbols with no position math.
+
+### Python bridge
+- `NetworkService` protocol → `PythonNetworkService`; process spawning isolated in `PythonProcessRunner`; interpreter/env in `PythonConfiguration` (path from the `pythonInterpreterPath` default, fallback `/usr/bin/python3`).
+- **Contract: JSON on stdout, human logs on stderr only.** Quotes use `get_stock_data.py --json <symbols…>`; also `--historical`, `--ohlc`, `--batch-ohlc`, `--test-key`. Errors come back as a JSON envelope with `error: true` and `error_code`. (This is JSON parsing, not the old stdout regex.)
+- Timeout values and batch sizing live in `Stockbar/Data/Networking/NetworkService.swift`; inspect the relevant operation when changing fetch behavior.
+- Failed fetches return a placeholder `StockFetchResult` with `.nan` prices rather than throwing, so metadata survives.
+- `PythonConfiguration.validateSymbol/sanitizeSymbol` restrict symbols to `A-Z0-9.^=-` to prevent argument injection — route new symbol paths through them.
+- Providers inside the script: yfinance (primary), FMP, Twelve Data, Stooq; order configurable via `DATA_SOURCE_PRIORITY`. Python-side quote cache at `~/Library/Caches/stockbar-cache/quote_cache.json` (passed by the app via `STOCKBAR_CACHE_FILE`, acceptance-aware; a legacy `~/.stockbar_cache.json` is moved there once), lock-file guarded with atomic replace.
+- `ENABLE_USER_SCRIPT_SANDBOXING = NO` and the app must stay unsandboxed — the subprocess bridge depends on it. The entitlement validator checks app sandbox and server permissions; the Xcode project defines script sandboxing.
+
+### UI layer
+- **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over nine sections — Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
+- **Menu bar**: `StockMenuBarController` + `StockStatusBar`, one `NSStatusItem` per visible symbol, Combine-driven; also handles external-display polling for status-item visibility.
+- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `VolumeChartView`, `MenuPriceChartView`, `SparklineView`.
+
+### Persistence
+| Store | Location | Contents |
+|---|---|---|
+| UserDefaults | `com.stockbar` (via `StockbarRuntimeStorage.userDefaults`) | Trades, preferences, cache timestamps |
+| Core Data | `<App Support>/Stockbar/StockbarDataModel.sqlite` | Historical prices, OHLC, snapshots — model selected by `Stockbar/Data/StockbarDataModel.xcdatamodeld/.xccurrentversion`; data migration flags in `DataMigrationService`; `CoreDataStoreRecovery` handles corrupt stores |
+| Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | FMP + Twelve Data keys, `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path) |
+| Keychain | `com.stockbar.folync`, Trading 212 service | Persistent broker/Folync credentials; acceptance fixtures use a separate restricted token file |
+
+### Caching & failure policy
+
+`Stockbar/Services/CacheCoordinator.swift` owns freshness, retry intervals and circuit-breaker thresholds. Preserve that policy when adding fetch paths.
+
+- Freshness follows the user's Main Refresh Interval (`RefreshService.freshnessInterval`); the Python quote cache is bounded to match through `STOCKBAR_QUOTE_CACHE_SECONDS` (set by `PythonConfiguration.load`).
+- Symbols with recorded failures are governed only by backoff (`shouldRetry`) and the circuit breaker; `shouldRefresh` never returns true for them. The per-symbol popover exposes suspension state and Retry Now.
+
+### Currency
+`CurrencyConverter` (exchangerate-api.com, USD base) for USD/GBP/EUR/JPY/CAD/AUD. **Normalize GBX/GBp to GBP once at the provider boundary.** Preserve values already reported as GBP, including cost bases. Use reported currency and existing provider-specific fallbacks; a `.L` suffix alone is not evidence that a value still needs division. See `PythonTests/test_get_ohlc_data.py` for regression examples.

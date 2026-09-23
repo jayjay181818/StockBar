@@ -1,83 +1,34 @@
-# STOCKBAR PROJECT KNOWLEDGE BASE
+# Stockbar working instructions
 
-**Generated:** 2026-01-26 | **Branch:** n/a | **Commit:** n/a
+macOS AppKit/SwiftUI portfolio app with a Python market-data bridge. Personal working agreements belong in global guidance; this file adds project constraints.
 
-## OVERVIEW
-macOS menu bar stock monitor. Swift 6 AppKit/SwiftUI frontend with Python (yfinance) subprocess backend.
+## Working efficiently
+- Read applicable directory `AGENTS.md` files before editing there. Read linked reference docs only for relevant tasks; do not load the whole documentation tree.
+- Use scoped searches and bounded output. Reuse instruction reads and valid check results unless inputs change. Keep complete logs on disk and report useful failures plus the log path.
+- Follow existing component isolation and design. Avoid generic refactors, dependency upgrades, or added abstractions unrelated to the request.
+- Start with affected checks; broaden for shared contracts and required CI gates. Do not equate process startup with functional acceptance.
 
-## STRUCTURE
-```
-Stockbar/
-├── Stockbar/                # App sources
-│   ├── Data/                # State, persistence, networking
-│   ├── Services/            # Business logic, coordinators
-│   ├── Utilities/           # Logging, config, perf
-│   ├── Views/               # SwiftUI analytics
-│   ├── Charts/              # Swift Charts UI
-│   ├── Analytics/           # Pure math services
-│   ├── Models/              # Data structs and settings
-│   └── Resources/           # Python scripts
-├── StockbarTests/           # XCTest suite
-├── Scripts/                 # Backup/restore tooling
-├── Changelogs/              # Release notes
-└── .github/workflows/       # CI + static analysis
-```
+## Invariants
+- Keep UI state on `@MainActor`, heavy work off the main thread, and Core Data writes on background contexts.
+- Use `StockbarRuntimeStorage` for app defaults and writable paths. Acceptance requires a valid temporary root, run ID and disabled live providers; never fall back to production storage on invalid configuration.
+- Gate live network/subprocess paths through `StockbarProviderAccessPolicy`. Use isolated stores and mocks in tests; the storage wrapper alone does not enable isolation.
+- Preserve local/manual holdings when broker or Folync sources are active. Broker/Folync financial fields stay authoritative and read-only. Never splice supplemental Folync and legacy points into one series. Keep broker/Folync credentials in Keychain and secrets out of logs.
+- Normalize pence to GBP once using reported currency and existing provider rules. Never divide already-normalized GBP just because a symbol ends in `.L`.
+- The app's Python bridge uses JSON stdout and stderr logs; retain structured errors and symbol validation. Keep the existing unsandboxed app configuration for subprocess compatibility.
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-| --- | --- | --- |
-| App bootstrap | `Stockbar/main.swift` | Manual entry point (no @main) |
-| Lifecycle | `Stockbar/AppDelegate.swift` | Dependency checks, migrations |
-| Menu bar UI | `Stockbar/StockMenuBarController.swift` | Status items, menu wiring |
-| Portfolio state | `Stockbar/Data/DataModel.swift` | @MainActor state hub |
-| Python bridge | `Stockbar/Data/Networking/NetworkService.swift` | Process + SafeDataBuffer |
-| Core Data | `Stockbar/Data/CoreData/` | Trade/historical persistence |
-| Analytics UI | `Stockbar/Views/` | Risk + portfolio dashboards |
+## Entry points
+- Lifecycle: `Stockbar/main.swift` → `AppDelegate.swift` → `StockMenuBarController.swift`. Preserve acceptance preflight before normal startup.
+- Window/settings: `Stockbar/StockbarMainWindowController.swift`, `Stockbar/Views/StockbarMainView.swift`. Settings stay embedded in the main window.
+- State: `Stockbar/Data/DataModel.swift`; fetches: `Stockbar/Data/Networking/`; persistence: `Stockbar/Data/CoreData/`.
+- Architecture and source ownership: [Docs/Architecture.md](Docs/Architecture.md).
 
-## CODE MAP
-| Symbol | Type | Location | Role |
-| --- | --- | --- | --- |
-| `AppDelegate` | class | `Stockbar/AppDelegate.swift` | App lifecycle + dependencies |
-| `StockMenuBarController` | class | `Stockbar/StockMenuBarController.swift` | Menu bar coordinator |
-| `DataModel` | class | `Stockbar/Data/DataModel.swift` | Central state + services |
-| `PythonNetworkService` | class | `Stockbar/Data/Networking/NetworkService.swift` | Subprocess fetch |
-| `CacheCoordinator` | actor | `Stockbar/Services/CacheCoordinator.swift` | Cache TTL + breaker |
+## Checks and tools
+Run from the repository root:
+- `bash script/develop.sh build` — build only.
+- `bash script/develop.sh test StockbarTests/ClassName[/methodName]` — focused XCTest; omit the filter for the full suite.
+- `bash script/develop.sh python-tests` — offline Python checks.
+- `bash script/develop.sh checks` — lint, entitlements, Sendable, code and documentation validators.
+- `bash script/develop.sh acceptance /path/to/manifest.json` — isolated acceptance harness; see [workflow details](Docs/Development.md).
+- `bash script/build_and_run.sh` — explicit normal-app launch; never a substitute for build-only checks.
 
-## CONVENTIONS (DEVIATIONS)
-- Manual `main.swift` entry (no `@main`).
-- Menu bar app uses `LSUIElement = false` (Dock-visible by default).
-- Python subprocesses must emit JSON to stdout; logs to stderr only.
-- `.L` symbols normalized from GBX to GBP early in the pipeline.
-- UI-facing state stays on `@MainActor` (Swift 6 strict isolation).
-- SwiftLint enabled with 120 line limit; `force_unwrapping` is opt-in.
-
-## ANTI-PATTERNS (PROJECT)
-- Network or heavy processing on main thread.
-- Direct Core Data writes on viewContext (use background contexts).
-- Stdout pollution from Python scripts.
-- Business logic embedded in SwiftUI view bodies.
-
-## UNIQUE STYLES
-- Cache + circuit breaker policy for fetch retries (Services/CacheCoordinator).
-- JSON error protocol from Python (`error: true`, `error_code`).
-- 5-minute snapshot cadence for historical data.
-
-## COMMANDS
-```bash
-# Lint
-swiftlint
-
-# Build
-xcodebuild build -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
-
-# Tests
-xcodebuild test -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
-
-# Python smoke test
-python3 Stockbar/Resources/get_stock_data.py AAPL
-```
-
-## NOTES
-- Python dependency check runs on first launch; sandboxing must remain disabled.
-- API keys load from `~/.stockbar_config.json`.
-- `Scripts/setup_and_run_tests.sh` hardcodes a local path; update when running elsewhere.
+[CI](.github/workflows/ci.yml) and [.swiftlint.yml](.swiftlint.yml) define gates. The app folder is Xcode-synced; new Swift test files require explicit test-target membership. See [recovery procedures](Scripts/README.md) before backup/restore work.

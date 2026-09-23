@@ -1,473 +1,153 @@
 # Stockbar User Guide
 
-**Version:** 2.3.4
-**Last Updated:** January 17, 2026
+Stockbar tracks a stock portfolio from the macOS menu bar, with a main window for holdings, analysis, alerts and settings.
 
----
+## Contents
 
-## Table of Contents
+- [Getting started](#getting-started)
+- [The main window](#the-main-window)
+- [Holdings](#holdings)
+- [The menu bar](#the-menu-bar)
+- [Analysis](#analysis)
+- [Alerts](#alerts)
+- [Currencies and UK stocks](#currencies-and-uk-stocks)
+- [Connections: Trading 212 and Folync](#connections-trading-212-and-folync)
+- [Refreshing and data freshness](#refreshing-and-data-freshness)
+- [Backups, Data Health and Diagnostics](#backups-data-health-and-diagnostics)
+- [Troubleshooting](#troubleshooting)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Privacy](#privacy)
 
-1. [Getting Started](#getting-started)
-2. [Adding Your First Stock](#adding-your-first-stock)
-3. [Understanding the Menu Bar Display](#understanding-the-menu-bar-display)
-4. [Managing Your Portfolio](#managing-your-portfolio)
-5. [Performance Charts](#performance-charts)
-6. [Currency Settings](#currency-settings)
-7. [Advanced Features](#advanced-features)
-8. [Troubleshooting](#troubleshooting)
+## Getting started
 
----
+**Requirements:** macOS 15.4 or later, Python 3.9 or later with the pinned packages in `requirements.txt`, and an internet connection for market data.
 
-## Getting Started
+On first launch Stockbar checks the configured Python interpreter (`/usr/bin/python3` by default). If packages are missing or the wrong version, an alert offers **Copy Command**, which copies a ready-to-run command such as:
 
-### System Requirements
-
-- macOS 15.4 or later
-- Python 3.8+ installed
-- Internet connection for real-time stock data
-
-### First Launch Setup
-
-When you launch Stockbar for the first time:
-
-1. **Python Dependency Check:** Stockbar will automatically verify that the required Python package (`yfinance`) is installed
-2. **If Missing:** You'll see an alert with installation instructions:
-   ```bash
-   pip3 install yfinance
-   ```
-3. **Menu Bar Icon:** Stockbar appears in your menu bar (look for the stock icon)
-4. **Access Preferences:** Click the menu bar icon → "Preferences..." to begin setup
-
----
-
-## Adding Your First Stock
-
-1. **Open Preferences:** Click the Stockbar icon → "Preferences..."
-2. **Click the "+" Button:** Located in the Portfolio tab
-3. **Enter Stock Information:**
-   - **Symbol:** Stock ticker symbol (e.g., `AAPL`, `GOOGL`, `MSFT`)
-     - For UK stocks: Add `.L` suffix (e.g., `VOD.L` for Vodafone)
-     - For other exchanges: Use Yahoo Finance ticker format
-   - **Units:** Number of shares you own
-   - **Average Cost:** Price per share you paid
-   - **Currency:** Select the currency you purchased in (USD, GBP, EUR, JPY, CAD, AUD)
-4. **Click "Add":** Stock will appear in your portfolio list
-5. **Data Updates:** Stockbar fetches real-time price data automatically
-
-### Example: Adding Apple Stock
-
-- Symbol: `AAPL`
-- Units: `10`
-- Average Cost: `150.00`
-- Currency: `USD`
-
-This tracks 10 shares of Apple purchased at $150 per share.
-
----
-
-## Understanding the Menu Bar Display
-
-### Menu Bar Items
-
-Each stock in your portfolio appears as a separate menu bar item showing:
-
-```
-AAPL: $1,700.00 (+$200.00)
+```bash
+'/usr/bin/python3' -m pip install -r '/Applications/Stockbar.app/Contents/Resources/requirements.txt'
 ```
 
-**Format:** `SYMBOL: Current Value (Day Gain/Loss)`
+If pip reports an *externally managed environment* (common with Homebrew Python), create a virtual environment, install the requirements into it, and point Stockbar at it (then relaunch):
 
-- **Current Value:** Current total value of this position (price × units)
-- **Day Gain/Loss:** Change in value since previous market close
-- **Color Coding:** (if enabled in preferences)
-  - 🟢 **Green:** Positive gains
-  - 🔴 **Red:** Negative losses
-
-### Portfolio Total Item
-
-Stockbar can also show a portfolio total item in the menu bar:
-
-```
-Portfolio $123,456.78 +$890.12
+```bash
+defaults write com.stockbar pythonInterpreterPath "$HOME/stockbar-venv/bin/python3"
 ```
 
-**Format:** `Portfolio Total (Day Gain/Loss)`
+The dependency check runs again whenever the interpreter changes.
 
-- **Portfolio Total:** Sum of all position values in the selected currency
-- **Day Gain/Loss:** Daily change shown as either currency or percentage (configurable)
-- Configure currency and day-gain format in **Preferences → Portfolio → Portfolio Menu Bar**
+Stockbar appears both in the Dock and in the menu bar. Click the Dock icon or choose **Open Stockbar** (⌘O) to show the main window.
 
-### Dropdown Menu Details
+## The main window
 
-Click any stock item to see detailed information:
+The sidebar groups every screen:
 
-- **Current Price:** Latest market price
-- **Previous Close:** Yesterday's closing price
-- **Market Value:** Total position value (price × units)
-- **Total Gains:** Overall profit/loss since purchase (current value - cost basis)
-- **Day Change:** Today's price movement ($ and %)
-- **Last Updated:** Timestamp of last price update
-- **Connection Status:** If a symbol is suspended, the menu shows retry timing and the last method attempted
+| Group | Screens |
+|---|---|
+| Portfolio | **Overview** (value, today's and selected-period movement, chart, position inspector), **Holdings**, **Alerts** |
+| Analysis | **Performance** (charts), **Risk**, **Allocation** (including Attribution) |
+| Maintenance | **Backups**, **Data Health**, **Diagnostics** |
+| | **Settings** |
 
-The portfolio dropdown also includes a summary line plus a 7-day trend and chart.
+Use the arrow keys to move through the sidebar. **Refresh Prices** at the bottom of the sidebar (⌘R) requests an immediate update and shows progress. The window remembers its size, position and last screen.
 
-### Custom Templates
+## Holdings
 
-In **Preferences → Portfolio**, you can now choose **Custom** mode to design your own status bar item using these tokens:
+The read-only table shows your positions in your saved order; click a column header to sort. Search filters the table without changing portfolio totals.
 
-- `{symbol}`: Stock ticker symbol (e.g., AAPL)
-- `{price}`: Current trading price
-- `{change}`: Today's change in value
-- `{changePct}`: Today's percentage change
-- `{currency}`: Currency symbol (e.g., $)
-- `{arrow}`: Up/Down arrow indicating trend
-- `{dayPL}`: Daily Profit/Loss for your position
-- `{totalPL}`: Total Profit/Loss for your position
-- `{marketValue}`: Current market value of your position
-- `{units}`: Number of shares held
-- `{avgCost}`: Your average cost basis
+Choose **Edit positions** to change local holdings:
 
-**Example**: `{symbol}: {price} ({dayPL})` -> `AAPL: $150.00 (+$250.00)`
+- **Add Holding** adds a row. Enter the symbol in Yahoo Finance format (`AAPL`, `VOD.L`, `SHOP.TO`), units, average cost and the currency that cost was entered in. Fractional units are kept as entered.
+- A symbol already in the portfolio is flagged with a warning; only one row per symbol is kept when saved, so combine lots into one row.
+- Row actions: 👁 **watchlist only** (price shown, excluded from totals and analytics), move up/down, and remove.
+- The toggle in the first column controls whether the symbol has its own menu-bar item.
 
----
+Positions provided by a linked Trading 212 account or by Folync are read-only here; their menu-bar visibility and alerts remain editable.
 
-## Managing Your Portfolio
+## The menu bar
 
-### Editing Stock Positions
+**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with a chart (1D/1W/1M), market value, total and period P&L, and cost basis.
 
-1. Click stock in portfolio list
-2. Modify units, average cost, or currency
-3. Changes save automatically
+**Per-stock items.** Each visible holding can have its own item. Choose a display mode and change format in Settings → Menu Bar, or a **Custom** template using these tokens:
 
-### Removing Stocks
+| Token | Meaning |
+|---|---|
+| `{symbol}` | Ticker |
+| `{price}` | Current price |
+| `{change}` | Price change today |
+| `{changePct}` | Percentage change today |
+| `{dayPL}` | Today's profit/loss for your position |
+| `{currency}` | Currency symbol |
+| `{arrow}` | Up/down arrow |
 
-1. Select stock in portfolio list
-2. Click "-" (minus) button
-3. Confirm removal
+Example: `{symbol} {price} {arrow}{changePct}`.
 
-### Reordering Stocks
+Click a stock item for its popover: price chart with a benchmark comparison (S&P 500 or FTSE 100), market value, P&L and units. For local holdings, the pencil next to **Units** edits the quantity (the current locale's decimal separator is accepted). If updates for the symbol have been paused after repeated failures, the popover says so and offers **Retry Now**.
 
-- **Drag and Drop:** Click and drag stocks to reorder them
-- **Menu Bar Order:** Menu bar items match portfolio order
+Gains are green and losses red when **Color Coding** is on (Settings → General); unchanged or unknown values are neutral. Settings → Menu Bar → Menu Bar Visibility can hide all stock items or show them only when an external display is connected.
 
-### Watchlist Mode
+## Analysis
 
-For stocks you want to track without ownership data:
+- **Performance** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons.
+- **Risk** — value at risk, Sharpe and Sortino ratios, volatility and drawdowns from stored portfolio history. Missing observations are ignored rather than treated as zero.
+- **Allocation** — sector allocation and diversification, a correlation matrix built from at least 20 shared trading days of stored prices, and performance attribution. Benchmarks and watchlist symbols are excluded.
 
-1. Add stock with symbol only
-2. Leave units/cost empty or set to zero
-3. Stock appears in menu bar showing only current price
+History accumulates as Stockbar runs (Settings → Refresh → Chart Data Collection) and is backfilled where providers allow.
 
----
+## Alerts
 
-## Performance Charts
+Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves by a percentage. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted.
 
-### Accessing Charts
+## Currencies and UK stocks
 
-1. Open Preferences → **Charts** tab
-2. Select chart type:
-   - **Portfolio Value:** Total portfolio value over time
-   - **Portfolio Gains:** Net profit/loss tracking
-   - **Individual Stock:** Price history for specific stock
+Choose the **Preferred Currency** in Settings → General (USD, GBP, EUR, JPY, CAD, AUD). Positions keep their own currencies and are converted for totals. Exchange rates and when they were last obtained are shown in Settings → General → Exchange Rates.
 
-### Time Range Selection
+London prices are often quoted in pence (**GBX**, 100 GBX = £1). Stockbar converts pence to pounds once, when data arrives, and displays pounds. When entering an average cost, pick the currency you are typing in — **GBX** for `250` meaning 250p, or **GBP** for `2.50`.
 
-Choose from preset ranges:
-- **1 Day:** Intraday performance
-- **1 Week, 1 Month, 3 Months, 6 Months:** Recent trends
-- **1 Year:** Annual performance
-- **All Time:** Complete historical data
+## Connections: Trading 212 and Folync
 
-### Performance Metrics
+Settings → **Connections** manages optional sources. Credentials are stored in your Keychain.
 
-Charts display:
-- **Total Return:** Absolute gain/loss amount and percentage
-- **Value Range:** Min/max portfolio values for period
-- **Volatility:** Risk measure (higher = more price swings)
+- **Trading 212** — link a read-only account, preview matches and differences, then link holdings. Linked positions take quantity, price, average cost and P&L from the broker.
+- **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Supplemental routes (history, candles, benchmarks, FX) can be switched on or off individually.
 
-### Comparison Mode
+Market-data API keys for FMP and Twelve Data, and the provider order, are also configured here.
 
-Compare multiple stocks on the same chart:
+## Refreshing and data freshness
 
-1. In the **Charts** tab, select a stock.
-2. Toggle **Comparison Mode**.
-3. Add up to 5 additional symbols to compare relative performance.
-4. Toggle **Normalized (%)** to see percentage growth comparison starting from the same baseline.
+- Prices refresh at the **Main Refresh Interval** (Settings → Refresh; default 5 minutes). A price younger than about 90% of the interval is reused.
+- A symbol that fails is retried with increasing delays (1, 2, 5, then 10 minutes). After five consecutive failures it is paused for one hour; use **Retry Now** in its popover to resume sooner.
+- **Data Health** summarises tracked rows, menu-bar visibility, currency and refresh settings.
 
-### Data Collection
+## Backups, Data Health and Diagnostics
 
-- Stockbar automatically records price snapshots every 5 minutes
-- Historical data builds over time as you use the app
-- Retroactive backfill captures past performance when possible
+- **Backups** — Stockbar makes an automatic backup once a day. Settings → Advanced → Backups offers **Backup Now**, **Restore from Backup** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
+- **Diagnostics** — view, refresh and clear the log. The log file is at `~/Library/Logs/com.stockbar/stockbar.log`.
 
----
-
-## Currency Settings
-
-### Setting Preferred Currency
-
-1. Open Preferences → **Portfolio** tab
-2. Use **Currency** dropdown
-3. Select: USD, GBP, EUR, JPY, CAD, AUD
-4. All values convert to your preferred currency
-
-### Multi-Currency Portfolios
-
-**Stockbar automatically handles mixed currencies:**
-
-- Each stock tracks its original purchase currency
-- Display values convert to your preferred currency
-- Exchange rates refresh via API
-- Manual refresh: Click **Refresh Exchange Rates** button
-
-### UK Stocks (GBX → GBP)
-
-**Important:** UK stocks on London Stock Exchange trade in **pence (GBX)**, not pounds.
-
-**Stockbar automatically converts:**
-- When you add a UK stock (symbol ending in `.L`)
-- Price data from API comes in pence (GBX)
-- Display shows values in pounds (GBP)
-- Average cost should be entered in **pence** (e.g., `150` for 150p)
-
-**Example:**
-- Symbol: `VOD.L` (Vodafone)
-- Price from API: 150 GBX (150 pence)
-- Displayed as: £1.50 GBP
-- Enter average cost: `150` (pence), shown as £1.50
-
----
-
-## Advanced Features
-
-### Debug Tools
-
-Access via Preferences → **Debug** tab:
-
-#### Performance Monitoring
-- **CPU Usage:** Real-time processor utilization
-- **Memory Usage:** App memory footprint
-- **Network Efficiency:** Data transfer metrics
-- **Active Stocks:** Number of tracked symbols
-
-#### Cache Inspector
-- View cache status for each stock:
-  - **Fresh:** Recent data (< 15 minutes old)
-  - **Stale:** Older data (15min - 1 hour)
-  - **Expired:** Very old data (> 1 hour)
-  - **Suspended:** Symbol temporarily paused after failures
-- **Clear Caches:** Force refresh all data
-- **Retry Now:** Resume suspended symbols
-
-#### Advanced Tools
-- **Export Debug Report:** Generate diagnostic file
-- **Simulate Market Closed:** Test mode for development
-
-### Data Management
-
-#### Backup Portfolio
-1. Debug tab → **Backup Portfolio** button
-2. Choose save location
-3. Creates `.json` backup file
-
-#### Restore Portfolio
-1. Debug tab → **Restore from Backup** button
-2. Select backup file
-3. Confirm restoration (overwrites current portfolio)
-
-### Appearance Settings
-
-**Choose display mode:**
-- **System:** Follow macOS appearance
-- **Light:** Always use light mode
-- **Dark:** Always use dark mode
-
-**Color Coding:**
-- Toggle in Portfolio tab
-- Shows green/red for gains/losses
-
----
+For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md).
 
 ## Troubleshooting
 
-### Data Not Updating?
+**Prices are not updating.** Check your connection, then open the symbol's popover: if updates are paused, click **Retry Now**. Confirm the symbol on [finance.yahoo.com](https://finance.yahoo.com) (UK listings need `.L`). Make sure the Python packages are installed for the configured interpreter.
 
-**Check these common issues:**
+**A value shows "—".** The price or history is not available yet, the symbol is invalid, or the provider is temporarily unavailable. Missing values are shown as "—" rather than as a price.
 
-1. **Internet Connection:** Verify you're online
-2. **Cache Status:**
-   - Open Debug tab → Cache Inspector
-   - Look for "Suspended" stocks
-   - Click "Retry Now" or "Clear All Caches"
-3. **Symbol Validity:**
-   - Verify ticker symbol is correct (use Yahoo Finance format)
-   - UK stocks need `.L` suffix
-4. **Python Dependencies:**
-   - Ensure `yfinance` is installed
-   - Run: `pip3 install --upgrade yfinance`
-5. **Rate Limiting:**
-   - Yahoo Finance may temporarily limit requests
-   - Suspended symbols are probed every 2 minutes and auto-resume when data returns
-   - Stockbar automatically backs off on errors
+**Risk or correlation says there is not enough data.** These need stored history; leave Stockbar running and data accumulates.
 
-**Force Manual Refresh:**
-- Preferences → Portfolio tab
-- Click **Refresh Exchange Rates** (also triggers price refresh)
-- Or quit and relaunch Stockbar
+**Exchange rates look stale.** Rates refresh at most every five minutes; Settings → General → Exchange Rates shows when they were last obtained. If no live rate is available, conversions that would rely on it are shown as unavailable rather than guessed.
 
-### Symbol Shows "N/A"?
+## Keyboard shortcuts
 
-**Possible causes:**
+| Shortcut | Action |
+|---|---|
+| ⌘O | Open Stockbar |
+| ⌘, | Settings |
+| ⌘R | Refresh prices (main window) |
+| ⌘W / ⌘M | Close / minimise window |
+| ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
+| ⌘H | Hide Stockbar |
+| ⌘Q | Quit |
 
-1. **Invalid Symbol:** Double-check ticker on Yahoo Finance
-2. **Delisted Stock:** Stock may no longer trade
-3. **Market Closed:** Some symbols don't provide pre/post-market data
-4. **Exchange Issues:** Data source temporarily unavailable
+## Privacy
 
-**Resolution:**
-- Verify symbol on [finance.yahoo.com](https://finance.yahoo.com)
-- Try removing and re-adding the stock
-- Check Debug tab for error details
-
-### What Does GBX Mean?
-
-**GBX = Pence Sterling (UK Currency)**
-
-- UK stocks trade in **pence**, not pounds
-- 100 pence = 1 pound (£1.00)
-- Stockbar automatically converts GBX → GBP for display
-- Always enter UK stock costs in **pence**
-
-**Example:**
-- Stock price: 250 GBX = £2.50 GBP
-- You bought 100 shares at 250 pence each
-- Enter average cost: `250` (automatically converts to £2.50)
-
-### Performance Issues?
-
-**If Stockbar feels slow:**
-
-1. **Reduce Portfolio Size:** Limit to < 20 stocks for best performance
-2. **Clear Old Data:**
-   - Debug tab → Advanced Tools
-   - Export then clear old cache entries
-3. **Check Memory Usage:**
-   - Debug tab shows current memory
-   - Normal: < 100 MB
-   - High: > 200 MB (consider fewer stocks)
-
-### Exchange Rates Not Updating?
-
-**Currency conversion issues:**
-
-1. **Manual Refresh:** Portfolio tab → **Refresh Exchange Rates**
-2. **Check Last Update:** Shows timestamp of last rate fetch
-3. **Fallback Rates:** If API fails, uses hardcoded fallback rates:
-   - USD: 1.0 (base)
-   - GBP: 0.79
-   - EUR: 0.92
-   - JPY: 149.50
-   - CAD: 1.36
-   - AUD: 1.53
-4. **Wait and Retry:** API has 5-minute cooldown between refreshes
-
-### Python Installation Issues?
-
-**If yfinance alert appears:**
-
-```bash
-# Install yfinance
-pip3 install yfinance
-
-# Or install all requirements
-cd /path/to/Stockbar
-pip3 install -r Stockbar/Resources/requirements.txt
-```
-
-**Verify installation:**
-```bash
-python3 -c "import yfinance; print('OK')"
-```
-
-**Python not found?**
-- Install Python 3.8+ from [python.org](https://www.python.org/downloads/)
-- Or use Homebrew: `brew install python3`
-
----
-
-## Tips & Best Practices
-
-### Data Accuracy
-- **Market Hours:** Most accurate during exchange trading hours
-- **Delayed Data:** Free API may have 15-minute delay
-- **Pre/Post Market:** Limited availability depending on exchange
-
-### Portfolio Tracking
-- **Regular Updates:** Stockbar refreshes every 15 minutes during market hours
-- **Manual Refresh:** Available via preferences if needed
-- **Historical Data:** Builds automatically over time
-
-### Privacy & Security
-- **Local Storage:** All data stored locally on your Mac
-- **No Account:** No sign-up or personal information required
-- **Data Control:** Full ownership of portfolio data via backup/restore
-
-### Performance Optimization
-- **Limit Symbols:** Keep portfolio under 20 stocks
-- **Clear Caches:** Periodically clear old cache data
-- **Monitor Debug:** Watch CPU/memory usage in Debug tab
-
----
-
-## Keyboard Shortcuts
-
-- **⌘,** (Command-Comma): Open Preferences
-- **⌘Q** (Command-Q): Quit Stockbar
-- **⌘W** (Command-W): Close Preferences window
-
----
-
-## Getting Help
-
-### Resources
-
-- **GitHub Issues:** Report bugs or request features
-- **FAQ:** See `Docs/FAQ.md` for common questions
-- **Logs:** Check `~/Documents/stockbar.log` for errors
-
-### Support
-
-If you encounter issues not covered in this guide:
-
-1. Check the FAQ document
-2. Review Debug tab for error messages
-3. Export debug report for analysis
-4. Check GitHub repository for similar issues
-
----
-
-## About Stockbar
-
-**Stockbar** is a macOS menu bar application for tracking stock portfolios in real-time.
-
-**Key Features:**
-- ✅ Real-time price tracking
-- ✅ Multi-currency support (6 currencies)
-- ✅ Historical performance charts
-- ✅ Automatic data caching
-- ✅ Lightweight and efficient
-- ✅ Privacy-focused (local data only)
-
-**Technology:**
-- Swift 6.0 (macOS native)
-- Python 3 (yfinance backend)
-- Core Data (persistence)
-- Swift Charts (visualization)
-
-**Version:** 2.3.4
-**License:** [License Type]
-**Created by:** [Author Name]
-
----
-
-*Last updated: January 17, 2026*
+Portfolio data is stored locally on your Mac (Application Support and Core Data). Market-data requests send ticker symbols to the configured providers. Broker and Folync credentials stay in your Keychain and are never written to logs.

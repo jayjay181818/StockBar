@@ -157,14 +157,14 @@ The refresh interval is configurable but not exposed in UI. Default is 5 minutes
 1. Quit Stockbar
 2. Run this command to increase interval to 10 minutes:
    ```bash
-   defaults write com.fhl43211.Stockbar refreshInterval 600
+   defaults write com.stockbar refreshInterval 600
    ```
 3. Restart Stockbar
 4. This reduces API calls by 50%
 
 **To revert to 5 minutes:**
 ```bash
-defaults write com.fhl43211.Stockbar refreshInterval 300
+defaults write com.stockbar refreshInterval 300
 ```
 
 ---
