@@ -4,7 +4,7 @@ Source: full project review of 22 September 2026 (build, 357 XCTests, Python and
 
 Status legend: ⬜ not started · 🔄 in progress · ✅ done · ⏸ deferred (needs decision) — each completed slice records its verification.
 
-No commits are made as part of this plan; the working tree already carries substantial uncommitted work. Commit in reviewable slices when ready.
+Committed on `testing` (23 Sept 2026) in seven area slices — tooling/CI, Python bridge, data layer, services, UI/project, tests, docs — each including the previously uncommitted Folync/overhaul work in the same files. Intermediate commits are not guaranteed to build on their own; the final commit does. Not pushed.
 
 ## Slice 1 — Position units editing (High 1, 2)
 - ✅ Preserve fractional units when editing from the menu-bar popover (`StockStatusBar.updateUnits`).
