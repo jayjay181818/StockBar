@@ -238,6 +238,8 @@ actor SectorAnalysisService {
     /// Diversification analysis
     struct DiversificationAnalysis {
         let score: Double  // 0-100 (100 = perfectly diversified)
+        /// Whether the score is based on at least one finite, valued position.
+        let isAvailable: Bool
         let concentrationRisk: ConcentrationRisk
         let recommendations: [String]
         let topHeavySectors: [Sector]
@@ -270,14 +272,17 @@ actor SectorAnalysisService {
     ) async -> [SectorAllocation] {
         await Logger.shared.debug("📊 Calculating sector allocations for \(positions.count) positions")
 
-        let totalPortfolioValue = positions.values.reduce(0, +)
+        // Invalid values must never enter a portfolio total (NaN would poison every percentage).
+        let validPositions = positions.filter { $0.value.isFinite && $0.value > 0 }
+        let totalPortfolioValue = validPositions.values.reduce(0, +)
+        guard totalPortfolioValue.isFinite, totalPortfolioValue > 0 else { return [] }
 
         // Group positions by sector
         var sectorMap: [Sector: (value: Double, change: Double, positions: [PositionSummary])] = [:]
 
-        for (symbol, value) in positions {
+        for (symbol, value) in validPositions {
             let sector = Sector.forSymbol(symbol)
-            let change = dayChanges[symbol] ?? 0.0
+            let change = dayChanges[symbol].flatMap { $0.isFinite ? $0 : nil } ?? 0.0
 
             let positionSummary = PositionSummary(
                 symbol: symbol,
@@ -303,7 +308,10 @@ actor SectorAnalysisService {
 
         for (sector, data) in sectorMap {
             let percentage = totalPortfolioValue > 0 ? (data.value / totalPortfolioValue) * 100 : 0
-            let changePercent = data.value > 0 ? (data.change / (data.value - data.change)) * 100 : 0
+            let priorValue = data.value - data.change
+            let changePercent = data.value > 0 && priorValue.isFinite && priorValue > 0
+                ? (data.change / priorValue) * 100
+                : 0
 
             // Update position percentages within sector
             let updatedPositions = data.positions.map { pos in
@@ -343,6 +351,15 @@ actor SectorAnalysisService {
         await Logger.shared.debug("📊 Analyzing sector diversification")
 
         let totalValue = sectorAllocations.reduce(0.0) { $0 + $1.totalValue }
+        guard totalValue.isFinite, totalValue > 0 else {
+            return DiversificationAnalysis(
+                score: .nan,
+                isAvailable: false,
+                concentrationRisk: .low,
+                recommendations: [],
+                topHeavySectors: []
+            )
+        }
 
         // Calculate Herfindahl index (concentration measure)
         let herfindahlIndex = sectorAllocations.reduce(0.0) { sum, allocation in
@@ -398,6 +415,7 @@ actor SectorAnalysisService {
 
         return DiversificationAnalysis(
             score: diversificationScore,
+            isAvailable: true,
             concentrationRisk: concentrationRisk,
             recommendations: recommendations,
             topHeavySectors: topHeavySectors

@@ -17,7 +17,7 @@ actor RiskMetricsService {
         let sharpeRatio: Double        // Risk-adjusted return
         let beta: Double?              // Market correlation (requires benchmark)
         let maxDrawdown: Double        // Maximum peak-to-trough decline
-        let maxDrawdownDuration: Int   // Days in drawdown
+        let maxDrawdownDuration: Int   // Observations from peak to trough
         let volatility: Double         // Annualized standard deviation
         let downsideDeviation: Double  // Volatility of negative returns only
         let sortinoRatio: Double       // Downside risk-adjusted return
@@ -181,7 +181,10 @@ actor RiskMetricsService {
 
     /// Calculate maximum drawdown and related metrics
     /// - Parameter portfolioValues: Array of portfolio values over time (chronological order)
-    func calculateMaxDrawdown(portfolioValues: [Double]) async -> MaxDrawdownMetrics? {
+    func calculateMaxDrawdown(portfolioValues rawValues: [Double]) async -> MaxDrawdownMetrics? {
+        // Missing observations are stored as 0 or NaN. Treating them as real
+        // values reports a spurious 100% one-period drawdown.
+        let portfolioValues = rawValues.filter { $0.isFinite && $0 > 0 }
         guard portfolioValues.count > 1 else { return nil }
 
         var maxDrawdown = 0.0
@@ -194,16 +197,12 @@ actor RiskMetricsService {
         for i in 1..<portfolioValues.count {
             let value = portfolioValues[i]
 
-            // Update peak if we've reached a new high
             if value > currentPeak {
                 currentPeak = value
                 currentPeakIndex = i
             }
 
-            // Calculate current drawdown from peak
             let drawdown = (currentPeak - value) / currentPeak
-
-            // Update max drawdown if current is worse
             if drawdown > maxDrawdown {
                 maxDrawdown = drawdown
                 maxDuration = i - currentPeakIndex
@@ -228,68 +227,46 @@ actor RiskMetricsService {
     ///   - dates: Array of dates corresponding to portfolio values
     ///   - threshold: Minimum drawdown percentage to report (e.g., 0.05 for 5%)
     /// - Returns: Array of DrawdownPeriod objects
-    func findDrawdownPeriods(portfolioValues: [Double], dates: [Date], threshold: Double = 0.05) -> [DrawdownPeriod] {
-        guard portfolioValues.count == dates.count, portfolioValues.count > 1 else {
-            return []
-        }
+    func findDrawdownPeriods(portfolioValues rawValues: [Double], dates rawDates: [Date], threshold: Double = 0.05) -> [DrawdownPeriod] {
+        guard rawValues.count == rawDates.count else { return [] }
+        let observations = zip(rawValues, rawDates).filter { $0.0.isFinite && $0.0 > 0 }
+        guard observations.count > 1 else { return [] }
 
         var drawdownPeriods: [DrawdownPeriod] = []
-        var currentPeak = portfolioValues[0]
-        var currentPeakDate = dates[0]
-        var inDrawdown = false
+        var currentPeak = observations[0].0
+        var currentPeakDate = observations[0].1
+        var trough = currentPeak
+        var troughDate = currentPeakDate
 
-        for i in 1..<portfolioValues.count {
-            let value = portfolioValues[i]
+        func recordIfSignificant() {
+            let drawdown = (currentPeak - trough) / currentPeak
+            guard drawdown >= threshold else { return }
+            let durationDays = Calendar.current.dateComponents([.day], from: currentPeakDate, to: troughDate).day ?? 0
+            drawdownPeriods.append(DrawdownPeriod(
+                startDate: currentPeakDate,
+                endDate: troughDate,
+                peakValue: currentPeak,
+                troughValue: trough,
+                drawdownPercent: drawdown,
+                durationDays: durationDays
+            ))
+        }
 
-            // Check if we've reached a new high
+        for (value, date) in observations.dropFirst() {
             if value >= currentPeak {
-                // If we were in a drawdown, record it
-                if inDrawdown {
-                    let drawdown = (currentPeak - portfolioValues[i - 1]) / currentPeak
-                    if drawdown >= threshold {
-                        let durationDays = Calendar.current.dateComponents([.day], from: currentPeakDate, to: dates[i - 1]).day ?? 0
-                        let period = DrawdownPeriod(
-                            startDate: currentPeakDate,
-                            endDate: dates[i - 1],
-                            peakValue: currentPeak,
-                            troughValue: portfolioValues[i - 1],
-                            drawdownPercent: drawdown,
-                            durationDays: durationDays
-                        )
-                        drawdownPeriods.append(period)
-                    }
-                    inDrawdown = false
-                }
-
+                // Recovery: record the episode using its deepest point.
+                recordIfSignificant()
                 currentPeak = value
-                currentPeakDate = dates[i]
-            } else {
-                // We're below the peak
-                let drawdown = (currentPeak - value) / currentPeak
-
-                if drawdown >= threshold && !inDrawdown {
-                    inDrawdown = true
-                }
+                currentPeakDate = date
+                trough = value
+                troughDate = date
+            } else if value < trough {
+                trough = value
+                troughDate = date
             }
         }
-
-        // Handle ongoing drawdown at end of data
-        if inDrawdown {
-            let lastIndex = portfolioValues.count - 1
-            let drawdown = (currentPeak - portfolioValues[lastIndex]) / currentPeak
-            if drawdown >= threshold {
-                let durationDays = Calendar.current.dateComponents([.day], from: currentPeakDate, to: dates[lastIndex]).day ?? 0
-                let period = DrawdownPeriod(
-                    startDate: currentPeakDate,
-                    endDate: dates[lastIndex],
-                    peakValue: currentPeak,
-                    troughValue: portfolioValues[lastIndex],
-                    drawdownPercent: drawdown,
-                    durationDays: durationDays
-                )
-                drawdownPeriods.append(period)
-            }
-        }
+        // Ongoing drawdown at the end of the data.
+        recordIfSignificant()
 
         return drawdownPeriods.sorted { $0.drawdownPercent > $1.drawdownPercent }
     }
@@ -333,9 +310,9 @@ actor RiskMetricsService {
         var returns: [Double] = []
         for i in 1..<values.count {
             let previousValue = values[i - 1]
-            guard previousValue > 0 else { continue }
-
             let currentValue = values[i]
+            guard previousValue.isFinite, previousValue > 0, currentValue.isFinite else { continue }
+
             let returnValue = (currentValue - previousValue) / previousValue
             returns.append(returnValue)
         }
@@ -352,10 +329,13 @@ actor RiskMetricsService {
     ///   - marketReturns: Optional benchmark returns for beta calculation
     /// - Returns: Complete RiskMetrics object
     func calculateComprehensiveRiskMetrics(
-        portfolioValues: [Double],
+        portfolioValues rawValues: [Double],
         riskFreeRate: Double = 0.04,
         marketReturns: [Double]? = nil
     ) async -> RiskMetrics? {
+        // Drop missing observations (0/NaN) so they cannot create spurious
+        // -100% returns and 100% drawdowns.
+        let portfolioValues = rawValues.filter { $0.isFinite && $0 > 0 }
         guard portfolioValues.count > 1 else {
             await logger.warning("⚠️ Insufficient portfolio data for risk metrics calculation")
             return nil
@@ -381,7 +361,7 @@ actor RiskMetricsService {
         let sortino = await calculateSortinoRatio(returns: returns) ?? 0
 
         // Calculate Beta if market returns provided
-        var beta: Double? = nil
+        var beta: Double?
         if let marketReturns = marketReturns, marketReturns.count == returns.count {
             beta = await calculateBeta(portfolioReturns: returns, marketReturns: marketReturns)
         }

@@ -6,9 +6,9 @@
 //  Persists annotations using Core Data via CoreDataStack.
 //
 
+import CoreData
 import Foundation
 import SwiftUI
-import CoreData
 
 // MARK: - Chart Annotation Model
 struct ChartAnnotation: Identifiable, Equatable, Codable {
@@ -63,15 +63,9 @@ class ChartAnnotationService: ObservableObject {
     
     private init() {
         // Store in Application Support directory
-        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let directory = appSupport.appendingPathComponent("Stockbar", isDirectory: true)
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            storageURL = directory.appendingPathComponent("chart_annotations.json")
-        } else {
-            // Fallback to documents
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            storageURL = documents.appendingPathComponent("chart_annotations.json")
-        }
+        let directory = StockbarRuntimeStorage.stockbarApplicationSupportDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        storageURL = directory.appendingPathComponent("chart_annotations.json")
         
         loadAnnotations()
     }
@@ -147,5 +141,3 @@ class ChartAnnotationService: ObservableObject {
 
 // MARK: - Annotation Entity (Stub for compilation if needed, but not used)
 // Since we cannot modify .xcdatamodeld, we use JSON storage.
-
-

@@ -181,8 +181,21 @@ enum Trading212PermissionPolicy {
 }
 
 enum Trading212SyncPolicy {
+    /// 30s remains selectable for anyone who wants near-live broker data, but it
+    /// is no longer the default: at that cadence the app makes ~2,880 broker API
+    /// calls a day, which is a meaningful battery and rate-limit cost for data
+    /// that changes far more slowly.
     static let minimumIntervalSeconds = 30
-    static let defaultIntervalSeconds = 30
+
+    /// Matches the 300s market-data refresh cadence, so broker sync and quote
+    /// refresh land on the same rhythm instead of beating against each other.
+    static let defaultIntervalSeconds = 300
+
+    /// The default this replaced. Used by the one-time migration in
+    /// `Trading212SettingsStore` to move existing installs off the old cadence.
+    static let legacyDefaultIntervalSeconds = 30
+
+    static let defaultHoldingReconciliationIntervalSeconds = 3_600
     static let intervalOptionsSeconds = [30, 60, 300, 900, 1_800]
 
     static func clampedIntervalSeconds(_ seconds: Int) -> Int {
@@ -206,6 +219,9 @@ struct Trading212StoredSettings: Equatable {
     var autoSyncEnabled: Bool
     var syncIntervalSeconds: Int
     var deleteMissingLinkedHoldings: Bool
+    var autoReconcileHoldingsEnabled: Bool
+    var autoImportBrokerOnlyHoldings: Bool
+    var holdingReconciliationIntervalSeconds: Int
 
     static let defaults = Trading212StoredSettings(
         isEnabled: false,
@@ -214,7 +230,10 @@ struct Trading212StoredSettings: Equatable {
         accountLabel: "Trading 212 ISA",
         autoSyncEnabled: true,
         syncIntervalSeconds: Trading212SyncPolicy.defaultIntervalSeconds,
-        deleteMissingLinkedHoldings: false
+        deleteMissingLinkedHoldings: false,
+        autoReconcileHoldingsEnabled: false,
+        autoImportBrokerOnlyHoldings: false,
+        holdingReconciliationIntervalSeconds: Trading212SyncPolicy.defaultHoldingReconciliationIntervalSeconds
     )
 }
 
@@ -350,6 +369,57 @@ enum Trading212PreviewValueSource: Equatable {
     case unavailable
 }
 
+enum PortfolioValuationSource: String, Codable, Equatable {
+    case brokerProvided
+    case folyncProvided
+    case localCalculationFallback
+    case marketDataFallback
+}
+
+struct Trading212BrokerPositionValuation: Equatable {
+    let manualSymbol: String
+    let instrumentId: String
+    let brokerCurrentValue: Double
+    let brokerTotalCost: Double?
+    let brokerUnrealizedProfitLoss: Double?
+    let fxImpact: Double?
+    let currency: String
+    let updatedAt: Date
+
+    var totalGainPercent: Double {
+        guard let brokerTotalCost,
+              brokerTotalCost > 0,
+              let brokerUnrealizedProfitLoss,
+              brokerUnrealizedProfitLoss.isFinite else {
+            return .nan
+        }
+        return (brokerUnrealizedProfitLoss / brokerTotalCost) * 100.0
+    }
+}
+
+struct Trading212BrokerValuationSnapshot: Equatable {
+    let accountKey: String
+    let currency: String
+    let accountValue: Double
+    let investmentsValue: Double?
+    let cashValue: Double?
+    let totalUnrealizedProfitLoss: Double?
+    let totalCost: Double?
+    let positionsByManualSymbol: [String: Trading212BrokerPositionValuation]
+    let updatedAt: Date
+
+    func isFresh(now: Date = Date(), maxAge: TimeInterval) -> Bool {
+        guard accountValue.isFinite, accountValue >= 0 else {
+            return false
+        }
+        return now.timeIntervalSince(updatedAt) <= maxAge
+    }
+
+    func position(for manualSymbol: String) -> Trading212BrokerPositionValuation? {
+        positionsByManualSymbol[manualSymbol.uppercased()]
+    }
+}
+
 enum Trading212PreviewConflictStatus: Equatable {
     case none
     case manualHoldingMatch
@@ -390,6 +460,7 @@ struct Trading212ImportPreviewRow: Identifiable, Equatable {
     let averagePrice: Double?
     let brokerProvidedPrice: Double?
     let currentValue: Double?
+    let totalCost: Double?
     let unrealizedProfitLoss: Double?
     let fxImpact: Double?
     let mappingConfidence: InstrumentResolutionConfidence

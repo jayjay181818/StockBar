@@ -169,17 +169,16 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
     
     // MARK: - Initialization
     
-    private init() {
+    init(cacheRoot: URL? = nil, fileManager: FileManager = .default) {
         // Setup cache directories
-        let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let stockbarCacheDirectory = cachesDirectory.appendingPathComponent("stockbar-cache")
+        let stockbarCacheDirectory = cacheRoot ?? StockbarRuntimeStorage.cacheDirectory(fileManager: fileManager)
         
         diskCacheDirectory = stockbarCacheDirectory.appendingPathComponent("disk")
         archiveCacheDirectory = stockbarCacheDirectory.appendingPathComponent("archive")
         
         // Create directories if they don't exist
-        try? FileManager.default.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: archiveCacheDirectory, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: archiveCacheDirectory, withIntermediateDirectories: true)
         
         // Load existing cache statistics
         loadCacheStatistics()
@@ -219,7 +218,6 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
             
             updateStatistics(for: targetLevel, operation: .store, size: entry.size)
             Task { await logger.debug("🗄️ Stored \(key) in \(targetLevel.rawValue) cache (\(entry.size) bytes)") }
-            
         } catch {
             Task { await logger.error("❌ Failed to store \(key) in cache: \(error)") }
         }
@@ -510,7 +508,7 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
     }
     
     private func loadCacheStatistics() {
-        if let data = UserDefaults.standard.data(forKey: "cacheStatistics"),
+        if let data = StockbarRuntimeStorage.userDefaults.data(forKey: "cacheStatistics"),
            let stats = try? decoder.decode(CacheStatistics.self, from: data) {
             DispatchQueue.main.async { [weak self] in
                 self?.cacheStats = stats
@@ -520,7 +518,7 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
     
     private func saveCacheStatistics() {
         if let data = try? encoder.encode(cacheStats) {
-            UserDefaults.standard.set(data, forKey: "cacheStatistics")
+            StockbarRuntimeStorage.userDefaults.set(data, forKey: "cacheStatistics")
         }
     }
     

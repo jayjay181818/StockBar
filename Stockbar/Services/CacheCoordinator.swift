@@ -27,6 +27,62 @@ actor CacheCoordinator {
     private var consecutiveFailures: [String: Int] = [:]  // Track consecutive failures per symbol
     private var suspendedSymbols: [String: Date] = [:]  // Circuit breaker: suspended symbols
 
+    // MARK: - Persistence
+    //
+    // Cache and breaker state used to live only in memory, so quitting the app
+    // cleared every circuit breaker and forced an immediate full refresh on the
+    // next launch — which defeats the rate limiting this type exists to provide.
+
+    private let defaults: UserDefaults
+    private static let stateKey = "cacheCoordinator.state.v1"
+
+    struct PersistedState: Codable, Sendable {
+        var lastSuccessfulFetch: [String: Date]
+        var lastFailedFetch: [String: Date]
+        var consecutiveFailures: [String: Int]
+        var suspendedSymbols: [String: Date]
+    }
+
+    init(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        self.defaults = defaults
+        guard let data = defaults.data(forKey: Self.stateKey),
+              let state = try? JSONDecoder().decode(PersistedState.self, from: data) else {
+            return
+        }
+        lastSuccessfulFetch = state.lastSuccessfulFetch
+        lastFailedFetch = state.lastFailedFetch
+        consecutiveFailures = state.consecutiveFailures
+        suspendedSymbols = state.suspendedSymbols
+        // Drop anything that already aged out while the app was closed. The
+        // pruning is a pure function so it can run in the nonisolated init.
+        let pruned = Self.prunedState(
+            PersistedState(
+                lastSuccessfulFetch: lastSuccessfulFetch,
+                lastFailedFetch: lastFailedFetch,
+                consecutiveFailures: consecutiveFailures,
+                suspendedSymbols: suspendedSymbols
+            ),
+            now: Date(),
+            maxCacheAge: maxCacheAge,
+            circuitBreakerTimeout: circuitBreakerTimeout
+        )
+        lastSuccessfulFetch = pruned.lastSuccessfulFetch
+        lastFailedFetch = pruned.lastFailedFetch
+        consecutiveFailures = pruned.consecutiveFailures
+        suspendedSymbols = pruned.suspendedSymbols
+    }
+
+    private func persist() {
+        let state = PersistedState(
+            lastSuccessfulFetch: lastSuccessfulFetch,
+            lastFailedFetch: lastFailedFetch,
+            consecutiveFailures: consecutiveFailures,
+            suspendedSymbols: suspendedSymbols
+        )
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        defaults.set(data, forKey: Self.stateKey)
+    }
+
     // MARK: - Cache Management
 
     /// Records a successful fetch for a symbol
@@ -35,6 +91,7 @@ actor CacheCoordinator {
         lastFailedFetch.removeValue(forKey: symbol)
         consecutiveFailures.removeValue(forKey: symbol)  // Reset failure count on success
         suspendedSymbols.removeValue(forKey: symbol)  // Remove from suspension on success
+        persist()
     }
 
     /// Records a failed fetch for a symbol
@@ -42,13 +99,14 @@ actor CacheCoordinator {
         lastFailedFetch[symbol] = time
 
         // Increment consecutive failure count
-        let currentFailures = consecutiveFailures[symbol] ?? 0
-        consecutiveFailures[symbol] = currentFailures + 1
+        let failures = (consecutiveFailures[symbol] ?? 0) + 1
+        consecutiveFailures[symbol] = failures
 
         // Check if we should suspend this symbol (circuit breaker)
-        if consecutiveFailures[symbol]! >= circuitBreakerThreshold {
+        if failures >= circuitBreakerThreshold {
             suspendedSymbols[symbol] = time
         }
+        persist()
     }
 
     /// Gets the last successful fetch time for a symbol
@@ -64,27 +122,23 @@ actor CacheCoordinator {
     // MARK: - Cache Decision Logic
 
     /// Determines if a symbol should be refreshed based on cache state
-    func shouldRefresh(symbol: String, at time: Date) -> Bool {
-        // Check if we have a recent successful fetch
-        if let lastSuccess = lastSuccessfulFetch[symbol] {
-            let timeSinceSuccess = time.timeIntervalSince(lastSuccess)
+    ///
+    /// Symbols with recorded consecutive failures are governed exclusively by
+    /// `shouldRetry` (exponential backoff and circuit breaker). Returning true
+    /// here for them would bypass both: a never-successful symbol has no
+    /// success timestamp, and a once-successful one ages past the freshness
+    /// interval, so either would be fetched on every pass.
+    func shouldRefresh(symbol: String, at time: Date, freshnessInterval: TimeInterval? = nil) -> Bool {
+        let activeCacheInterval = max(0, freshnessInterval ?? cacheInterval)
 
-            // If cache is still fresh, don't refresh
-            if timeSinceSuccess < cacheInterval {
-                return false
-            }
-
-            // If cache is very old (> 1 hour), force refresh
-            if timeSinceSuccess > maxCacheAge {
-                return true
-            }
-
-            // Normal case: cache expired, should refresh
-            return true
+        if isSuspended(symbol: symbol, at: time) || (consecutiveFailures[symbol] ?? 0) > 0 {
+            return false
         }
 
-        // No successful fetch recorded, should refresh
-        return true
+        // No successful fetch recorded, or the cache has aged out.
+        guard let lastSuccess = lastSuccessfulFetch[symbol] else { return true }
+
+        return time.timeIntervalSince(lastSuccess) >= activeCacheInterval
     }
 
     /// Determines if a failed fetch should be retried using exponential backoff
@@ -95,7 +149,9 @@ actor CacheCoordinator {
         }
 
         guard let lastFailed = lastFailedFetch[symbol] else {
-            return false
+            // A failure count without a timestamp (legacy persisted state)
+            // must not strand the symbol; allow one retry.
+            return (consecutiveFailures[symbol] ?? 0) > 0
         }
 
         let timeSinceFailed = time.timeIntervalSince(lastFailed)
@@ -125,6 +181,7 @@ actor CacheCoordinator {
     func clearSuspension(for symbol: String) {
         suspendedSymbols.removeValue(forKey: symbol)
         consecutiveFailures.removeValue(forKey: symbol)
+        persist()
     }
 
     /// Checks if symbol is currently cached
@@ -137,7 +194,13 @@ actor CacheCoordinator {
         return timeSinceSuccess < cacheInterval
     }
 
-    /// Gets cache status for a symbol
+    /// Gets cache status for a symbol.
+    ///
+    /// This is a **pure query**. It must not mutate cache or breaker state:
+    /// it is called from display paths (menu bar construction, the diagnostics
+    /// list), and clearing the failure counter here would let merely *looking*
+    /// at a symbol reset its exponential backoff and disarm the circuit breaker.
+    /// Expired suspensions are reaped by `clearOldCacheEntries()` instead.
     func getCacheStatus(for symbol: String, at time: Date) -> CacheStatus {
         // Check if suspended first
         if let suspendedAt = suspendedSymbols[symbol] {
@@ -148,11 +211,9 @@ actor CacheCoordinator {
                     failures: failures,
                     resumeIn: circuitBreakerTimeout - timeSinceSuspension
                 )
-            } else {
-                // Suspension expired, remove it
-                suspendedSymbols.removeValue(forKey: symbol)
-                consecutiveFailures.removeValue(forKey: symbol)
             }
+            // Suspension has expired; fall through and report the underlying
+            // cache state without touching stored state.
         }
 
         if let lastSuccess = lastSuccessfulFetch[symbol] {
@@ -187,6 +248,7 @@ actor CacheCoordinator {
         lastFailedFetch.removeValue(forKey: symbol)
         consecutiveFailures.removeValue(forKey: symbol)
         suspendedSymbols.removeValue(forKey: symbol)
+        persist()
     }
 
     /// Clears all cache
@@ -195,6 +257,7 @@ actor CacheCoordinator {
         lastFailedFetch.removeAll()
         consecutiveFailures.removeAll()
         suspendedSymbols.removeAll()
+        persist()
     }
 
     /// Gets all cached symbols
@@ -229,11 +292,52 @@ actor CacheCoordinator {
         )
     }
 
-    /// Clears old cache entries beyond max age
-    func clearOldCacheEntries() {
-        let cutoffTime = Date().addingTimeInterval(-maxCacheAge)
-        lastSuccessfulFetch = lastSuccessfulFetch.filter { $0.value > cutoffTime }
-        lastFailedFetch = lastFailedFetch.filter { $0.value > cutoffTime }
+    /// Clears old cache entries beyond max age, and reaps circuit-breaker
+    /// suspensions that have served their timeout. This is the only place that
+    /// state expiry mutates — `getCacheStatus` stays a pure query.
+    func clearOldCacheEntries(now: Date = Date()) {
+        let pruned = Self.prunedState(
+            PersistedState(
+                lastSuccessfulFetch: lastSuccessfulFetch,
+                lastFailedFetch: lastFailedFetch,
+                consecutiveFailures: consecutiveFailures,
+                suspendedSymbols: suspendedSymbols
+            ),
+            now: now,
+            maxCacheAge: maxCacheAge,
+            circuitBreakerTimeout: circuitBreakerTimeout
+        )
+        lastSuccessfulFetch = pruned.lastSuccessfulFetch
+        lastFailedFetch = pruned.lastFailedFetch
+        consecutiveFailures = pruned.consecutiveFailures
+        suspendedSymbols = pruned.suspendedSymbols
+        persist()
+    }
+
+    /// Ages out stale entries. Failure counts are dropped together with their
+    /// failure timestamp (unless the symbol is still suspended) so an orphaned
+    /// count can neither prime the breaker early nor strand a symbol with no
+    /// retry timestamp.
+    static func prunedState(
+        _ state: PersistedState,
+        now: Date,
+        maxCacheAge: TimeInterval = 3600,
+        circuitBreakerTimeout: TimeInterval = 3600
+    ) -> PersistedState {
+        let cutoffTime = now.addingTimeInterval(-maxCacheAge)
+        let suspended = state.suspendedSymbols.filter {
+            now.timeIntervalSince($0.value) < circuitBreakerTimeout
+        }
+        let failed = state.lastFailedFetch.filter { $0.value > cutoffTime }
+        let failures = state.consecutiveFailures.filter { symbol, _ in
+            failed[symbol] != nil || suspended[symbol] != nil
+        }
+        return PersistedState(
+            lastSuccessfulFetch: state.lastSuccessfulFetch.filter { $0.value > cutoffTime },
+            lastFailedFetch: failed,
+            consecutiveFailures: failures,
+            suspendedSymbols: suspended
+        )
     }
 }
 

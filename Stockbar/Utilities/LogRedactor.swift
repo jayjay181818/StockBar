@@ -5,37 +5,37 @@ enum LogRedactor {
 
     private static let redactionRules: [(pattern: String, template: String)] = [
         (
-            #"(?i)([?&](?:apikey|api_key|access_token|token|key)=)[^&\s"'<>)\]]+"#,
+            #"(?i)([?&](?:apikey|api_key|access_token|token|key)=)(?!\[REDACTED\])[^&\s"'<>)\]]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|TRADING212_API_KEY|TRADING212_API_SECRET|API_SECRET|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)[^\s,;"')\]]+"#,
+            #"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|TRADING212_API_KEY|TRADING212_API_SECRET|API_SECRET|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)(?!\[REDACTED\])[^\s,;"')\]]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b(Authorization\s*[:=]\s*Basic\s+)[A-Za-z0-9._~+/\-=]+"#,
+            #"(?i)\b(Authorization\s*[:=]\s*Basic\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/\-=]+"#,
+            #"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b(Basic\s+)[A-Za-z0-9._~+/\-=]+"#,
+            #"(?i)\b(Basic\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-=]+"#,
+            #"(?i)\b(Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"#,
             "$1[REDACTED]"
         ),
         (
-            #"(?i)\b((?:accountId|account_id|accountNumber|account_number|apiAccountId|api_account_id|id)\s*["']?\s*[:=]\s*)["']?[0-9]{5,}["']?"#,
+            #"(?i)\b((?:accountId|account_id|accountNumber|account_number|apiAccountId|api_account_id|id)\s*["']?\s*[:=]\s*)(?!\[REDACTED\])["']?[0-9]{5,}["']?"#,
             "$1[REDACTED]"
         )
     ]
 
     static func redact(_ message: String) -> String {
-        redactionRules.reduce(message) { current, rule in
+        let redacted = redactionRules.reduce(message) { current, rule in
             guard let regex = try? NSRegularExpression(pattern: rule.pattern) else {
                 return current
             }
@@ -47,6 +47,19 @@ enum LogRedactor {
                 withTemplate: rule.template
             )
         }
+
+        // Repair values corrupted by older, non-idempotent rules without
+        // modifying correctly redacted markers.
+        guard let corruptedMarker = try? NSRegularExpression(pattern: #"\[REDACTED\]\]+"#) else {
+            return redacted
+        }
+        let range = NSRange(redacted.startIndex..<redacted.endIndex, in: redacted)
+        return corruptedMarker.stringByReplacingMatches(
+            in: redacted,
+            options: [],
+            range: range,
+            withTemplate: replacement
+        )
     }
 
     static func containsUnredactedSecret(_ message: String) -> Bool {

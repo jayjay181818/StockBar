@@ -1,6 +1,6 @@
-import Foundation
-import CoreGraphics
 import AppKit
+import CoreGraphics
+import Foundation
 import UniformTypeIdentifiers
 
 /// Manages export functionality for portfolio data to CSV and PDF formats
@@ -76,7 +76,6 @@ final class ExportManager {
             
             // Show success notification
             showExportNotification(fileName: url.lastPathComponent, success: true)
-            
         } catch {
             Task { await logger.error("Failed to export CSV: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
@@ -120,7 +119,6 @@ final class ExportManager {
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
             Task { await logger.info("Successfully exported detailed portfolio CSV to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
-            
         } catch {
             Task { await logger.error("Failed to export portfolio CSV: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
@@ -178,7 +176,6 @@ final class ExportManager {
             try pdfData.write(to: url)
             Task { await logger.info("Successfully exported PDF to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
-            
         } catch {
             Task { await logger.error("Failed to export PDF: \(error.localizedDescription)") }
             showExportNotification(fileName: url.lastPathComponent, success: false, error: error.localizedDescription)
@@ -348,15 +345,12 @@ final class ExportManager {
     }
     
     private func showExportNotification(fileName: String, success: Bool, error: String? = nil) {
-        DispatchQueue.main.async {
-            let notification = NSUserNotification()
-            notification.title = success ? "Export Successful" : "Export Failed"
-            notification.informativeText = success ? 
-                "Successfully exported \(fileName)" : 
-                "Failed to export \(fileName): \(error ?? "Unknown error")"
-            notification.soundName = success ? NSUserNotificationDefaultSoundName : nil
-            
-            NSUserNotificationCenter.default.deliver(notification)
+        let title = success ? "Export Successful" : "Export Failed"
+        let body = success
+            ? "Successfully exported \(fileName)"
+            : "Failed to export \(fileName): \(error ?? "Unknown error")"
+        Task {
+            await StockbarNotificationPoster.post(title: title, body: body, playSound: success)
         }
     }
 }

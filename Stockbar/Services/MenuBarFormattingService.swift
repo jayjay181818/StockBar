@@ -22,6 +22,8 @@ actor MenuBarFormattingService {
         let change: Double
         let changePct: Double
         let dayPL: Double
+        let currency: String
+        let useColorCoding: Bool
         let settingsHash: Int
     }
 
@@ -72,6 +74,8 @@ actor MenuBarFormattingService {
             change: change,
             changePct: changePct,
             dayPL: dayPL,
+            currency: currency,
+            useColorCoding: useColorCoding,
             settingsHash: settings.hashValue
         )
 
@@ -200,7 +204,8 @@ actor MenuBarFormattingService {
 
         if settings.showCurrency {
             if let symbol = currencySymbol(for: currency) {
-                return "\(formatted.hasPrefix("+") ? "+" : "")\(symbol)\(abs(change).formatted(decimalPlaces: settings.decimalPlaces))"
+                let sign = change < 0 ? "-" : "+"
+                return "\(sign)\(symbol)\(abs(change).formatted(decimalPlaces: settings.decimalPlaces))"
             } else {
                 return "\(currency) \(formatted)"
             }
