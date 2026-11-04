@@ -48,8 +48,8 @@ The restore script:
 
 1. Verifies the backup name and location, then verifies that Stockbar is stopped.
 2. Requests an explicit `yes` confirmation before overwriting data.
-3. Imports `UserDefaults.plist` when present.
-4. Copies the SQLite database and matching sidecars. Existing database files are preserved in a timestamped `StockbarDataModel_pre_restore_*` directory first; stale destination sidecars are removed only after that safety copy.
+3. Before changing anything, saves the current data to a timestamped `StockbarDataModel_pre_restore_*` directory: a `defaults export` of `com.stockbar`, `.stockbar_config.json`, the quote cache and the SQLite files. The restore aborts if this safety copy cannot be made.
+4. Imports `UserDefaults.plist` when present, then copies the SQLite database and matching sidecars; stale destination sidecars are removed only after the safety copy.
 5. Restores `.stockbar_config.json` to `~/Library/Application Support/com.stockbar/.stockbar_config.json` with mode `600`.
 6. Restores the optional cache and prints the manifest.
 

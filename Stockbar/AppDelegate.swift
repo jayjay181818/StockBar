@@ -85,7 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let success = await BackupService.shared.performAutomaticBackupIfNeeded(trades: dataModel.realTimeTrades)
+        let success = await BackupService.shared.performAutomaticBackupIfNeeded(trades: dataModel.localPortfolioTradesForBackup)
         if success {
             await Logger.shared.info("Automatic backup completed successfully")
         } else {

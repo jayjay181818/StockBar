@@ -692,11 +692,17 @@ private struct HoldingsEditableRow: View {
             TextField("Units", text: $realTimeTrade.trade.position.unitSizeString)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: HoldingsTableLayout.unitsWidth)
+                .foregroundStyle(Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString) ? Color.primary : Color.red)
+                .help(Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString)
+                      ? "Units held" : "Not a number Stockbar can read; it counts as 0 units")
                 .onChange(of: realTimeTrade.trade.position.unitSizeString) { _, _ in dataModel.triggerTradeUpdate() }
 
             TextField("Avg Cost", text: $realTimeTrade.trade.position.positionAvgCostString)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: HoldingsTableLayout.averageCostWidth)
+                .foregroundStyle(Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString) ? Color.primary : Color.red)
+                .help(Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString)
+                      ? "Average cost per unit" : "Not a number Stockbar can read; cost and P&L are left blank")
                 .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _, _ in dataModel.triggerTradeUpdate() }
 
             Picker("", selection: currencyBinding) {
@@ -947,7 +953,7 @@ private struct StockbarBackupsView: View {
     private func backUpNow() {
         isBackingUp = true
         Task {
-            let success = await BackupService.shared.performManualBackup(trades: dataModel.realTimeTrades)
+            let success = await BackupService.shared.performManualBackup(trades: dataModel.localPortfolioTradesForBackup)
             isBackingUp = false
             status = BackupStatusMessage(
                 text: success ? "Backup completed." : "Backup failed. See Diagnostics for details.",

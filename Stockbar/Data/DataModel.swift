@@ -84,6 +84,8 @@ class DataModel: ObservableObject {
     /// Last time a Trading 212 sync actually updated linked holdings. Market
     /// refresh only defers to the broker while this is recent.
     private var lastTrading212LinkedSyncAt: Date?
+    /// A trade change is waiting out the save debounce.
+    private var hasPendingDebouncedTradeSave = false
     var legacyPortfolioTrades: [RealTimeTrade]?
     var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
     var folyncRefreshTimer: Timer?
@@ -497,9 +499,20 @@ class DataModel: ObservableObject {
         }
     }
 
+    /// Set once Core Data has held a portfolio (or legacy trades were recovered
+    /// once). After that an empty store means the user emptied it on purpose.
+    static let coreDataPortfolioEstablishedKey = "coreDataPortfolioEstablished"
+
     private func recoverLegacyUserTradesIfNeeded(afterLoading trades: [Trade]) async throws -> [Trade] {
+        let defaults = StockbarRuntimeStorage.userDefaults
         let portfolioTrades = trades.filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
         guard portfolioTrades.isEmpty else {
+            defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
+            return portfolioTrades
+        }
+        // Recover only before Core Data has ever held the portfolio; otherwise
+        // deleting every holding brought old legacy holdings back on relaunch.
+        guard !defaults.bool(forKey: Self.coreDataPortfolioEstablishedKey) else {
             return portfolioTrades
         }
 
@@ -517,6 +530,7 @@ class DataModel: ObservableObject {
 
         await logger.warning("⚠️ Core Data portfolio was empty; recovering \(legacyTrades.count) trades from legacy UserDefaults")
         try await tradeDataService.saveAllTrades(legacyTrades)
+        defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
         return legacyTrades
     }
     
@@ -1453,6 +1467,13 @@ class DataModel: ObservableObject {
         symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
 
+    /// The user's own holdings for backups. While Folync is active the displayed
+    /// rows are Folync's read-only ones and the local portfolio is set aside.
+    var localPortfolioTradesForBackup: [RealTimeTrade] {
+        (isFolyncPortfolioActive ? (legacyPortfolioTrades ?? []) : realTimeTrades)
+            .filter { $0.sourceIdentity == nil }
+    }
+
     /// Preserve provider-owned position valuations in window tables and inspectors.
     func positionFinancialFieldsReadOnly(for trade: RealTimeTrade) -> Bool {
         isFolyncPortfolioActive || trade.sourceIdentity != nil
@@ -1620,6 +1641,39 @@ class DataModel: ObservableObject {
 
     // MARK: - Private Methods
 
+    /// The body of the 2-second debounced save. Also run directly on quit, so an
+    /// edit made in the last two seconds is not lost.
+    private func saveDebouncedTradeChanges() {
+        hasPendingDebouncedTradeSave = false
+        guard hasCompletedInitialTradeLoad else {
+            Task { await logger.debug("Skipping trade save until initial load completes") }
+            return
+        }
+        guard !isFolyncPortfolioActive else { return }
+
+        let trades = realTimeTrades
+
+        // Save trades with meaningful data (units > 0 OR price set OR symbol set)
+        // This allows saving partial edits where user enters units/price but hasn't set symbol yet
+        let validTrades = trades.filter { trade in
+            let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasUnits = trade.trade.position.unitSize > 0
+            let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasSymbol || hasUnits || hasPrice
+        }
+        if !validTrades.isEmpty {
+            let validPortfolioTrades = validTrades.filter { !isBenchmarkTrade($0) }
+            saveTrades(validTrades)
+
+            if !validPortfolioTrades.isEmpty {
+                saveUserOrder(validPortfolioTrades)
+                saveTradingInfo()
+            }
+
+            objectWillChange.send()
+        }
+    }
+
     // Keep setupPublishers and saveTrades as they are
     private func setupPublishers() {
         // Merge updates from $realTimeTrades (array changes) and manual triggers (content changes)
@@ -1628,36 +1682,10 @@ class DataModel: ObservableObject {
             $realTimeTrades.map { _ in () },
             tradeUpdateTrigger
         )
+        .handleEvents(receiveOutput: { [weak self] _ in self?.hasPendingDebouncedTradeSave = true })
         .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
         .sink { [weak self] _ in
-            guard let self = self else { return }
-            guard self.hasCompletedInitialTradeLoad else {
-                Task { await self.logger.debug("Skipping trade save until initial load completes") }
-                return
-            }
-            guard !self.isFolyncPortfolioActive else { return }
-
-            let trades = self.realTimeTrades
-            
-            // Save trades with meaningful data (units > 0 OR price set OR symbol set)
-            // This allows saving partial edits where user enters units/price but hasn't set symbol yet
-            let validTrades = trades.filter { trade in
-                let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let hasUnits = trade.trade.position.unitSize > 0
-                let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                return hasSymbol || hasUnits || hasPrice
-            }
-            if !validTrades.isEmpty {
-                let validPortfolioTrades = validTrades.filter { !self.isBenchmarkTrade($0) }
-                self.saveTrades(validTrades)
-
-                if !validPortfolioTrades.isEmpty {
-                    self.saveUserOrder(validPortfolioTrades)
-                    self.saveTradingInfo()
-                }
-
-                self.objectWillChange.send()
-            }
+            self?.saveDebouncedTradeChanges()
         }
         .store(in: &cancellables)
 
@@ -1726,6 +1754,9 @@ class DataModel: ObservableObject {
 
     /// Waits for queued background saves, e.g. before the app terminates.
     func flushPendingPersistence() async {
+        if hasPendingDebouncedTradeSave {
+            saveDebouncedTradeChanges()
+        }
         while let task = pendingPersistenceTask {
             await task.value
             if pendingPersistenceTask == task {
@@ -1735,6 +1766,9 @@ class DataModel: ObservableObject {
     }
 
     func replacePortfolioTrades(_ trades: [Trade], source: String, allowEmptyPortfolio: Bool = false) async throws {
+        // While Folync is active the displayed rows are Folync's and the local
+        // portfolio is set aside; a restore here would be undone on deactivation.
+        guard !isFolyncPortfolioActive else { throw PortfolioRestoreError.folyncPortfolioActive }
         let portfolioTrades = trades
             .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
@@ -1859,11 +1893,14 @@ class DataModel: ObservableObject {
 
 enum PortfolioRestoreError: LocalizedError {
     case noRestorablePortfolioTrades
+    case folyncPortfolioActive
 
     var errorDescription: String? {
         switch self {
         case .noRestorablePortfolioTrades:
             return "The selected backup does not contain any portfolio stocks. It only contains internal benchmark rows."
+        case .folyncPortfolioActive:
+            return "Folync is providing the portfolio. Switch to the local portfolio in Settings → Connections before restoring a backup."
         }
     }
 }

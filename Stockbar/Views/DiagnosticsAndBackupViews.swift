@@ -259,6 +259,10 @@ struct RestoreBackupView: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(.blue)
+                        .disabled(dataModel.isFolyncPortfolioActive)
+                        .help(dataModel.isFolyncPortfolioActive
+                              ? "Folync is providing the portfolio. Switch to the local portfolio before restoring."
+                              : "Replace the current portfolio with this backup")
                     }
                     .padding(.vertical, 4)
                 }
@@ -308,11 +312,18 @@ struct RestoreBackupView: View {
 
         Task {
             do {
-                // Backup current portfolio first
-                _ = await BackupService.shared.performManualBackup(trades: dataModel.realTimeTrades)
-
-                // Restore from backup
+                // Read the chosen backup first, so a bad file changes nothing.
                 let restoredTrades = try await BackupService.shared.restoreFromBackup(backupURL: backup.url)
+
+                // Then keep a copy of the current portfolio. Its cleanup never
+                // deletes the backup being restored, and a failed copy stops the
+                // restore rather than replacing holdings with no way back.
+                let current = dataModel.localPortfolioTradesForBackup
+                let safetyCopied = await BackupService.shared.performPreRestoreBackup(trades: current, keeping: backup.url)
+                if !safetyCopied && current.contains(where: { !$0.trade.name.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                    throw BackupRestoreSafetyError.safetyBackupFailed
+                }
+
                 try await dataModel.replacePortfolioTrades(restoredTrades, source: "backup-restore")
 
                 await MainActor.run {
@@ -377,5 +388,13 @@ struct BackupPreviewView: View {
             .padding()
         }
         .frame(width: 500, height: 400)
+    }
+}
+
+private enum BackupRestoreSafetyError: LocalizedError {
+    case safetyBackupFailed
+
+    var errorDescription: String? {
+        "Stockbar could not save a copy of your current portfolio first, so nothing was restored. Check the backup folder is writable and try again."
     }
 }
