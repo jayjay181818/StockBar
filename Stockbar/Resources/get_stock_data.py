@@ -244,6 +244,21 @@ def set_cache(symbol, result):
         save_cache_unlocked(current_cache)
     return True
 
+def exchange_today(index, symbol):
+    """Current calendar date in the exchange's timezone.
+
+    Bar dates in yfinance history are in the exchange timezone, so comparing
+    them with the Mac's local date can treat today's partial bar as complete.
+    Prefer the history index timezone; fall back to the symbol's market date.
+    """
+    tz = getattr(index, 'tz', None)
+    if tz is not None:
+        try:
+            return datetime.now(tz).date()
+        except Exception:
+            pass
+    return datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
+
 def market_date_for_symbol(symbol):
     tz = None
     try:
@@ -624,7 +639,7 @@ def fetch_real_time_quote_yfinance(symbol):
         daily_hist = daily_hist.sort_index()
         
         # Remove today's data if it's incomplete (during market hours)
-        today = datetime.now().date()
+        today = exchange_today(daily_hist.index, symbol)
         complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
         
         if not complete_days.empty:
@@ -1223,6 +1238,21 @@ def fetch_real_time_quote(symbol):
     fmp_result = fetch_real_time_quote_fmp(symbol)
     return validated_provider_quote(symbol, "FMP", fmp_result)
 
+def yfinance_reported_currency(ticker):
+    """Currency reported by yfinance for a ticker (history metadata, then fast_info, then info)."""
+    for getter in (
+        lambda: ticker.history_metadata.get('currency'),
+        lambda: ticker.fast_info['currency'],
+        lambda: ticker.info.get('currency'),
+    ):
+        try:
+            value = getter()
+            if value:
+                return value
+        except Exception:
+            continue
+    return None
+
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
     if not YFINANCE_AVAILABLE:
@@ -1246,6 +1276,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 
             historical_data = []
             prev_close_raw = None
+            _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
             
             for date, row in hist.iterrows():
                 close_price_raw = float(row['Close'])
@@ -1255,7 +1286,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 else:
                     previous_close_raw = float(row['Open'])
                 
-                if symbol.upper().endswith('.L'):
+                if uses_pence:
                     close_price = close_price_raw / 100.0
                     previous_close = previous_close_raw / 100.0
                 else:
@@ -1298,6 +1329,7 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
         return []
     
     historical_data = []
+    reported_currency = data.get('currency')
     for entry in data['historical']:
         try:
             date_obj = datetime.strptime(entry['date'], '%Y-%m-%d')
@@ -1306,7 +1338,8 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
             close_price = entry['close']
             previous_close = entry.get('open', close_price)
             
-            if api_symbol.endswith('.L'):
+            _, uses_pence = normalize_currency(entry.get('currency') or reported_currency, api_symbol)
+            if uses_pence:
                 close_price = close_price / 100.0
                 previous_close = previous_close / 100.0
             
