@@ -22,8 +22,14 @@ class RefreshService {
     private var refreshTimer: Timer?
     private var currentSymbolIndex = 0
     private var cancellables = Set<AnyCancellable>()
-    private var isRefreshing = false
+    private var scheduler: RefreshPassScheduler!
     private var lastImmediateFireAt: Date?
+    /// When connectivity was last lost; used to forgive failures caused by the outage.
+    private var offlineSince: Date?
+
+    /// Failures recorded this long before connectivity was reported lost are still
+    /// attributed to the outage (path monitoring lags the first failed fetch).
+    private static let outageAttributionGrace: TimeInterval = 120
 
     /// Floor between the immediate refreshes triggered by timer (re)starts.
     /// `startRefreshTimer` is called from reactive paths — an interval change or
@@ -49,6 +55,9 @@ class RefreshService {
         self.cacheCoordinator = cacheCoordinator
         self.refreshCoordinator = refreshCoordinator
         self.refreshInterval = refreshInterval
+        self.scheduler = RefreshPassScheduler { [weak self] request in
+            await self?.runRefreshPass(request)
+        }
         
         setupConnectivityMonitoring()
     }
@@ -61,19 +70,41 @@ class RefreshService {
             .sink { [weak self] isConnected in
                 guard let self = self else { return }
                 if isConnected {
-                    // If network returns, trigger an immediate refresh if needed or restart timer
-                    if self.refreshTimer == nil {
-                         self.startRefreshTimer()
+                    let outageStart = self.offlineSince
+                    self.offlineSince = nil
+                    Task { @MainActor in
+                        // Failures caused by the outage must not keep symbols
+                        // suspended for the full circuit-breaker timeout.
+                        if let outageStart {
+                            await self.clearNetworkCausedSuspensions(since: outageStart)
+                        }
+                        // If network returns, restart the timer (which also refreshes immediately)
+                        if self.refreshTimer == nil {
+                            self.startRefreshTimer()
+                        }
+                        await Logger.shared.info("🌐 Network restored: Resuming refresh operations")
                     }
-                    // Optionally trigger immediate refresh if it was down for a while
-                    Task { await Logger.shared.info("🌐 Network restored: Resuming refresh operations") }
                 } else {
                     // Pause refresh timer when offline to save resources
+                    if self.offlineSince == nil { self.offlineSince = Date() }
                     self.stopRefreshTimer()
                     Task { await Logger.shared.info("🌐 Network lost: Pausing refresh operations") }
                 }
             }
             .store(in: &cancellables)
+    }
+
+    /// Un-suspends symbols whose recent failures happened during (or just before) an
+    /// outage, and resets their backoff so the post-reconnect refresh retries them.
+    private func clearNetworkCausedSuspensions(since outageStart: Date) async {
+        guard let dataModel else { return }
+        let cutoff = outageStart.addingTimeInterval(-Self.outageAttributionGrace)
+        for symbol in Set(dataModel.realTimeTrades.map { $0.trade.name }.filter { !$0.isEmpty }) {
+            guard let lastFailed = await cacheCoordinator.getLastFailedFetch(for: symbol),
+                  lastFailed >= cutoff else { continue }
+            await cacheCoordinator.clearSuspension(for: symbol)
+            await Logger.shared.debug("Cleared outage-caused failures for \(symbol) after reconnect")
+        }
     }
 
     func setDataModel(_ dataModel: DataModel) {
@@ -86,16 +117,27 @@ class RefreshService {
     /// symbols are evaluated and fetched. Otherwise the entire portfolio is
     /// considered.
     ///
-    /// - Parameter limitedTo: Optional list of symbols to refresh immediately.
-    func performRefreshAllTrades(limitedTo targetSymbols: [String]? = nil) async {
+    /// A request that arrives while a refresh is running is not dropped: it is
+    /// queued and a follow-up pass runs once the current one finishes.
+    ///
+    /// - Parameters:
+    ///   - limitedTo: Optional list of symbols to refresh immediately.
+    ///   - force: User-initiated refresh. Skips the freshness check and retry
+    ///     backoff (suspended symbols are still skipped unless explicitly targeted).
+    func performRefreshAllTrades(limitedTo targetSymbols: [String]? = nil, force: Bool = false) async {
+        let symbols = targetSymbols.flatMap { $0.isEmpty ? nil : Set($0.map { $0.uppercased() }) }
+        await scheduler.schedule(RefreshRequest(symbols: symbols, force: force))
+    }
+
+    private func runRefreshPass(_ request: RefreshRequest) async {
         guard let dataModel = dataModel else { return }
-        
-        // Prevent concurrent refreshes
-        if isRefreshing {
+        let targetSymbols: [String]? = request.symbols.map { Array($0) }
+        let force = request.force
+
+        guard ConnectivityMonitor.shared.isConnected else {
+            await Logger.shared.debug("Offline – skipping refresh pass")
             return
         }
-        isRefreshing = true
-        defer { isRefreshing = false }
 
         let now = Date()
         var symbolsToRefresh: [String] = []
@@ -142,7 +184,13 @@ class RefreshService {
         // quote and silently doubling the effective interval.
         let freshnessInterval = Self.freshnessInterval(forRefreshInterval: refreshInterval)
         for symbol in candidateSymbols {
-            if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now, freshnessInterval: freshnessInterval) {
+            if force {
+                let explicitlyTargeted = request.symbols?.contains(symbol.uppercased()) ?? false
+                let suspended = await cacheCoordinator.isSuspended(symbol: symbol, at: now)
+                if explicitlyTargeted || !suspended {
+                    symbolsToForceRefresh.append(symbol)
+                }
+            } else if await cacheCoordinator.shouldRefresh(symbol: symbol, at: now, freshnessInterval: freshnessInterval) {
                 symbolsToRefresh.append(symbol)
             } else if await cacheCoordinator.shouldRetry(symbol: symbol, at: now) {
                 symbolsToForceRefresh.append(symbol)
@@ -223,13 +271,13 @@ class RefreshService {
                             currency: currency
                         )
                     } else {
-                        await cacheCoordinator.setFailedFetch(for: symbol, at: now)
+                        await recordFailure(for: symbol, at: now)
                         await Logger.shared.debug("Updated failure cache for \(symbol) - failed fetch, retaining old data")
                     }
 
                     await Logger.shared.debug("Updated trade \(symbol) from refresh result.")
                 } else {
-                    await cacheCoordinator.setFailedFetch(for: symbol, at: now)
+                    await recordFailure(for: symbol, at: now)
                     await Logger.shared.warning("No result returned for symbol \(symbol), treating as failure.")
                 }
             }
@@ -256,6 +304,17 @@ class RefreshService {
         } catch {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Counts a failed fetch toward the circuit breaker, unless the device is
+    /// offline: an outage says nothing about the symbol, and suspensions it caused
+    /// would outlive the outage by up to the breaker timeout.
+    private func recordFailure(for symbol: String, at time: Date) async {
+        guard ConnectivityMonitor.shared.isConnected else {
+            await Logger.shared.debug("Offline – not counting failed fetch for \(symbol)")
+            return
+        }
+        await cacheCoordinator.setFailedFetch(for: symbol, at: time)
     }
 
     nonisolated static func freshnessInterval(forRefreshInterval interval: TimeInterval) -> TimeInterval {
@@ -310,6 +369,67 @@ class RefreshService {
     
     // Legacy support / Staggered refresh placeholders if needed
     // For now, we unify on batch refresh per the optimization plan
+}
+
+/// One requested refresh pass. `symbols == nil` means the whole portfolio.
+struct RefreshRequest: Equatable, Sendable {
+    var symbols: Set<String>?
+    var force: Bool
+}
+
+/// Pending refresh requests that arrived while a pass was running. Requests with
+/// the same `force` merge (a whole-portfolio request absorbs targeted ones);
+/// forced requests are served first.
+struct RefreshRequestQueue: Sendable {
+    private(set) var pending: [RefreshRequest] = []
+
+    var isEmpty: Bool { pending.isEmpty }
+
+    mutating func enqueue(_ request: RefreshRequest) {
+        guard let index = pending.firstIndex(where: { $0.force == request.force }) else {
+            pending.append(request)
+            return
+        }
+        if let existing = pending[index].symbols, let incoming = request.symbols {
+            pending[index].symbols = existing.union(incoming)
+        } else {
+            pending[index].symbols = nil
+        }
+    }
+
+    mutating func dequeue() -> RefreshRequest? {
+        guard !pending.isEmpty else { return nil }
+        let index = pending.firstIndex(where: \.force) ?? 0
+        return pending.remove(at: index)
+    }
+}
+
+/// Serialises refresh passes. A request made during a running pass is queued and
+/// served by a follow-up pass instead of being dropped.
+@MainActor
+final class RefreshPassScheduler {
+    private var queue = RefreshRequestQueue()
+    private(set) var isRunning = false
+    private let runPass: (RefreshRequest) async -> Void
+
+    init(runPass: @escaping (RefreshRequest) async -> Void) {
+        self.runPass = runPass
+    }
+
+    func schedule(_ request: RefreshRequest) async {
+        if isRunning {
+            queue.enqueue(request)
+            return
+        }
+        isRunning = true
+        defer { isRunning = false }
+
+        var next: RefreshRequest? = request
+        while let current = next {
+            await runPass(current)
+            next = queue.dequeue()
+        }
+    }
 }
 
 struct BrokerLinkedMarketRefreshPlan {

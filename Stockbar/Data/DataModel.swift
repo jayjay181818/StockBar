@@ -1335,7 +1335,8 @@ class DataModel: ObservableObject {
     /// Triggers an immediate refresh for the provided symbols, bypassing the
     /// staggered rotation. Symbols are matched case-insensitively against the
     /// current portfolio.
-    func refreshSymbolsImmediately(_ symbols: [String], reason: String) async {
+    /// `force` (user-initiated) skips the freshness check and retry backoff.
+    func refreshSymbolsImmediately(_ symbols: [String], reason: String, force: Bool = false) async {
         let uniqueTargets = Array(Set(symbols.map { $0.uppercased() }))
         guard !uniqueTargets.isEmpty else { return }
 
@@ -1355,7 +1356,7 @@ class DataModel: ObservableObject {
             return
         }
 
-        await performRefreshAllTrades(limitedTo: resolvedSymbols)
+        await performRefreshAllTrades(limitedTo: resolvedSymbols, force: force)
     }
 
     /// Convenience helper that inspects cache status and refreshes any symbol
@@ -1387,13 +1388,13 @@ class DataModel: ObservableObject {
     }
 
     /// Internal method that delegates refresh work to the RefreshService once it is ready.
-    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil) async {
+    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil, force: Bool = false) async {
         guard let refreshService else {
             await Logger.shared.warning("performRefreshAllTrades called before refreshService initialized")
             return
         }
 
-        await refreshService.performRefreshAllTrades(limitedTo: symbols)
+        await refreshService.performRefreshAllTrades(limitedTo: symbols, force: force)
     }
 
     /// Memory-efficient calculation of portfolio metrics - delegates to PortfolioCalculationService

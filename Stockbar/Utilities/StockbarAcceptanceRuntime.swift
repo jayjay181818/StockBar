@@ -62,6 +62,37 @@ struct StockbarAcceptanceRuntime: Sendable {
         applicationSupportRoot?.appendingPathComponent("FolyncSupplemental", isDirectory: true)
     }
 
+    /// True for the per-process isolation created automatically under XCTest.
+    /// All three must hold, so cleanup can never reach the production
+    /// Keychain item or an explicit acceptance root.
+    var isAutomaticXCTestIsolation: Bool {
+        guard let runID, runID.hasPrefix("xctest-"), let root else { return false }
+        let expectedRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Stockbar-\(runID)", isDirectory: true)
+            .standardizedFileURL
+        return root.standardizedFileURL == expectedRoot
+            && folyncKeychainService != Self.productionFolyncKeychainService
+    }
+
+    /// Removes everything an automatic XCTest run created: temporary root, defaults
+    /// suite and Folync Keychain item. Never touches explicit acceptance runs.
+    func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
+        guard isAutomaticXCTestIsolation else { return }
+        if let root { try? fileManager.removeItem(at: root) }
+        if let defaultsSuiteName { UserDefaults.standard.removePersistentDomain(forName: defaultsSuiteName) }
+        try? FolyncCredentialStore(service: folyncKeychainService).delete()
+    }
+
+    nonisolated(unsafe) private static var runtimePendingCleanup: Self?
+
+    /// Schedules `removeAutomaticTestArtifacts()` for process exit (XCTest has no
+    /// process-level teardown hook for process-wide singletons).
+    fileprivate func scheduleCleanupAtExit() {
+        guard isAutomaticXCTestIsolation else { return }
+        Self.runtimePendingCleanup = self
+        atexit { StockbarAcceptanceRuntime.runtimePendingCleanup?.removeAutomaticTestArtifacts() }
+    }
+
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
@@ -131,6 +162,7 @@ struct StockbarAcceptanceRuntime: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
+        uniqueSuffix: String = UUID().uuidString.lowercased(),
         isRunningUnderXCTest: Bool? = nil
     ) throws -> Self {
         let hasExplicitAcceptanceEnvironment = environment["STOCKBAR_ACCEPTANCE_ROOT"] != nil
@@ -148,7 +180,9 @@ struct StockbarAcceptanceRuntime: Sendable {
             return try resolve(environment: environment, fileManager: fileManager)
         }
 
-        let runID = "xctest-\(processIdentifier)"
+        // PIDs are reused across runs, so a PID alone could collide with (and
+        // inherit) a previous run's leftover defaults, files or Keychain items.
+        let runID = "xctest-\(processIdentifier)-\(uniqueSuffix)"
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("Stockbar-\(runID)", isDirectory: true)
             .standardizedFileURL
@@ -164,7 +198,9 @@ struct StockbarAcceptanceRuntime: Sendable {
 public enum StockbarRuntimeStorage {
     static let acceptance: StockbarAcceptanceRuntime = {
         do {
-            return try StockbarAcceptanceRuntime.resolveCurrent()
+            let runtime = try StockbarAcceptanceRuntime.resolveCurrent()
+            runtime.scheduleCleanupAtExit()
+            return runtime
         } catch {
             fatalError("Invalid Stockbar acceptance environment: \(error.localizedDescription)")
         }
