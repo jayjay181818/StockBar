@@ -295,3 +295,42 @@ class ExchangeDateTests(unittest.TestCase):
         index = mock.Mock(tz=None)
         with mock.patch.object(self.module, "market_date_for_symbol", return_value="2026-11-14"):
             self.assertEqual(self.module.exchange_today(index, "VOD.L").isoformat(), "2026-11-14")
+
+
+class OHLCFetchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def ohlc(self, symbol, currency, rows):
+        fake_yf = mock.Mock()
+        fake_yf.Ticker.return_value = _FakeTicker(rows, currency)
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "yf", fake_yf, create=True):
+            return self.module.fetch_ohlc_data_yfinance(symbol)
+
+    @staticmethod
+    def bar(hour, price, volume):
+        from datetime import datetime as real_datetime, timezone
+
+        return (
+            real_datetime(2026, 11, 3, hour, tzinfo=timezone.utc),
+            {"Open": price, "High": price, "Low": price, "Close": price, "Volume": volume},
+        )
+
+    def test_missing_volume_is_zero_and_does_not_fail_the_fetch(self):
+        data = self.ohlc("^FTSE", None, [self.bar(10, 8000.0, float("nan")), self.bar(11, 8010.0, 1500.0)])
+        self.assertEqual([(point["close"], point["volume"]) for point in data], [(8000.0, 0), (8010.0, 1500)])
+
+    def test_rows_with_a_missing_price_are_skipped(self):
+        data = self.ohlc("AAPL", "USD", [self.bar(10, 200.0, 10.0), self.bar(11, float("nan"), 10.0)])
+        self.assertEqual([point["close"] for point in data], [200.0])
+        self.assertIsNone(self.ohlc("AAPL", "USD", [self.bar(10, float("nan"), 10.0)]))
+
+    def test_london_bars_are_scaled_by_reported_currency(self):
+        self.assertEqual(self.ohlc("VOD.L", "GBp", [self.bar(10, 1000.0, 5.0)])[0]["close"], 10.0)
+        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["close"], 600.0)
+        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["volume"], 5)

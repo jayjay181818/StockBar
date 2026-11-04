@@ -184,6 +184,58 @@ final class DataIntegrityGuardTests: XCTestCase {
         XCTAssertEqual(decoded.droppedCount, 1)
     }
 
+    func testAnnotationsSurviveAReloadFromDisk() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarTests-Annotations-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("chart_annotations.json")
+
+        let first = ChartAnnotationService(storageURL: url)
+        let kept = ChartAnnotation(type: .buyMarker, date: Date(timeIntervalSince1970: 1_700_000_000), price: 12.5, text: "Bought", symbol: "AAA")
+        let removed = ChartAnnotation(type: .note, date: Date(timeIntervalSince1970: 1_700_100_000), price: 13, text: "Gone", symbol: "AAA")
+        let other = ChartAnnotation(type: .text, date: Date(timeIntervalSince1970: 1_700_200_000), price: 1, text: "Other", symbol: "BBB")
+        first.addAnnotation(kept)
+        first.addAnnotation(removed)
+        first.addAnnotation(other)
+        first.removeAnnotation(id: removed.id)
+        first.clearAnnotations(for: "BBB")
+
+        let reloaded = ChartAnnotationService(storageURL: url)
+        XCTAssertEqual(reloaded.annotations, [kept])
+    }
+
+    func testBackupFileRestoresThePortfolioAndSkipsBenchmarks() async throws {
+        let backups = try BackupService.shared.getBackupDirectory()
+        let realRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Stockbar", isDirectory: true).standardizedFileURL.path
+        guard !backups.standardizedFileURL.path.hasPrefix(realRoot) else {
+            return XCTFail("Backups must go to the isolated test root, not \(realRoot)")
+        }
+        let before = Set(BackupService.shared.listAvailableBackups().map(\.url))
+
+        let holding = RealTimeTrade(
+            trade: Trade(name: "VOD.L", position: Position(unitSize: "12.345678", positionAvgCost: "71.25", currency: "GBP", costCurrency: "GBX")),
+            realTimeInfo: TradingInfo()
+        )
+        let benchmark = RealTimeTrade(
+            trade: Trade(name: "^GSPC", position: Position(unitSize: "0", positionAvgCost: "", currency: "USD", costCurrency: "USD")),
+            realTimeInfo: TradingInfo()
+        )
+        let saved = await BackupService.shared.performManualBackup(trades: [holding, benchmark])
+        XCTAssertTrue(saved)
+
+        let created = BackupService.shared.listAvailableBackups().map(\.url).filter { !before.contains($0) }
+        defer { created.forEach { try? FileManager.default.removeItem(at: $0) } }
+        let backupURL = try XCTUnwrap(created.first)
+
+        let restored = try await BackupService.shared.restoreFromBackup(backupURL: backupURL)
+        XCTAssertEqual(restored.map(\.name), ["VOD.L"], "Benchmarks are internal rows and are not backed up")
+        let position = try XCTUnwrap(restored.first?.position)
+        XCTAssertEqual(position.unitSize, 12.345678, accuracy: 1e-9)
+        XCTAssertEqual(position.costCurrency, "GBX")
+        XCTAssertEqual(position.currency, "GBP")
+    }
+
     func testPriceSanitiserAcceptsLargeRealQuotes() {
         let service = DataValidationService.shared
         XCTAssertEqual(service.sanitizePrice(1_520_000), 1_520_000)

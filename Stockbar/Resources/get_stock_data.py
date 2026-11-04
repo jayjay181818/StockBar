@@ -1536,6 +1536,19 @@ def output_error(error_code, message, symbol=None, retry_after=None):
 
     print_json(error_obj)
 
+def finite_ohlc_value(value):
+    """A price as a finite float, or None when missing or non-finite."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+def ohlc_volume(value):
+    """Share count as an int; a missing or non-finite volume becomes 0."""
+    number = finite_ohlc_value(value)
+    return int(number) if number is not None else 0
+
 def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
     """Fetch OHLC data using yfinance"""
     if not YFINANCE_AVAILABLE:
@@ -1548,19 +1561,19 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
         if hist.empty:
             return None
 
+        # Scale by the currency yfinance reports, as the history path does, so
+        # a .L listing quoted in GBP or USD is not divided by 100.
+        _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
+        divisor = 100.0 if uses_pence else 1.0
+
         ohlc_data = []
         for date, row in hist.iterrows():
-            open_price = float(row['Open'])
-            high_price = float(row['High'])
-            low_price = float(row['Low'])
-            close_price = float(row['Close'])
-            volume = int(row['Volume'])
-
-            if symbol.upper().endswith('.L'):
-                open_price /= 100.0
-                high_price /= 100.0
-                low_price /= 100.0
-                close_price /= 100.0
+            prices = [finite_ohlc_value(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
+            # A row with a missing price (often today's partial bar) would become
+            # null in the JSON and fail decoding of the whole response, so skip it.
+            if any(price is None for price in prices):
+                continue
+            open_price, high_price, low_price, close_price = (price / divisor for price in prices)
 
             ohlc_data.append({
                 'timestamp': int(date.timestamp()),
@@ -1569,8 +1582,12 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
                 'high': high_price,
                 'low': low_price,
                 'close': close_price,
-                'volume': volume
+                # Indices and FX often have no volume; that must not fail the fetch.
+                'volume': ohlc_volume(row['Volume'])
             })
+
+        if not ohlc_data:
+            return None
 
         print(f"yfinance retrieved {len(ohlc_data)} OHLC data points for {symbol} (period={period}, interval={interval})", file=sys.stderr)
         return ohlc_data
