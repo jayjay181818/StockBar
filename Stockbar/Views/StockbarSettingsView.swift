@@ -422,7 +422,7 @@ struct StockbarSettingsView: View {
 
     private func performManualBackup() {
         Task {
-            let success = await BackupService.shared.performManualBackup(trades: dataModel.realTimeTrades)
+            let success = await BackupService.shared.performManualBackup(trades: dataModel.localPortfolioTradesForBackup)
             backupAlertMessage = success ? "Backup completed." : "Backup failed. See Diagnostics for details."
             showingBackupAlert = true
         }

@@ -80,8 +80,14 @@ class BackupService {
         return await performBackup(trades: trades, automatic: false)
     }
 
+    /// Safety backup taken just before a restore. Its retention cleanup never
+    /// deletes `keeping`, the backup about to be restored.
+    func performPreRestoreBackup(trades: [RealTimeTrade], keeping restoreURL: URL) async -> Bool {
+        return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
+    }
+
     /// Core backup implementation
-    private func performBackup(trades: [RealTimeTrade], automatic: Bool) async -> Bool {
+    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
         do {
             let backupDir = try getBackupDirectory()
 
@@ -120,6 +126,7 @@ class BackupService {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
+            encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
 
             let jsonData = try encoder.encode(exportData)
             try jsonData.write(to: backupURL)
@@ -128,7 +135,7 @@ class BackupService {
             lastBackupDate = Date()
 
             // Cleanup old backups
-            try await cleanupOldBackups()
+            try await cleanupOldBackups(keeping: keptURL)
 
             await logger.info("Backup successful: \(filename)")
             return true
@@ -173,6 +180,7 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         let exportData = try decoder.decode([PortfolioExportData].self, from: data)
         let trades = exportData
@@ -192,6 +200,7 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         return try decoder.decode([PortfolioExportData].self, from: data)
             .filter { !SymbolMetadata.isBenchmarkSymbol($0.symbol) }
@@ -200,7 +209,7 @@ class BackupService {
     // MARK: - Cleanup
 
     /// Removes backups older than retention period
-    private func cleanupOldBackups() async throws {
+    private func cleanupOldBackups(keeping keptURL: URL? = nil) async throws {
         let backupDir = try getBackupDirectory()
         let contents = try fileManager.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)
 
@@ -209,7 +218,8 @@ class BackupService {
         var deletedCount = 0
         for fileURL in contents {
             guard fileURL.pathExtension == backupFileExtension,
-                  fileURL.lastPathComponent.starts(with: backupFilePrefix) else {
+                  fileURL.lastPathComponent.starts(with: backupFilePrefix),
+                  fileURL.standardizedFileURL != keptURL?.standardizedFileURL else {
                 continue
             }
 

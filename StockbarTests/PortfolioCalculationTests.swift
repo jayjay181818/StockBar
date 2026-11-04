@@ -2150,3 +2150,51 @@ class PortfolioCalculationTests: XCTestCase {
     }
 
 }
+
+final class PortfolioBackupFormatTests: XCTestCase {
+    func testParseAmountReadsGroupingAndLocaleDecimalsAndRejectsJunk() {
+        let uk = Locale(identifier: "en_GB")
+        let german = Locale(identifier: "de_DE")
+        XCTAssertEqual(Position.parseAmount("1,000", locale: uk), 1_000)
+        XCTAssertEqual(Position.parseAmount(" 10.25 ", locale: german), 10.25, "A plain '.' decimal works in any locale")
+        XCTAssertEqual(Position.parseAmount("12,50", locale: german), 12.5)
+        XCTAssertEqual(Position.parseAmount("0", locale: uk), 0, "Watchlist rows can hold zero units")
+        XCTAssertNil(Position.parseAmount("abc", locale: uk))
+        XCTAssertNil(Position.parseAmount("-5", locale: uk))
+        XCTAssertNil(Position.parseAmount("", locale: uk))
+        XCTAssertTrue(Position.isReadableAmount("  "))
+        XCTAssertFalse(Position.isReadableAmount("12x"))
+    }
+
+    func testBackupRoundTripKeepsWatchlistMenuBarAndCurrencyAndSurvivesBlankCost() throws {
+        let watched = Trade(
+            name: "VOD.L",
+            position: Position(unitSize: "0", positionAvgCost: "", currency: "GBP", costCurrency: "GBX"),
+            isWatchlistOnly: true,
+            showInMenuBar: false
+        )
+        let encoder = JSONEncoder()
+        encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
+
+        let data = try encoder.encode([PortfolioExportData(from: watched)])
+        let restored = try XCTUnwrap(try decoder.decode([PortfolioExportData].self, from: data).first).toTrade()
+
+        XCTAssertTrue(restored.isWatchlistOnly)
+        XCTAssertFalse(restored.showInMenuBar)
+        XCTAssertEqual(restored.position.currency, "GBP")
+        XCTAssertEqual(restored.position.costCurrency, "GBX")
+        XCTAssertEqual(restored.position.positionAvgCostString, "", "A blank cost stays blank rather than failing the backup")
+    }
+
+    func testBackupsWrittenBeforeTheNewFieldsStillDecode() throws {
+        let old = #"[{"symbol":"AAPL","units":5,"avgPositionCost":150.5,"costCurrency":"USD"}]"#
+        let trade = try XCTUnwrap(try JSONDecoder().decode([PortfolioExportData].self, from: Data(old.utf8)).first).toTrade()
+        XCTAssertEqual(trade.name, "AAPL")
+        XCTAssertFalse(trade.isWatchlistOnly)
+        XCTAssertTrue(trade.showInMenuBar)
+        XCTAssertEqual(trade.position.currency, "USD")
+        XCTAssertEqual(trade.position.positionAvgCost, 150.5)
+    }
+}

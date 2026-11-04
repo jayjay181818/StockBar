@@ -57,14 +57,39 @@ struct Position: Codable, Equatable {
     }
     var unitSize: Double {
         get {
-            return Double(unitSizeString) ?? 0
+            return Self.parseAmount(unitSizeString) ?? 0
         }
     }
     var positionAvgCostString: String
     var positionAvgCost: Double {
         get {
-            return Double(positionAvgCostString) ?? .nan
+            return Self.parseAmount(positionAvgCostString) ?? .nan
         }
+    }
+
+    /// Parses a typed units or cost value. A plain "1234.5" works in any locale;
+    /// otherwise the user's locale applies, so "1,000" (grouping) and "12,50"
+    /// (decimal comma) are read as entered instead of becoming 0 or NaN.
+    /// Returns nil for empty, non-numeric, non-finite or negative input.
+    /// Blank is fine (watchlist rows); anything else must parse.
+    static func isReadableAmount(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || parseAmount(text) != nil
+    }
+
+    static func parseAmount(_ text: String, locale: Locale = .current) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let plain = Double(trimmed) {
+            return plain.isFinite && plain >= 0 ? plain : nil
+        }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.isLenient = true
+        guard let value = formatter.number(from: trimmed)?.doubleValue, value.isFinite, value >= 0 else {
+            return nil
+        }
+        return value
     }
     private var _unitSize: String
     var currency: String?
