@@ -54,6 +54,61 @@ struct BrokerLinkStoreSnapshot: Codable, Equatable {
     static func empty(now: Date = Date()) -> BrokerLinkStoreSnapshot {
         BrokerLinkStoreSnapshot(schemaVersion: 2, updatedAt: now, accounts: [], positions: [])
     }
+
+    /// Moves links saved under an older key for the same account onto
+    /// `account`'s current key. Editing the account label or rotating the API
+    /// key changes the key; without this every link would stop matching.
+    /// Returns nil when nothing needs moving.
+    func rekeyed(to account: BrokerAccountIdentity, now: Date = Date()) -> BrokerLinkStoreSnapshot? {
+        guard let stable = BrokerAccountIdentity.stableIdentity(ofKey: account.brokerAccountKey) else {
+            return nil
+        }
+        var staleKeys: Set<String> = []
+        for key in accounts.map(\.brokerAccountKey) where key != account.brokerAccountKey {
+            if BrokerAccountIdentity.stableIdentity(ofKey: key) == stable {
+                staleKeys.insert(key)
+            }
+        }
+        guard !staleKeys.isEmpty else { return nil }
+
+        var result = self
+        let currentIDs = Set(positions.filter { $0.brokerAccountKey == account.brokerAccountKey }.map(\.id))
+        result.positions = positions.compactMap { position in
+            guard staleKeys.contains(position.brokerAccountKey) else { return position }
+            let moved = BrokerLinkedPosition(
+                brokerAccountKey: account.brokerAccountKey,
+                instrumentId: position.instrumentId,
+                displaySymbol: position.displaySymbol,
+                displayName: position.displayName,
+                providerTicker: position.providerTicker,
+                manualSymbol: position.manualSymbol,
+                manualQuantityAtLink: position.manualQuantityAtLink,
+                brokerQuantityAtLink: position.brokerQuantityAtLink,
+                manualAverageCostAtLink: position.manualAverageCostAtLink,
+                manualCurrency: position.manualCurrency,
+                linkedAt: position.linkedAt,
+                updatedAt: now
+            )
+            // A link already saved under the current key wins.
+            return currentIDs.contains(moved.id) ? nil : moved
+        }
+        var replacedKeys = staleKeys
+        replacedKeys.insert(account.brokerAccountKey)
+        let linkedAt = accounts.filter { replacedKeys.contains($0.brokerAccountKey) }.map(\.linkedAt).min() ?? now
+        result.accounts.removeAll { replacedKeys.contains($0.brokerAccountKey) }
+        result.accounts.append(BrokerLinkedAccount(
+            brokerAccountKey: account.brokerAccountKey,
+            broker: account.broker,
+            accountLabel: account.accountLabel,
+            accountType: account.accountType,
+            taxWrapper: account.taxWrapper,
+            environment: account.environment,
+            linkedAt: linkedAt,
+            updatedAt: now
+        ))
+        result.updatedAt = now
+        return result
+    }
 }
 
 struct BrokerLinkSaveResult: Equatable {
@@ -105,6 +160,14 @@ actor BrokerLinkStore {
 
     func restoreSnapshot(_ snapshot: BrokerLinkStoreSnapshot) throws {
         try save(snapshot)
+    }
+
+    /// Re-keys links saved for the same account under an older key. Returns
+    /// true when links were moved, so callers reload the snapshot.
+    func adoptLinks(for account: BrokerAccountIdentity) throws -> Bool {
+        guard let rekeyed = try loadSnapshot().rekeyed(to: account) else { return false }
+        try save(rekeyed)
+        return true
     }
 
     func linkExactMatches(

@@ -283,15 +283,22 @@ private struct StockbarHoldingsView: View {
         dataModel.realTimeTrades.filter { !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }
     }
 
-    private var canEditPortfolio: Bool { !dataModel.isFolyncPortfolioActive }
+    private var canEditPortfolio: Bool { !dataModel.isFolyncPortfolioActive && !dataModel.portfolioLoadFailed }
+
+    private var subtitle: String {
+        if dataModel.portfolioLoadFailed {
+            return "Your saved holdings could not be loaded, so editing is paused to avoid overwriting them. Restart Stockbar or restore a backup."
+        }
+        return dataModel.isFolyncPortfolioActive
+            ? "Read-only Folync holdings. Visibility and alerts remain local to Stockbar."
+            : "Positions, cost basis, menu bar visibility and watchlist status."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             StockbarPageHeader(
                 "Holdings",
-                subtitle: dataModel.isFolyncPortfolioActive
-                    ? "Read-only Folync holdings. Visibility and alerts remain local to Stockbar."
-                    : "Positions, cost basis, menu bar visibility and watchlist status."
+                subtitle: subtitle
             ) {
                 HStack(spacing: 10) {
                     if canEditPortfolio {

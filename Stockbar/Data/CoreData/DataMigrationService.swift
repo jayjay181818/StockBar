@@ -367,7 +367,7 @@ final class DataMigrationService: @unchecked Sendable {
     }
     
     private func convertLegacyPortfolioSnapshot(_ legacy: PortfolioSnapshot) -> HistoricalPortfolioSnapshot {
-        let portfolioComposition = Dictionary(uniqueKeysWithValues: 
+        let portfolioComposition = Dictionary(firstValuesFor: 
             legacy.priceSnapshots.map { snapshot in
                 let positionSnapshot = PositionSnapshot(
                     symbol: snapshot.symbol,
