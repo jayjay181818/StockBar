@@ -255,6 +255,7 @@ extension DataModel {
             preserving: legacyPortfolioTrades ?? [],
             overlays: FolyncOverlayStore.shared.load()
         )
+        evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
     }
 
     func updateFolyncSupplementalSettings(_ supplemental: FolyncSupplementalSettings) async {

@@ -1232,6 +1232,23 @@ class DataModel: ObservableObject {
         }
     }
 
+    /// Price alerts used to be checked only by the market-quote refresh, so
+    /// holdings priced by Folync or Trading 212 never fired. Every price source
+    /// now calls this after applying prices.
+    func evaluatePriceAlerts(for trades: [RealTimeTrade]) {
+        for trade in trades where !isBenchmarkTrade(trade) {
+            let info = trade.realTimeInfo
+            let price = info.getCurrentDisplayPrice()
+            guard price.isFinite, price > 0 else { continue }
+            PriceAlertService.shared.checkAlerts(
+                symbol: trade.trade.name,
+                currentPrice: price,
+                previousPrice: info.prevClosePrice,
+                currency: info.currency ?? "USD"
+            )
+        }
+    }
+
     private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
         let updatesBySymbol = Dictionary(firstValuesFor: plan.tradeUpdates.map {
             ($0.manualSymbol.uppercased(), $0)
@@ -1262,6 +1279,7 @@ class DataModel: ObservableObject {
         }
 
         realTimeTrades = updatedTrades
+        evaluatePriceAlerts(for: updatedTrades.filter { updatesBySymbol[$0.trade.name.uppercased()] != nil })
 
         if !plan.tradeUpdates.isEmpty || !deletedSymbols.isEmpty {
             let summary = calculateDisplayPortfolioSummary(

@@ -194,6 +194,8 @@ struct AddPriceAlertView: View {
     @State private var selectedCondition: AlertCondition = .above
     @State private var thresholdValue: String = ""
     @State private var errorMessage: String?
+    /// Set after warning that the condition is already met; a second Add creates it.
+    @State private var confirmedAlreadyMet = false
 
     private var availableSymbols: [String] {
         dataModel.realTimeTrades
@@ -253,8 +255,9 @@ struct AddPriceAlertView: View {
             .formStyle(.grouped)
             .scrollDisabled(true)
             .fixedSize(horizontal: false, vertical: true)
-            .onChange(of: thresholdValue) { _, _ in errorMessage = nil }
-            .onChange(of: selectedCondition) { _, _ in errorMessage = nil }
+            .onChange(of: thresholdValue) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
+            .onChange(of: selectedCondition) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
+            .onChange(of: selectedSymbol) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
 
             HStack(spacing: 12) {
                 Spacer()
@@ -310,6 +313,27 @@ struct AddPriceAlertView: View {
         if selectedCondition == .percentChange && threshold > 100 {
             errorMessage = "Enter a percentage between 0 and 100."
             return
+        }
+
+        if alertService.alerts.contains(where: {
+            $0.symbol == selectedSymbol && $0.condition == selectedCondition && abs($0.threshold - threshold) < 1e-9
+        }) {
+            errorMessage = "An identical alert already exists for \(selectedSymbol)."
+            return
+        }
+
+        // Above/below alerts fire when the price crosses the threshold, so one
+        // already on the far side would stay silent until the price comes back.
+        let currentPrice = dataModel.realTimeTrades.first(where: { $0.trade.name == selectedSymbol })?
+            .realTimeInfo.getCurrentDisplayPrice()
+        if let currentPrice, currentPrice.isFinite, currentPrice > 0 {
+            if selectedCondition == .above && currentPrice >= threshold {
+                errorMessage = "The price is already above this level, so the alert only fires after it dips and rises through it again. Press Add again to create it anyway."
+                guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
+            } else if selectedCondition == .below && currentPrice <= threshold {
+                errorMessage = "The price is already below this level, so the alert only fires after it recovers and falls through it again. Press Add again to create it anyway."
+                guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
+            }
         }
 
         let alert = PriceAlert(
