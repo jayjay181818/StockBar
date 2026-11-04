@@ -169,6 +169,11 @@ struct PortfolioAnalyticsView: View {
                     )
                     .foregroundStyle(by: .value("Sector", sectorLabel(allocation.sector)))
                 }
+                // Same colours as the breakdown table below.
+                .chartForegroundStyleScale(
+                    domain: sectorAllocations.map { sectorLabel($0.sector) },
+                    range: sectorAllocations.map { colorForSector($0.sector) }
+                )
                 .frame(height: 300)
                 .chartLegend(position: .trailing)
                 .accessibilityLabel("Sector allocation")
