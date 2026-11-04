@@ -144,7 +144,9 @@ class MenuChartViewModel: ObservableObject {
                 let startDate = range.startDate(from: endDate)
                 
                 // Get price snapshots for the symbol within the time range
-                let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
+                let snapshots = historicalDataManager.getPriceSnapshots(
+                    for: symbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                )
                 historicalDataManager.requestPriceHistoryIfNeeded(
                     for: symbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
                     availablePointCount: snapshots.count,
@@ -185,7 +187,9 @@ class MenuChartViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 var benchmarkPoints: [MenuChartDataPoint] = []
                 if let benchmarkSymbol {
-                    let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(for: benchmarkSymbol, from: startDate, to: endDate)
+                    let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(
+                        for: benchmarkSymbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                    )
                     historicalDataManager.requestPriceHistoryIfNeeded(
                         for: benchmarkSymbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
                         availablePointCount: benchmarkSnapshots.count,

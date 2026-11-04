@@ -72,7 +72,7 @@ The scripts do not publish backups, upload them, or validate provider credential
 From the repository root:
 
 ```bash
-python3 -m unittest discover -s Scripts/tests -v
+python3 -B -m unittest discover -s Scripts/tests -p 'test_*.py' -v
 ```
 
 The recovery tests use a temporary fixture home, a mocked `defaults` executable, and mocked process probes. They do not read or write your real defaults domain, database, config, cache, or Keychain.

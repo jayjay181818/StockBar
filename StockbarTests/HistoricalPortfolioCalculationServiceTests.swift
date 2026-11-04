@@ -155,3 +155,47 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertNotEqual(hash, PortfolioComposition(positions: Array(positions.prefix(1))).compositionHash)
     }
 }
+
+@MainActor
+final class DataIntegrityGuardTests: XCTestCase {
+    func testBackupCleanupAlwaysKeepsTheNewestBackups() {
+        let now = Date()
+        let backups = (0..<8).map { index in
+            (url: URL(fileURLWithPath: "/tmp/portfolio_backup_\(index).json"),
+             created: now.addingTimeInterval(-Double(index) * 40 * 86_400))
+        }
+        let cutoff = now.addingTimeInterval(-30 * 86_400)
+
+        let deleted = BackupService.backupsToDelete(backups, cutoff: cutoff, minimumKept: 5, keeping: backups[6].url)
+
+        // All but the newest are past the cutoff; the newest five and the kept file survive.
+        XCTAssertEqual(deleted.map(\.lastPathComponent), ["portfolio_backup_5.json", "portfolio_backup_7.json"])
+        XCTAssertTrue(BackupService.backupsToDelete(Array(backups.suffix(3)), cutoff: cutoff, minimumKept: 5, keeping: nil).isEmpty)
+    }
+
+    func testAnnotationDecodingKeepsReadableEntries() throws {
+        let good = ChartAnnotation(type: .note, date: Date(timeIntervalSince1970: 1_700_000_000), price: 10, text: "Kept", symbol: "TEST")
+        let goodJSON = String(decoding: try JSONEncoder().encode(good), as: UTF8.self)
+        let data = Data("[\(goodJSON), {\"unexpected\": true}]".utf8)
+
+        let decoded = try ChartAnnotationService.decodeAnnotations(from: data)
+
+        XCTAssertEqual(decoded.annotations.map(\.text), ["Kept"])
+        XCTAssertEqual(decoded.droppedCount, 1)
+    }
+
+    func testPriceSanitiserAcceptsLargeRealQuotes() {
+        let service = DataValidationService.shared
+        XCTAssertEqual(service.sanitizePrice(1_520_000), 1_520_000)
+        XCTAssertNil(service.sanitizePrice(.infinity))
+        XCTAssertNil(service.sanitizePrice(DataValidationService.maximumPlausiblePrice * 10))
+    }
+
+    func testLeakScanSeesRawSecretsThatRedactionWouldHide() {
+        let raw = "ERROR 403 url=https://financialmodelingprep.com/api/v3/quote/MU?apikey=raw-secret"
+        let rawSnapshot = RuntimeIssueMonitor.scan(logs: [raw])
+        let redactedSnapshot = RuntimeIssueMonitor.scan(logs: [LogRedactor.redact(raw)])
+        XCTAssertEqual(rawSnapshot.secretLeakCount, 1)
+        XCTAssertEqual(redactedSnapshot.secretLeakCount, 0)
+    }
+}

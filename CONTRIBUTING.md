@@ -47,8 +47,8 @@ We are committed to providing a welcoming and inclusive environment for all cont
 Before contributing, ensure you have:
 
 - **macOS 15.4+** for development
-- **Xcode 16.0+** with Swift 6.0 support
-- **Python 3.8+** installed
+- **A current Xcode** (the project builds in Swift 5 language mode with strict concurrency; see the build settings)
+- **Python 3.9+**, with `python3 -m pip install -r Stockbar/Resources/requirements.txt`
 - **Git** for version control
 - Basic familiarity with Swift and SwiftUI
 

@@ -16,7 +16,7 @@ StockBar is a native macOS menu bar and portfolio window app for tracking holdin
 - UK `.L` holdings and GBX/GBP cost bases are normalized consistently for display and gain calculations.
 
 ### Trading 212 Broker Sync
-- Trading 212 can be enabled from Settings -> Data Sources as a broker/portfolio provider.
+- Trading 212 can be enabled from Settings -> Connections as a broker/portfolio provider.
 - Credentials are API Key + API Secret and are stored in macOS Keychain only.
 - Supports Live / Real Money and Demo / Paper environments with separated account keys and cache namespaces.
 - Account type and label are configurable, including Stocks & Shares ISA, Invest/general, and Unknown/custom.
@@ -24,7 +24,7 @@ StockBar is a native macOS menu bar and portfolio window app for tracking holdin
 - Preview maps Trading 212 provider tickers to canonical instruments and audits manual matches, quantity deltas, and conflicts.
 - Link Matched Holdings saves broker links only after user confirmation.
 - Linked Trading 212 holdings use broker-provided live position data by default for quantity, current price, value, average cost, and P/L.
-- Auto-sync uses one bulk Trading 212 positions/account refresh every 30 seconds when enabled.
+- Auto-sync uses one bulk Trading 212 positions/account refresh every 5 minutes by default when enabled (selectable: 30 seconds, 1, 5, 15 or 30 minutes).
 - Market-data providers are not called unnecessarily for linked Trading 212 holdings during normal broker sync.
 - Optional setting can delete linked manual holdings when the position is removed from Trading 212.
 - Trading/order execution is not supported and is never required.
@@ -44,7 +44,7 @@ StockBar is a native macOS menu bar and portfolio window app for tracking holdin
 ### Market Data And Charts
 - yfinance remains the primary general market-data provider.
 - Financial Modeling Prep, Twelve Data, and Stooq remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
-- Fetch priority is configurable from Settings -> Data Sources.
+- Historical fetch priority is configurable from Settings -> Connections; live quotes use a fixed provider order.
 - Historical charts use the existing market-data system unless their independent Folync line-history or OHLCV route is enabled and usable.
 - Interactive Swift Charts views cover portfolio value, portfolio gains, and individual symbol performance.
 - Individual stock charts combine stored price snapshots with memory-only live samples, and same-day
@@ -66,9 +66,9 @@ StockBar is a native macOS menu bar and portfolio window app for tracking holdin
 - Menu bar values update from Trading 212 broker sync for linked holdings and from market-data refreshes for manual/watchlist symbols.
 
 ### Settings
-- Embedded Settings section in the main Stockbar window with tabs: General, Menu Bar, Appearance, Data Sources, Refresh, and Advanced.
+- Embedded Settings section in the main Stockbar window with tabs: General, Menu Bar, Appearance, Connections, Refresh, and Advanced.
 - App menu Settings, `Cmd+,`, sidebar Settings, and menu popover Preferences all route to the embedded Settings section.
-- Data Sources includes API key fields for FMP and Twelve Data, fetch priority/fallback order, and Trading 212 broker configuration.
+- Connections includes API key fields for FMP and Twelve Data, fetch priority/fallback order, and Trading 212 broker configuration.
 - Trading 212 settings include enable/disable, environment, account type, account label, credential status, Test Connection, Preview Import, Link Matched Holdings, auto-sync settings, and missing-position deletion behavior.
 - Sensitive credential fields stay empty after save by design; stored status is shown instead.
 
@@ -100,11 +100,11 @@ Broker data and market data are intentionally separate. Trading 212 is the sourc
 
 ### Prerequisites
 1. macOS 15.4 or later.
-2. Xcode 15 or later for local development.
-3. Python 3.7+ with yfinance for the market-data subprocess path:
+2. A current Xcode for local development (see the project's build settings for the Swift language mode).
+3. Python 3.9+ with the pinned helper dependencies for the market-data subprocess path:
 
    ```bash
-   pip3 install yfinance
+   python3 -m pip install -r Stockbar/Resources/requirements.txt
    ```
 
 ### Build From Source
@@ -126,11 +126,11 @@ Or build/run from this local workspace:
 2. Open the main Stockbar window from the menu bar or app menu.
 3. Go to Holdings.
 4. Use Add Holding to add or edit manual positions.
-5. Use Settings -> Data Sources to configure market-data API keys and provider priority if needed.
+5. Use Settings -> Connections to configure market-data API keys and provider priority if needed.
 6. Use Charts, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, and Settings from the sidebar as needed.
 
 ### Trading 212 Setup
-1. Open Settings -> Data Sources.
+1. Open Settings -> Connections.
 2. Enable Trading 212.
 3. Choose Live / Real Money or Demo / Paper.
 4. Select the account type and account label, for example `Trading 212 ISA`.
@@ -138,7 +138,7 @@ Or build/run from this local workspace:
 6. Use Test Connection.
 7. Use Preview Import to review proposed mappings and conflicts.
 8. If all rows are clean manual matches, use Link Matched Holdings.
-9. Enable auto-sync if you want linked holdings refreshed from Trading 212 every 30 seconds.
+9. Enable auto-sync if you want linked holdings refreshed from Trading 212 (every 5 minutes by default).
 
 Trading 212 setup is read-only until you explicitly link matched holdings. Previewing does not mutate holdings, backups, historical data, market caches, or Core Data trade rows.
 
@@ -180,12 +180,12 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data, Stooq.
 - **Broker data**: Trading 212 for linked broker positions.
 - **Folync supplemental data**: independent toggles for line history, OHLCV, benchmarks, and exchange rates, plus an explicit legacy fallback toggle. These controls require the Folync portfolio source to be active.
-- **FMP/Twelve Data keys**: configured in Settings -> Data Sources.
+- **FMP/Twelve Data keys**: configured in Settings -> Connections.
 - **Trading 212 credentials**: stored in Keychain only.
 - **Fetch priority**: configurable for market-data fallbacks.
 
 ### Refresh Behavior
-- Trading 212 linked holdings: one bulk broker sync every 30 seconds when enabled.
+- Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
 - Folync portfolio snapshots poll every 60 seconds; Folync benchmarks and FX poll every 15 minutes; Folync chart history loads on demand. All Folync routes use ETags.
 - An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data/Stooq or direct exchange-rate request. Disabling it resumes the existing local pipeline.
@@ -276,7 +276,7 @@ python3 Stockbar/Resources/get_stock_data.py AAPL
 - **Trading 212 Broker Provider**: Added read-only connection testing, import preview, manual-match audit, broker-link persistence, and linked holding sync.
 - **Secure Credentials**: Trading 212 API Key/API Secret are stored in Keychain; logs redact credentials, auth headers, account identifiers, and sensitive payload fields.
 - **Broker-Primary Linked Holdings**: Linked Trading 212 holdings use broker-provided live position data by default for quantity, price, value, average cost, and P/L.
-- **30-Second Broker Sync**: Trading 212 sync uses one bulk positions refresh every 30 seconds without changing the slower market-data fallback cadence.
+- **30-Second Broker Sync** (2.4.2; later releases default to 5 minutes): Trading 212 sync used one bulk positions refresh every 30 seconds without changing the slower market-data fallback cadence.
 - **ISA/Account Labelling**: Users can configure account type and account label, including Stocks & Shares ISA.
 - **Safe Linking**: Preview/import does not mutate holdings until explicit linking; broker links are keyed by broker account and instrument identity.
 - **Modern Stockbar Window**: Added the first-class sidebar UI for Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, and Diagnostics.

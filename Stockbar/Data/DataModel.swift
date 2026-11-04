@@ -69,6 +69,9 @@ class DataModel: ObservableObject {
     private var trading212BrokerSyncTimer: Timer?
     private var trading212ScheduledFailureCount = 0
     private var trading212NextScheduledAttempt = Date.distantPast
+    /// Identifies the current scheduled cycle, so a cancelled older cycle
+    /// cannot clear the handle of a newer one.
+    private var trading212BrokerSyncGeneration = 0
     private var lastTrading212ScheduledReconciliation = Date.distantPast
     private var isTrading212BrokerSyncInProgress = false
     private var isTrading212HoldingReconciliationInProgress = false
@@ -553,7 +556,8 @@ class DataModel: ObservableObject {
     }
     
     internal func saveTradingInfo() {
-        guard !portfolioLoadFailed else { return }
+        // Folync display rows must not overwrite the local price cache.
+        guard !portfolioLoadFailed, !isFolyncPortfolioActive else { return }
         let tradingInfoDict = Dictionary(firstValuesFor: realTimeTrades
             .filter { !isBenchmarkTrade($0) }
             .map { ($0.trade.name, $0.realTimeInfo) })
@@ -776,6 +780,8 @@ class DataModel: ObservableObject {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
 
         guard !isFolyncPortfolioActive else { return }
 
@@ -823,15 +829,24 @@ class DataModel: ObservableObject {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
+        // A restart begins a fresh schedule instead of inheriting old backoff.
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
     }
 
     private func runTrading212ScheduledCycle(reason: String) {
         guard Date() >= trading212NextScheduledAttempt else { return }
         guard trading212BrokerSyncTask == nil else { return }
 
+        trading212BrokerSyncGeneration &+= 1
+        let generation = trading212BrokerSyncGeneration
         trading212BrokerSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.trading212BrokerSyncTask = nil }
+            defer {
+                if self.trading212BrokerSyncGeneration == generation {
+                    self.trading212BrokerSyncTask = nil
+                }
+            }
 
             let settings = self.trading212SettingsStore.load()
             let reconciliationInterval = TimeInterval(max(
@@ -851,6 +866,8 @@ class DataModel: ObservableObject {
                 self.trading212ScheduledFailureCount = 0
                 self.trading212NextScheduledAttempt = .distantPast
             } catch {
+                // Cancellation (suspend or restart) is not a provider failure.
+                if error is CancellationError || Task.isCancelled { return }
                 self.trading212ScheduledFailureCount += 1
                 let retryAfter: TimeInterval?
                 if case let Trading212ProviderError.rateLimited(value) = error {

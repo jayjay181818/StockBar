@@ -241,7 +241,12 @@ class HistoricalDataManager: ObservableObject {
     // Full history stays in Core Data; only the active working set is retained.
     private let maxDataPoints = 1_800
     
-    private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
+    private static let snapshotIntervalDefaultsKey = "portfolioSnapshotIntervalSeconds"
+    /// Seconds between recorded portfolio snapshots (default 5 minutes), kept across launches.
+    private var snapshotInterval: TimeInterval = {
+        let stored = StockbarRuntimeStorage.userDefaults.double(forKey: HistoricalDataManager.snapshotIntervalDefaultsKey)
+        return stored >= 30 ? stored : 300
+    }()
     private var lastSnapshotTime: Date = Date.distantPast
     private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
         didSet { aliasHistoryCache.removeAll() }
@@ -256,7 +261,6 @@ class HistoricalDataManager: ObservableObject {
     private var folyncPortfolioHistoryContexts: [String: String] = [:]
     private var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
     private var folyncPriceOverlays: [String: [PriceSnapshot]] = [:]
-    private var latestFolyncLineSeriesKeyBySymbol: [String: String] = [:]
     private var folyncUnavailableSeries: Set<String> = []
     private var folyncPortfolioValueOverlays: [String: [ChartDataPoint]] = [:]
     private var folyncPortfolioGainOverlays: [String: [ChartDataPoint]] = [:]
@@ -489,23 +493,12 @@ class HistoricalDataManager: ObservableObject {
         return recentSnapshots
     }
     
-    /// Get historical portfolio snapshots with intelligent caching
+    /// Historical portfolio snapshots for a range. Filtering the in-memory
+    /// array is cheap, and a cache here went stale (or stayed empty) whenever
+    /// snapshots were loaded or merged without a new recording.
     func getHistoricalPortfolioSnapshots(timeRange: ChartTimeRange) -> [HistoricalPortfolioSnapshot] {
-        let cacheKey = "portfolio_snapshots_\(timeRange.rawValue)"
-        
-        if let cached: [HistoricalPortfolioSnapshot] = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: cacheKey) {
-            return cached
-        }
-        
-        // Filter from full dataset based on time range
         let cutoffDate = timeRange.startDate()
-        let filteredSnapshots = historicalPortfolioSnapshots.filter { $0.date >= cutoffDate }
-        
-        // Determine cache level based on data recency
-        let isRecent = timeRange == .day || timeRange == .week
-        storeInCache(filteredSnapshots, key: cacheKey, isRecent: isRecent)
-        
-        return filteredSnapshots
+        return historicalPortfolioSnapshots.filter { $0.date >= cutoffDate }
     }
     
     /// Cache portfolio analytics to avoid recalculation
@@ -1212,7 +1205,11 @@ class HistoricalDataManager: ObservableObject {
         endDate: Date,
         dataModel: DataModel?
     ) -> [ChartDataPoint] {
-        let cacheKey = "\(symbol)-\(timeRange.rawValue)-\(Int(startDate.timeIntervalSince1970))-\(Int(endDate.timeIntervalSince1970))"
+        // Rolling ranges end "now", so their dates must not be part of the key
+        // (it changed every second and the cache grew without bound).
+        let cacheKey = timeRange == .custom
+            ? "\(symbol)-\(timeRange.rawValue)-\(Int(startDate.timeIntervalSince1970))-\(Int(endDate.timeIntervalSince1970))"
+            : "\(symbol)-\(timeRange.rawValue)"
         let folyncEnabled = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
         let folyncRouteApplies = folyncEnabled
             && dataModel?.folyncCapabilities?.isTrackedOrAllowlisted(symbol) == true
@@ -1254,9 +1251,14 @@ class HistoricalDataManager: ObservableObject {
         
         Task { await logger.debug("📊 CACHE MISS: Stock data for \(symbol) \(timeRange.rawValue): \(filteredData.count) points") }
         
-        // Cache the result
+        // Cache the result, dropping expired entries first.
+        let now = Date()
+        for (key, cachedAt) in stockDataCacheTimestamp where now.timeIntervalSince(cachedAt) >= stockDataCacheInterval {
+            stockDataCache.removeValue(forKey: key)
+            stockDataCacheTimestamp.removeValue(forKey: key)
+        }
         stockDataCache[cacheKey] = filteredData
-        stockDataCacheTimestamp[cacheKey] = Date()
+        stockDataCacheTimestamp[cacheKey] = now
         
         // Check if we have insufficient data for the requested time range
         let minimumExpectedDataPoints = getExpectedDataPointsForTimeRange(timeRange)
@@ -1573,7 +1575,10 @@ class HistoricalDataManager: ObservableObject {
     
     /// Gets performance metrics for an individual stock symbol
     func getStockPerformanceMetrics(for symbol: String, timeRange: ChartTimeRange) -> PerformanceMetrics? {
-        let stockSnapshots = aliasAwarePriceSnapshots(for: symbol)
+        let stockSnapshots = aliasAwarePriceSnapshots(
+            for: symbol,
+            folyncSeriesKeys: folyncLineSeriesKeys(for: symbol, timeRange: timeRange, customFrom: nil, customTo: nil)
+        )
         guard !stockSnapshots.isEmpty else { return nil }
         
         let startDate = timeRange.startDate(from: Date())
@@ -2646,6 +2651,7 @@ class HistoricalDataManager: ObservableObject {
     /// Sets the snapshot interval for debug purposes
     func setSnapshotInterval(_ interval: TimeInterval) {
         snapshotInterval = interval
+        StockbarRuntimeStorage.userDefaults.set(interval, forKey: Self.snapshotIntervalDefaultsKey)
         Task { await logger.info("📊 Snapshot interval changed to \(interval) seconds") }
     }
     
@@ -3007,8 +3013,18 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Pure read of sorted history. Display formatting must never start provider work.
-    func getPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date = Date()) -> [PriceSnapshot] {
-        aliasAwarePriceSnapshots(for: symbol)
+    /// Pass `timeRange` to read the Folync overlay for that range when one
+    /// exists; without it only local history is returned.
+    func getPriceSnapshots(
+        for symbol: String,
+        from startDate: Date,
+        to endDate: Date = Date(),
+        timeRange: ChartTimeRange? = nil
+    ) -> [PriceSnapshot] {
+        let seriesKeys = timeRange.map {
+            folyncLineSeriesKeys(for: symbol, timeRange: $0, customFrom: nil, customTo: nil)
+        }
+        return aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: seriesKeys)
             .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
     }
 
@@ -3095,7 +3111,6 @@ class HistoricalDataManager: ObservableObject {
 
     func clearFolyncSupplementalOverlays() {
         folyncPriceOverlays.removeAll()
-        latestFolyncLineSeriesKeyBySymbol.removeAll()
         folyncUnavailableSeries.removeAll()
         folyncPortfolioHistoryContexts.removeAll()
         folyncPortfolioHistoryFetchRequestTimes.removeAll()
@@ -3455,7 +3470,10 @@ class HistoricalDataManager: ObservableObject {
     ) -> [PriceSnapshot] {
         let aliases = instrumentAliasStore.aliases(for: symbol)
         let aliasKeys = Set(([symbol] + aliases).map(normalizedSeriesKey))
-        let seriesKeys = requestedSeriesKeys ?? Set(aliasKeys.compactMap { latestFolyncLineSeriesKeyBySymbol[$0] })
+        // Folync overlays are per range. Without the caller's range there is no
+        // way to know which overlay applies, so range-less reads use local data
+        // (the most recently fetched overlay could be any range).
+        let seriesKeys = requestedSeriesKeys ?? []
         if let overlay = seriesKeys.compactMap({ folyncPriceOverlays[$0] }).first {
             return overlay
         }
@@ -3498,7 +3516,6 @@ class HistoricalDataManager: ObservableObject {
             folyncUnavailableSeries.remove(key)
             folyncSourceStatusBySeries[key] = status
             folyncCoverageBySeries[key] = metadata.coverageLabel
-            latestFolyncLineSeriesKeyBySymbol[alias] = key
             invalidateStockDataCache(for: alias)
         }
         priceDataRevision &+= 1
@@ -3522,7 +3539,6 @@ class HistoricalDataManager: ObservableObject {
             folyncUnavailableSeries.insert(key)
             folyncSourceStatusBySeries[key] = .unavailable
             folyncCoverageBySeries.removeValue(forKey: key)
-            latestFolyncLineSeriesKeyBySymbol[alias] = key
             invalidateStockDataCache(for: alias)
         }
         priceDataRevision &+= 1
@@ -3546,7 +3562,6 @@ class HistoricalDataManager: ObservableObject {
             folyncUnavailableSeries.remove(key)
             folyncSourceStatusBySeries[key] = .legacy
             folyncCoverageBySeries.removeValue(forKey: key)
-            latestFolyncLineSeriesKeyBySymbol[alias] = key
             invalidateStockDataCache(for: alias)
         }
         priceDataRevision &+= 1

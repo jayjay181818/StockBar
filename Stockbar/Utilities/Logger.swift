@@ -326,17 +326,19 @@ public actor Logger {
     /// Gets only the most recent logs using a tail-like approach for large files
     /// - Parameter maxLines: Maximum number of lines to return
     /// - Returns: Array of recent log entry strings
-    public func getTailLogs(maxLines: Int = 100) -> [String] {
+    /// - Parameter redacted: Pass false only to scan for leaks in memory;
+    ///   never display or log the raw lines.
+    public func getTailLogs(maxLines: Int = 100, redacted: Bool = true) -> [String] {
         guard let logFileURL = getLogFileURL(),
               fileManager.fileExists(atPath: logFileURL.path) else {
             return ["No log file found"]
         }
 
-        return getTailLogsFromLargeFile(fileURL: logFileURL, maxLines: max(0, maxLines))
+        return getTailLogsFromLargeFile(fileURL: logFileURL, maxLines: max(0, maxLines), redacted: redacted)
     }
     
     /// Efficiently reads the last N lines from a large log file
-    private func getTailLogsFromLargeFile(fileURL: URL, maxLines: Int) -> [String] {
+    private func getTailLogsFromLargeFile(fileURL: URL, maxLines: Int, redacted: Bool = true) -> [String] {
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             defer { try? fileHandle.close() }
@@ -363,7 +365,7 @@ public actor Logger {
                 let newLines = content.components(separatedBy: .newlines)
                     .filter { !$0.isEmpty }
                     .map { line in
-                        let safeLine = LogRedactor.redact(line)
+                        let safeLine = redacted ? LogRedactor.redact(line) : line
                         if safeLine.count > 1000 {
                             return String(safeLine.prefix(1000)) + " ... [truncated]"
                         }
