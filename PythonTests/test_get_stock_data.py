@@ -171,3 +171,98 @@ class StockDataContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeHistory:
+    def __init__(self, rows):
+        self.rows = rows
+        self.empty = not rows
+
+    def iterrows(self):
+        return iter(self.rows)
+
+
+class _FakeTicker:
+    def __init__(self, rows, currency):
+        self._rows = rows
+        self.history_metadata = {"currency": currency} if currency else {}
+        self.fast_info = {}
+        self.info = {}
+
+    def history(self, **_kwargs):
+        return _FakeHistory(self._rows)
+
+
+class HistoricalCurrencyTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def yfinance_prices(self, symbol, currency):
+        from datetime import datetime as real_datetime, timezone
+
+        rows = [
+            (real_datetime(2026, 11, 3, 10, tzinfo=timezone.utc), {"Open": 1000.0, "Close": 1010.0}),
+            (real_datetime(2026, 11, 3, 11, tzinfo=timezone.utc), {"Open": 1010.0, "Close": 1020.0}),
+        ]
+        fake_yf = mock.Mock()
+        fake_yf.Ticker.return_value = _FakeTicker(rows, currency)
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "yf", fake_yf, create=True):
+            data = self.module.fetch_historical_data_yfinance(symbol, "2026-11-03", "2026-11-03")
+        return [(point["price"], point["previousClose"]) for point in data]
+
+    def fmp_prices(self, symbol, currency):
+        response = {"historical": [{"date": "2026-11-03", "open": 1000.0, "close": 1010.0}]}
+        if currency:
+            response["currency"] = currency
+        with mock.patch.object(self.module, "make_fmp_request", return_value=response):
+            data = self.module.fetch_historical_data_fmp(symbol, "2026-11-03", "2026-11-03")
+        return [(point["price"], point["previousClose"]) for point in data]
+
+    def test_pence_quoted_london_history_is_divided_by_100(self):
+        self.assertEqual(self.yfinance_prices("VOD.L", "GBp"), [(10.1, 10.0), (10.2, 10.1)])
+        self.assertEqual(self.fmp_prices("VOD.L", "GBX"), [(10.1, 10.0)])
+
+    def test_pound_and_dollar_quoted_london_history_keeps_its_scale(self):
+        self.assertEqual(self.yfinance_prices("CSPX.L", "USD"), [(1010.0, 1000.0), (1020.0, 1010.0)])
+        self.assertEqual(self.yfinance_prices("III.L", "GBP"), [(1010.0, 1000.0), (1020.0, 1010.0)])
+        self.assertEqual(self.fmp_prices("CSPX.L", "USD"), [(1010.0, 1000.0)])
+
+    def test_missing_currency_falls_back_to_the_london_suffix_rule(self):
+        self.assertEqual(self.yfinance_prices("VOD.L", None), [(10.1, 10.0), (10.2, 10.1)])
+        self.assertEqual(self.yfinance_prices("AAPL", None), [(1010.0, 1000.0), (1020.0, 1010.0)])
+        self.assertEqual(self.fmp_prices("VOD.L", None), [(10.1, 10.0)])
+
+
+class ExchangeDateTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def test_uses_the_exchange_timezone_not_the_local_date(self):
+        from datetime import datetime as real_datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        # 01:30 UTC on 15 Nov is still 14 Nov in New York.
+        instant = real_datetime(2026, 11, 15, 1, 30, tzinfo=timezone.utc)
+
+        class FixedDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+        index = mock.Mock(tz=ZoneInfo("America/New_York"))
+        with mock.patch.object(self.module, "datetime", FixedDatetime):
+            self.assertEqual(self.module.exchange_today(index, "AAPL").isoformat(), "2026-11-14")
+
+    def test_index_without_timezone_falls_back_to_market_date(self):
+        index = mock.Mock(tz=None)
+        with mock.patch.object(self.module, "market_date_for_symbol", return_value="2026-11-14"):
+            self.assertEqual(self.module.exchange_today(index, "VOD.L").isoformat(), "2026-11-14")
