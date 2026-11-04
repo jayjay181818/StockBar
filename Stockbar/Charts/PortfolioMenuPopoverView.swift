@@ -5,6 +5,7 @@ struct PortfolioMenuActions {
     let refresh: () -> Void
     let preferences: () -> Void
     let quit: () -> Void
+    var openApp: () -> Void = {}
 
     @MainActor
     static let noop = PortfolioMenuActions(refresh: {}, preferences: {}, quit: {})
@@ -152,6 +153,8 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var coverageLabel = ""
     @Published var hasRangeCoverage = false
+    /// The period whose data is currently shown; drives the draw-in animation.
+    @Published private(set) var loadedRange: MenuChartTimeRange?
 
     private let historicalDataManager = HistoricalDataManager.shared
     private let folyncCoordinator: FolyncSupplementalCoordinator
@@ -165,6 +168,15 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     private let reloadCoalescer = ChartReloadCoalescer()
     private var isActive = false
     private(set) var loadGeneration = 0
+
+    /// What the shown data was loaded for. Reloads for the same context keep
+    /// the current chart on screen instead of flashing a spinner.
+    private struct LoadContext: Equatable {
+        let range: MenuChartTimeRange
+        let currency: String
+        let source: PortfolioValuationSource
+    }
+    private var shownContext: LoadContext?
 
     // Capture values: RealTimeTrade instances can be edited in place.
     private struct PositionInput: Equatable {
@@ -263,9 +275,13 @@ final class PortfolioMenuChartViewModel: ObservableObject {
         guard isActive else { return }
         loadGeneration &+= 1
         isLoading = true
-        chartData = []
-        hasRangeCoverage = false
-        coverageLabel = ""
+        let context = LoadContext(range: selectedTimeRange, currency: preferredCurrency, source: valuationSource)
+        if context != shownContext {
+            chartData = []
+            hasRangeCoverage = false
+            coverageLabel = ""
+            shownContext = nil
+        }
         if valuationSource == .folyncProvided || selectedTimeRange != .day {
             let range = selectedTimeRange
             let value = currentValue
@@ -283,8 +299,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                         guard let points = PortfolioMenuChartDataBuilder.providerPoints(
                             history, scopeID: scopeID, currency: currency, range: range
                         ) else {
-                            coverageLabel = "Folync history does not match this portfolio, currency or period."
-                            isLoading = false
+                            showUnavailable("Folync history does not match this portfolio, currency or period.", context: context)
                             return
                         }
                         chartData = points
@@ -294,6 +309,8 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                         // Folync's 1d series is rolling history; Today's P&L still uses its daily reference.
                         if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
                     case .legacy, .unavailable:
+                        chartData = []
+                        hasRangeCoverage = false
                         coverageLabel = "Folync portfolio history is unavailable for this period. Check the connection and source history."
                     }
                 } else {
@@ -307,7 +324,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                     coverageLabel = "Local history · \(chartData.count) observations"
                     if !hasRangeCoverage { coverageLabel += " · partial history" }
                 }
-                isLoading = false
+                markLoaded(context)
             }
             return
         }
@@ -324,7 +341,20 @@ final class PortfolioMenuChartViewModel: ObservableObject {
             range: selectedTimeRange
         )
         hasRangeCoverage = PortfolioMenuChartDataBuilder.coversRange(chartData, range: selectedTimeRange)
+        markLoaded(context)
+    }
+
+    private func markLoaded(_ context: LoadContext) {
+        shownContext = context
+        loadedRange = context.range
         isLoading = false
+    }
+
+    private func showUnavailable(_ message: String, context: LoadContext) {
+        chartData = []
+        hasRangeCoverage = false
+        coverageLabel = message
+        markLoaded(context)
     }
 }
 
@@ -333,10 +363,10 @@ struct PortfolioMenuPopoverView: View {
     @ObservedObject private var dataModel: DataModel
     @StateObject private var viewModel: PortfolioMenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
-    @Namespace private var animationNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let actions: PortfolioMenuActions
-    private let chartHeight: CGFloat = 168
+    private let chartHeight: CGFloat = 150
 
     init(dataModel: DataModel, actions: PortfolioMenuActions) {
         self.dataModel = dataModel
@@ -389,13 +419,16 @@ struct PortfolioMenuPopoverView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             headerView
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 14)
 
-            ZStack(alignment: .topTrailing) {
+            MenuPopoverTimeRangePicker(
+                selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) })
+            ) { _ in
+                hoveredPoint = nil
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Group {
                     if let dayReference {
                         PortfolioMenuDayReferenceView(
@@ -406,6 +439,8 @@ struct PortfolioMenuPopoverView: View {
                         MenuPopoverLineChart(
                             points: viewModel.chartData,
                             isLoading: viewModel.isLoading,
+                            revealTrigger: viewModel.loadedRange?.rawValue ?? "",
+                            emptyMessage: "Portfolio history builds up while Stockbar runs.",
                             hoveredPoint: $hoveredPoint
                         )
                         .accessibilityLabel("Portfolio history, \(viewModel.selectedTimeRange.description)")
@@ -413,48 +448,32 @@ struct PortfolioMenuPopoverView: View {
                     }
                 }
                 .frame(height: chartHeight)
-                .clipShape(Rectangle())
 
-                MenuPopoverTimeRangePicker(
-                    selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) }),
-                    namespace: animationNamespace
-                ) { _ in
-                    hoveredPoint = nil
+                if !viewModel.coverageLabel.isEmpty {
+                    Text(viewModel.coverageLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
-                .padding(.top, 12)
-                .padding(.trailing, 16)
-            }
-            .background(Color.black.opacity(0.12))
-
-            if !viewModel.coverageLabel.isEmpty {
-                Text(viewModel.coverageLabel).font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 18).padding(.top, 8)
             }
 
             statsGrid
-                .padding(.horizontal, 18)
-                .padding(.vertical, 16)
 
             Divider()
-                .overlay(Color.white.opacity(0.12))
 
             MenuPopoverFooter(
                 updatedText: updatedText,
                 onRefresh: actions.refresh,
+                onOpenApp: actions.openApp,
                 onPreferences: actions.preferences,
                 onQuit: actions.quit
             )
-            .padding(.horizontal, 18)
-            .padding(.vertical, 13)
         }
-        .frame(width: 360)
-        .background(.ultraThinMaterial)
-        .environment(\.colorScheme, .dark)
-        .cornerRadius(18)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.13), lineWidth: 1)
-        )
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
+        .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear {
             viewModel.activate()
             viewModel.update(
@@ -484,98 +503,66 @@ struct PortfolioMenuPopoverView: View {
     }
 
     private var headerView: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Portfolio")
-                    .font(.system(size: 22, weight: .bold, design: .default))
-                    .foregroundColor(.white)
-
-                HStack(spacing: 6) {
-                    Text("\(summary.currency) • \(positionCountText)")
-                    Circle()
-                        .fill(Color.white.opacity(0.35))
-                        .frame(width: 3, height: 3)
-                    Text(selectedRangeLabel)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.55))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                Text("\(summary.currency) · \(positionCountText)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(currentDisplayValue)
-                    .font(.system(size: 26, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white)
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
                     .contentTransition(.numericText())
+                    .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: summary.totalValue)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
 
                 if let point = hoveredPoint {
                     Text(MenuPopoverFormatter.date(point.date, range: viewModel.selectedTimeRange))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.white.opacity(0.1)))
-                } else if let displayedChange {
-                    performancePill(percent: displayedChange.percent)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                } else {
+                    StockbarChangeBadge(percent: displayedChange?.percent)
                 }
             }
         }
     }
 
     private var statsGrid: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
                 MenuPopoverStatBox(
                     label: "Market Value",
                     value: MenuPopoverFormatter.currencyExact(summary.totalValue, currency: summary.currency)
                 )
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 1)
-
-                let totalColor: Color = summary.totalGain >= 0 ? .green : .red
                 MenuPopoverStatBox(
                     label: "Total P&L",
                     value: MenuPopoverFormatter.currencyExact(summary.totalGain, currency: summary.currency, includeSign: true),
                     subValue: MenuPopoverFormatter.percent(summary.totalGainPct),
-                    valueColor: totalColor
+                    valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
                 )
             }
-
-            Rectangle()
-                .fill(Color.white.opacity(0.1))
-                .frame(height: 1)
-
-            HStack(spacing: 0) {
+            GridRow {
                 let change = displayedChange
-                let rangeColor: Color = (change?.value ?? 0) >= 0 ? .green : .red
                 MenuPopoverStatBox(
                     label: "\(selectedRangeLabel) P&L",
                     value: MenuPopoverFormatter.currencyExact(change?.value, currency: summary.currency, includeSign: true),
                     subValue: MenuPopoverFormatter.percent(change?.percent),
-                    valueColor: rangeColor
+                    valueColor: StockbarPalette.signed(change?.value, neutral: .primary)
                 )
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 1)
-
                 MenuPopoverStatBox(
                     label: "Cost Basis",
                     value: MenuPopoverFormatter.currencyExact(summary.totalCost, currency: summary.currency)
                 )
             }
         }
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
     }
 
     private var positionCountText: String {
@@ -583,30 +570,7 @@ struct PortfolioMenuPopoverView: View {
     }
 
     private var selectedRangeLabel: String {
-        viewModel.selectedTimeRange == .day ? "Today" : viewModel.selectedTimeRange.description
-    }
-
-    private func performancePill(percent: Double) -> some View {
-        let safePercent = percent.isFinite ? percent : 0
-        let isPositive = safePercent >= 0
-
-        return HStack(spacing: 2) {
-            Image(systemName: isPositive ? "arrow.up" : "arrow.down")
-                .font(.system(size: 8, weight: .bold))
-            Text("\(String(format: "%.2f", abs(safePercent)))%")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(
-            Capsule()
-                .fill(isPositive ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
-        )
-        .foregroundColor(isPositive ? .green : .red)
-        .overlay(
-            Capsule()
-                .strokeBorder(isPositive ? Color.green.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
-        )
+        viewModel.selectedTimeRange == .day ? "Today's" : viewModel.selectedTimeRange.description
     }
 }
 
@@ -615,9 +579,7 @@ private struct PortfolioMenuDayReferenceView: View {
     let currency: String
 
     private var chartColor: Color {
-        reference.change.value >= 0
-            ? Color(red: 0.2, green: 0.85, blue: 0.5)
-            : Color(red: 1.0, green: 0.3, blue: 0.3)
+        StockbarPalette.signed(reference.change.value, neutral: .accentColor)
     }
 
     var body: some View {
@@ -643,7 +605,7 @@ private struct PortfolioMenuDayReferenceView: View {
                     path.addLine(to: CGPoint(x: geometry.size.width, y: referenceY))
                 }
                 .stroke(
-                    Color.white.opacity(0.35),
+                    Color.primary.opacity(0.3),
                     style: StrokeStyle(lineWidth: 1, dash: [5, 5])
                 )
 
@@ -660,12 +622,12 @@ private struct PortfolioMenuDayReferenceView: View {
 
                 Text("Folync day reference")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.65))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.black.opacity(0.25)))
-                    .padding(.leading, 16)
-                    .padding(.top, 12)
+                    .background(StockbarPalette.hoverFill, in: Capsule())
+                    .padding(.leading, 4)
+                    .padding(.top, 4)
 
                 HStack(spacing: 12) {
                     referenceLabel(
@@ -680,8 +642,8 @@ private struct PortfolioMenuDayReferenceView: View {
                         alignment: .trailing
                     )
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         }
@@ -701,10 +663,11 @@ private struct PortfolioMenuDayReferenceView: View {
         VStack(alignment: alignment, spacing: 1) {
             Text(title)
                 .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.white.opacity(0.45))
+                .foregroundStyle(.tertiary)
             Text(MenuPopoverFormatter.currencyExact(value, currency: currency))
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.8))
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
     }
 }

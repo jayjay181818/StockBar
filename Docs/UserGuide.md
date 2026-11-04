@@ -49,24 +49,26 @@ The sidebar groups every screen:
 | Maintenance | **Backups**, **Data Health**, **Diagnostics** |
 | | **Settings** |
 
-Use the arrow keys to move through the sidebar. **Refresh Prices** at the bottom of the sidebar (⌘R) requests an immediate update and shows progress. The window remembers its size, position and last screen.
+Use the arrow keys to move through the sidebar. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. The window remembers its size, position and last screen. Motion follows System Settings → Accessibility → Display → Reduce Motion.
+
+**Overview** shows the total value with today's and the selected period's change, a portfolio chart (hover to read any point), a summary, and details for one position.
 
 ## Holdings
 
-The read-only table shows your positions in your saved order; click a column header to sort. Search filters the table without changing portfolio totals.
+The read-only table shows your positions in your saved order; click a column header to sort, and click a Today or Total P&L value to switch between amount and percentage. Search filters the table without changing portfolio totals.
 
-Choose **Edit positions** to change local holdings:
+Choose **Edit** to change local holdings, and **Done** when finished (changes save as you type):
 
 - **Add Holding** adds a row. Enter the symbol in Yahoo Finance format (`AAPL`, `VOD.L`, `SHOP.TO`), units, average cost and the currency that cost was entered in. Fractional units are kept as entered.
 - A symbol already in the portfolio is flagged with a warning; only one row per symbol is kept when saved, so combine lots into one row.
-- Row actions: 👁 **watchlist only** (price shown, excluded from totals and analytics), move up/down, and remove.
-- The toggle in the first column controls whether the symbol has its own menu-bar item.
+- Row actions: 👁 **watchlist only** (price shown, excluded from totals and analytics), move up/down, and remove. Removing a holding asks for confirmation.
+- The **Menu Bar** switch (checkbox while editing) controls whether the symbol has its own menu-bar item. Profit and loss columns are shown outside Edit mode.
 
 Positions provided by a linked Trading 212 account or by Folync are read-only here; their menu-bar visibility and alerts remain editable.
 
 ## The menu bar
 
-**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with a chart (1D/1W/1M), market value, total and period P&L, and cost basis.
+**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with a chart (Today, 1 Week, 1 Month), market value, total and period P&L, and cost basis. Hover over the chart to read the value at any point.
 
 **Per-stock items.** Each visible holding can have its own item. Choose a display mode and change format in Settings → Menu Bar, or a **Custom** template using these tokens:
 
@@ -82,7 +84,9 @@ Positions provided by a linked Trading 212 account or by Folync are read-only he
 
 Example: `{symbol} {price} {arrow}{changePct}`.
 
-Click a stock item for its popover: price chart with a benchmark comparison (S&P 500 or FTSE 100), market value, P&L and units. For local holdings, the pencil next to **Units** edits the quantity (the current locale's decimal separator is accepted). If updates for the symbol have been paused after repeated failures, the popover says so and offers **Retry Now**.
+Click a stock item for its popover: a price chart with an optional benchmark line (S&P 500 or FTSE 100; switch it off in Settings → Menu Bar → Stock Popover), market value, P&L and units. Hover over the chart to read the price at any point. A symbol without stored history shows **No history yet** rather than a flat line. For local holdings, the pencil next to **Units** edits the quantity (the current locale's decimal separator is accepted); a lock means the quantity comes from a linked source. If updates for the symbol have been paused after repeated failures, the popover says so and offers **Retry Now**.
+
+Both popovers end with the last update time (click it to refresh) and buttons to open the Stockbar window, open Settings and quit. Popovers follow the **Theme** in Settings → Appearance.
 
 Gains are green and losses red when **Color Coding** is on (Settings → General); unchanged or unknown values are neutral. Settings → Menu Bar → Menu Bar Visibility can hide all stock items or show them only when an external display is connected.
 
@@ -96,7 +100,7 @@ History accumulates as Stockbar runs (Settings → Refresh → Chart Data Collec
 
 ## Alerts
 
-Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves by a percentage. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted.
+Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves by a percentage; the sheet shows the symbol's current price for reference. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted from their row or its right-click menu.
 
 ## Currencies and UK stocks
 
@@ -121,7 +125,8 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 
 ## Backups, Data Health and Diagnostics
 
-- **Backups** — Stockbar makes an automatic backup once a day. Settings → Advanced → Backups offers **Backup Now**, **Restore from Backup** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
+- **Backups** — Stockbar makes an automatic backup once a day. The Backups screen (and Settings → Advanced → Backups) shows the last backup and offers **Back Up Now**, **Restore from Backup…** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
+- **Data Health** — price and exchange-rate freshness, portfolio source, tracked symbols, menu-bar visibility and preferred currency.
 - **Diagnostics** — view, refresh and clear the log. The log file is at `~/Library/Logs/com.stockbar/stockbar.log`.
 
 For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md).

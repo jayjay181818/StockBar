@@ -144,9 +144,7 @@ struct FolyncDataSourceSection: View {
                 }
             }
         }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .stockbarCard()
         .onAppear(perform: loadStoredSettings)
         .onChange(of: selectedScope) { _, _ in preview = nil }
     }

@@ -8,6 +8,8 @@ struct StockbarOverviewView: View {
     @ObservedObject var navigationState: StockbarMainNavigationState
     @StateObject private var chartModel: PortfolioMenuChartViewModel
     @State private var selectedSymbol = ""
+    @State private var selectedDate: Date?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, navigationState: StockbarMainNavigationState) {
         self.dataModel = dataModel
@@ -49,189 +51,353 @@ struct StockbarOverviewView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let showsSideInspector = geometry.size.width >= 1000
             HStack(spacing: 0) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
+                    VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
                         header
-                        metrics
-                        chart
-                        if !chartModel.coverageLabel.isEmpty {
-                            Text(chartModel.coverageLabel).font(.caption).foregroundStyle(.secondary)
+                        hero
+                        chartCard
+                        summaryCard
+                        if !showsSideInspector {
+                            inspector.stockbarCard()
                         }
-                        summaryRows
-                        HStack {
-                            Label(source, systemImage: "externaldrive")
-                            if dataModel.isFolyncPortfolioActive {
-                                Text(dataModel.folyncConnectionState.message).lineLimit(1)
-                            }
-                            Spacer()
-                            Text(MenuPopoverFormatter.updatedText(from: holdings.map { $0.realTimeInfo.lastUpdateTime }))
-                            Button { Task { await dataModel.refreshAllTrades() } } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .help("Refresh portfolio")
-                            .accessibilityLabel("Refresh portfolio")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        if geometry.size.width < 1050 { inspector }
                     }
-                    .padding(30)
+                    .padding(StockbarLayout.pageInsets)
                 }
-                if geometry.size.width >= 1050 {
+                if showsSideInspector {
                     Divider()
-                    ScrollView { inspector.padding(24) }
-                        .frame(width: 250)
+                        .ignoresSafeArea(edges: .top)
+                    ScrollView {
+                        inspector
+                            .padding(.horizontal, 22)
+                            .padding(.top, 14)
+                            .padding(.bottom, StockbarLayout.pagePadding)
+                    }
+                    .frame(width: 270)
+                    .background {
+                        StockbarPalette.cardFill.ignoresSafeArea(edges: .top)
+                    }
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { updateChart(); chartModel.activate() }
         .onDisappear { chartModel.deactivate() }
         .onReceive(dataModel.tradeContentPublisher) { _ in updateChart() }
         .onChange(of: summary.totalValue) { _, _ in updateChart() }
         .onChange(of: summary.currency) { _, _ in updateChart() }
         .onChange(of: summary.valuationSource) { _, _ in updateChart() }
+        .onChange(of: chartModel.selectedTimeRange) { _, _ in selectedDate = nil }
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Overview").font(.largeTitle).fontWeight(.semibold)
-                Text(dataModel.isFolyncPortfolioActive ? "Read-only portfolio summary" : "Your portfolio at a glance")
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Picker("Time range", selection: Binding(get: { chartModel.selectedTimeRange }, set: { chartModel.setTimeRange($0) })) {
+        StockbarPageHeader(
+            "Overview",
+            subtitle: dataModel.isFolyncPortfolioActive ? "Read-only portfolio summary from \(source)." : "Your portfolio at a glance."
+        ) {
+            Picker("Time range", selection: Binding(
+                get: { chartModel.selectedTimeRange },
+                set: { range in
+                    withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
+                        chartModel.setTimeRange(range)
+                    }
+                }
+            )) {
                 ForEach(MenuChartTimeRange.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 180)
+            .help("Chart period")
         }
     }
 
-    private var metrics: some View {
+    private var hero: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 30) {
+            HStack(alignment: .bottom, spacing: 36) {
                 portfolioValue
-                changeMetric("Today", amount: summary.dayGain, percent: summary.dayGainPct)
-                if chartModel.selectedTimeRange != .day {
-                    changeMetric("\(chartModel.selectedTimeRange.rawValue) change",
-                                 amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan)
-                }
+                changeMetrics
+                Spacer(minLength: 0)
             }
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
                 portfolioValue
-                HStack(spacing: 30) {
-                    changeMetric("Today", amount: summary.dayGain, percent: summary.dayGainPct)
-                    if chartModel.selectedTimeRange != .day {
-                        changeMetric("\(chartModel.selectedTimeRange.rawValue) change",
-                                     amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan)
-                    }
-                }
+                changeMetrics
+            }
+        }
+    }
+
+    private var changeMetrics: some View {
+        HStack(alignment: .top, spacing: 30) {
+            changeMetric("Today", amount: summary.dayGain, percent: summary.dayGainPct,
+                         unavailableHint: "Waiting for today's prices")
+            if chartModel.selectedTimeRange != .day {
+                changeMetric("\(chartModel.selectedTimeRange.description) change",
+                             amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan,
+                             unavailableHint: "Needs more stored history")
+                    .transition(.opacity)
             }
         }
     }
 
     private var portfolioValue: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Total portfolio value · \(summary.currency)").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Total value · \(summary.currency)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Text(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
-                .font(.system(size: 36, weight: .semibold)).monospacedDigit().fixedSize()
+                .font(.system(size: 42, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: summary.totalValue)
+                .fixedSize()
+                .accessibilityLabel("Total portfolio value \(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))")
         }
     }
 
-    private func changeMetric(_ title: String, amount: Double, percent: Double) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).foregroundStyle(.secondary)
-            Text(amount.isFinite && percent.isFinite
-                 ? "\(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency)) (\(String(format: "%+.2f%%", percent)))"
-                 : "Unavailable")
-                .font(.headline).monospacedDigit()
-                .foregroundStyle(amount.isFinite ? (amount < 0 ? Color.red : Color.green) : Color.secondary)
+    private func changeMetric(_ title: String, amount: Double, percent: Double, unavailableHint: String) -> some View {
+        let isAvailable = amount.isFinite && percent.isFinite
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if isAvailable {
+                HStack(spacing: 8) {
+                    Text(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency))
+                        .font(.system(.title3, design: .rounded).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(StockbarPalette.signed(amount, neutral: .primary))
+                        .contentTransition(.numericText())
+                    StockbarChangeBadge(percent: percent)
+                }
+            } else {
+                Text("—")
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .help(unavailableHint)
+                Text(unavailableHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    private var chartCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            chart
+                .frame(height: 280)
+            if !chartModel.coverageLabel.isEmpty {
+                Text(chartModel.coverageLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .stockbarCard()
+    }
+
+    private var chartTint: Color {
+        StockbarPalette.signed(rangeChange?.value, neutral: .accentColor)
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        let values = chartModel.chartData.map(\.price).filter(\.isFinite)
+        guard let minimum = values.min(), let maximum = values.max() else { return 0...1 }
+        let padding = max((maximum - minimum) * 0.12, maximum * 0.002, 0.01)
+        return (minimum - padding)...(maximum + padding)
+    }
+
+    private var hoveredPoint: MenuChartDataPoint? {
+        guard let selectedDate else { return nil }
+        return chartModel.chartData.min {
+            abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate))
+        }
     }
 
     @ViewBuilder private var chart: some View {
-        if chartModel.isLoading {
-            ProgressView("Loading portfolio history…").frame(height: 280)
+        if chartModel.isLoading && chartModel.chartData.count < 2 {
+            ProgressView("Loading portfolio history…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if chartModel.chartData.count > 1 {
-            Chart(chartModel.chartData) { point in
-                LineMark(x: .value("Date", point.date), y: .value(summary.currency, point.price))
-                    .foregroundStyle((rangeChange?.value ?? 0) >= 0 ? Color.green : Color.red)
+            let domain = chartYDomain
+            Chart {
+                ForEach(chartModel.chartData) { point in
+                    AreaMark(
+                        x: .value("Date", point.date),
+                        yStart: .value(summary.currency, domain.lowerBound),
+                        yEnd: .value(summary.currency, point.price)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(
+                        colors: [chartTint.opacity(0.28), chartTint.opacity(0.02)],
+                        startPoint: .top, endPoint: .bottom
+                    ))
+                    LineMark(x: .value("Date", point.date), y: .value(summary.currency, point.price))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(chartTint)
+                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                }
+                if let hoveredPoint {
+                    RuleMark(x: .value("Date", hoveredPoint.date))
+                        .foregroundStyle(Color.secondary.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .annotation(position: .top, spacing: 4,
+                                    overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                            chartCallout(for: hoveredPoint)
+                        }
+                    PointMark(x: .value("Date", hoveredPoint.date), y: .value(summary.currency, hoveredPoint.price))
+                        .symbolSize(60)
+                        .foregroundStyle(chartTint)
+                }
             }
-            .chartYScale(domain: .automatic(includesZero: false))
-            .chartYAxis { AxisMarks(position: .leading) }
-            .frame(height: 280)
+            .chartYScale(domain: domain)
+            .chartXSelection(value: $selectedDate)
+            .chartYAxis {
+                AxisMarks(position: .leading) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                    AxisValueLabel {
+                        if let amount = value.as(Double.self) {
+                            Text(HoldingsCurrencyFormatter.compactAmount(amount, currency: summary.currency))
+                        }
+                    }
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                    AxisValueLabel(format: chartModel.selectedTimeRange == .day
+                                   ? .dateTime.hour().minute()
+                                   : .dateTime.day().month(.abbreviated))
+                }
+            }
+            .chartReveal(trigger: chartRevealKey)
             .accessibilityLabel("Portfolio value over \(chartModel.selectedTimeRange.description), in \(summary.currency)")
+            .accessibilityValue(rangeChange.map { String(format: "%+.2f percent", $0.percent) } ?? "Change unavailable")
         } else {
             ContentUnavailableView(
                 chartModel.selectedTimeRange == .day && summary.valuationSource == .folyncProvided
-                    ? "Daily result from Folync" : "Not enough history",
+                    ? "Daily result from Folync" : "Not enough history yet",
                 systemImage: "chart.xyaxis.line",
                 description: Text(chartModel.selectedTimeRange == .day && summary.valuationSource == .folyncProvided
                                   ? "Folync has not supplied enough intraday history to draw a chart. Today's result uses its daily reference."
-                                  : "A chart appears when at least two portfolio observations are available.")
+                                  : "The chart appears once Stockbar has stored at least two portfolio values for this period. Leave it running and history builds up.")
             )
-            .frame(height: 280)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var summaryRows: some View {
-        VStack(spacing: 0) {
-            detailRow("Portfolio value", HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
-            detailRow("Unrealised P&L", HoldingsCurrencyFormatter.signedAmount(summary.totalGain, currency: summary.currency))
-            detailRow("Cost basis", HoldingsCurrencyFormatter.amount(summary.totalCost, currency: summary.currency))
-            detailRow("Positions", "\(summary.ownedPositionCount)")
-            if dataModel.isFolyncPortfolioActive, let cash = dataModel.folyncPortfolioSnapshot?.cash {
-                detailRow("Cash", HoldingsCurrencyFormatter.amount(cash.value ?? .nan, currency: cash.currency ?? summary.currency))
+    /// Identifies a distinct data set so the chart only redraws in on real changes.
+    private var chartRevealKey: String {
+        "\(chartModel.selectedTimeRange.rawValue)-\(chartModel.chartData.count)-\(chartModel.chartData.first?.date.timeIntervalSince1970 ?? 0)"
+    }
+
+    private func chartCallout(for point: MenuChartDataPoint) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(HoldingsCurrencyFormatter.amount(point.price, currency: summary.currency))
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+            Text(point.date, format: chartModel.selectedTimeRange == .day
+                 ? .dateTime.hour().minute()
+                 : .dateTime.day().month(.abbreviated).hour().minute())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(StockbarPalette.cardStroke))
+    }
+
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            StockbarSectionTitle(title: "Summary")
+                .padding(.bottom, 4)
+            StockbarDetailRow(label: "Portfolio value", value: HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
+            StockbarDetailRow(
+                label: "Unrealised P&L",
+                value: summary.totalGain.isFinite
+                    ? "\(HoldingsCurrencyFormatter.signedAmount(summary.totalGain, currency: summary.currency)) (\(MenuPopoverFormatter.percent(summary.totalGainPct)))"
+                    : "—",
+                valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
+            )
+            StockbarDetailRow(label: "Cost basis", value: HoldingsCurrencyFormatter.amount(summary.totalCost, currency: summary.currency))
+            let cash = dataModel.isFolyncPortfolioActive ? dataModel.folyncPortfolioSnapshot?.cash : nil
+            StockbarDetailRow(label: "Positions", value: "\(summary.ownedPositionCount)", showsDivider: cash != nil)
+            if let cash {
+                StockbarDetailRow(
+                    label: "Cash",
+                    value: HoldingsCurrencyFormatter.amount(cash.value ?? .nan, currency: cash.currency ?? summary.currency),
+                    showsDivider: false
+                )
             }
         }
+        .stockbarCard()
     }
 
     private var inspector: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Selected position").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Selected Position")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             if let trade = selectedHolding {
                 Picker("Position", selection: Binding(
-                    get: { selectedHolding?.trade.name ?? "" }, set: { selectedSymbol = $0 }
+                    get: { selectedHolding?.trade.name ?? "" },
+                    set: { symbol in
+                        withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
+                            selectedSymbol = symbol
+                        }
+                    }
                 )) {
                     ForEach(holdings, id: \.trade.name) { Text($0.displayLabel ?? $0.trade.name).tag($0.trade.name) }
                 }
                 .labelsHidden()
-                Divider()
-                Text(trade.displayLabel ?? trade.trade.name).font(.title3).fontWeight(.semibold)
-                let value = dataModel.calculatePositionValue(for: trade)
-                detailRow("Market value", HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
-                detailRow("Units", trade.trade.position.unitSize.formatted(.number.precision(.fractionLength(0...6))))
-                detailRow("Price", HoldingsCurrencyFormatter.amount(trade.realTimeInfo.getCurrentDisplayPrice(),
-                                                                    currency: trade.realTimeInfo.currency ?? ""))
-                detailRow("Average cost", trade.trade.position.getDisplayCost(for: trade.trade.name))
-                let profit = dataModel.calculatePositionProfitLoss(for: trade)
-                detailRow("Total P&L", HoldingsCurrencyFormatter.signedAmount(profit.totalAmount, currency: profit.currency))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(trade.displayLabel ?? trade.trade.name)
+                        .font(.title3.weight(.semibold))
+                    let name = trade.realTimeInfo.shortName
+                    if !name.isEmpty && name != trade.trade.name {
+                        Text(name).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+
+                VStack(spacing: 0) {
+                    let value = dataModel.calculatePositionValue(for: trade)
+                    StockbarDetailRow(label: "Market value", value: HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
+                    StockbarDetailRow(label: "Units", value: MenuPopoverFormatter.units(trade.trade.position.unitSize))
+                    StockbarDetailRow(label: "Price", value: HoldingsCurrencyFormatter.amount(
+                        trade.realTimeInfo.getCurrentDisplayPrice(), currency: trade.realTimeInfo.currency ?? ""
+                    ))
+                    StockbarDetailRow(label: "Average cost", value: trade.trade.position.getDisplayCost(for: trade.trade.name))
+                    let profit = dataModel.calculatePositionProfitLoss(for: trade)
+                    StockbarDetailRow(
+                        label: "Today",
+                        value: HoldingsCurrencyFormatter.signedAmount(profit.dayAmount, currency: profit.currency),
+                        valueColor: StockbarPalette.signed(profit.dayAmount, neutral: .primary)
+                    )
+                    StockbarDetailRow(
+                        label: "Total P&L",
+                        value: HoldingsCurrencyFormatter.signedAmount(profit.totalAmount, currency: profit.currency),
+                        valueColor: StockbarPalette.signed(profit.totalAmount, neutral: .primary),
+                        showsDivider: false
+                    )
+                }
+                .id(trade.trade.name)
+                .transition(.opacity)
             } else {
-                Text("Add a holding or connect a portfolio to see position details.").foregroundStyle(.secondary)
+                Text("Add a holding or connect a portfolio to see position details.")
+                    .foregroundStyle(.secondary)
             }
             Button { navigationState.selectedSection = .holdings } label: {
                 Label("Open Holdings", systemImage: "arrow.right")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 4)
             Button("View data health") { navigationState.selectedSection = .dataHealth }
                 .buttonStyle(.link)
-        }
-    }
-
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(label).foregroundStyle(.secondary)
-                Spacer(minLength: 12)
-                Text(value).monospacedDigit().multilineTextAlignment(.trailing)
-            }.padding(.vertical, 12)
-            Divider()
+                .frame(maxWidth: .infinity)
         }
     }
 

@@ -52,7 +52,7 @@ Yes: System Settings → General → Login Items → add Stockbar.
 
 ### How do I add or edit a stock?
 
-Holdings → **Edit positions** → **Add Holding**. Enter the symbol in Yahoo Finance format, units, average cost and the currency of that cost. You can also edit units from a stock's menu-bar popover.
+Holdings → **Add Holding** (or **Edit** to change existing rows). Enter the symbol in Yahoo Finance format, units, average cost and the currency of that cost. You can also edit units from a stock's menu-bar popover.
 
 ### Which symbols are supported?
 
@@ -78,7 +78,7 @@ Use the arrows on each row in Edit mode. The read-only table and menu bar follow
 
 ### How often do prices update?
 
-At your **Main Refresh Interval** (Settings → Refresh; default 5 minutes). Press ⌘R or **Refresh Prices** in the sidebar to request an immediate update; prices fetched very recently may be reused.
+At your **Main Refresh Interval** (Settings → Refresh; default 5 minutes). Press ⌘R or the refresh button at the bottom of the sidebar to request an immediate update; prices fetched very recently may be reused.
 
 ### Why has a stock stopped updating?
 
@@ -110,7 +110,7 @@ Automatically, at most every five minutes, from exchangerate-api.com or from Fol
 
 ### My stock items disappeared.
 
-Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, or set to appear only with an external display. Each holding's first-column toggle in Holdings controls its own item. macOS may also hide items when the menu bar is full.
+Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, or set to appear only with an external display. Each holding's **Menu Bar** switch in Holdings controls its own item. macOS may also hide items when the menu bar is full.
 
 ### Colours aren't showing.
 
@@ -124,7 +124,7 @@ Yes. Settings → Menu Bar → Display Mode → Custom, with the tokens listed i
 
 ### How do backups work?
 
-Stockbar makes one automatic backup per day while running. Settings → Advanced → Backups offers Backup Now, Restore from Backup and View Backups, and how long to keep them (30 days by default). Backups are plain JSON listing your holdings, so store them privately. Keychain credentials are not included. Command-line recovery is described in [Scripts/README.md](../Scripts/README.md).
+Stockbar makes one automatic backup per day while running. The Backups screen and Settings → Advanced → Backups offer Back Up Now, Restore from Backup and View Backups, and how long to keep them (30 days by default). Backups are plain JSON listing your holdings, so store them privately. Keychain credentials are not included. Command-line recovery is described in [Scripts/README.md](../Scripts/README.md).
 
 ### Where are the logs?
 

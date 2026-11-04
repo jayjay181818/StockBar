@@ -84,7 +84,7 @@ struct PortfolioAnalyticsView: View {
                     attributionAnalysisSection
                 }
             }
-            .padding()
+            .padding(StockbarLayout.pageInsets)
         }
         .sheet(isPresented: $showAttributionSheet) {
             AttributionAnalysisView(dataModel: dataModel)
@@ -109,17 +109,7 @@ struct PortfolioAnalyticsView: View {
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Portfolio Analytics")
-                .font(.title2)
-                .fontWeight(.bold)
-
-            HStack {
-                Text("Analyze sector allocation, diversification, and correlation")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                Spacer()
-
+            StockbarPageHeader("Allocation", subtitle: "Sector allocation, diversification, correlation and attribution.") {
                 // Time Range Picker
                 Picker("Time Range", selection: $selectedTimeRange) {
                     ForEach(TimeRange.allCases, id: \.self) { range in
@@ -127,6 +117,7 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(width: 250)
                 .onChange(of: selectedTimeRange) {
                     Task {

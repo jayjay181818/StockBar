@@ -59,6 +59,8 @@ class MenuChartViewModel: ObservableObject {
     /// False when the chart is only the current price drawn flat across the
     /// range; period changes from such a chart are meaningless (always 0).
     @Published private(set) var hasStoredHistory = false
+    /// The period whose data is currently shown; drives the draw-in animation.
+    @Published private(set) var loadedRange: MenuChartTimeRange?
     
     private let symbol: String
     private var currentPrice: Double
@@ -216,6 +218,7 @@ class MenuChartViewModel: ObservableObject {
                     self.chartData = dataPoints
                     self.benchmarkData = benchmarkPoints
                     self.hasStoredHistory = !validSnapshots.isEmpty && !dataPoints.isEmpty
+                    self.loadedRange = range
                     self.isLoading = false
                     
                     let logger = self.logger
@@ -264,11 +267,11 @@ private extension MenuChartViewModel {
 struct MenuPriceChartView: View {
     @StateObject private var viewModel: MenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
-    @Namespace private var animationNamespace
     @State private var isEditingUnits = false
     @State private var unitsInput = ""
     @State private var unitsInputError: String?
     @AppStorage("menu.benchmarkComparisonEnabled", store: StockbarRuntimeStorage.userDefaults) private var benchmarkEnabled: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let symbol: String
     let currentPrice: Double
@@ -277,18 +280,24 @@ struct MenuPriceChartView: View {
     let onUnitsSave: ((Double) -> Void)?
     let onRetry: (() -> Void)?
 
-    private let chartHeight: CGFloat = 160
+    private let chartHeight: CGFloat = 140
 
     private var marketValue: String {
         let val = currentPrice * metrics.units
         if val.isNaN || val.isInfinite { return "—" }
-        return MenuPopoverFormatter.currency(val, currency: metrics.currency)
+        return MenuPopoverFormatter.currencyExact(val, currency: metrics.currency)
     }
-    private var totalPnL: String { MenuPopoverFormatter.currency(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
+    private var totalPnL: String { MenuPopoverFormatter.currencyExact(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
     private var totalPnLPercent: String { MenuPopoverFormatter.percent(metrics.totalPnLPercent) }
     private var priceChangePercent: Double? { metrics.priceChangePercent }
     private var units: String { MenuPopoverFormatter.units(metrics.units) }
-    private var avgCost: String { MenuPopoverFormatter.currency(metrics.avgCost, currency: metrics.currency) }
+    private var avgCost: String { MenuPopoverFormatter.currencyExact(metrics.avgCost, currency: metrics.currency) }
+
+    /// Only real stored history is drawn; a flat line at today's price would
+    /// look like a chart without being one.
+    private var chartPoints: [MenuChartDataPoint] {
+        viewModel.hasStoredHistory ? viewModel.chartData : []
+    }
 
     private var rangePriceChange: (value: Double, percent: Double)? {
         guard viewModel.hasStoredHistory,
@@ -311,12 +320,12 @@ struct MenuPriceChartView: View {
         return (rangePriceChange.value * metrics.units, rangePriceChange.percent)
     }
 
-    private var benchmarkLabel: String? {
+    private var benchmarkName: String? {
         guard benchmarkEnabled,
               let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol) else {
             return nil
         }
-        return "vs \(MenuPriceChartView.benchmarkDisplayName(for: benchmark))"
+        return MenuPriceChartView.benchmarkDisplayName(for: benchmark)
     }
 
     init(
@@ -337,228 +346,191 @@ struct MenuPriceChartView: View {
         self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice, benchmarkSymbol: benchmark))
         self._unitsInput = State(initialValue: MenuPopoverFormatter.editableUnits(metrics.units))
     }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            headerView
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
 
-            ZStack(alignment: .topTrailing) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            headerView
+
+            MenuPopoverTimeRangePicker(
+                selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) })
+            ) { _ in
+                hoveredPoint = nil
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 MenuPopoverLineChart(
-                    points: viewModel.chartData,
-                    comparisonPoints: benchmarkEnabled ? viewModel.benchmarkData : [],
-                    comparisonLabel: benchmarkLabel,
+                    points: chartPoints,
+                    comparisonPoints: benchmarkName != nil && !chartPoints.isEmpty ? viewModel.benchmarkData : [],
                     isLoading: viewModel.isLoading,
+                    revealTrigger: viewModel.loadedRange?.rawValue ?? "",
+                    emptyMessage: "Stockbar stores \(symbol)'s price as it runs; the chart fills in over time.",
                     hoveredPoint: $hoveredPoint
                 )
-                    .frame(height: chartHeight)
-                    .clipShape(Rectangle())
-                
-                MenuPopoverTimeRangePicker(
-                    selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) }),
-                    namespace: animationNamespace
-                ) { _ in
-                    hoveredPoint = nil
-                }
-                    .padding(.top, 12)
-                    .padding(.trailing, 16)
-            }
-            .background(
-                LinearGradient(
-                    colors: [Color.black.opacity(0.2), Color.clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+                .frame(height: chartHeight)
+                .accessibilityLabel("\(symbol) price, \(viewModel.selectedTimeRange.description)")
+                .accessibilityValue(rangePriceChange.map { String(format: "%+.2f percent", $0.percent) } ?? "No history")
 
-            bentoStatsGrid
-                .padding(16)
+                if let benchmarkName, !chartPoints.isEmpty, !viewModel.benchmarkData.isEmpty {
+                    MenuPopoverChartLegend(
+                        primaryLabel: symbol,
+                        primaryColor: MenuPopoverLineChart.color(for: chartPoints),
+                        comparisonLabel: benchmarkName
+                    )
+                }
+            }
+
+            statsGrid
 
             if let notice = metrics.suspensionNotice {
                 suspensionBanner(notice)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             Divider()
-                .overlay(Color.white.opacity(0.1))
 
             footerView
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
         .frame(width: 330)
-        .background(.ultraThinMaterial)
-        .environment(\.colorScheme, .dark)
-        .cornerRadius(16)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: metrics.suspensionNotice)
         .onAppear { viewModel.activate() }
         .onDisappear { viewModel.deactivate() }
         .onChange(of: currentPrice) { _, newValue in
             viewModel.updateCurrentPrice(newValue)
         }
     }
-    
+
     private var headerView: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(symbol)
-                    .font(.system(size: 24, weight: .bold, design: .default))
-                    .foregroundColor(.white)
-
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Text(metrics.exchangeName)
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            
-            Spacer()
-            
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(MenuPopoverFormatter.currencyExact(hoveredPoint?.price ?? currentPrice, currency: currency))
-                    .font(.system(size: 24, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white)
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .contentTransition(.numericText())
+                    .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: currentPrice)
 
-                if hoveredPoint == nil {
-                    changeBadge(percent: rangePriceChange?.percent ?? priceChangePercent)
-                } else if let point = hoveredPoint {
+                if let point = hoveredPoint {
                     Text(MenuPopoverFormatter.date(point.date, range: viewModel.selectedTimeRange))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.white.opacity(0.1)))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                } else {
+                    StockbarChangeBadge(percent: rangePriceChange?.percent ?? priceChangePercent)
                 }
             }
         }
     }
-    
-    /// Direction badge. Unknown or unchanged values are neutral rather than
-    /// defaulting to a green "up 0.00%".
-    @ViewBuilder
-    private func changeBadge(percent: Double?) -> some View {
-        let value = percent.flatMap { $0.isFinite ? $0 : nil }
-        let tint: Color = value.map { $0 > 0 ? .green : ($0 < 0 ? .red : .gray) } ?? .gray
-        let symbol = value.map { $0 > 0 ? "arrow.up" : ($0 < 0 ? "arrow.down" : "minus") } ?? "minus"
-        HStack(spacing: 2) {
-            Image(systemName: symbol)
-                .font(.system(size: 8, weight: .bold))
-            Text(value.map { "\(String(format: "%.2f", abs($0)))%" } ?? "—")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(tint.opacity(0.2)))
-        .foregroundColor(tint)
-        .overlay(Capsule().strokeBorder(tint.opacity(0.3), lineWidth: 1))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(value.map { String(format: "%@ %.2f percent", $0 >= 0 ? "Up" : "Down", abs($0)) } ?? "Change unavailable")
-    }
 
-    private var bentoStatsGrid: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
+    private var statsGrid: some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
                 MenuPopoverStatBox(label: "Market Value", value: marketValue)
-                Rectangle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 1)
-                
-                let totalColor: Color = Self.signColor(metrics.totalPnL)
-                MenuPopoverStatBox(label: "Total P&L", value: totalPnL, subValue: totalPnLPercent, valueColor: totalColor)
+                MenuPopoverStatBox(label: "Total P&L", value: totalPnL, subValue: totalPnLPercent,
+                                   valueColor: Self.signColor(metrics.totalPnL))
             }
-            
-            Rectangle()
-                .fill(Color.white.opacity(0.1))
-                .frame(height: 1)
-            
-            HStack(spacing: 0) {
-                let rangeValue = formatCurrency(rangePnL.value, currency: metrics.currency, includeSign: true)
-                let rangePctStr = MenuPopoverFormatter.percent(rangePnL.percent)
-                let rangeColor: Color = Self.signColor(rangePnL.value)
-                let rangeLabel = rangePriceChange == nil ? "Today's P&L" : "\(viewModel.selectedTimeRange.rawValue) P&L"
-                
-                MenuPopoverStatBox(label: rangeLabel, value: rangeValue, subValue: rangePctStr, valueColor: rangeColor)
-                
-                Rectangle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 1)
-                
+            GridRow {
+                let rangeLabel = rangePriceChange == nil ? "Today's P&L" : "\(viewModel.selectedTimeRange.description) P&L"
+                MenuPopoverStatBox(
+                    label: rangeLabel,
+                    value: MenuPopoverFormatter.currencyExact(rangePnL.value, currency: metrics.currency, includeSign: true),
+                    subValue: MenuPopoverFormatter.percent(rangePnL.percent),
+                    valueColor: Self.signColor(rangePnL.value)
+                )
                 unitsBox
             }
         }
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
     }
-    
+
     private var unitsBox: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text("Units")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: {
-                    guard metrics.canEditUnits else { return }
-                    isEditingUnits.toggle()
-                }) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 10))
-                        .foregroundColor(metrics.canEditUnits ? .white.opacity(0.6) : .white.opacity(0.2))
-                }
-                .buttonStyle(.plain)
-                .disabled(!metrics.canEditUnits)
-                .help(metrics.canEditUnits ? "Edit units" : "Units are provided by the linked source and are read-only")
-                .accessibilityLabel("Edit units")
-                .popover(isPresented: $isEditingUnits, arrowEdge: .top) {
-                    unitsEditor
+                if metrics.canEditUnits {
+                    Button {
+                        isEditingUnits.toggle()
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18)
+                            .background(StockbarPalette.hoverFill, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit units")
+                    .accessibilityLabel("Edit units")
+                    .popover(isPresented: $isEditingUnits, arrowEdge: .top) {
+                        unitsEditor
+                    }
+                } else {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .help("Units come from the linked source and are read-only")
+                        .accessibilityLabel("Units are read-only")
                 }
             }
 
-            HStack(alignment: .lastTextBaseline, spacing: 4) {
-                Text(units)
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white)
+            Text(units)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
 
-                Text("@ \(avgCost)")
-                    .font(.system(size: 10, weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-            }
+            Text("at \(avgCost)")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .menuPopoverTile()
     }
-    
+
     private var unitsEditor: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Edit Units")
                 .font(.headline)
-            
+            Text(symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             TextField("Units", text: $unitsInput)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .frame(width: 160)
+                .monospacedDigit()
+                .frame(width: 180)
                 .onSubmit(saveUnits)
                 .onChange(of: unitsInput) { _, _ in unitsInputError = nil }
 
             if let unitsInputError {
-                Text(unitsInputError)
+                Label(unitsInputError, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
-                    .frame(width: 160, alignment: .leading)
+                    .frame(width: 180, alignment: .leading)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Spacer()
                 Button("Cancel") {
                     unitsInput = MenuPopoverFormatter.editableUnits(metrics.units)
                     unitsInputError = nil
@@ -570,17 +542,17 @@ struct MenuPriceChartView: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
+            .frame(width: 180)
         }
         .padding(16)
     }
-    
+
     private func suspensionBanner(_ notice: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "pause.circle.fill")
                 .foregroundStyle(.orange)
             Text(notice)
                 .font(.caption)
-                .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if let onRetry {
@@ -589,7 +561,7 @@ struct MenuPriceChartView: View {
             }
         }
         .padding(10)
-        .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
@@ -613,6 +585,9 @@ struct MenuPriceChartView: View {
             onRefresh: {
                 NotificationCenter.default.post(name: .refreshRequested, object: nil)
             },
+            onOpenApp: {
+                NSApp.sendAction(#selector(AppDelegate.showStockbarWindow(_:)), to: NSApp.delegate, from: nil)
+            },
             onPreferences: {
                 NSApp.sendAction(#selector(AppDelegate.showPreferences(_:)), to: NSApp.delegate, from: nil)
             },
@@ -622,13 +597,8 @@ struct MenuPriceChartView: View {
         )
     }
 
-    private func formatCurrency(_ value: Double?, currency: String, includeSign: Bool = false) -> String {
-        MenuPopoverFormatter.currency(value, currency: currency, includeSign: includeSign)
-    }
-
     static func signColor(_ value: Double?) -> Color {
-        guard let value, value.isFinite, value != 0 else { return .white }
-        return value > 0 ? .green : .red
+        StockbarPalette.signed(value, neutral: .primary)
     }
 
     static func benchmarkSymbol(for symbol: String) -> String? {
