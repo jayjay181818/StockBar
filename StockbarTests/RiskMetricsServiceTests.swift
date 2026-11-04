@@ -43,6 +43,56 @@ final class RiskMetricsServiceTests: XCTestCase {
         }
     }
 
+    func testVaR_IsZeroNotALossWhenThePercentileReturnIsAGain() async throws {
+        // Every day is a gain: there is no loss at the 95% level.
+        let gains = [0.01, 0.02, 0.03, 0.04, 0.05, 0.02, 0.01, 0.03, 0.02, 0.04]
+        let var95 = await service.calculateVaR(returns: gains, confidenceLevel: 0.95, portfolioValue: 10_000)
+        XCTAssertEqual(try XCTUnwrap(var95), 0, accuracy: 0.0001)
+    }
+
+    func testVaR_ReportsTheLossAndIgnoresNonFiniteReturns() async throws {
+        var returns = [Double](repeating: 0.01, count: 18) + [-0.10, -0.10]
+        returns.append(.nan)
+        returns.append(.infinity)
+        let var95 = await service.calculateVaR(returns: returns, confidenceLevel: 0.95, portfolioValue: 10_000)
+        XCTAssertEqual(try XCTUnwrap(var95), 1_000, accuracy: 0.01)
+
+        let none = await service.calculateVaR(returns: [.nan, .infinity], confidenceLevel: 0.95, portfolioValue: 10_000)
+        XCTAssertNil(none)
+    }
+
+    func testSnapshotsInAnotherCurrencyAreConvertedOrDropped() {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        func snapshot(_ offset: Int, value: Double, currency: String) -> HistoricalPortfolioSnapshot {
+            HistoricalPortfolioSnapshot(date: day.addingTimeInterval(Double(offset) * 86_400), totalValue: value,
+                                        totalGains: value / 10, totalCost: value * 0.9, currency: currency,
+                                        portfolioComposition: [:])
+        }
+        // 1 GBP = 1.25 USD; CHF has no rate.
+        let convert: (Double, String, String) -> Double = { amount, from, to in
+            switch (from, to) {
+            case ("USD", "GBP"): return amount / 1.25
+            case ("CHF", _): return .nan
+            default: return amount
+            }
+        }
+        let input = [snapshot(0, value: 1_000, currency: "GBP"),
+                     snapshot(1, value: 1_250, currency: "USD"),
+                     snapshot(2, value: 900, currency: "CHF"),
+                     snapshot(3, value: 1_100, currency: "gbp")]
+
+        let result = RiskMetricsService.normalizingSnapshotCurrencies(input, to: "GBP", convert: convert)
+
+        XCTAssertEqual(result.snapshots.count, 3)
+        XCTAssertEqual(result.convertedCount, 1)
+        XCTAssertEqual(result.droppedCount, 1)
+        let usdSnapshot = result.snapshots[1]
+        XCTAssertEqual(usdSnapshot.totalValue, 1_000, accuracy: 0.0001, "1,250 USD is 1,000 GBP, not 1,250 GBP")
+        XCTAssertEqual(usdSnapshot.totalGains, 100, accuracy: 0.0001)
+        XCTAssertEqual(usdSnapshot.currency, "GBP")
+        XCTAssertEqual(result.snapshots[2].totalValue, 1_100, accuracy: 0.0001, "same currency in another case is untouched")
+    }
+
     func testVaR99_ShouldBeHigherThanVaR95() async throws {
         // Given: Same return series
         let returns = Array(repeating: -0.20, count: 5)

@@ -13,6 +13,8 @@ struct RiskAnalyticsView: View {
     /// Missing history is an expected state, not a failure.
     @State private var insufficientDataMessage: String?
     @State private var selectedTimeRange: TimeRange = .oneYear
+    /// Set when snapshots recorded in another currency were converted or left out.
+    @State private var currencyNotice: String?
 
     enum TimeRange: String, CaseIterable {
         case oneMonth = "1M"
@@ -61,6 +63,10 @@ struct RiskAnalyticsView: View {
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
+                    if let currencyNotice {
+                        StockbarNotice(message: currencyNotice)
+                    }
+
                     // Risk metrics cards
                     metricsGridView(metrics: metrics)
 
@@ -562,8 +568,24 @@ struct RiskAnalyticsView: View {
             // (previous day's holdings revalued at the new prices).
             let preferredCurrency = dataModel.preferredCurrency
             let converter = dataModel.currencyConverter
+
+            // Each snapshot was recorded in the currency that was preferred at the time. Convert
+            // them to today's currency, or leave out those that cannot be converted.
+            let normalized = RiskMetricsService.normalizingSnapshotCurrencies(
+                snapshots, to: preferredCurrency,
+                convert: { converter.convert(amount: $0, from: $1, to: $2) }
+            )
+            var notices: [String] = []
+            if normalized.convertedCount > 0 {
+                notices.append("\(normalized.convertedCount) recorded snapshot(s) were in another currency and were converted to \(preferredCurrency) at today's exchange rate.")
+            }
+            if normalized.droppedCount > 0 {
+                notices.append("\(normalized.droppedCount) snapshot(s) in another currency were left out because no exchange rate is available.")
+            }
+            let notice = notices.isEmpty ? nil : notices.joined(separator: " ")
+
             guard let series = RiskMetricsService.flowAdjustedDailySeries(
-                snapshots: snapshots,
+                snapshots: normalized.snapshots,
                 convert: { converter.convert(amount: $0, from: $1, to: preferredCurrency) }
             ) else {
                 await MainActor.run {
@@ -588,6 +610,7 @@ struct RiskAnalyticsView: View {
                 await MainActor.run {
                     self.riskMetrics = metrics
                     self.drawdownPeriods = periods
+                    self.currencyNotice = notice
                     self.isCalculating = false
                 }
             } else {

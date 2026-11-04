@@ -507,8 +507,8 @@ private struct StockbarHoldingsView: View {
                                     realTimeTrade: realTimeTrade,
                                     dataModel: dataModel,
                                     rowIndex: index,
-                                    canMoveUp: index > 0,
-                                    canMoveDown: index < dataModel.realTimeTrades.count - 1,
+                                    canMoveUp: HoldingsEditing.moveDestination(from: index, by: -1, visibleIndices: visibleIndices) != nil,
+                                    canMoveDown: HoldingsEditing.moveDestination(from: index, by: 1, visibleIndices: visibleIndices) != nil,
                                     onDelete: { requestRemoval(of: realTimeTrade) },
                                     onMove: { move(from: index, by: $0) }
                                 )
@@ -559,8 +559,10 @@ private struct StockbarHoldingsView: View {
     }
 
     private func move(from index: Int, by offset: Int) {
-        let destination = index + offset
-        guard dataModel.realTimeTrades.indices.contains(index),
+        // Swap with the neighbouring *visible* row, so hidden rows (benchmarks, rows filtered
+        // out by search) are never moved behind the user's back.
+        guard let destination = HoldingsEditing.moveDestination(from: index, by: offset, visibleIndices: visibleIndices),
+              dataModel.realTimeTrades.indices.contains(index),
               dataModel.realTimeTrades.indices.contains(destination)
         else { return }
         withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
@@ -610,6 +612,9 @@ private struct HoldingsEditableRow: View {
     let onDelete: () -> Void
     let onMove: (Int) -> Void
     @State private var isHovered = false
+    @FocusState private var symbolFieldFocused: Bool
+    /// The symbol when its field gained focus, to detect a rename on commit.
+    @State private var symbolAtFocus: String?
 
     /// An empty field is still being typed into, so only flag real violations.
     private var isSymbolAcceptable: Bool {
@@ -631,7 +636,10 @@ private struct HoldingsEditableRow: View {
         return "Ticker symbol"
     }
 
-    private let currencies = ["GBX", "GBP", "USD", "EUR", "JPY"]
+    /// Every supported currency plus pence; a stored legacy code stays selectable.
+    private var currencies: [String] {
+        HoldingsEditing.currencyOptions(current: realTimeTrade.trade.position.costCurrency)
+    }
 
     private var financialFieldsReadOnly: Bool {
         dataModel.positionFinancialFieldsReadOnly(for: realTimeTrade)
@@ -639,7 +647,7 @@ private struct HoldingsEditableRow: View {
 
     var body: some View {
         HStack(spacing: HoldingsTableLayout.spacing) {
-            Toggle("", isOn: Binding(
+            Toggle("Show \(realTimeTrade.trade.name) in menu bar", isOn: Binding(
                 get: { realTimeTrade.trade.showInMenuBar },
                 set: { newValue in
                     dataModel.setPositionMenuBarVisibility(newValue, for: realTimeTrade)
@@ -666,6 +674,15 @@ private struct HoldingsEditableRow: View {
                         }
                     }
                     .help(symbolHelp)
+                    .focused($symbolFieldFocused)
+                    .onSubmit { commitSymbolChange() }
+                    .onChange(of: symbolFieldFocused) { _, focused in
+                        if focused {
+                            symbolAtFocus = realTimeTrade.trade.name
+                        } else {
+                            commitSymbolChange()
+                        }
+                    }
                     .onChange(of: realTimeTrade.trade.name) { _, newValue in
                         // Normalise as the user types so an unusable ticker never
                         // reaches the Python bridge in the first place.
@@ -705,7 +722,7 @@ private struct HoldingsEditableRow: View {
                       ? "Average cost per unit" : "Not a number Stockbar can read; cost and P&L are left blank")
                 .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _, _ in dataModel.triggerTradeUpdate() }
 
-            Picker("", selection: currencyBinding) {
+            Picker("Currency for \(realTimeTrade.trade.name)", selection: currencyBinding) {
                 ForEach(currencies, id: \.self) { currency in
                     Text(currency).tag(currency)
                 }
@@ -761,6 +778,17 @@ private struct HoldingsEditableRow: View {
         }
     }
 
+    /// A renamed holding must not keep showing the previous symbol's price: drop the stale quote
+    /// and ask for a refresh once the edit is committed (Return or focus change).
+    private func commitSymbolChange() {
+        guard let original = symbolAtFocus, original != realTimeTrade.trade.name else { return }
+        symbolAtFocus = realTimeTrade.trade.name
+        guard !realTimeTrade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        realTimeTrade.realTimeInfo = TradingInfo()
+        dataModel.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        NotificationCenter.default.post(name: .refreshRequested, object: nil)
+    }
+
     private var currencyBinding: Binding<String> {
         Binding(
             get: { realTimeTrade.trade.position.costCurrency ?? defaultCurrency },
@@ -813,6 +841,9 @@ private struct ProfitLossCell: View {
         }
         .buttonStyle(.plain)
         .help(helpText)
+        .accessibilityLabel(kind == .day ? "Today's profit and loss" : "Total profit and loss")
+        .accessibilityValue("\(text), \(AttributionFormat.direction(amount))")
+        .accessibilityHint(helpText)
     }
 
     private var amount: Double {
@@ -989,7 +1020,7 @@ private struct StockbarDataHealthView: View {
                     StockbarMetricTile(
                         title: "Prices",
                         value: pricesValue(now: context.date),
-                        detail: "Refreshes every \(refreshIntervalText)",
+                        detail: pricesDetail(now: context.date),
                         systemImage: "clock",
                         valueColor: pricesAreStale(now: context.date) ? .orange : .primary
                     )
@@ -1030,9 +1061,19 @@ private struct StockbarDataHealthView: View {
         .stockbarPage()
     }
 
-    private var lastPriceUpdate: Date? {
-        StockbarRelativeTime.latest(trackedTrades.map { $0.realTimeInfo.lastUpdateTime })
+    /// Held positions drive the freshness figure (watchlist-only rows only when nothing is held).
+    private var pricedTrades: [RealTimeTrade] {
+        let held = trackedTrades.filter { !$0.trade.isWatchlistOnly }
+        return held.isEmpty ? trackedTrades : held
     }
+
+    /// The oldest price update among positions, not the newest: one fresh quote must not hide
+    /// a stale or missing one.
+    private var priceFreshness: (date: Date?, missingCount: Int) {
+        StockbarRelativeTime.oldest(pricedTrades.map { $0.realTimeInfo.lastUpdateTime })
+    }
+
+    private var lastPriceUpdate: Date? { priceFreshness.date }
 
     private var exchangeRateStatus: (title: String, color: Color) {
         if currencyConverter.isUsingFallbackRates { return ("Approximate", .orange) }
@@ -1042,15 +1083,26 @@ private struct StockbarDataHealthView: View {
     }
 
     private func pricesValue(now: Date) -> String {
+        let freshness = priceFreshness
+        if pricedTrades.isEmpty { return "No positions" }
+        if freshness.missingCount > 0 {
+            return "\(freshness.missingCount) not updated yet"
+        }
         guard let lastPriceUpdate else { return "Not updated yet" }
         return StockbarRelativeTime.updatedText(lastPriceUpdate, now: now)
             .replacingOccurrences(of: "Updated ", with: "")
             .capitalizedFirstLetter
     }
 
-    /// Stale once more than two refresh intervals have passed without new prices.
+    private func pricesDetail(now: Date) -> String {
+        let base = "Oldest of \(pricedTrades.count) · refreshes every \(refreshIntervalText)"
+        return pricesAreStale(now: now) && !pricedTrades.isEmpty ? "Stale · \(base)" : base
+    }
+
+    /// Stale once more than two refresh intervals have passed without new prices for any position.
     private func pricesAreStale(now: Date) -> Bool {
-        guard let lastPriceUpdate else { return true }
+        let freshness = priceFreshness
+        guard freshness.missingCount == 0, let lastPriceUpdate else { return true }
         return now.timeIntervalSince(lastPriceUpdate) > max(dataModel.refreshInterval * 2, 600)
     }
 

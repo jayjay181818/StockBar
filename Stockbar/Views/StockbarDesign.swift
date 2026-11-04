@@ -305,6 +305,15 @@ enum StockbarRelativeTime {
             .map { Date(timeIntervalSince1970: TimeInterval($0)) }
     }
 
+    /// The oldest positive Unix timestamp and how many entries have none. A single stale
+    /// position must not be hidden by fresher ones, and a position that never updated counts
+    /// as missing rather than being skipped.
+    static func oldest(_ timestamps: [Int?]) -> (date: Date?, missingCount: Int) {
+        let valid = timestamps.compactMap { $0 }.filter { $0 > 0 }
+        let oldest = valid.min().map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        return (oldest, timestamps.count - valid.count)
+    }
+
     /// "Updated just now", "Updated 5 min. ago" or "Not updated yet".
     static func updatedText(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "Not updated yet" }

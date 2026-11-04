@@ -247,6 +247,26 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertEqual(requestCount, 1, "A failed attempt must still start the retry cooldown")
     }
 
+    @MainActor
+    func testFreshInstallWarnsAboutHardCodedRatesAfterFirstAttemptFails() async {
+        let converter = CurrencyConverter(
+            exchangeRates: [:], refreshOnInit: false, loadHistoryOnInit: false,
+            supplementalRouter: FixedFolyncFXRouter(result: .legacy))
+
+        // Before any refresh attempt finishes, conversions are "not ready", not "degraded".
+        _ = converter.convert(amount: 100, from: "USD", to: "GBP")
+        await Task.yield()
+        XCTAssertFalse(converter.isUsingFallbackRates)
+
+        // The first attempt fails with no saved history: lastRefreshTime stays distantPast.
+        converter.finishFailedLegacyRefresh()
+        for _ in 0..<100 where !converter.isUsingFallbackRates { await Task.yield() }
+
+        XCTAssertEqual(converter.lastRefreshTime, .distantPast)
+        XCTAssertTrue(converter.isUsingFallbackRates, "a fresh install on hard-coded rates must be flagged")
+        XCTAssertEqual(converter.convert(amount: 100, from: "USD", to: "GBP"), 74, accuracy: 0.001)
+    }
+
     func testIncompleteFolyncCrossRateNeverSplicesHardCodedLegacyValues() async {
         let legacyRequests = LockedRequestCounter()
         let router = FixedFolyncFXRouter(result: .folync(

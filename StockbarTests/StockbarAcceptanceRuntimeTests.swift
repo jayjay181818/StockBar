@@ -244,3 +244,27 @@ private extension URL {
         return candidate.hasPrefix(prefix)
     }
 }
+
+final class StockbarAutosavePolicyTests: XCTestCase {
+    private let production = StockbarAcceptanceRuntime(
+        root: nil, runID: nil,
+        folyncKeychainService: StockbarAcceptanceRuntime.productionFolyncKeychainService,
+        liveProviderRequestsAllowed: true)
+    private let acceptance = StockbarAcceptanceRuntime(
+        root: URL(fileURLWithPath: "/tmp/stockbar-acceptance-test", isDirectory: true), runID: "run-12345678",
+        folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+        liveProviderRequestsAllowed: false)
+
+    func testProductionKeepsTheRealAutosaveNames() {
+        XCTAssertEqual(StockbarAutosavePolicy.windowFrameName("StockbarMainWindow", acceptance: production), "StockbarMainWindow")
+        XCTAssertEqual(StockbarAutosavePolicy.statusItemName("com.stockbar.portfolio", acceptance: production), "com.stockbar.portfolio")
+    }
+
+    func testAcceptanceNeverUsesTheProductionAutosaveNames() {
+        XCTAssertNil(StockbarAutosavePolicy.windowFrameName("StockbarMainWindow", acceptance: acceptance),
+                     "the window frame must not be saved or restored under acceptance")
+        let statusName = StockbarAutosavePolicy.statusItemName("com.stockbar.portfolio", acceptance: acceptance)
+        XCTAssertNotEqual(statusName, "com.stockbar.portfolio")
+        XCTAssertTrue(statusName.hasSuffix(".acceptance.run-12345678"))
+    }
+}

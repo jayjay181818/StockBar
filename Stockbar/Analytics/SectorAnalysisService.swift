@@ -88,161 +88,165 @@ actor SectorAnalysisService {
             return rawValue
         }
 
-        /// Get sector for a given symbol using known mappings
+        /// Get sector for a given symbol using known mappings.
+        ///
+        /// UK listings are keyed with their `.L` suffix (`TSCO.L`) so they cannot collide
+        /// with US tickers that share the same letters (`TSCO` is Tractor Supply). `.LON`
+        /// and `.XC` suffixes are normalised to `.L`. A bare ticker only ever matches the
+        /// US table; an unmapped symbol is `.unknown`.
         static func forSymbol(_ symbol: String) -> Sector {
-            let symbolUpper = symbol.uppercased().replacingOccurrences(of: ".L", with: "")
-
-            // Comprehensive stock sector mappings (US & UK)
-            let sectorMap: [String: Sector] = [
-                // ===== US STOCKS =====
-
-                // Technology
-                "AAPL": .technology, "MSFT": .technology, "GOOGL": .technology, "GOOG": .technology,
-                "AMZN": .consumerCyclical, "META": .communicationServices, "NVDA": .technology,
-                "TSLA": .consumerCyclical, "AVGO": .technology, "ORCL": .technology,
-                "CRM": .technology, "ADBE": .technology, "CSCO": .technology, "INTC": .technology,
-                "AMD": .technology, "QCOM": .technology, "IBM": .technology, "NOW": .technology,
-                "SNOW": .technology, "PLTR": .technology, "NET": .technology, "CRWD": .technology,
-                "ZS": .technology, "DDOG": .technology, "MDB": .technology, "WDAY": .technology,
-
-                // Healthcare
-                "JNJ": .healthcare, "UNH": .healthcare, "LLY": .healthcare, "PFE": .healthcare,
-                "ABBV": .healthcare, "TMO": .healthcare, "MRK": .healthcare, "ABT": .healthcare,
-                "DHR": .healthcare, "BMY": .healthcare, "AMGN": .healthcare, "CVS": .healthcare,
-                "GILD": .healthcare, "VRTX": .healthcare, "ISRG": .healthcare, "REGN": .healthcare,
-                "CI": .healthcare, "HUM": .healthcare, "BSX": .healthcare, "MDT": .healthcare,
-
-                // Financials
-                "BRK.B": .financials, "JPM": .financials, "V": .financials, "MA": .financials,
-                "BAC": .financials, "WFC": .financials, "GS": .financials, "MS": .financials,
-                "SCHW": .financials, "AXP": .financials, "BLK": .financials, "C": .financials,
-                "USB": .financials, "PNC": .financials, "TFC": .financials, "COF": .financials,
-                "CME": .financials, "ICE": .financials, "SPGI": .financials, "MCO": .financials,
-
-                // Consumer Cyclical
-                "HD": .consumerCyclical, "MCD": .consumerCyclical, "NKE": .consumerCyclical,
-                "SBUX": .consumerCyclical, "LOW": .consumerCyclical, "TJX": .consumerCyclical,
-                "BKNG": .consumerCyclical, "MAR": .consumerCyclical, "GM": .consumerCyclical,
-                "F": .consumerCyclical, "ABNB": .consumerCyclical, "UBER": .consumerCyclical,
-
-                // Consumer Defensive
-                "WMT": .consumerDefensive, "PG": .consumerDefensive, "KO": .consumerDefensive,
-                "PEP": .consumerDefensive, "COST": .consumerDefensive, "PM": .consumerDefensive,
-                "MO": .consumerDefensive, "CL": .consumerDefensive, "KMB": .consumerDefensive,
-                "GIS": .consumerDefensive, "K": .consumerDefensive, "HSY": .consumerDefensive,
-
-                // Energy
-                "XOM": .energy, "CVX": .energy, "COP": .energy, "SLB": .energy, "EOG": .energy,
-                "MPC": .energy, "PSX": .energy, "VLO": .energy, "OXY": .energy, "HAL": .energy,
-
-                // Industrials
-                "BA": .industrials, "HON": .industrials, "UPS": .industrials, "CAT": .industrials,
-                "GE": .industrials, "MMM": .industrials, "LMT": .industrials, "RTX": .industrials,
-                "DE": .industrials, "UNP": .industrials, "FDX": .industrials, "NSC": .industrials,
-
-                // Communication Services
-                "DIS": .communicationServices, "NFLX": .communicationServices, "CMCSA": .communicationServices,
-                "VZ": .communicationServices, "T": .communicationServices, "TMUS": .communicationServices,
-                "CHTR": .communicationServices, "EA": .communicationServices, "TTWO": .communicationServices,
-
-                // Utilities
-                "NEE": .utilities, "DUK": .utilities, "SO": .utilities, "D": .utilities,
-                "AEP": .utilities, "EXC": .utilities, "SRE": .utilities, "XEL": .utilities,
-
-                // Real Estate
-                "AMT": .realEstate, "PLD": .realEstate, "CCI": .realEstate, "EQIX": .realEstate,
-                "PSA": .realEstate, "WELL": .realEstate, "DLR": .realEstate, "AVB": .realEstate,
-
-                // Basic Materials
-                "LIN": .basicMaterials, "APD": .basicMaterials, "ECL": .basicMaterials, "SHW": .basicMaterials,
-                "NEM": .basicMaterials, "FCX": .basicMaterials, "NUE": .basicMaterials, "DD": .basicMaterials,
-
-                // ===== UK STOCKS (FTSE 100) =====
-
-                // UK Technology
-                "SAGE": .technology, "AUTO": .technology, "DARK": .technology,
-
-                // UK Healthcare
-                "AZN": .healthcare, "GSK": .healthcare, "BATS": .healthcare,
-                "OCDO": .healthcare, "AAF": .healthcare, "HIK": .healthcare,
-                "HIMS": .healthcare, // Hims & Hers Health (US)
-
-                // UK Financials
-                "LLOY": .financials, "BARC": .financials, "NWG": .financials, "STAN": .financials,
-                "HSBA": .financials, "PRU": .financials, "AVIV": .financials, "LGEN": .financials,
-                "III": .financials, "STJ": .financials, "BNZL": .financials,
-                "LSE": .financials, "EXPN": .financials, "LSEG": .financials,
-                "AV": .financials, // Aviva (UK insurance)
-                "OSCR": .financials, // Oscar Health (US)
-
-                // UK Consumer Cyclical
-                "TSCO": .consumerCyclical, "MKS": .consumerCyclical, "SBRY": .consumerCyclical,
-                "WTB": .consumerCyclical, "JD": .consumerCyclical, "FRAS": .consumerCyclical,
-                "NEXT": .consumerCyclical, "BDEV": .consumerCyclical, "INF": .consumerCyclical,
-                "PSON": .consumerCyclical, "BRBY": .consumerCyclical,
-                "EZJ": .consumerCyclical, "CCH": .consumerCyclical, "WPP": .consumerCyclical,
-                "TW": .consumerCyclical, // Taylor Wimpey (UK housebuilder)
-                "BABA": .consumerCyclical, // Alibaba (China)
-
-                // UK Consumer Defensive
-                "ULVR": .consumerDefensive, "DGE": .consumerDefensive, "ABF": .consumerDefensive,
-                "RKT": .consumerDefensive, "IMB": .consumerDefensive, "CPG": .consumerDefensive,
-
-                // UK Energy
-                "BP": .energy, "SHEL": .energy, "RDSA": .energy, "RDSB": .energy,
-
-                // UK Industrials
-                "RR": .industrials, "IMI": .industrials, "SMWH": .industrials, "RMV": .industrials,
-                "SPX": .industrials, "WEIR": .industrials, "MGGT": .industrials, "SGE": .industrials,
-                "IAG": .industrials, // International Airlines Group (British Airways parent)
-
-                // UK Communication Services
-                "VOD": .communicationServices, "BT.A": .communicationServices, "ITV": .communicationServices,
-                "REL": .communicationServices, "RMG": .communicationServices,
-
-                // UK Utilities
-                "SSE": .utilities, "NG": .utilities, "UU": .utilities, "SVT": .utilities,
-                "PERC": .utilities,
-
-                // UK Real Estate
-                "LAND": .realEstate, "SGRO": .realEstate, "BLND": .realEstate, "PSN": .realEstate,
-                "BBOX": .realEstate, "SAFE": .realEstate, "DIGS": .realEstate,
-
-                // UK Basic Materials
-                "RIO": .basicMaterials, "GLEN": .basicMaterials,
-                "ANTO": .basicMaterials, "CRH": .basicMaterials, "JMAT": .basicMaterials,
-
-                // ===== ADDITIONAL US STOCKS =====
-                "MU": .technology // Micron Technology (semiconductors)
-            ]
-
-            // Try exact match first
-            if let sector = sectorMap[symbolUpper] {
-                return sector
-            }
-
-            // Try without .L suffix for UK stocks
-            if SymbolMetadata.isUKSymbol(symbol) {
-                let baseSymbol = symbolUpper
-                    .replacingOccurrences(of: ".LON", with: "")
-                    .replacingOccurrences(of: ".L", with: "")
-                if let sector = sectorMap[baseSymbol] {
-                    return sector
-                }
-            }
-
-            return .unknown
+            let key = normalizedLookupKey(symbol)
+            return sectorMap[key] ?? .unknown
         }
+
+        /// Upper-cased lookup key with UK exchange suffixes normalised to `.L`.
+        static func normalizedLookupKey(_ symbol: String) -> String {
+            let upper = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            for suffix in [".LON", ".XC"] where upper.hasSuffix(suffix) {
+                return String(upper.dropLast(suffix.count)) + ".L"
+            }
+            return upper
+        }
+
+        // Stock sector mappings. US tickers are bare; UK tickers carry `.L`.
+        private static let sectorMap: [String: Sector] = [
+            // ===== US STOCKS =====
+
+            // Technology
+            "AAPL": .technology, "MSFT": .technology, "GOOGL": .technology, "GOOG": .technology,
+            "AMZN": .consumerCyclical, "META": .communicationServices, "NVDA": .technology,
+            "TSLA": .consumerCyclical, "AVGO": .technology, "ORCL": .technology,
+            "CRM": .technology, "ADBE": .technology, "CSCO": .technology, "INTC": .technology,
+            "AMD": .technology, "QCOM": .technology, "IBM": .technology, "NOW": .technology,
+            "SNOW": .technology, "PLTR": .technology, "NET": .technology, "CRWD": .technology,
+            "ZS": .technology, "DDOG": .technology, "MDB": .technology, "WDAY": .technology,
+            "MU": .technology,
+
+            // Healthcare
+            "JNJ": .healthcare, "UNH": .healthcare, "LLY": .healthcare, "PFE": .healthcare,
+            "ABBV": .healthcare, "TMO": .healthcare, "MRK": .healthcare, "ABT": .healthcare,
+            "DHR": .healthcare, "BMY": .healthcare, "AMGN": .healthcare, "CVS": .healthcare,
+            "GILD": .healthcare, "VRTX": .healthcare, "ISRG": .healthcare, "REGN": .healthcare,
+            "CI": .healthcare, "HUM": .healthcare, "BSX": .healthcare, "MDT": .healthcare,
+            "HIMS": .healthcare, "OSCR": .healthcare, "SAGE": .healthcare,
+
+            // Financials
+            "BRK.B": .financials, "JPM": .financials, "V": .financials, "MA": .financials,
+            "BAC": .financials, "WFC": .financials, "GS": .financials, "MS": .financials,
+            "SCHW": .financials, "AXP": .financials, "BLK": .financials, "C": .financials,
+            "USB": .financials, "PNC": .financials, "TFC": .financials, "COF": .financials,
+            "CME": .financials, "ICE": .financials, "SPGI": .financials, "MCO": .financials,
+
+            // Consumer Cyclical
+            "HD": .consumerCyclical, "MCD": .consumerCyclical, "NKE": .consumerCyclical,
+            "SBUX": .consumerCyclical, "LOW": .consumerCyclical, "TJX": .consumerCyclical,
+            "BKNG": .consumerCyclical, "MAR": .consumerCyclical, "GM": .consumerCyclical,
+            "F": .consumerCyclical, "ABNB": .consumerCyclical, "UBER": .consumerCyclical,
+            "TSCO": .consumerCyclical, // Tractor Supply (UK Tesco is TSCO.L)
+            "BABA": .consumerCyclical, "JD": .consumerCyclical,
+
+            // Consumer Defensive
+            "WMT": .consumerDefensive, "PG": .consumerDefensive, "KO": .consumerDefensive,
+            "PEP": .consumerDefensive, "COST": .consumerDefensive, "PM": .consumerDefensive,
+            "MO": .consumerDefensive, "CL": .consumerDefensive, "KMB": .consumerDefensive,
+            "GIS": .consumerDefensive, "K": .consumerDefensive, "HSY": .consumerDefensive,
+
+            // Energy
+            "XOM": .energy, "CVX": .energy, "COP": .energy, "SLB": .energy, "EOG": .energy,
+            "MPC": .energy, "PSX": .energy, "VLO": .energy, "OXY": .energy, "HAL": .energy,
+            "BP": .energy,
+
+            // Industrials
+            "BA": .industrials, "HON": .industrials, "UPS": .industrials, "CAT": .industrials,
+            "GE": .industrials, "MMM": .industrials, "LMT": .industrials, "RTX": .industrials,
+            "DE": .industrials, "UNP": .industrials, "FDX": .industrials, "NSC": .industrials,
+
+            // Communication Services
+            "DIS": .communicationServices, "NFLX": .communicationServices, "CMCSA": .communicationServices,
+            "VZ": .communicationServices, "T": .communicationServices, "TMUS": .communicationServices,
+            "CHTR": .communicationServices, "EA": .communicationServices, "TTWO": .communicationServices,
+
+            // Utilities
+            "NEE": .utilities, "DUK": .utilities, "SO": .utilities, "D": .utilities,
+            "AEP": .utilities, "EXC": .utilities, "SRE": .utilities, "XEL": .utilities,
+
+            // Real Estate
+            "AMT": .realEstate, "PLD": .realEstate, "CCI": .realEstate, "EQIX": .realEstate,
+            "PSA": .realEstate, "WELL": .realEstate, "DLR": .realEstate, "AVB": .realEstate,
+
+            // Basic Materials
+            "LIN": .basicMaterials, "APD": .basicMaterials, "ECL": .basicMaterials, "SHW": .basicMaterials,
+            "NEM": .basicMaterials, "FCX": .basicMaterials, "NUE": .basicMaterials, "DD": .basicMaterials,
+            "RIO": .basicMaterials,
+
+            // ===== UK STOCKS (FTSE 100/250, keyed with .L) =====
+
+            // Technology
+            "SGE.L": .technology, // Sage Group
+            "DARK.L": .technology,
+
+            // Healthcare
+            "AZN.L": .healthcare, "GSK.L": .healthcare, "HIK.L": .healthcare, "SN.L": .healthcare,
+
+            // Financials
+            "LLOY.L": .financials, "BARC.L": .financials, "NWG.L": .financials, "STAN.L": .financials,
+            "HSBA.L": .financials, "PRU.L": .financials, "AV.L": .financials, "AVIV.L": .financials,
+            "LGEN.L": .financials, "III.L": .financials, "STJ.L": .financials, "LSEG.L": .financials,
+
+            // Consumer Cyclical
+            "MKS.L": .consumerCyclical, "WTB.L": .consumerCyclical, "JD.L": .consumerCyclical,
+            "FRAS.L": .consumerCyclical, "NEXT.L": .consumerCyclical, "BDEV.L": .consumerCyclical,
+            "PSON.L": .consumerCyclical, "BRBY.L": .consumerCyclical, "CPG.L": .consumerCyclical,
+            "TW.L": .consumerCyclical, "PSN.L": .consumerCyclical, "SMWH.L": .consumerCyclical,
+
+            // Consumer Defensive
+            "TSCO.L": .consumerDefensive, "SBRY.L": .consumerDefensive, "OCDO.L": .consumerDefensive,
+            "ULVR.L": .consumerDefensive, "DGE.L": .consumerDefensive, "ABF.L": .consumerDefensive,
+            "RKT.L": .consumerDefensive, "IMB.L": .consumerDefensive, "BATS.L": .consumerDefensive,
+            "CCH.L": .consumerDefensive,
+
+            // Energy
+            "BP.L": .energy, "SHEL.L": .energy, "RDSA.L": .energy, "RDSB.L": .energy,
+
+            // Industrials
+            "RR.L": .industrials, "IMI.L": .industrials,
+            "SPX.L": .industrials, "WEIR.L": .industrials, "MGGT.L": .industrials,
+            "IAG.L": .industrials, "EZJ.L": .industrials, "BNZL.L": .industrials,
+            "EXPN.L": .industrials, "REL.L": .industrials, "RMG.L": .industrials,
+            "BA.L": .industrials,
+
+            // Communication Services
+            "VOD.L": .communicationServices, "BT.A.L": .communicationServices, "ITV.L": .communicationServices,
+            "AUTO.L": .communicationServices, "INF.L": .communicationServices, "WPP.L": .communicationServices,
+            "AAF.L": .communicationServices, "RMV.L": .communicationServices,
+
+            // Utilities
+            "SSE.L": .utilities, "NG.L": .utilities, "UU.L": .utilities, "SVT.L": .utilities,
+
+            // Real Estate
+            "LAND.L": .realEstate, "SGRO.L": .realEstate, "BLND.L": .realEstate,
+            "BBOX.L": .realEstate, "SAFE.L": .realEstate, "DIGS.L": .realEstate,
+
+            // Basic Materials
+            "RIO.L": .basicMaterials, "GLEN.L": .basicMaterials,
+            "ANTO.L": .basicMaterials, "CRH.L": .basicMaterials, "JMAT.L": .basicMaterials
+        ]
     }
 
     /// Diversification analysis
     struct DiversificationAnalysis {
-        let score: Double  // 0-100 (100 = perfectly diversified)
-        /// Whether the score is based on at least one finite, valued position.
+        /// 0-100 (100 = perfectly diversified), computed over classified sectors only.
+        let score: Double
+        /// Whether the score is based on enough classified, finite, valued positions.
         let isAvailable: Bool
         let concentrationRisk: ConcentrationRisk
         let recommendations: [String]
         let topHeavySectors: [Sector]
+        /// Share (0-100) of portfolio value in symbols with no known sector.
+        let unclassifiedPercentage: Double
+
+        /// Above this share the sector view says more about the lookup table than the portfolio.
+        static let maximumUnclassifiedPercentage: Double = 50.0
 
         enum ConcentrationRisk: String {
             case low = "Low"
@@ -344,7 +348,11 @@ actor SectorAnalysisService {
 
     // MARK: - Diversification Analysis
 
-    /// Analyze portfolio diversification across sectors
+    /// Analyze portfolio diversification across sectors.
+    ///
+    /// The `.unknown` bucket is not a sector: it is excluded from the Herfindahl score,
+    /// concentration and recommendations and reported as `unclassifiedPercentage`. When
+    /// most of the portfolio is unclassified the analysis is marked unavailable.
     func analyzeDiversification(
         sectorAllocations: [SectorAllocation]
     ) async -> DiversificationAnalysis {
@@ -357,13 +365,30 @@ actor SectorAnalysisService {
                 isAvailable: false,
                 concentrationRisk: .low,
                 recommendations: [],
-                topHeavySectors: []
+                topHeavySectors: [],
+                unclassifiedPercentage: 0
             )
         }
 
-        // Calculate Herfindahl index (concentration measure)
-        let herfindahlIndex = sectorAllocations.reduce(0.0) { sum, allocation in
-            let weight = allocation.totalValue / totalValue
+        let classified = sectorAllocations.filter { $0.sector != .unknown }
+        let classifiedValue = classified.reduce(0.0) { $0 + $1.totalValue }
+        let unclassifiedPercentage = max(0, min(100, (1 - classifiedValue / totalValue) * 100))
+
+        guard classifiedValue > 0,
+              unclassifiedPercentage <= DiversificationAnalysis.maximumUnclassifiedPercentage else {
+            return DiversificationAnalysis(
+                score: .nan,
+                isAvailable: false,
+                concentrationRisk: .low,
+                recommendations: [],
+                topHeavySectors: [],
+                unclassifiedPercentage: unclassifiedPercentage
+            )
+        }
+
+        // Herfindahl index over classified sectors only.
+        let herfindahlIndex = classified.reduce(0.0) { sum, allocation in
+            let weight = allocation.totalValue / classifiedValue
             return sum + (weight * weight)
         }
 
@@ -373,8 +398,12 @@ actor SectorAnalysisService {
         let idealHerfindahl = 1.0 / Double(Sector.allCases.count - 1)  // Exclude unknown
         let diversificationScore = max(0, min(100, (1.0 - (herfindahlIndex - idealHerfindahl) / (1.0 - idealHerfindahl)) * 100))
 
-        // Identify concentration risk
-        let maxPercentage = sectorAllocations.first?.percentageOfPortfolio ?? 0
+        // Share of the classified portfolio held by each sector.
+        func classifiedShare(_ allocation: SectorAllocation) -> Double {
+            allocation.totalValue / classifiedValue * 100
+        }
+
+        let maxPercentage = classified.map(classifiedShare).max() ?? 0
         let concentrationRisk: DiversificationAnalysis.ConcentrationRisk
         if maxPercentage > 50 {
             concentrationRisk = .high
@@ -384,22 +413,19 @@ actor SectorAnalysisService {
             concentrationRisk = .low
         }
 
-        // Find top-heavy sectors (>25% allocation)
-        let topHeavySectors = sectorAllocations
-            .filter { $0.percentageOfPortfolio > 25 }
-            .map { $0.sector }
+        // Find top-heavy sectors (>25% of classified value)
+        let topHeavy = classified.filter { classifiedShare($0) > 25 }
+        let topHeavySectors = topHeavy.map { $0.sector }
 
         // Generate recommendations
         var recommendations: [String] = []
 
-        if !topHeavySectors.isEmpty {
-            for sector in topHeavySectors {
-                recommendations.append("Consider reducing exposure to \(sector.displayName) (>\(String(format: "%.1f", sectorAllocations.first { $0.sector == sector }?.percentageOfPortfolio ?? 0))%)")
-            }
+        for allocation in topHeavy {
+            recommendations.append("Consider reducing exposure to \(allocation.sector.displayName) (>\(String(format: "%.1f", classifiedShare(allocation)))%)")
         }
 
         // Suggest underrepresented sectors
-        let representedSectors = Set(sectorAllocations.map { $0.sector })
+        let representedSectors = Set(classified.map { $0.sector })
         let missingMajorSectors = [Sector.technology, .healthcare, .financials, .consumerCyclical]
             .filter { !representedSectors.contains($0) }
 
@@ -411,14 +437,15 @@ actor SectorAnalysisService {
             recommendations.append("Portfolio is well diversified across sectors")
         }
 
-        await Logger.shared.debug("📊 Diversification score: \(String(format: "%.1f", diversificationScore)), risk: \(concentrationRisk.rawValue)")
+        await Logger.shared.debug("📊 Diversification score: \(String(format: "%.1f", diversificationScore)), risk: \(concentrationRisk.rawValue), unclassified \(String(format: "%.1f", unclassifiedPercentage))%")
 
         return DiversificationAnalysis(
             score: diversificationScore,
             isAvailable: true,
             concentrationRisk: concentrationRisk,
             recommendations: recommendations,
-            topHeavySectors: topHeavySectors
+            topHeavySectors: topHeavySectors,
+            unclassifiedPercentage: unclassifiedPercentage
         )
     }
 
