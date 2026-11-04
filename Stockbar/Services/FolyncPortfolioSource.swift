@@ -6,7 +6,24 @@ enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
     case invalidPayload(String)
     case invalidResponse
     case unauthorized
+    case rateLimited(retryAfter: TimeInterval?)
     case unavailable(Int)
+
+    /// Maps a non-success Folync status. Folync answers 429 with `Retry-After`
+    /// (whole seconds) after repeated failed token attempts from one address.
+    static func forStatus(_ status: Int, retryAfter: String?) -> FolyncPortfolioSourceError {
+        switch status {
+        case 401:
+            return .unauthorized
+        case 429:
+            let seconds = retryAfter
+                .flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                .map { TimeInterval(min(max($0, 1), 3600)) }
+            return .rateLimited(retryAfter: seconds)
+        default:
+            return .unavailable(status)
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +37,9 @@ enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
             return "Folync returned an invalid response."
         case .unauthorized:
             return "Folync rejected the client access token."
+        case .rateLimited(let retryAfter):
+            let wait = retryAfter.map { " Retrying after \(Int($0)) seconds." } ?? ""
+            return "Folync is refusing requests after too many failed token attempts.\(wait)"
         case .unavailable(let status):
             return "Folync request failed with HTTP \(status)."
         }
@@ -434,10 +454,10 @@ actor FolyncPortfolioSource: PortfolioSource {
     }
 
     private func validate(_ response: HTTPURLResponse) throws {
-        switch response.statusCode {
-        case 200..<300: return
-        case 401: throw FolyncPortfolioSourceError.unauthorized
-        default: throw FolyncPortfolioSourceError.unavailable(response.statusCode)
-        }
+        guard !(200..<300).contains(response.statusCode) else { return }
+        throw FolyncPortfolioSourceError.forStatus(
+            response.statusCode,
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After")
+        )
     }
 }

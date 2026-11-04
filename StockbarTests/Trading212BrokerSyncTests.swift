@@ -26,6 +26,32 @@ final class Trading212BrokerSyncTests: XCTestCase {
                        "After sleep, use the next minute boundary without replaying missed polls")
     }
 
+    func testFolyncFailedPollBackoffSlowsRejectedTokensAndHonoursRetryAfter() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000).addingTimeInterval(5)
+        XCTAssertEqual(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.unauthorized, at: now),
+                       now.addingTimeInterval(15 * 60), "A rejected token must not be re-sent every minute")
+        XCTAssertEqual(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.rateLimited(retryAfter: 120), at: now),
+                       now.addingTimeInterval(120))
+        XCTAssertEqual(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.rateLimited(retryAfter: 30), at: now),
+                       FolyncRefreshSchedule.nextRegularCheck(after: now), "A short Retry-After never polls faster than normal")
+        XCTAssertEqual(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.rateLimited(retryAfter: nil), at: now),
+                       FolyncRefreshSchedule.nextRegularCheck(after: now))
+        XCTAssertNil(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.unavailable(503), at: now))
+        XCTAssertNil(FolyncRefreshSchedule.backoff(after: URLError(.notConnectedToInternet), at: now),
+                     "Being off the network or tailnet keeps the regular cadence")
+    }
+
+    func testFolyncStatusMappingReadsRetryAfterForRateLimits() {
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(401, retryAfter: nil), .unauthorized)
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(429, retryAfter: "42"), .rateLimited(retryAfter: 42))
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(429, retryAfter: " 7 "), .rateLimited(retryAfter: 7))
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(429, retryAfter: "0"), .rateLimited(retryAfter: 1))
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(429, retryAfter: "999999"), .rateLimited(retryAfter: 3600))
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(429, retryAfter: "Wed, 04 Nov 2026 00:00:00 GMT"),
+                       .rateLimited(retryAfter: nil), "HTTP-date Retry-After falls back to the regular cadence")
+        XCTAssertEqual(FolyncPortfolioSourceError.forStatus(503, retryAfter: "30"), .unavailable(503))
+    }
+
     func testSharedCoreDataStackUsesInMemoryStoreUnderXCTest() {
         XCTAssertEqual(
             CoreDataStack.shared.persistentContainer.persistentStoreDescriptions.first?.type,
@@ -1904,6 +1930,33 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertNoThrow(try FolyncEndpointPolicy.validate(URL(string: "http://127.0.0.1:3000")!))
         XCTAssertNoThrow(try FolyncEndpointPolicy.validate(URL(string: "http://localhost:3000")!))
         XCTAssertThrowsError(try FolyncEndpointPolicy.validate(URL(string: "http://192.168.0.10:3000")!))
+    }
+
+    func testFolyncBaseURLWithPortKeepsPortAndSurfacesRateLimit() async throws {
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            XCTAssertEqual(request.url?.host, "folync.test")
+            XCTAssertEqual(request.url?.port, 13000)
+            XCTAssertEqual(request.url?.path, "/api/client/v2/scopes/all/snapshot")
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 429, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json", "Retry-After": "42"]
+            )!
+            let body = #"{"statusCode":429,"data":{"code":"too_many_failed_attempts","retryable":true}}"#
+            return (response, Data(body.utf8))
+        }
+        let source = try FolyncPortfolioSource(
+            baseURL: URL(string: "https://folync.test:13000")!, token: "test-token",
+            session: Self.stubSession(), providerPolicy: Self.testProviderPolicy
+        )
+        do {
+            _ = try await source.fetchSnapshot(scopeID: "all", etag: nil)
+            XCTFail("A 429 must not decode as a snapshot")
+        } catch {
+            XCTAssertEqual(error as? FolyncPortfolioSourceError, .rateLimited(retryAfter: 42))
+        }
+        XCTAssertEqual(stub.requests.count, 1, "A 429 must not trigger the v1 fallback")
     }
 
     func testDecodesVersionOneSnapshotIntoReadOnlyDisplayTrades() throws {

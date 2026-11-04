@@ -89,6 +89,8 @@ class DataModel: ObservableObject {
     var folyncSupplementalRefreshTimer: Timer?
     var folyncSupplementalRefreshTask: Task<Void, Never>?
     var folyncETag: String?
+    /// Set after a rejected token or rate limit; automatic polls wait until then.
+    var folyncBackoffUntil: Date?
 
     var isFolyncPortfolioActive: Bool { folyncPortfolioSnapshot != nil }
 

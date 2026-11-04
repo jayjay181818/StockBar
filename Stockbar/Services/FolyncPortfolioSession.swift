@@ -106,6 +106,8 @@ extension DataModel {
         folyncRefreshTask?.cancel()
         folyncRefreshTask = nil
         folyncRefreshRequestID = nil
+        // A restart follows a new URL, token or scope, so earlier backoff no longer applies.
+        folyncBackoffUntil = nil
         let settings = FolyncSettingsStore.shared.load()
         guard settings.isEnabled else { return }
 
@@ -143,6 +145,11 @@ extension DataModel {
         await refreshFolyncPortfolio(allowCatchUp: false)
     }
 
+    var isFolyncBackingOff: Bool {
+        guard let folyncBackoffUntil else { return false }
+        return folyncBackoffUntil > Date()
+    }
+
     private func refreshFolyncPortfolio(allowCatchUp: Bool) async {
         // Manual and scheduled refreshes share the same in-flight request.
         if let task = folyncRefreshTask {
@@ -178,10 +185,11 @@ extension DataModel {
             let catchUp = succeeded && allowCatchUp && FolyncRefreshSchedule.needsCatchUp(
                 providerSyncAt: providerSyncAt, checkStartedAt: startedAt, completedAt: completedAt
             )
+            let regular = FolyncRefreshSchedule.nextRegularCheck(after: completedAt)
             let next = catchUp ? completedAt.addingTimeInterval(FolyncRefreshSchedule.catchUpDelay)
-                : FolyncRefreshSchedule.nextRegularCheck(after: completedAt)
+                : max(regular, folyncBackoffUntil ?? regular)
             scheduleFolyncCheck(at: next, isCatchUp: catchUp)
-            await Logger.shared.info("Folync poll completed: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp)")
+            await Logger.shared.info("Folync poll completed: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp), backoff=\(isFolyncBackingOff)")
         }
         folyncRefreshTask = task
         await task.value
@@ -215,6 +223,7 @@ extension DataModel {
                     snapshot: snapshot
                 ))
             }
+            folyncBackoffUntil = nil
             return true
         } catch {
             guard !Task.isCancelled else { return false }
@@ -224,6 +233,7 @@ extension DataModel {
                 applyFolyncSnapshot(cached.snapshot)
             }
             markFolyncRefreshFailure(error)
+            folyncBackoffUntil = FolyncRefreshSchedule.backoff(after: error, at: Date())
             return false
         }
     }
@@ -278,14 +288,15 @@ extension DataModel {
         // Capabilities readiness can change after bounded Folync backfills even
         // when only on-demand chart routes are enabled. Keep this conditional
         // ETag poll active for every configured Folync connection.
-        if runImmediately {
+        if runImmediately, !isFolyncBackingOff {
             await refreshFolyncSupplementalMarketData()
         }
         let timer = Timer(fire: FolyncRefreshSchedule.nextRegularCheck(after: Date()),
                           interval: FolyncRefreshSchedule.interval, repeats: true) {
             [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.folyncSupplementalRefreshTask == nil else { return }
+                // Supplemental routes use the same token, so they wait out the same backoff.
+                guard let self, self.folyncSupplementalRefreshTask == nil, !self.isFolyncBackingOff else { return }
                 self.folyncSupplementalRefreshTask = Task { @MainActor [weak self] in
                     guard let self else { return }
                     defer { self.folyncSupplementalRefreshTask = nil }
@@ -389,6 +400,7 @@ extension DataModel {
         folyncRefreshRequestID = nil
         folyncLastCheckedAt = nil
         folyncNextCheckAt = nil
+        folyncBackoffUntil = nil
         restoreFolyncBenchmarkOverlays()
         currencyConverter.deactivateFolyncOverlay()
         folyncRefreshTimer?.invalidate()

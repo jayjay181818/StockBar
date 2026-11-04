@@ -1029,6 +1029,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         let data: Data
         let statusCode: Int
         let etag: String?
+        let retryAfter: String?
     }
 
     private func request(
@@ -1056,15 +1057,17 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw FolyncPortfolioSourceError.invalidResponse }
-        return HTTPResult(data: data, statusCode: http.statusCode, etag: http.value(forHTTPHeaderField: "ETag"))
+        return HTTPResult(
+            data: data,
+            statusCode: http.statusCode,
+            etag: http.value(forHTTPHeaderField: "ETag"),
+            retryAfter: http.value(forHTTPHeaderField: "Retry-After")
+        )
     }
 
     private func validate(_ response: HTTPResult) throws {
-        switch response.statusCode {
-        case 200..<300: return
-        case 401: throw FolyncPortfolioSourceError.unauthorized
-        default: throw FolyncPortfolioSourceError.unavailable(response.statusCode)
-        }
+        guard !(200..<300).contains(response.statusCode) else { return }
+        throw FolyncPortfolioSourceError.forStatus(response.statusCode, retryAfter: response.retryAfter)
     }
 
     private func decode<T: Decodable>(_ type: T.Type, data: Data) throws -> T {
