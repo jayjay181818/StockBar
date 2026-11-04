@@ -363,6 +363,7 @@ struct PortfolioMenuPopoverView: View {
     @ObservedObject private var dataModel: DataModel
     @StateObject private var viewModel: PortfolioMenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
+    @State private var summaryCache = DisplaySummaryCache()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let actions: PortfolioMenuActions
@@ -384,10 +385,13 @@ struct PortfolioMenuPopoverView: View {
         )
     }
 
+    /// Computed once per render pass (see `DisplaySummaryCache`).
     private var summary: DisplayPortfolioSummary {
-        dataModel.calculateDisplayPortfolioSummary(
-            preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
-        )
+        summaryCache.summary {
+            dataModel.calculateDisplayPortfolioSummary(
+                preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
+            )
+        }
     }
 
     private var currentDisplayValue: String {
@@ -419,6 +423,7 @@ struct PortfolioMenuPopoverView: View {
     }
 
     var body: some View {
+        let _ = summaryCache.beginPass()
         VStack(alignment: .leading, spacing: 12) {
             headerView
 
@@ -476,30 +481,26 @@ struct PortfolioMenuPopoverView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onAppear {
             viewModel.activate()
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
         .onDisappear { viewModel.deactivate() }
         .onReceive(dataModel.tradeContentPublisher) { _ in
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
         .onReceive(dataModel.$portfolioMenuBarDisplaySettings.dropFirst()) { _ in
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
+    }
+
+    /// Event handlers run between renders, so they must not reuse the last render's summary.
+    private func refreshChartModel() {
+        summaryCache.beginPass()
+        viewModel.update(
+            currentValue: summary.totalValue,
+            currentTrades: dataModel.realTimeTrades,
+            preferredCurrency: summary.currency,
+            valuationSource: summary.valuationSource
+        )
     }
 
     private var headerView: some View {

@@ -32,7 +32,8 @@ struct ChartGestureHandler: ViewModifier {
                     interactionManager.hideCrosshair()
                 }
             }
-            // Desktop scroll wheel zoom support
+            // Desktop scroll wheel support: Option+scroll zooms, horizontal scroll pans.
+            // Everything else is left to the enclosing scroll view.
             .onScrollWheel { event in
                 handleScrollWheel(event)
             }
@@ -40,25 +41,22 @@ struct ChartGestureHandler: ViewModifier {
 
     // MARK: - Scroll Wheel Handling (Desktop)
 
-    private func handleScrollWheel(_ event: NSEvent) {
+    /// Returns true when the event was used for the chart; otherwise it is passed on so the page can scroll.
+    private func handleScrollWheel(_ event: NSEvent) -> Bool {
         // Option/Alt + scroll = zoom (more intuitive for desktop)
         if event.modifierFlags.contains(.option) && event.scrollingDeltaY != 0 {
             let zoomFactor = 1.0 + (event.scrollingDeltaY * 0.01)
             interactionManager.handleZoom(zoomFactor, anchor: hoverLocation)
-            return
-        }
-
-        // Vertical scroll = zoom by default
-        if event.scrollingDeltaY != 0 && event.scrollingDeltaX == 0 {
-            let zoomFactor = 1.0 + (event.scrollingDeltaY * 0.01)
-            interactionManager.handleZoom(zoomFactor, anchor: hoverLocation)
+            return true
         }
 
         // Horizontal scroll or shift+vertical = pan
         if event.scrollingDeltaX != 0 || (event.modifierFlags.contains(.shift) && event.scrollingDeltaY != 0) {
             let deltaX = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : event.scrollingDeltaY
             interactionManager.handlePan(CGSize(width: -deltaX, height: 0))
+            return true
         }
+        return false
     }
 
     // MARK: - Magnification Gesture (Zoom)
@@ -132,7 +130,8 @@ extension View {
     }
 
     // Helper for scroll wheel events
-    func onScrollWheel(perform action: @escaping (NSEvent) -> Void) -> some View {
+    /// `action` returns whether it consumed the event; unconsumed events continue to the enclosing views.
+    func onScrollWheel(perform action: @escaping (NSEvent) -> Bool) -> some View {
         self.overlay(
             ScrollWheelHandler(action: action)
         )
@@ -142,14 +141,11 @@ extension View {
 // MARK: - Scroll Wheel Handler
 
 private struct ScrollWheelHandler: NSViewRepresentable {
-    let action: (NSEvent) -> Void
+    let action: (NSEvent) -> Bool
 
     func makeNSView(context: Context) -> ScrollWheelView {
         let view = ScrollWheelView()
         view.scrollAction = action
-        DispatchQueue.main.async {
-            view.window?.makeFirstResponder(view)
-        }
         return view
     }
 
@@ -158,7 +154,7 @@ private struct ScrollWheelHandler: NSViewRepresentable {
     }
 
     class ScrollWheelView: NSView {
-        var scrollAction: ((NSEvent) -> Void)?
+        var scrollAction: ((NSEvent) -> Bool)?
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -170,29 +166,13 @@ private struct ScrollWheelHandler: NSViewRepresentable {
         }
 
         override func scrollWheel(with event: NSEvent) {
-            scrollAction?(event)
+            if scrollAction?(event) == true { return }
             super.scrollWheel(with: event)
         }
 
-        override func magnify(with event: NSEvent) {
-            // Handle trackpad pinch-to-zoom
-            let fakeScrollEvent = NSEvent.otherEvent(
-                with: .scrollWheel,
-                location: event.locationInWindow,
-                modifierFlags: event.modifierFlags,
-                timestamp: event.timestamp,
-                windowNumber: event.windowNumber,
-                context: nil,
-                subtype: 0,
-                data1: 0,
-                data2: Int(event.magnification * 100)
-            )
-            if let scrollEvent = fakeScrollEvent {
-                scrollAction?(scrollEvent)
-            }
-        }
-
-        override var acceptsFirstResponder: Bool { true }
+        // Pinch is not handled here: magnify events travel up the responder chain to the
+        // SwiftUI MagnificationGesture above. The view also never takes first responder, so it
+        // cannot steal keyboard focus from text fields.
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
