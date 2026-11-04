@@ -114,6 +114,9 @@ class StockMenuBarController: NSObject {
             },
             quit: { [weak self] in
                 Task { @MainActor in self?.quitApp() }
+            },
+            openApp: { [weak self] in
+                Task { @MainActor in self?.showStockbarWindow(nil) }
             }
         )
     }

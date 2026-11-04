@@ -38,9 +38,7 @@ struct Trading212DataSourceSection: View {
             statusBlock
             previewBlock
         }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .stockbarCard()
         .onAppear(perform: loadSettings)
         .alert("Link matched holdings?", isPresented: $showingLinkConfirmation) {
             Button("Cancel", role: .cancel) {}

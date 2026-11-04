@@ -36,10 +36,6 @@ struct DataSourcesSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Data Sources & Fallbacks")
-                    .font(.title2)
-                    .padding(.bottom, 10)
-                
                 // MARK: - API Keys Section
                 VStack(alignment: .leading, spacing: 12) {
                     Text("API Keys")
@@ -139,9 +135,7 @@ struct DataSourcesSettingsView: View {
                         .padding(.leading, 164)
                     }
                 }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                .cornerRadius(8)
+                .stockbarCard()
 
                 FolyncDataSourceSection(dataModel: dataModel)
 
@@ -197,19 +191,19 @@ struct DataSourcesSettingsView: View {
                                     sourceLabel(for: source)
                                 }
                                 .padding(8)
-                                .background(Color(NSColor.controlBackgroundColor))
-                                .cornerRadius(4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(StockbarPalette.hoverFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                             }
                         }
                     }
                 }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                .cornerRadius(8)
+                .stockbarCard()
                 
                 Spacer()
             }
-            .padding()
+            .padding(.horizontal, StockbarLayout.pagePadding)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 900, alignment: .leading)
         }
         .onAppear {
             loadSettings()

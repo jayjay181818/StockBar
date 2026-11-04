@@ -84,7 +84,7 @@ struct RiskAnalyticsView: View {
                     emptyStateView
                 }
             }
-            .padding()
+            .padding(StockbarLayout.pageInsets)
         }
         .onAppear {
             calculateRiskMetrics()
@@ -94,19 +94,12 @@ struct RiskAnalyticsView: View {
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Portfolio Risk Analytics")
-                    .font(.title2)
-                    .fontWeight(.bold)
-
-                Spacer()
-
+        VStack(alignment: .leading, spacing: 16) {
+            StockbarPageHeader("Risk", subtitle: "Value at risk, volatility, risk-adjusted returns and drawdowns from stored portfolio history.") {
                 Button(action: calculateRiskMetrics) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .font(.subheadline)
+                    Label("Recalculate", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .disabled(isCalculating)
             }
 
@@ -117,6 +110,8 @@ struct RiskAnalyticsView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
             .onChange(of: selectedTimeRange) {
                 calculateRiskMetrics()
             }

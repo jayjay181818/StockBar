@@ -201,9 +201,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     func configurePortfolioActions(
         refresh: @escaping () -> Void,
         preferences: @escaping () -> Void,
-        quit: @escaping () -> Void
+        quit: @escaping () -> Void,
+        openApp: @escaping () -> Void = {}
     ) {
-        portfolioActions = PortfolioMenuActions(refresh: refresh, preferences: preferences, quit: quit)
+        portfolioActions = PortfolioMenuActions(refresh: refresh, preferences: preferences, quit: quit, openApp: openApp)
     }
     
     func removeAllSymbolItems() {
@@ -378,12 +379,16 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         } else {
             mainPopover?.contentSize = mainPopoverSize
             mainPopover?.animates = false
-            mainPopover?.contentViewController = NSHostingController(
+            mainPopover?.appearance = StockbarAppearance.popoverAppearance()
+            let hostingController = NSHostingController(
                 rootView: PortfolioMenuPopoverView(
                     dataModel: dataModel,
                     actions: actionsForCurrentPortfolioPopover()
                 )
             )
+            // Size the popover to its SwiftUI content.
+            hostingController.sizingOptions = .preferredContentSize
+            mainPopover?.contentViewController = hostingController
 
             mainPopover?.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             startMainPopoverEventMonitors()
@@ -443,6 +448,12 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
                 Task { @MainActor in
                     self?.closeMainPopover()
                     self?.portfolioActions.quit()
+                }
+            },
+            openApp: { [weak self] in
+                Task { @MainActor in
+                    self?.closeMainPopover()
+                    self?.portfolioActions.openApp()
                 }
             }
         )
@@ -718,13 +729,6 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         }
     }
     
-    private static let updatedDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter
-    }()
-
     private func buildMenuMetrics(trade: Trade, data: TradingData) -> MenuPopoverMetrics {
         let displayCandidate = data.displayPrice.isFinite && data.displayPrice > 0 ? data.displayPrice : nil
         let currentCandidate = data.currentPrice.isFinite && data.currentPrice > 0 ? data.currentPrice : nil
@@ -738,13 +742,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         let totalPL = marketValue - positionCost
         let totalPLPct = positionCost > 0 ? (totalPL / positionCost) * 100 : Double.nan
 
-        let updatedText: String
-        if let lastUpdateTime = data.lastUpdateTime, lastUpdateTime > 0 {
-            let date = Date(timeIntervalSince1970: TimeInterval(lastUpdateTime))
-            updatedText = "Updated: \(Self.updatedDateFormatter.string(from: date))"
-        } else {
-            updatedText = "Updated: —"
-        }
+        let updatedText = MenuPopoverFormatter.updatedText(from: [data.lastUpdateTime])
 
         let exchangeName = SymbolMetadata.exchangeDisplayName(for: trade.name)
 
@@ -832,6 +830,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
         detailPopover?.contentSize = popoverSize
         detailPopover?.animates = false
+        detailPopover?.appearance = StockbarAppearance.popoverAppearance()
 
         if detailPopover?.isShown == true {
             detailPopover?.performClose(sender)

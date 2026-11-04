@@ -25,35 +25,32 @@ struct DebugLogView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Header with controls - compact layout
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Debug Logs")
-                        .font(.headline)
-                    Text(useTailMode ? "(Tail Mode)" : "(Scrollable)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                HStack(spacing: 8) {
+                HStack(spacing: 14) {
                     Toggle("Auto Refresh", isOn: $isAutoRefresh)
-                        .toggleStyle(SwitchToggleStyle())
-                    
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+
                     Toggle("Tail Mode", isOn: $useTailMode)
-                        .toggleStyle(SwitchToggleStyle())
-                        .help("Use tail mode for very large log files")
-                    
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .help("Read only the end of the file; faster for very large logs")
+
                     Stepper("Max Lines: \(maxLines)", value: $maxLines, in: 100...2000, step: 100)
-                        .frame(width: 140)
-                    
-                    Button("Refresh") {
+                        .fixedSize()
+
+                    Spacer()
+
+                    Button {
                         refreshLogs()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(.bordered)
-                    
-                    Button("Clear Logs") {
+
+                    Button(role: .destructive) {
                         clearLogs()
+                    } label: {
+                        Label("Clear Logs", systemImage: "trash")
                     }
-                    .buttonStyle(.bordered)
-                    .foregroundColor(.red)
                 }
             }
             
@@ -89,8 +86,11 @@ struct DebugLogView: View {
                         }
                     }
                 }
-                .background(Color(NSColor.textBackgroundColor))
-                .border(Color(NSColor.separatorColor))
+                .background(Color(NSColor.textBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
+                )
                 .onChange(of: logEntries.count) { _, _ in
                     // Auto-scroll to top when new logs are added (newest logs are now at top)
                     if !logEntries.isEmpty {

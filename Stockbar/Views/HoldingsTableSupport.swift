@@ -5,16 +5,14 @@ enum HoldingsTableLayout {
     static let spacing: CGFloat = 10
     static let horizontalPadding: CGFloat = 14
 
-    static let visibleWidth: CGFloat = 58
-    static let symbolWidth: CGFloat = 150
-    static let unitsWidth: CGFloat = 130
-    static let averageCostWidth: CGFloat = 140
-    static let currencyWidth: CGFloat = 120
-    static let currentWidth: CGFloat = 130
-    static let valueWidth: CGFloat = 145
-    static let dayProfitLossWidth: CGFloat = 140
-    static let totalProfitLossWidth: CGFloat = 145
-    static let actionsWidth: CGFloat = 105
+    static let visibleWidth: CGFloat = 66
+    static let symbolWidth: CGFloat = 130
+    static let unitsWidth: CGFloat = 110
+    static let averageCostWidth: CGFloat = 110
+    static let currencyWidth: CGFloat = 100
+    static let currentWidth: CGFloat = 115
+    static let valueWidth: CGFloat = 130
+    static let actionsWidth: CGFloat = 110
 
     static let contentWidth: CGFloat = {
         let columnWidths = [
@@ -25,11 +23,11 @@ enum HoldingsTableLayout {
             currencyWidth,
             currentWidth,
             valueWidth,
-            dayProfitLossWidth,
-            totalProfitLossWidth,
             actionsWidth
-        ].reduce(0, +)
-        return columnWidths + (spacing * 9) + (horizontalPadding * 2)
+        ]
+        return columnWidths.reduce(0, +)
+            + spacing * CGFloat(columnWidths.count - 1)
+            + horizontalPadding * 2
     }()
 }
 

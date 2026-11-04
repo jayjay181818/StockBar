@@ -31,8 +31,16 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
         let hostingController = NSHostingController(
             rootView: StockbarMainView(dataModel: dataModel, navigationState: navigationState)
         )
+        // Enforce the minimum size only. Letting SwiftUI's ideal size drive the
+        // window would resize it when switching to a section with a tall ideal
+        // height, such as the Holdings table.
+        hostingController.sizingOptions = [.minSize]
         let window = NSWindow(contentViewController: hostingController)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        // The sidebar runs the full height of the window, under a transparent
+        // title bar, in the style of current macOS apps.
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.title = "Stockbar"
         window.isReleasedWhenClosed = false
         window.minSize = WindowMetrics.minimumSize
