@@ -223,6 +223,33 @@ enum MenuChartDataBuilder {
     }
 }
 
+/// Aligns a comparison series with the primary one so both start at 0% on the same instant.
+enum MenuChartSeriesAlignment {
+    /// Percent change of `series` relative to its value at the start of `window`.
+    ///
+    /// Points outside the window are dropped. The baseline is the last price at or before the
+    /// window start (a benchmark that began earlier is rebased to where it stood when the primary
+    /// series began); a series that only starts inside the window is rebased to its first point.
+    /// Expects `series` in ascending date order.
+    static func percentSeries(
+        _ series: [MenuChartDataPoint],
+        window: ClosedRange<Date>
+    ) -> [(time: TimeInterval, value: Double)] {
+        let inside = series.filter { window.contains($0.date) && $0.price.isFinite }
+        let before = series.last { $0.date <= window.lowerBound && $0.price.isFinite }
+        guard let baselinePoint = before ?? inside.first else { return [] }
+        let baseline = baselinePoint.price
+        guard baseline != 0 else { return [] }
+
+        var result: [(time: TimeInterval, value: Double)] = []
+        if let before, inside.first.map({ $0.date > window.lowerBound }) ?? true {
+            result.append((window.lowerBound.timeIntervalSince1970, (before.price / baseline) - 1.0))
+        }
+        result.append(contentsOf: inside.map { ($0.date.timeIntervalSince1970, ($0.price / baseline) - 1.0) })
+        return result
+    }
+}
+
 enum MenuPopoverFormatter {
     static func currency(_ value: Double?, currency: String, includeSign: Bool = false) -> String {
         HoldingsCurrencyFormatter.compactAmount(value, currency: currency, includeSign: includeSign)
@@ -235,9 +262,12 @@ enum MenuPopoverFormatter {
             : HoldingsCurrencyFormatter.amount(value, currency: currency)
     }
 
-    static func percent(_ value: Double?) -> String {
+    /// Signed percentage in the user's locale; `value` is already in percent (1.5 means 1.5%).
+    static func percent(_ value: Double?, locale: Locale = .current) -> String {
         guard let value, value.isFinite else { return "" }
-        return String(format: "%+.2f%%", value)
+        return (value / 100).formatted(
+            .percent.precision(.fractionLength(2)).sign(strategy: .always()).locale(locale)
+        )
     }
 
     /// Displays fractional share quantities without rounding them away.
@@ -490,9 +520,11 @@ struct MenuPopoverLineChart: View {
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let location):
-                                hoveredPoint = nearestPoint(toX: location.x, width: geometry.size.width)
+                                // Writing the binding re-renders the popover; only do it for a new point.
+                                let nearest = nearestPoint(toX: location.x, width: geometry.size.width)
+                                if nearest?.id != hoveredPoint?.id { hoveredPoint = nearest }
                             case .ended:
-                                hoveredPoint = nil
+                                if hoveredPoint != nil { hoveredPoint = nil }
                             }
                         }
                 } else if isLoading {
@@ -542,17 +574,10 @@ struct MenuPopoverLineChart: View {
             let dateRange = maxDate - minDate
             let safeDateRange = dateRange == 0 ? 1.0 : dateRange
 
-            func percentSeries(_ series: [MenuChartDataPoint]) -> [(time: TimeInterval, value: Double)] {
-                guard let first = series.first else { return [] }
-                let baseline = first.price
-                return series.map { point in
-                    let percent = baseline.isFinite && baseline != 0 ? (point.price / baseline) - 1.0 : 0.0
-                    return (point.date.timeIntervalSince1970, percent)
-                }
-            }
-
-            let primarySeries = percentSeries(points)
-            let comparisonSeries = percentSeries(comparisonPoints)
+            // Both series are clipped to the primary series' window and rebased to the value at its start.
+            let window = (points.first?.date ?? .distantPast)...(points.last?.date ?? .distantFuture)
+            let primarySeries = MenuChartSeriesAlignment.percentSeries(points, window: window)
+            let comparisonSeries = MenuChartSeriesAlignment.percentSeries(comparisonPoints, window: window)
             let combinedValues = primarySeries.map { $0.value } + comparisonSeries.map { $0.value }
             let minValue = combinedValues.min() ?? 0
             let maxValue = combinedValues.max() ?? 0

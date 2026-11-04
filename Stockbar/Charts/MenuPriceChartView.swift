@@ -64,7 +64,8 @@ class MenuChartViewModel: ObservableObject {
     
     private let symbol: String
     private var currentPrice: Double
-    private let benchmarkSymbol: String?
+    /// Nil while the benchmark comparison is switched off, so nothing is fetched for it.
+    private var benchmarkSymbol: String?
     private let timeRangeSelectionStore: MenuChartTimeRangeSelectionStore
     private let historicalDataManager = HistoricalDataManager.shared
     private let logger = Logger.shared
@@ -113,6 +114,13 @@ class MenuChartViewModel: ObservableObject {
         guard range != selectedTimeRange else { return }
         selectedTimeRange = range
         timeRangeSelectionStore.save(range, for: symbol)
+        loadChartData()
+    }
+
+    func setBenchmarkSymbol(_ symbol: String?) {
+        guard symbol != benchmarkSymbol else { return }
+        benchmarkSymbol = symbol
+        if symbol == nil { benchmarkData = [] }
         loadChartData()
     }
 
@@ -203,22 +211,9 @@ class MenuChartViewModel: ObservableObject {
                             symbol: snapshot.symbol
                         )
                     }.sorted { $0.date < $1.date }
-
-                    if let first = benchmarkPoints.first {
-                        if first.date > startDate {
-                            benchmarkPoints.insert(
-                                MenuChartDataPoint(date: startDate, price: first.price, symbol: first.symbol),
-                                at: 0
-                            )
-                        }
-                        if let last = benchmarkPoints.last, last.date < endDate {
-                            benchmarkPoints.append(MenuChartDataPoint(date: endDate, price: last.price, symbol: last.symbol))
-                        } else if benchmarkPoints.count == 1 {
-                            benchmarkPoints.append(MenuChartDataPoint(date: endDate, price: first.price, symbol: first.symbol))
-                        }
-                    }
+                    // The line chart clips the benchmark to the primary window and rebases it there.
                 }
-                
+
                 await MainActor.run {
                     guard !Task.isCancelled, self.isActive, generation == self.loadGeneration else { return }
                     self.chartData = dataPoints
@@ -358,7 +353,9 @@ struct MenuPriceChartView: View {
         self.metrics = metrics
         self.onUnitsSave = onUnitsSave
         self.onRetry = onRetry
-        let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol)
+        // Don't fetch a benchmark the user has switched off.
+        let benchmarkEnabled = StockbarRuntimeStorage.userDefaults.object(forKey: "menu.benchmarkComparisonEnabled") as? Bool ?? true
+        let benchmark = benchmarkEnabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil
         self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice, benchmarkSymbol: benchmark))
         self._unitsInput = State(initialValue: MenuPopoverFormatter.editableUnits(metrics.units))
     }
@@ -384,7 +381,7 @@ struct MenuPriceChartView: View {
                 )
                 .frame(height: chartHeight)
                 .accessibilityLabel("\(symbol) price, \(viewModel.selectedTimeRange.description)")
-                .accessibilityValue(rangePriceChange.map { String(format: "%+.2f percent", $0.percent) } ?? "No history")
+                .accessibilityValue(rangePriceChange.map { "\(MenuPopoverFormatter.percent($0.percent)) change" } ?? "No history")
 
                 if let benchmarkName, !chartPoints.isEmpty, !viewModel.benchmarkData.isEmpty {
                     MenuPopoverChartLegend(
@@ -416,6 +413,9 @@ struct MenuPriceChartView: View {
         .onDisappear { viewModel.deactivate() }
         .onChange(of: currentPrice) { _, newValue in
             viewModel.updateCurrentPrice(newValue)
+        }
+        .onChange(of: benchmarkEnabled) { _, enabled in
+            viewModel.setBenchmarkSymbol(enabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil)
         }
     }
 
