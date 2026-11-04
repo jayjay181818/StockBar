@@ -5,12 +5,14 @@ struct FolyncDataSourceSection: View {
     @ObservedObject var dataModel: DataModel
     @State private var endpoint = ""
     @State private var token = ""
+    @State private var hasStoredToken = false
+    @State private var didLoadStoredSettings = false
     @State private var portfolios: [FolyncPortfolio] = []
     @State private var selectedScope = "all"
     @State private var preview: FolyncPortfolioSnapshot?
     @State private var supplemental = FolyncSupplementalSettings.disabled
     @State private var isWorking = false
-    @State private var statusMessage = "Folync has not been tested."
+    @State private var statusMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -23,6 +25,8 @@ struct FolyncDataSourceSection: View {
                 Spacer()
                 if dataModel.isFolyncPortfolioActive {
                     Label("Active", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else if dataModel.isFolyncEnabled {
+                    Label("Enabled", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
             }
 
@@ -34,7 +38,7 @@ struct FolyncDataSourceSection: View {
                 }
                 GridRow {
                     Text("Client token:")
-                    SecureField(FolyncCredentialStore.shared.hasToken() ? "Stored in Keychain" : "Required", text: $token)
+                    SecureField(hasStoredToken ? "Stored in Keychain" : "Required", text: $token)
                         .textFieldStyle(.roundedBorder)
                 }
                 if !portfolios.isEmpty {
@@ -52,24 +56,38 @@ struct FolyncDataSourceSection: View {
 
             HStack {
                 Button("Test Connection") { testConnection() }
-                    .disabled(isWorking || endpointURL == nil || token.isEmpty)
+                    .disabled(isWorking || !canSubmitConnectionRequest)
                 Button("Preview") { loadPreview() }
-                    .disabled(isWorking || portfolios.isEmpty)
+                    .disabled(isWorking || !canSubmitConnectionRequest || portfolios.isEmpty)
                 Button("Activate Folync") { activate() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isWorking || preview?.scope.id != selectedScope)
-                if dataModel.isFolyncPortfolioActive {
-                    Button("Refresh Now") { Task { await dataModel.refreshFolyncPortfolio() } }
-                    Button("Use Local Portfolio") { dataModel.deactivateFolyncPortfolio() }
+                    .disabled(isWorking || !canSubmitConnectionRequest || preview?.scope.id != selectedScope)
+                if dataModel.isFolyncEnabled {
+                    Button("Refresh Now") {
+                        statusMessage = nil
+                        Task { await dataModel.refreshFolyncPortfolio() }
+                    }
+                    .disabled(isWorking)
+                    Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync") {
+                        dataModel.deactivateFolyncPortfolio()
+                        statusMessage = "Folync has been disabled."
+                    }
+                    .disabled(isWorking)
                 }
                 if isWorking { ProgressView().controlSize(.small) }
             }
 
-            Text(dataModel.isFolyncPortfolioActive ? dataModel.folyncConnectionState.message : statusMessage)
+            if let setupHint, !dataModel.isFolyncEnabled {
+                Text(setupHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(displayedStatusMessage)
                 .font(.caption)
                 .foregroundStyle(statusColor)
 
-            if dataModel.isFolyncPortfolioActive {
+            if dataModel.isFolyncEnabled {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Checks five seconds after each minute, with one follow-up if the broker sync is still pending.")
                     if let checked = dataModel.folyncLastCheckedAt {
@@ -90,26 +108,25 @@ struct FolyncDataSourceSection: View {
                     supplementalToggle(
                         "Historical line charts",
                         route: .historicalLineCharts,
-                        value: $supplemental.historicalLineCharts
+                        value: supplementalBinding(\.historicalLineCharts)
                     )
                     supplementalToggle(
                         "Candlestick / OHLCV charts",
                         route: .candlestickCharts,
-                        value: $supplemental.candlestickCharts
+                        value: supplementalBinding(\.candlestickCharts)
                     )
                     supplementalToggle(
                         "Benchmark market data",
                         route: .benchmarkMarketData,
-                        value: $supplemental.benchmarkMarketData
+                        value: supplementalBinding(\.benchmarkMarketData)
                     )
                     supplementalToggle(
                         "Exchange rates",
                         route: .exchangeRates,
-                        value: $supplemental.exchangeRates
+                        value: supplementalBinding(\.exchangeRates)
                     )
-                    Toggle("Allow legacy local-provider fallback", isOn: $supplemental.allowLegacyFallback)
+                    Toggle("Allow legacy local-provider fallback", isOn: supplementalBinding(\.allowLegacyFallback))
                         .toggleStyle(.checkbox)
-                        .onChange(of: supplemental.allowLegacyFallback) { _, _ in saveSupplementalSettings() }
 
                     Text("Stockbar-only watchlist symbols remain on the local provider. Folync responses are cached separately and never replace Core Data chart history.")
                         .font(.caption)
@@ -149,26 +166,84 @@ struct FolyncDataSourceSection: View {
         .onChange(of: selectedScope) { _, _ in preview = nil }
     }
 
-    private var endpointURL: URL? { URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    private var endpointURL: URL? {
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        return url
+    }
+
+    private var hasUsableToken: Bool {
+        !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasStoredToken
+    }
+
+    private var canSubmitConnectionRequest: Bool {
+        guard let endpointURL else { return false }
+        guard (try? FolyncEndpointPolicy.validate(endpointURL)) != nil else { return false }
+        return hasUsableToken
+    }
+
+    private var setupHint: String? {
+        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedEndpoint.isEmpty {
+            return "Enter a Folync HTTPS URL and client token to test the connection."
+        }
+        guard let endpointURL else {
+            return FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+        }
+        do {
+            try FolyncEndpointPolicy.validate(endpointURL)
+        } catch {
+            return error.localizedDescription
+        }
+        if !hasUsableToken {
+            return FolyncPortfolioSourceError.missingToken.errorDescription
+        }
+        return nil
+    }
+
+    private var displayedStatusMessage: String {
+        if let statusMessage {
+            return statusMessage
+        }
+        if dataModel.isFolyncEnabled || dataModel.folyncConnectionState != .notConfigured {
+            return dataModel.folyncConnectionState.message
+        }
+        return "Folync has not been tested."
+    }
+
     private var statusColor: Color {
-        dataModel.isFolyncPortfolioActive ? .secondary : (statusMessage.hasPrefix("Connected") ? .green : .secondary)
+        if let statusMessage, statusMessage.hasPrefix("Connected") {
+            return .green
+        }
+        return .secondary
     }
 
     private func loadStoredSettings() {
-        let settings = FolyncSettingsStore.shared.load()
+        guard !didLoadStoredSettings else { return }
+        didLoadStoredSettings = true
+        let settings = dataModel.folyncSessionDependencies.settingsStore.load()
         endpoint = settings.baseURL
         selectedScope = settings.scopeID
         supplemental = settings.supplemental
+        Task {
+            hasStoredToken = await dataModel.hasStoredFolyncToken()
+        }
     }
 
     func testConnection() {
-        guard let endpointURL else { return }
+        guard let endpointURL else {
+            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            return
+        }
         isWorking = true
         Task {
             defer { isWorking = false }
             do {
-                portfolios = try await dataModel.testFolyncConnection(baseURL: endpointURL, token: token)
-                if !portfolios.contains(where: { $0.id == selectedScope }) { selectedScope = portfolios.first?.id ?? "all" }
+                let fetchedPortfolios = try await dataModel.testFolyncConnection(baseURL: endpointURL, token: token)
+                if !fetchedPortfolios.contains(where: { $0.id == selectedScope }) {
+                    selectedScope = fetchedPortfolios.first?.id ?? "all"
+                }
+                portfolios = fetchedPortfolios
                 statusMessage = "Connected. Select a portfolio and preview it before activation."
             } catch {
                 portfolios = []
@@ -179,7 +254,10 @@ struct FolyncDataSourceSection: View {
     }
 
     private func loadPreview() {
-        guard let endpointURL else { return }
+        guard let endpointURL else {
+            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            return
+        }
         isWorking = true
         Task {
             defer { isWorking = false }
@@ -194,19 +272,34 @@ struct FolyncDataSourceSection: View {
     }
 
     private func activate() {
-        guard let endpointURL else { return }
+        guard let endpointURL else {
+            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            return
+        }
         isWorking = true
         Task {
             defer { isWorking = false }
             do {
                 try await dataModel.activateFolyncPortfolio(baseURL: endpointURL, token: token, scopeID: selectedScope)
-                supplemental = FolyncSettingsStore.shared.load().supplemental
+                supplemental = dataModel.folyncSessionDependencies.settingsStore.load().supplemental
+                hasStoredToken = true
                 token = ""
-                statusMessage = "Folync is active."
+                statusMessage = nil
             } catch {
                 statusMessage = LogRedactor.redact(error.localizedDescription)
             }
         }
+    }
+
+    private func supplementalBinding(_ keyPath: WritableKeyPath<FolyncSupplementalSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { supplemental[keyPath: keyPath] },
+            set: { newValue in
+                guard supplemental[keyPath: keyPath] != newValue else { return }
+                supplemental[keyPath: keyPath] = newValue
+                saveSupplementalSettings()
+            }
+        )
     }
 
     @ViewBuilder
@@ -221,7 +314,6 @@ struct FolyncDataSourceSection: View {
                     .toggleStyle(.checkbox)
                     // A lost capability must not trap an already-enabled route.
                     .disabled(!value.wrappedValue && capability(for: route)?.isUsable != true)
-                    .onChange(of: value.wrappedValue) { _, _ in saveSupplementalSettings() }
                 Spacer()
                 Text(capabilityLabel(for: route))
                     .font(.caption2)
@@ -273,14 +365,15 @@ struct FolyncDataSourceSection: View {
     }
 
     private func saveSupplementalSettings() {
-        Task { await dataModel.updateFolyncSupplementalSettings(supplemental) }
+        let current = supplemental
+        Task { await dataModel.updateFolyncSupplementalSettings(current) }
     }
 
     private func visibilityBinding(_ holding: FolyncHolding) -> Binding<Bool> {
         Binding(
             get: {
                 let key = holding.overlayKey(scopeID: dataModel.folyncPortfolioSnapshot?.scope.id ?? selectedScope)
-                return FolyncOverlayStore.shared.load()[key]?.showInMenuBar ?? true
+                return dataModel.folyncSessionDependencies.overlayStore.load()[key]?.showInMenuBar ?? true
             },
             set: { dataModel.setFolyncHoldingVisibleInMenuBar($0, holding: holding) }
         )
