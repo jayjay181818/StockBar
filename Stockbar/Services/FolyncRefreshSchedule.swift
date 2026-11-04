@@ -42,3 +42,42 @@ enum FolyncRefreshSchedule {
             && completedAt.addingTimeInterval(catchUpDelay) < nextRegularCheck(after: checkStartedAt)
     }
 }
+
+actor FolyncBackoffCoordinator {
+    static let shared = FolyncBackoffCoordinator()
+
+    private var backoffUntil: Date?
+
+    init(backoffUntil: Date? = nil) {
+        self.backoffUntil = backoffUntil
+    }
+
+    func until() -> Date? {
+        backoffUntil
+    }
+
+    func isBackingOff(at now: Date = Date()) -> Bool {
+        guard let backoffUntil else { return false }
+        return backoffUntil > now
+    }
+
+    @discardableResult
+    func recordFailure(_ error: Error, at now: Date = Date()) -> Date? {
+        guard let next = FolyncRefreshSchedule.backoff(after: error, at: now) else {
+            return backoffUntil
+        }
+        if let existing = backoffUntil, existing > next {
+            return existing
+        }
+        backoffUntil = next
+        return next
+    }
+
+    func clear() {
+        backoffUntil = nil
+    }
+
+    func set(_ date: Date?) {
+        backoffUntil = date
+    }
+}

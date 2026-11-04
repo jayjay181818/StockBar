@@ -490,13 +490,14 @@ actor FolyncSupplementalCache {
 }
 
 actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupplementalFXRouting {
-    static let shared = FolyncSupplementalCoordinator()
+    static let shared = FolyncSupplementalCoordinator(backoff: .shared)
 
     private let settingsStore: FolyncSettingsStore
     private let tokenProvider: @Sendable () throws -> String
     private let cache: FolyncSupplementalCache
     private let session: URLSession
     private let providerPolicy: StockbarProviderAccessPolicy
+    private let backoff: FolyncBackoffCoordinator
     private var memoryCapabilities: [String: FolyncCapabilities] = [:]
 
     init(
@@ -505,6 +506,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         cache: FolyncSupplementalCache = .shared,
         session: URLSession = .shared,
         providerPolicy: StockbarProviderAccessPolicy = .current,
+        backoff: FolyncBackoffCoordinator = FolyncBackoffCoordinator(),
         tokenProvider: (@Sendable () throws -> String)? = nil
     ) {
         self.settingsStore = settingsStore
@@ -512,6 +514,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         self.cache = cache
         self.session = session
         self.providerPolicy = providerPolicy
+        self.backoff = backoff
     }
 
     func fetchCapabilities(baseURL: URL, token: String) async throws -> FolyncCapabilities? {
@@ -540,7 +543,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             memoryCapabilities[endpoint] = cached.payload
             return cached.payload
         }
-        try validate(response)
+        try await validate(response)
         let capabilities = try decode(FolyncCapabilities.self, data: response.data)
         try validateSchema(capabilities.schemaVersion)
         memoryCapabilities[endpoint] = capabilities
@@ -700,7 +703,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             if response.statusCode == 304, let cached, isUsablePortfolioHistory(cached.payload) {
                 return .folync(cached.payload, status: sourceStatus(quality: cached.payload.quality, stale: false))
             }
-            try validate(response)
+            try await validate(response)
             let payload = try decode(FolyncPortfolioHistory.self, data: response.data)
             try validateSchema(payload.schemaVersion)
             guard isUsablePortfolioHistory(payload) else {
@@ -754,7 +757,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             if response.statusCode == 304, let cached, isUsableBenchmarks(cached.payload.benchmarks) {
                 return .folync(cached.payload.benchmarks, status: benchmarkStatus(cached.payload.benchmarks))
             }
-            try validate(response)
+            try await validate(response)
             let payload = try decode(FolyncBenchmarksResponse.self, data: response.data)
             try validateSchema(payload.schemaVersion)
             guard isUsableBenchmarks(payload.benchmarks) else {
@@ -781,20 +784,27 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     func routeFX() async -> FolyncRoutedFXResult {
         guard let configuration = currentConfiguration(),
               configuration.settings.isSupplementalRouteActive(.exchangeRates) else { return .legacy }
+        let capabilities = await capabilitiesForCurrentSettings()
+        let requiredQuotes = Set(Self.requiredFXQuotes).union(
+            capabilities?.fx.quotes
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+                .filter { !$0.isEmpty } ?? []
+        )
+        let quotesValue = Self.orderedFXQuotes(from: requiredQuotes).joined(separator: ",")
         let calendar = Calendar(identifier: .gregorian)
         let to = Date()
         let from = calendar.date(byAdding: .day, value: -31, to: to) ?? to
         let formatter = Self.dayFormatter
         let query = [
             URLQueryItem(name: "base", value: "USD"),
-            URLQueryItem(name: "quotes", value: "GBP,EUR,JPY,CAD,AUD"),
+            URLQueryItem(name: "quotes", value: quotesValue),
             URLQueryItem(name: "from", value: formatter.string(from: from)),
             URLQueryItem(name: "to", value: formatter.string(from: to))
         ]
         let resource = "fx"
         // Keep one rolling cache identity so yesterday's last valid response is
         // still usable as an explicitly stale Folync result after midnight.
-        let cacheRange = "rolling-31d|USD|GBP,EUR,JPY,CAD,AUD"
+        let cacheRange = "rolling-31d|USD|\(quotesValue)"
         let cached: (payload: FolyncFXResponse, etag: String?, receiptTime: Date)? = try? await cache.load(
             endpoint: configuration.endpoint,
             scopeID: configuration.settings.scopeID,
@@ -802,10 +812,6 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             identity: "USD",
             range: cacheRange,
             as: FolyncFXResponse.self
-        )
-        let capabilities = await capabilitiesForCurrentSettings()
-        let requiredQuotes = Set(Self.requiredFXQuotes).union(
-            capabilities?.fx.quotes.map { $0.uppercased() } ?? []
         )
         guard capabilities?.resources.exchangeRates.isUsable == true else {
             if let cached, let parsed = usableFX(cached.payload, requiredQuotes: requiredQuotes) {
@@ -829,7 +835,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                     status: sourceStatus(quality: cached.payload.quality, stale: cached.payload.stale)
                 )
             }
-            try validate(response)
+            try await validate(response)
             let payload = try decode(FolyncFXResponse.self, data: response.data)
             try validateSchema(payload.schemaVersion)
             guard let parsed = usableFX(payload, requiredQuotes: requiredQuotes) else {
@@ -857,8 +863,26 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         }
     }
 
-    func clearInMemoryState() {
+    func clearInMemoryState() async {
         memoryCapabilities.removeAll()
+        await backoff.clear()
+    }
+
+    func backoffUntil() async -> Date? {
+        await backoff.until()
+    }
+
+    func isBackingOff(at now: Date = Date()) async -> Bool {
+        await backoff.isBackingOff(at: now)
+    }
+
+    @discardableResult
+    func recordBackoff(after error: Error, at now: Date = Date()) async -> Date? {
+        await backoff.recordFailure(error, at: now)
+    }
+
+    func clearBackoff() async {
+        await backoff.clear()
     }
 
     private struct Configuration: Sendable {
@@ -980,7 +1004,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                isUsableMarketHistory(cached.payload, requireOHLC: requireOHLC) {
                 return .response(cached.payload, sourceStatus(quality: cached.payload.quality, stale: cached.payload.stale))
             }
-            try validate(response)
+            try await validate(response)
             let payload = try decode(FolyncMarketHistory.self, data: response.data)
             try validateSchema(payload.schemaVersion)
             guard isUsableMarketHistory(payload, requireOHLC: requireOHLC) else {
@@ -1041,6 +1065,9 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     ) async throws -> HTTPResult {
         try providerPolicy.authorize(.folync)
         try FolyncEndpointPolicy.validate(baseURL)
+        if await backoff.isBackingOff() {
+            throw FolyncPortfolioSourceError.rateLimited(retryAfter: nil)
+        }
         var url = path.reduce(baseURL) { $0.appendingPathComponent($1) }
         if !query.isEmpty {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
@@ -1065,9 +1092,11 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         )
     }
 
-    private func validate(_ response: HTTPResult) throws {
+    private func validate(_ response: HTTPResult) async throws {
         guard !(200..<300).contains(response.statusCode) else { return }
-        throw FolyncPortfolioSourceError.forStatus(response.statusCode, retryAfter: response.retryAfter)
+        let error = FolyncPortfolioSourceError.forStatus(response.statusCode, retryAfter: response.retryAfter)
+        await backoff.recordFailure(error)
+        throw error
     }
 
     private func decode<T: Decodable>(_ type: T.Type, data: Data) throws -> T {
@@ -1119,11 +1148,13 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         }
     }
 
+    private func isUsableBenchmark(_ benchmark: FolyncBenchmark) -> Bool {
+        benchmark.quality != .unavailable
+            && benchmark.current.last?.isFinite == true
+    }
+
     private func isUsableBenchmarks(_ benchmarks: [FolyncBenchmark]) -> Bool {
-        !benchmarks.isEmpty && benchmarks.allSatisfy {
-            $0.quality != .unavailable
-                && $0.current.last?.isFinite == true
-        }
+        benchmarks.contains(where: isUsableBenchmark)
     }
 
     private func usableFX(
@@ -1162,9 +1193,9 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     }
 
     private func benchmarkStatus(_ benchmarks: [FolyncBenchmark]) -> FolyncSupplementalSourceStatus {
+        guard isUsableBenchmarks(benchmarks) else { return .unavailable }
         if benchmarks.contains(where: { $0.stale }) { return .stale }
-        if benchmarks.contains(where: { $0.quality == .partial }) { return .partial }
-        if benchmarks.allSatisfy({ $0.quality == .unavailable }) { return .unavailable }
+        if benchmarks.contains(where: { $0.quality == .partial || !isUsableBenchmark($0) }) { return .partial }
         return .current
     }
 
@@ -1190,6 +1221,12 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     }()
 
     private static let requiredFXQuotes = ["GBP", "EUR", "JPY", "CAD", "AUD"]
+
+    private static func orderedFXQuotes(from requiredQuotes: Set<String>) -> [String] {
+        let baseOrder = requiredFXQuotes.filter { requiredQuotes.contains($0) }
+        let extraQuotes = requiredQuotes.subtracting(requiredFXQuotes).sorted()
+        return baseOrder + extraQuotes
+    }
 
     private static func parseDay(_ value: String) -> Date? {
         dayFormatter.date(from: value)

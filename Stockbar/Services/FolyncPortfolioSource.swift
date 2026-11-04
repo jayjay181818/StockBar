@@ -1,7 +1,10 @@
 import Foundation
 
 enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
+    case invalidEndpoint
     case insecureTransport
+    case missingToken
+    case invalidScope(String)
     case unsupportedSchema(Int)
     case invalidPayload(String)
     case invalidResponse
@@ -27,12 +30,21 @@ enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidEndpoint:
+            return "Folync endpoint URL is incomplete. Enter a full HTTPS URL."
         case .insecureTransport:
             return "Folync requires HTTPS except for localhost development."
+        case .missingToken:
+            return "Folync client access token is required."
+        case .invalidScope(let reason):
+            return "Folync portfolio scope is invalid: \(reason)."
         case .unsupportedSchema(let version):
             return "Folync client API schema version \(version) is not supported."
-        case .invalidPayload:
-            return "Folync returned invalid financial data."
+        case .invalidPayload(let reason):
+            let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty
+                ? "Folync returned invalid financial data."
+                : "Folync returned invalid financial data (\(trimmed))."
         case .invalidResponse:
             return "Folync returned an invalid response."
         case .unauthorized:
@@ -48,8 +60,10 @@ enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
 
 enum FolyncEndpointPolicy {
     static func validate(_ url: URL) throws {
-        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
-            throw FolyncPortfolioSourceError.invalidPayload("Endpoint URL is incomplete")
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(),
+              !host.isEmpty else {
+            throw FolyncPortfolioSourceError.invalidEndpoint
         }
         if scheme == "https" { return }
         if scheme == "http", host == "localhost" || host == "127.0.0.1" { return }
@@ -365,7 +379,7 @@ actor FolyncPortfolioSource: PortfolioSource {
     ) throws {
         try FolyncEndpointPolicy.validate(baseURL)
         guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw FolyncPortfolioSourceError.invalidPayload("Client token is required")
+            throw FolyncPortfolioSourceError.missingToken
         }
         self.baseURL = baseURL
         self.token = token
@@ -404,7 +418,7 @@ actor FolyncPortfolioSource: PortfolioSource {
         try validate(response)
         let snapshot = try decoder.decodeSnapshot(data)
         guard snapshot.scope.id == scopeID else {
-            throw FolyncPortfolioSourceError.invalidPayload("Snapshot scope does not match request")
+            throw FolyncPortfolioSourceError.invalidScope("Snapshot scope does not match request")
         }
         return .changed(snapshot: snapshot, etag: response.value(forHTTPHeaderField: "ETag"))
     }
@@ -434,7 +448,7 @@ actor FolyncPortfolioSource: PortfolioSource {
               scopeID != "..",
               !scopeID.contains("/"),
               !scopeID.contains("\\") else {
-            throw FolyncPortfolioSourceError.invalidPayload("Scope identifier is not a valid path component")
+            throw FolyncPortfolioSourceError.invalidScope("Scope identifier is not a valid path component")
         }
     }
 
