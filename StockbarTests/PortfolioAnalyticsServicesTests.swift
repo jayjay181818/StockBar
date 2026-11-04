@@ -22,6 +22,76 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         XCTAssertEqual(attribution.stockContributions[0].dollarContribution, 10, accuracy: 0.001)
     }
 
+    private func attributionSnapshot(
+        _ date: Date, total: Double, currency: String = "GBP", positions: [PositionSnapshot]
+    ) -> HistoricalPortfolioSnapshot {
+        HistoricalPortfolioSnapshot(
+            date: date, totalValue: total, totalGains: 0, totalCost: total, currency: currency,
+            portfolioComposition: Dictionary(positions.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    // 1 GBP = 1.25 USD, GBX is pence.
+    private let attributionConvert: @Sendable (Double, String, String) -> Double = { amount, from, to in
+        func toGBP(_ value: Double, _ code: String) -> Double {
+            switch code {
+            case "USD": return value / 1.25
+            case "GBX": return value / 100
+            default: return value
+            }
+        }
+        return from == to ? amount : toGBP(amount, from)
+    }
+
+    func testAttributionConvertsMixedCurrenciesBeforeWeighting() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = start.addingTimeInterval(86400)
+        // GBP total: 1000 USD = 800, 100 GBP-stock = 100... VOD 10_000p = 100 GBP, SAP-like GBP 100.
+        func positions(usd: Double, gbx: Double, gbp: Double) -> [PositionSnapshot] {
+            [PositionSnapshot(symbol: "AAPL", units: 10, priceAtDate: usd, valueAtDate: 10 * usd, currency: "USD"),
+             PositionSnapshot(symbol: "VOD.L", units: 100, priceAtDate: gbx, valueAtDate: 100 * gbx, currency: "GBX"),
+             PositionSnapshot(symbol: "ULVR", units: 1, priceAtDate: gbp, valueAtDate: gbp, currency: "GBP")]
+        }
+        // Start: 1000 USD = 800 GBP, 100 * 100p = 100 GBP, 100 GBP -> 1000 GBP total.
+        let startSnapshot = attributionSnapshot(start, total: 1000, positions: positions(usd: 100, gbx: 100, gbp: 100))
+        // End: AAPL +10% (+80 GBP), VOD +10% (+10 GBP), ULVR flat. Total 1090.
+        let endSnapshot = attributionSnapshot(end, total: 1090, positions: positions(usd: 110, gbx: 110, gbp: 100))
+
+        let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
+            startDate: start, endDate: end, historicalSnapshots: [startSnapshot, endSnapshot], convert: attributionConvert)
+        let attribution = try XCTUnwrap(result)
+        let bySymbol = Dictionary(attribution.stockContributions.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first })
+
+        XCTAssertEqual(try XCTUnwrap(bySymbol["AAPL"]).dollarContribution, 80, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["VOD.L"]).dollarContribution, 10, accuracy: 0.01, "GBX must be converted from pence")
+        XCTAssertEqual(try XCTUnwrap(bySymbol["ULVR"]).dollarContribution, 0, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["AAPL"]).weight, 80, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["VOD.L"]).weight, 10, accuracy: 0.5)
+        XCTAssertEqual(attribution.sectorContributions.map(\.dollarContribution).reduce(0, +), 90, accuracy: 0.01)
+        XCTAssertEqual(attribution.portfolioReturn, 9, accuracy: 0.01)
+        let waterfallSum = attribution.waterfallData.filter { !$0.isSummary }.map(\.value).reduce(0, +)
+        XCTAssertEqual(1000 + waterfallSum, 1090, accuracy: 0.01)
+    }
+
+    func testAttributionIgnoresNewMoneyInAFlatPeriod() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = start.addingTimeInterval(86400)
+        let before = PositionSnapshot(symbol: "AAPL", units: 100, priceAtDate: 100, valueAtDate: 10_000, currency: "GBP")
+        let after = PositionSnapshot(symbol: "AAPL", units: 150, priceAtDate: 100, valueAtDate: 15_000, currency: "GBP")
+
+        let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
+            startDate: start, endDate: end,
+            historicalSnapshots: [attributionSnapshot(start, total: 10_000, positions: [before]),
+                                  attributionSnapshot(end, total: 15_000, positions: [after])],
+            convert: attributionConvert)
+        let attribution = try XCTUnwrap(result)
+
+        XCTAssertEqual(attribution.portfolioReturn, 0, accuracy: 0.0001)
+        XCTAssertEqual(attribution.stockContributions[0].dollarContribution, 0, accuracy: 0.0001)
+        XCTAssertNil(attribution.twrMwrComparison, "TWR/MWR are hidden without cash-flow data")
+        XCTAssertNil(attribution.netCashFlow)
+    }
+
     func testCorrelationMatrix_WithPerfectCorrelation() async throws {
         // Given: Two identical return series.
         let service = CorrelationMatrixService()

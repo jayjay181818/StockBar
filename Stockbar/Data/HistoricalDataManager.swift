@@ -249,6 +249,9 @@ class HistoricalDataManager: ObservableObject {
     private var aliasHistoryCache = AliasPriceSnapshotCache()
     private var livePortfolioValueSamples: [ChartDataPoint] = []
     private var livePortfolioGainSamples: [ChartDataPoint] = []
+    /// Currency of the live portfolio samples (the menu-bar currency), which
+    /// can differ from the main currency the stored snapshots use.
+    private var livePortfolioSampleCurrency: String?
     private let priceHistoryScheduler = HistoricalPriceFetchScheduler()
     private var folyncPortfolioHistoryContexts: [String: String] = [:]
     private var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
@@ -915,11 +918,21 @@ class HistoricalDataManager: ObservableObject {
     func recordLivePortfolioSample(
         totalValue: Double,
         totalGains: Double,
+        currency: String? = nil,
         timestamp: Date = Date()
     ) {
         guard totalValue.isFinite, totalValue > 0 else {
             Task { await logger.debug("📈 Skipping live portfolio sample - invalid value \(totalValue)") }
             return
+        }
+
+        if let currency, currency.uppercased() != livePortfolioSampleCurrency?.uppercased() {
+            // Samples in different currencies cannot share one series.
+            if livePortfolioSampleCurrency != nil {
+                livePortfolioValueSamples.removeAll()
+                livePortfolioGainSamples.removeAll()
+            }
+            livePortfolioSampleCurrency = currency
         }
 
         livePortfolioValueSamples = appendLivePortfolioPoint(
@@ -948,7 +961,7 @@ class HistoricalDataManager: ObservableObject {
         allowSyntheticPositionHistory: Bool = true
     ) -> [ChartDataPoint] {
         let startDate = timeRange.startDate(from: now)
-        let storedAndLiveValues = storedAndLivePortfolioValues(from: startDate, to: now)
+        let storedAndLiveValues = storedAndLivePortfolioValues(from: startDate, to: now, currency: preferredCurrency)
 
         guard timeRange == .day, allowSyntheticPositionHistory else {
             return storedAndLiveValues
@@ -1026,7 +1039,9 @@ class HistoricalDataManager: ObservableObject {
             
             // NEW: Use stored portfolio snapshots if available
             if !historicalPortfolioSnapshots.isEmpty {
-                let data = getStoredPortfolioValues(for: timeRange)
+                let data = getStoredPortfolioValues(
+                    for: timeRange, currency: dataModel?.preferredCurrency, customFrom: customFrom, customTo: customTo
+                )
                 Task { await logger.debug("📊 Portfolio value chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)") }
                 
                 // If we have good coverage, return stored data
@@ -1049,7 +1064,9 @@ class HistoricalDataManager: ObservableObject {
                 
                 // Return stored data if available while background calculation runs
                 if !historicalPortfolioSnapshots.isEmpty {
-                    return getStoredPortfolioValues(for: timeRange)
+                    return getStoredPortfolioValues(
+                    for: timeRange, currency: dataModel.preferredCurrency, customFrom: customFrom, customTo: customTo
+                )
                 }
             }
             
@@ -1103,7 +1120,9 @@ class HistoricalDataManager: ObservableObject {
             
             // NEW: Use stored portfolio gains if available
             if !historicalPortfolioSnapshots.isEmpty {
-                let data = getStoredPortfolioGains(for: timeRange)
+                let data = getStoredPortfolioGains(
+                    for: timeRange, currency: dataModel?.preferredCurrency, customFrom: customFrom, customTo: customTo
+                )
                 Task { await logger.debug("📊 Portfolio gains chart data: \(data.count) stored portfolio points for range \(timeRange.rawValue)") }
                 
                 // If we have good coverage, return stored data
@@ -1126,7 +1145,9 @@ class HistoricalDataManager: ObservableObject {
                 
                 // Return stored data if available while background calculation runs
                 if !historicalPortfolioSnapshots.isEmpty {
-                    return getStoredPortfolioGains(for: timeRange)
+                    return getStoredPortfolioGains(
+                    for: timeRange, currency: dataModel.preferredCurrency, customFrom: customFrom, customTo: customTo
+                )
                 }
             }
             
@@ -1375,124 +1396,151 @@ class HistoricalDataManager: ObservableObject {
         return PythonNetworkService()
     }
     
-    func getPerformanceMetrics(for timeRange: ChartTimeRange) -> PerformanceMetrics? {
-        let startDate = timeRange.startDate(from: Date())
-        let relevantSnapshots = portfolioSnapshots.filter { $0.timestamp >= startDate }.sorted { $0.timestamp < $1.timestamp }
-        
-        guard let firstSnapshot = relevantSnapshots.first,
-              let lastSnapshot = relevantSnapshots.last else {
-            return nil
+    /// Start and end of a portfolio chart range; `.custom` uses the user's dates.
+    func portfolioRangeBounds(
+        for timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil,
+        now: Date = Date()
+    ) -> (start: Date, end: Date) {
+        guard timeRange == .custom, let customFrom else {
+            return (timeRange.startDate(from: now), now)
         }
-        
-        // For single day or very short periods, compare with previous day if available
+        return (customFrom, min(customTo ?? now, now))
+    }
+
+    /// Metrics for the series the portfolio chart draws: recorded snapshots
+    /// plus this session's live samples, falling back to session snapshots.
+    func getPerformanceMetrics(
+        for timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil,
+        currency: String? = nil,
+        now: Date = Date()
+    ) -> PerformanceMetrics? {
+        let bounds = portfolioRangeBounds(for: timeRange, customFrom: customFrom, customTo: customTo, now: now)
+        let seriesCurrency = currency ?? historicalPortfolioSnapshots.last?.currency
+        var points = storedAndLivePortfolioValues(from: bounds.start, to: bounds.end, currency: seriesCurrency)
+            .filter { $0.value.isFinite && $0.value > 0 }
+        var previousPoint = storedAndLivePortfolioValues(from: .distantPast, to: bounds.start, currency: seriesCurrency)
+            .last { $0.value.isFinite && $0.value > 0 && $0.date < bounds.start }
+        var metricsCurrency = seriesCurrency
+        if points.isEmpty {
+            let session = portfolioSnapshots.sorted { $0.timestamp < $1.timestamp }
+            points = session
+                .filter { $0.timestamp >= bounds.start && $0.timestamp <= bounds.end && $0.totalValue.isFinite && $0.totalValue > 0 }
+                .map { ChartDataPoint(date: $0.timestamp, value: $0.totalValue) }
+            previousPoint = session
+                .last { $0.timestamp < bounds.start && $0.totalValue.isFinite && $0.totalValue > 0 }
+                .map { ChartDataPoint(date: $0.timestamp, value: $0.totalValue) }
+            metricsCurrency = metricsCurrency ?? session.last?.currency
+        }
+        return Self.performanceMetrics(points: points, previousPoint: previousPoint, currency: metricsCurrency ?? "USD")
+    }
+
+    /// Pure metrics over a sorted value series. Per-period statistics use one
+    /// close per day, and annualised figures need at least 30 days of data.
+    nonisolated static func performanceMetrics(
+        points: [ChartDataPoint],
+        previousPoint: ChartDataPoint?,
+        currency: String,
+        calendar: Calendar = .current
+    ) -> PerformanceMetrics? {
+        guard let firstPoint = points.first, let lastPoint = points.last else { return nil }
+
+        // A single point is compared with the last value before the range.
+        let basePoint = points.count == 1 ? previousPoint : firstPoint
         let totalReturn: Double
         let totalReturnPercent: Double
-        
-        if relevantSnapshots.count == 1 {
-            // Single snapshot - compare with the most recent snapshot before the time range
-            let previousSnapshots = portfolioSnapshots.filter { $0.timestamp < startDate }.sorted { $0.timestamp < $1.timestamp }
-            if let previousSnapshot = previousSnapshots.last {
-                totalReturn = lastSnapshot.totalValue - previousSnapshot.totalValue
-                totalReturnPercent = (totalReturn / previousSnapshot.totalValue) * 100
-            } else {
-                totalReturn = 0
-                totalReturnPercent = 0
-            }
+        if let basePoint, basePoint.value > 0 {
+            totalReturn = lastPoint.value - basePoint.value
+            totalReturnPercent = (totalReturn / basePoint.value) * 100
         } else {
-            totalReturn = lastSnapshot.totalValue - firstSnapshot.totalValue
-            totalReturnPercent = (totalReturn / firstSnapshot.totalValue) * 100
+            totalReturn = 0
+            totalReturnPercent = 0
         }
-        
-        // Calculate daily returns for advanced metrics
-        let dailyReturns = zip(relevantSnapshots.dropFirst(), relevantSnapshots).map { current, previous in
-            (current.totalValue - previous.totalValue) / previous.totalValue
+
+        var dailyCloses: [Double] = []
+        var lastDay: Date?
+        for point in points {
+            let day = calendar.startOfDay(for: point.date)
+            if day == lastDay {
+                dailyCloses[dailyCloses.count - 1] = point.value
+            } else {
+                dailyCloses.append(point.value)
+                lastDay = day
+            }
         }
-        
+        let dailyReturns = zip(dailyCloses.dropFirst(), dailyCloses).map { current, previous in
+            (current - previous) / previous
+        }
+
         let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
         let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - meanReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance) * 100 // Convert to percentage
-        
-        let maxValue = relevantSnapshots.map { $0.totalValue }.max() ?? lastSnapshot.totalValue
-        let minValue = relevantSnapshots.map { $0.totalValue }.min() ?? lastSnapshot.totalValue
-        
-        // MARK: - Advanced Analytics Calculations
-        
-        // Calculate Sharpe Ratio (assuming 2% risk-free rate annually)
-        let riskFreeRate = 0.02 / 252 // Daily risk-free rate
-        let excessReturns = dailyReturns.map { $0 - riskFreeRate }
-        let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
+        let volatility = sqrt(variance) * 100
+
+        let values = points.map(\.value)
+        let maxValue = values.max() ?? lastPoint.value
+        let minValue = values.min() ?? lastPoint.value
+
+        // Sharpe ratio, assuming a 2% annual risk-free rate.
+        let riskFreeRate = 0.02 / 252
+        let meanExcessReturn = meanReturn - riskFreeRate
         let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) : nil
-        
-        // Calculate Maximum Drawdown
-        let (maxDrawdown, maxDrawdownPercent) = calculateMaxDrawdown(snapshots: relevantSnapshots)
-        
-        // Calculate Annualized Return and Volatility
-        let periodInYears = max(0.001, lastSnapshot.timestamp.timeIntervalSince(firstSnapshot.timestamp) / (365.25 * 24 * 3600))
-        let annualizedReturn = totalReturnPercent / periodInYears
-        let annualizedVolatility = volatility * sqrt(252) // Assuming ~252 trading days per year
-        
-        // Calculate Value at Risk (95% confidence level)
+
+        let (maxDrawdown, maxDrawdownPercent) = calculateMaxDrawdown(values: values)
+
+        let span = lastPoint.date.timeIntervalSince(basePoint?.date ?? firstPoint.date)
+        let periodInYears = span / (365.25 * 24 * 3600)
+        let annualizedReturn: Double? = span >= 30 * 86_400 && basePoint != nil
+            ? (pow(1 + totalReturnPercent / 100, 1 / periodInYears) - 1) * 100
+            : nil
+        let annualizedVolatility: Double? = dailyReturns.count >= 2 ? volatility * sqrt(252) : nil
+
         let sortedReturns = dailyReturns.sorted()
         let var95Index = Int(Double(sortedReturns.count) * 0.05)
         let valueAtRisk = var95Index < sortedReturns.count ? abs(sortedReturns[var95Index] * 100) : nil
-        
-        // Calculate Win Rate
+
         let positiveReturns = dailyReturns.filter { $0 > 0 }.count
         let winRate = dailyReturns.isEmpty ? nil : Double(positiveReturns) / Double(dailyReturns.count) * 100
-        
-        // Beta calculation would require market benchmark data - set to nil for now
-        let beta: Double? = nil
-        
+
         return PerformanceMetrics(
             totalReturn: totalReturn,
             totalReturnPercent: totalReturnPercent,
             volatility: volatility,
             maxValue: maxValue,
             minValue: minValue,
-            currency: lastSnapshot.currency,
-            startDate: firstSnapshot.timestamp,
-            endDate: lastSnapshot.timestamp,
+            currency: currency,
+            startDate: basePoint?.date ?? firstPoint.date,
+            endDate: lastPoint.date,
             sharpeRatio: sharpeRatio,
             maxDrawdown: maxDrawdown,
             maxDrawdownPercent: maxDrawdownPercent,
-            beta: beta,
-            annualizedReturn: annualizedReturn,
+            beta: nil,
+            annualizedReturn: annualizedReturn.flatMap { $0.isFinite ? $0 : nil },
             annualizedVolatility: annualizedVolatility,
             valueAtRisk: valueAtRisk,
             winRate: winRate
         )
     }
-    
-    /// Calculates maximum drawdown from a series of portfolio snapshots
-    private func calculateMaxDrawdown(snapshots: [PortfolioSnapshot]) -> (maxDrawdown: Double?, maxDrawdownPercent: Double?) {
-        guard snapshots.count > 1 else { return (nil, nil) }
-        
+
+    /// Calculates maximum drawdown from a series of portfolio values
+    private nonisolated static func calculateMaxDrawdown(values: [Double]) -> (maxDrawdown: Double?, maxDrawdownPercent: Double?) {
+        guard values.count > 1, var peak = values.first else { return (nil, nil) }
+
         var maxDrawdown: Double = 0
         var maxDrawdownPercent: Double = 0
-        var peak: Double = snapshots.first?.totalValue ?? 0
-        
-        for snapshot in snapshots {
-            let currentValue = snapshot.totalValue
-            
-            // Update peak if we have a new high
-            if currentValue > peak {
-                peak = currentValue
-            }
-            
-            // Calculate drawdown from peak
+        for currentValue in values {
+            peak = max(peak, currentValue)
             let drawdown = peak - currentValue
-            let drawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0
-            
-            // Update maximum drawdown
             if drawdown > maxDrawdown {
                 maxDrawdown = drawdown
-                maxDrawdownPercent = drawdownPercent
+                maxDrawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0
             }
         }
-        
         return (maxDrawdown, maxDrawdownPercent)
     }
-    
+
     /// Calculates maximum drawdown for individual stock prices
     private func calculateStockMaxDrawdown(snapshots: [PriceSnapshot]) -> (maxDrawdown: Double?, maxDrawdownPercent: Double?) {
         guard snapshots.count > 1 else { return (nil, nil) }
@@ -2918,13 +2966,19 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Gets stored portfolio values for chart display
-    func getStoredPortfolioValues(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
-        let startDate = timeRange.startDate()
+    func getStoredPortfolioValues(
+        for timeRange: ChartTimeRange,
+        currency: String? = nil,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> [ChartDataPoint] {
+        let bounds = portfolioRangeBounds(for: timeRange, customFrom: customFrom, customTo: customTo)
+        let startDate = bounds.start
 
         // Debug logging
         Task { await logger.debug("📊 GET PORTFOLIO VALUES: totalSnapshots=\(historicalPortfolioSnapshots.count), startDate=\(startDate), timeRange=\(timeRange.rawValue)") }
 
-        let values = storedAndLivePortfolioValues(from: startDate, to: Date())
+        let values = storedAndLivePortfolioValues(from: startDate, to: bounds.end, currency: currency)
 
         Task { await logger.debug("📊 GET PORTFOLIO VALUES: filteredCount=\(values.count)") }
 
@@ -2932,15 +2986,22 @@ class HistoricalDataManager: ObservableObject {
     }
     
     /// Gets stored portfolio gains for chart display
-    func getStoredPortfolioGains(for timeRange: ChartTimeRange) -> [ChartDataPoint] {
-        let startDate = timeRange.startDate()
-        
-        let storedGains = historicalPortfolioSnapshots
-            .filter { $0.date >= startDate }
+    func getStoredPortfolioGains(
+        for timeRange: ChartTimeRange,
+        currency: String? = nil,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> [ChartDataPoint] {
+        let bounds = portfolioRangeBounds(for: timeRange, customFrom: customFrom, customTo: customTo)
+
+        let storedGains = portfolioSnapshots(in: currency)
+            .filter { $0.date >= bounds.start && $0.date <= bounds.end }
             .map { snapshot in
                 ChartDataPoint(date: snapshot.date, value: snapshot.totalGains)
             }
-        let liveGains = livePortfolioGainSamples.filter { $0.date >= startDate }
+        let liveGains = liveSamplesMatch(currency)
+            ? livePortfolioGainSamples.filter { $0.date >= bounds.start && $0.date <= bounds.end }
+            : []
 
         return deduplicatedSortedChartPoints(storedGains + liveGains)
     }
@@ -2958,13 +3019,22 @@ class HistoricalDataManager: ObservableObject {
         from startDate: Date,
         to endDate: Date,
         availablePointCount: Int,
+        coversRange: Bool = true,
         force: Bool = false
     ) {
         let folyncEnabled = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
-        guard force || folyncEnabled || availablePointCount < 10 else { return }
+        guard force || folyncEnabled || availablePointCount < 10 || !coversRange else { return }
         schedulePriceHistoryFetchIfNeeded(
             for: symbol, timeRange: timeRange, startDate: startDate, endDate: endDate, force: force
         )
+    }
+
+    /// Whether sorted snapshots start near the beginning of the range (within
+    /// a fifth of its length), so plenty of recent points cannot hide a gap.
+    nonisolated static func snapshotsReachRangeStart(_ snapshots: [PriceSnapshot], from startDate: Date, to endDate: Date) -> Bool {
+        guard let first = snapshots.first else { return false }
+        let slack = endDate.timeIntervalSince(startDate) * 0.2
+        return first.timestamp <= startDate.addingTimeInterval(slack)
     }
 
     func folyncSourceStatus(
@@ -3066,14 +3136,32 @@ class HistoricalDataManager: ObservableObject {
         let currentValueInPreferredCurrency: Double
     }
 
-    private func storedAndLivePortfolioValues(from startDate: Date, to endDate: Date) -> [ChartDataPoint] {
-        let storedValues = historicalPortfolioSnapshots
+    private func storedAndLivePortfolioValues(from startDate: Date, to endDate: Date, currency: String?) -> [ChartDataPoint] {
+        let storedValues = portfolioSnapshots(in: currency)
             .filter { $0.date >= startDate && $0.date <= endDate }
             .map { snapshot in
                 ChartDataPoint(date: snapshot.date, value: snapshot.totalValue)
             }
-        let liveValues = livePortfolioValueSamples.filter { $0.date >= startDate && $0.date <= endDate }
+        let liveValues = liveSamplesMatch(currency)
+            ? livePortfolioValueSamples.filter { $0.date >= startDate && $0.date <= endDate }
+            : []
         return deduplicatedSortedChartPoints(storedValues + liveValues)
+    }
+
+    /// Stored snapshots in `currency`, or all of them when no currency is given.
+    private func portfolioSnapshots(in currency: String?) -> [HistoricalPortfolioSnapshot] {
+        guard let currency else { return historicalPortfolioSnapshots }
+        return historicalPortfolioSnapshots.filter { $0.currency.uppercased() == currency.uppercased() }
+    }
+
+    /// Whether the live samples can join a series in `currency`. With no
+    /// currency given, the stored snapshots' latest currency decides.
+    private func liveSamplesMatch(_ currency: String?) -> Bool {
+        guard let sampleCurrency = livePortfolioSampleCurrency,
+              let seriesCurrency = currency ?? historicalPortfolioSnapshots.last?.currency else {
+            return true
+        }
+        return sampleCurrency.uppercased() == seriesCurrency.uppercased()
     }
 
     private func portfolioMenuPositions(

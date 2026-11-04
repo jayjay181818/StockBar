@@ -144,7 +144,7 @@ struct AttributionAnalysisResult: Codable {
     let waterfallData: [WaterfallDataPoint]
     let startingValue: Double
     let endingValue: Double
-    let netCashFlow: Double
+    let netCashFlow: Double? // nil when no reliable cash-flow data exists
 
     var topContributors: [StockContribution] {
         stockContributions
@@ -180,7 +180,7 @@ struct AttributionAnalysisResult: Codable {
         waterfallData: [WaterfallDataPoint],
         startingValue: Double,
         endingValue: Double,
-        netCashFlow: Double
+        netCashFlow: Double?
     ) {
         self.startDate = startDate
         self.endDate = endDate

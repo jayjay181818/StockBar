@@ -118,7 +118,7 @@ struct AttributionAnalysisView: View {
     private func summaryCardsView(_ result: AttributionAnalysisResult) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             metricCard(
-                title: "Total Return",
+                title: "Return (excl. new money)",
                 value: String(format: "%.2f%%", result.portfolioReturn),
                 color: result.portfolioReturn >= 0 ? .green : .red
             )
@@ -135,11 +135,14 @@ struct AttributionAnalysisView: View {
                 color: .blue
             )
 
-            metricCard(
-                title: "Net Cash Flow",
-                value: formatCurrency(result.netCashFlow),
-                color: result.netCashFlow >= 0 ? .green : .red
-            )
+            // Only shown when real cash-flow data exists; Stockbar does not track deposits yet.
+            if let netCashFlow = result.netCashFlow {
+                metricCard(
+                    title: "Net Cash Flow",
+                    value: formatCurrency(netCashFlow),
+                    color: netCashFlow >= 0 ? .green : .red
+                )
+            }
         }
     }
 

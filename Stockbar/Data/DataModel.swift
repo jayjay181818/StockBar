@@ -1288,6 +1288,7 @@ class DataModel: ObservableObject {
             historicalDataManager.recordLivePortfolioSample(
                 totalValue: summary.totalValue,
                 totalGains: summary.totalGain,
+                currency: summary.currency,
                 timestamp: Date()
             )
         }

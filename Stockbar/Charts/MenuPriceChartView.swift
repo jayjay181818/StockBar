@@ -147,7 +147,8 @@ class MenuChartViewModel: ObservableObject {
                 let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
                 historicalDataManager.requestPriceHistoryIfNeeded(
                     for: symbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
-                    availablePointCount: snapshots.count
+                    availablePointCount: snapshots.count,
+                    coversRange: HistoricalDataManager.snapshotsReachRangeStart(snapshots, from: startDate, to: endDate)
                 )
                 let validSnapshots = snapshots.filter { $0.price.isFinite && $0.price > 0 }
                 
@@ -187,7 +188,8 @@ class MenuChartViewModel: ObservableObject {
                     let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(for: benchmarkSymbol, from: startDate, to: endDate)
                     historicalDataManager.requestPriceHistoryIfNeeded(
                         for: benchmarkSymbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
-                        availablePointCount: benchmarkSnapshots.count
+                        availablePointCount: benchmarkSnapshots.count,
+                        coversRange: HistoricalDataManager.snapshotsReachRangeStart(benchmarkSnapshots, from: startDate, to: endDate)
                     )
                     let validBenchmarkSnapshots = benchmarkSnapshots.filter { $0.price.isFinite && $0.price > 0 }
                     benchmarkPoints = validBenchmarkSnapshots.map { snapshot in
@@ -311,6 +313,16 @@ struct MenuPriceChartView: View {
         let change = last.price - first.price
         let percent = (change / first.price) * 100
         return (change, percent)
+    }
+
+    /// Names the span the range P&L really covers: the selected range only
+    /// when history reaches back that far, otherwise the first point's date.
+    private var rangePnLLabel: String {
+        guard rangePriceChange != nil, let first = viewModel.chartData.first else { return "Today's P&L" }
+        if PortfolioMenuChartDataBuilder.coversRange(viewModel.chartData, range: viewModel.selectedTimeRange) {
+            return "\(viewModel.selectedTimeRange.description) P&L"
+        }
+        return "P&L since \(first.date.formatted(.dateTime.day().month(.abbreviated)))"
     }
 
     private var rangePnL: (value: Double?, percent: Double?) {
@@ -447,7 +459,7 @@ struct MenuPriceChartView: View {
                                    valueColor: Self.signColor(metrics.totalPnL))
             }
             GridRow {
-                let rangeLabel = rangePriceChange == nil ? "Today's P&L" : "\(viewModel.selectedTimeRange.description) P&L"
+                let rangeLabel = rangePnLLabel
                 MenuPopoverStatBox(
                     label: rangeLabel,
                     value: MenuPopoverFormatter.currencyExact(rangePnL.value, currency: metrics.currency, includeSign: true),
