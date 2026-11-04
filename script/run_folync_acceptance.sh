@@ -78,9 +78,24 @@ done
 app_log="$acceptance_root/stockbar.log"
 /usr/bin/nohup "$executable" > "$app_log" 2>&1 < /dev/null &
 app_pid=$!
-sleep 2
+# Poll for the app's own readiness marker (DataModel initialisation, logged to the
+# acceptance-root log file) instead of assuming two seconds is enough.
+ready_log="$acceptance_root/Logs/com.stockbar/stockbar.log"
+ready=0
+for _ in {1..120}; do
+  kill -0 "$app_pid" 2>/dev/null || break
+  if [[ -f "$ready_log" ]] && /usr/bin/grep -q "DataModel initialized" "$ready_log"; then
+    ready=1
+    break
+  fi
+  sleep 0.25
+done
 if ! kill -0 "$app_pid" 2>/dev/null; then
   print -u2 "Acceptance Stockbar exited during startup; evidence retained at $acceptance_root"
+  exit 68
+fi
+if (( ready == 0 )); then
+  print -u2 "Acceptance Stockbar did not report readiness within 30s; evidence retained at $acceptance_root"
   exit 68
 fi
 

@@ -46,7 +46,7 @@ final class OHLCFetchService: Sendable {
             // Fallback to main get_stock_data.py location
             self.pythonScriptPath = Bundle.main.resourcePath?.appending("/get_ohlc_data.py") ?? ""
         }
-        self.processRunner = processRunner ?? PythonProcessRunner(config: .load())
+        self.processRunner = processRunner ?? PythonProcessRunner()
         self.ohlcDataStore = ohlcDataStore ?? OHLCDataService()
         self.supplementalProvider = supplementalProvider ?? FolyncSupplementalCoordinator.shared
     }

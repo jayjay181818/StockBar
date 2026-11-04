@@ -41,6 +41,35 @@ class StockDataContractTests(unittest.TestCase):
         self.assertEqual(self.module.handle_twelvedata_symbol("^FTSE"), ("FTSE", None))
         self.assertEqual(self.module.resolve_symbol_alias("^FTSE"), "^FTSE")
 
+    def test_lon_suffix_is_stripped_only_at_the_end(self):
+        self.assertEqual(self.module.handle_twelvedata_symbol("ABC.LON"), ("ABC", "LSE"))
+        self.assertEqual(self.module.handle_twelvedata_symbol("LLOY.L"), ("LLOY", "LSE"))
+        self.assertEqual(self.module.handle_lse_symbol("ABC.LON"), "ABC.L")
+        self.assertEqual(self.module.handle_lse_symbol("A.LSE.L"), "A.LSE.L")
+        self.assertEqual(self.module.handle_stooq_symbol("ABC.LON"), "ABC.UK")
+        self.assertEqual(self.module.handle_stooq_symbol("LLOY.L"), "LLOY.UK")
+
+    def test_configured_alias_is_resolved_by_provider_symbol_helpers(self):
+        self.module.SYMBOL_ALIASES["MYUK"] = "REAL.L"
+        self.assertEqual(self.module.handle_lse_symbol("myuk"), "REAL.L")
+        self.assertEqual(self.module.handle_twelvedata_symbol("MYUK"), ("REAL", "LSE"))
+        self.assertEqual(self.module.handle_stooq_symbol("MYUK"), "REAL.UK")
+
+    def test_market_state_prefers_reported_state(self):
+        from datetime import datetime
+        saturday = datetime(2026, 7, 25, 11, 0)
+        self.assertEqual(self.module.resolve_market_state("REGULAR", "CLOSED", saturday), "REGULAR")
+        self.assertEqual(self.module.resolve_market_state("postpost", "REGULAR", saturday), "CLOSED")
+        self.assertEqual(self.module.resolve_market_state("PRE", "CLOSED", saturday), "PRE")
+
+    def test_market_state_is_closed_at_weekends_without_a_reported_state(self):
+        from datetime import datetime
+        saturday = datetime(2026, 7, 25, 11, 0)
+        friday = datetime(2026, 7, 24, 11, 0)
+        self.assertEqual(self.module.resolve_market_state(None, "REGULAR", saturday), "CLOSED")
+        self.assertEqual(self.module.resolve_market_state("UNKNOWN", "REGULAR", saturday), "CLOSED")
+        self.assertEqual(self.module.resolve_market_state(None, "REGULAR", friday), "REGULAR")
+
     def test_legacy_cache_moves_once_to_default_location_only(self):
         root = self.temp_directory.name
         default_file = os.path.join(root, "Caches", "stockbar-cache", "quote_cache.json")

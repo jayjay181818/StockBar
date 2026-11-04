@@ -385,16 +385,28 @@ def history_symbol_for_prev_close(symbol):
         return upper.replace('.XC', '.L')
     return upper
 
+# Only a trailing London suffix is a suffix; a plain replace() would also rewrite
+# ".L" inside tickers such as "ABC.LON" or "A.LSE.L".
+LSE_SUFFIX_PATTERN = re.compile(r'\.(?:LON|L)$')
+
 def handle_lse_symbol(symbol):
-    """Convert London Stock Exchange symbols for FMP API"""
+    """Convert London Stock Exchange symbols for FMP API (alias-resolved)."""
     upper = resolve_symbol_alias(symbol)
-    if upper.endswith('.XC'):
-        return upper.replace('.XC', '.L')
-    if upper.endswith('.L'):
-        return symbol.upper()
-    elif upper.endswith('.LON'):
-        return symbol.upper().replace('.LON', '.L')
-    return symbol.upper()
+    return LSE_SUFFIX_PATTERN.sub('.L', upper)
+
+def resolve_market_state(reported_state, clock_state, now_market):
+    """Pick the market state: Yahoo's own marketState when present (it knows
+    holidays and early closes), otherwise the clock-derived state, forced to
+    CLOSED on weekends. Public holidays are not modelled here."""
+    if isinstance(reported_state, str):
+        normalized = reported_state.strip().upper()
+        if normalized in ("REGULAR", "PRE", "POST"):
+            return normalized
+        if normalized in ("CLOSED", "PREPRE", "POSTPOST"):
+            return "CLOSED"
+    if now_market.weekday() >= 5:
+        return "CLOSED"
+    return clock_state
 
 def normalize_currency(raw_currency, symbol):
     """Normalize currency codes and detect pence-based quotes."""
@@ -421,10 +433,10 @@ def handle_twelvedata_symbol(symbol):
     if upper == '^FTSE':
         return 'FTSE', None
     if upper.endswith('.XC'):
-        upper = upper.replace('.XC', '.L')
-    if upper.endswith('.L') or upper.endswith('.LON'):
+        upper = upper[:-len('.XC')] + '.L'
+    if LSE_SUFFIX_PATTERN.search(upper):
         # Strip suffix, specify exchange in params
-        return upper.replace('.L', '').replace('.LON', ''), "LSE"
+        return LSE_SUFFIX_PATTERN.sub('', upper), "LSE"
     return upper, None
 
 def fetch_historical_data_twelvedata(symbol, start_date, end_date):
@@ -517,13 +529,12 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
 def handle_stooq_symbol(symbol):
     """Convert symbols for Stooq (e.g. AV.L -> AV.UK)"""
     # Stooq uses .UK for LSE
-    if symbol.upper().endswith('.L'):
-        return symbol.upper().replace('.L', '.UK')
-    elif symbol.upper().endswith('.LON'):
-        return symbol.upper().replace('.LON', '.UK')
+    upper = resolve_symbol_alias(symbol)
+    if LSE_SUFFIX_PATTERN.search(upper):
+        return LSE_SUFFIX_PATTERN.sub('.UK', upper)
     # US stocks typically have .US suffix or just ticker, Stooq often needs .US for common ones
     # but let's stick to LSE fallback focus for now.
-    return symbol.upper()
+    return upper
 
 def fetch_historical_data_stooq(symbol, start_date, end_date):
     """Fetch historical data from Stooq (CSV)"""
@@ -655,6 +666,7 @@ def fetch_real_time_quote_yfinance(symbol):
         pre_market_price = None
         post_market_price = None
         market_state = "REGULAR"
+        reported_market_state = None
         
         currency = None
 
@@ -662,6 +674,7 @@ def fetch_real_time_quote_yfinance(symbol):
         try:
             info = ticker.info
             currency = info.get('currency') or info.get('financialCurrency')
+            reported_market_state = info.get('marketState')
             
             # Extract timestamp from regularMarketTime
             if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
@@ -726,19 +739,11 @@ def fetch_real_time_quote_yfinance(symbol):
             
             # Simplified LSE market hours logic for brevity in this view
             if (current_hour_market >= 7 and current_hour_market < 8):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
                 market_state = "REGULAR"
             elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
         else:
@@ -760,21 +765,19 @@ def fetch_real_time_quote_yfinance(symbol):
             current_minute_market = now_market.minute
             
             if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
                 market_state = "REGULAR"
             elif current_hour_market >= 16 and current_hour_market < 20:
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
+
+        market_state = resolve_market_state(reported_market_state, market_state, now_market)
+        if market_state == "PRE" and pre_market_price is not None:
+            current_price = pre_market_price
+        elif market_state == "POST" and post_market_price is not None:
+            current_price = post_market_price
 
         normalized_currency, uses_pence = normalize_currency(currency, symbol)
         if uses_pence:

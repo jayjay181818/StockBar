@@ -11,20 +11,20 @@ protocol PythonProcessRunning: Sendable {
 }
 
 actor PythonProcessRunner: PythonProcessRunning {
-    /// Grace period between SIGTERM and SIGKILL when a run times out.
+    /// Grace period between SIGTERM and SIGKILL when a run times out or is cancelled.
     private static let terminationGraceNanoseconds: UInt64 = 5_000_000_000
 
-    private let executablePath: String
-    private let environment: [String: String]
+    /// A pinned configuration (tests), or nil to rebuild the configuration for every run so
+    /// interpreter, config-file and quote-cache settings changed after launch take effect.
+    private let pinnedConfig: PythonConfiguration?
     private let providerPolicy: StockbarProviderAccessPolicy
     private let logger = Logger.shared
 
     init(
-        config: PythonConfiguration = .load(),
+        config: PythonConfiguration? = nil,
         providerPolicy: StockbarProviderAccessPolicy = .current
     ) {
-        self.executablePath = config.interpreterPath
-        self.environment = config.environment
+        self.pinnedConfig = config
         self.providerPolicy = providerPolicy
     }
 
@@ -34,11 +34,14 @@ actor PythonProcessRunner: PythonProcessRunning {
         logContext: String
     ) async throws -> PythonProcessResult {
         try providerPolicy.authorize(.python)
+        try Task.checkCancellation()
+
+        let config = pinnedConfig ?? PythonConfiguration.load()
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = arguments
         var processEnvironment = ProcessInfo.processInfo.environment
-        environment.forEach { key, value in
+        config.environment.forEach { key, value in
             processEnvironment[key] = value
         }
         process.environment = processEnvironment
@@ -50,93 +53,106 @@ actor PythonProcessRunner: PythonProcessRunning {
 
         let outputBuffer = ProcessDataBuffer()
         let errorBuffer = ProcessDataBuffer()
+        let control = ProcessRunControl(process: process)
+        let logger = self.logger
 
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty {
-                outputBuffer.append(chunk)
+        defer { control.cancelTimeout() }
+
+        let result: PythonProcessResult = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard control.install(continuation) else { return }
+
+                // Each pipe is read to EOF by exactly one reader, so chunks can
+                // never be appended out of order, and nothing is left unread
+                // when the process exits (a multi-symbol --batch-ohlc response
+                // is easily megabytes).
+                let readersDone = DispatchGroup()
+                readersDone.enter()
+                readersDone.enter()
+
+                process.terminationHandler = { proc in
+                    let status = proc.terminationStatus
+                    readersDone.notify(queue: .global(qos: .utility)) {
+                        control.finish(.success(PythonProcessResult(
+                            stdout: outputBuffer.contents,
+                            stderr: errorBuffer.contents,
+                            exitCode: status
+                        )))
+                    }
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    process.terminationHandler = nil
+                    control.finish(.failure(error))
+                    return
+                }
+
+                Self.startReader(outputPipe.fileHandleForReading, into: outputBuffer, group: readersDone)
+                Self.startReader(errorPipe.fileHandleForReading, into: errorBuffer, group: readersDone)
+
+                // A cancellation that raced the launch must still stop the child.
+                if control.markLaunched() {
+                    Task { await Self.terminateWithGrace(process, logContext: logContext, logger: logger, reason: "cancelled") }
+                    return
+                }
+
+                let timeoutTask = Task {
+                    let timeoutNanoseconds = UInt64(max(0, timeoutSeconds) * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    guard !Task.isCancelled, process.isRunning else { return }
+
+                    control.markTimedOut()
+                    await Self.terminateWithGrace(process, logContext: logContext, logger: logger, reason: "timeout reached")
+                }
+                control.setTimeoutTask(timeoutTask)
+            }
+        } onCancel: {
+            control.cancel { [logContext, logger] process in
+                Task { await Self.terminateWithGrace(process, logContext: logContext, logger: logger, reason: "cancelled") }
             }
         }
 
-        errorPipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if !chunk.isEmpty {
-                errorBuffer.append(chunk)
-            }
-        }
-
-        let timeoutState = ProcessTimeoutState()
-        var timeoutTask: Task<Void, Never>?
-
-        let result: PythonProcessResult = try await withCheckedThrowingContinuation { continuation in
-            let continuationBox = ProcessContinuationBox(
-                continuation: continuation,
-                outputPipe: outputPipe,
-                errorPipe: errorPipe
-            )
-
-            process.terminationHandler = { proc in
-                // Drain to EOF rather than taking a single `availableData`
-                // snapshot: readabilityHandler callbacks are delivered
-                // asynchronously and may still be pending when the process
-                // exits, so a single read can truncate large payloads (a
-                // multi-symbol --batch-ohlc response is easily megabytes) and
-                // surface as an intermittent JSON parse failure.
-                outputPipe.fileHandleForReading.readabilityHandler = nil
-                errorPipe.fileHandleForReading.readabilityHandler = nil
-
-                if let remainingOutput = try? outputPipe.fileHandleForReading.readToEnd(),
-                   !remainingOutput.isEmpty {
-                    outputBuffer.append(remainingOutput)
-                }
-
-                if let remainingError = try? errorPipe.fileHandleForReading.readToEnd(),
-                   !remainingError.isEmpty {
-                    errorBuffer.append(remainingError)
-                }
-
-                continuationBox.resume(.success(PythonProcessResult(
-                    stdout: outputBuffer.contents,
-                    stderr: errorBuffer.contents,
-                    exitCode: proc.terminationStatus
-                )))
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuationBox.resume(.failure(error))
-                return
-            }
-
-            timeoutTask = Task {
-                let timeoutNanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                guard process.isRunning else { return }
-
-                timeoutState.markTimedOut()
-                await logger.warning("\(logContext) timeout reached, terminating process")
-                process.terminate()
-
-                // SIGTERM alone is not enough: a child blocked in a syscall
-                // inside a C extension can ignore it, in which case
-                // terminationHandler never fires and the continuation never
-                // resumes — the caller would hang forever despite the timeout.
-                try? await Task.sleep(nanoseconds: Self.terminationGraceNanoseconds)
-                if process.isRunning {
-                    await logger.error("\(logContext) ignored SIGTERM, sending SIGKILL")
-                    kill(process.processIdentifier, SIGKILL)
-                }
-            }
-        }
-
-        timeoutTask?.cancel()
-
-        if timeoutState.didTimeout {
+        if control.didTimeOut {
             throw NetworkError.timeout("\(logContext) timed out after \(Int(timeoutSeconds))s")
         }
 
         return result
+    }
+
+    /// Drains `handle` sequentially on its own queue until EOF.
+    private static func startReader(_ handle: FileHandle, into buffer: ProcessDataBuffer, group: DispatchGroup) {
+        DispatchQueue.global(qos: .utility).async {
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                buffer.append(chunk)
+            }
+            group.leave()
+        }
+    }
+
+    /// SIGTERM, then SIGKILL after the grace period.
+    ///
+    /// SIGTERM alone is not enough: a child blocked in a syscall inside a C
+    /// extension can ignore it, in which case terminationHandler never fires
+    /// and the caller would hang forever despite the timeout.
+    private static func terminateWithGrace(
+        _ process: Process,
+        logContext: String,
+        logger: Logger,
+        reason: String
+    ) async {
+        guard process.isRunning else { return }
+        await logger.warning("\(logContext) \(reason), terminating process")
+        process.terminate()
+
+        try? await Task.sleep(nanoseconds: terminationGraceNanoseconds)
+        if process.isRunning {
+            await logger.error("\(logContext) ignored SIGTERM, sending SIGKILL")
+            kill(process.processIdentifier, SIGKILL)
+        }
     }
 }
 
@@ -157,48 +173,54 @@ private final class ProcessDataBuffer: @unchecked Sendable {
     }
 }
 
-private final class ProcessTimeoutState: @unchecked Sendable {
+/// Lock-protected state shared by the launch, termination, timeout and
+/// cancellation paths of one process run.
+private final class ProcessRunControl: @unchecked Sendable {
     private let lock = NSLock()
+    private let process: Process
+    private var continuation: CheckedContinuation<PythonProcessResult, Error>?
+    private var finished = false
+    private var cancelled = false
+    private var launched = false
     private var timedOut = false
+    private var timeoutTask: Task<Void, Never>?
 
-    func markTimedOut() {
-        lock.lock()
-        timedOut = true
-        lock.unlock()
+    init(process: Process) {
+        self.process = process
     }
 
-    var didTimeout: Bool {
+    /// Stores the continuation. If the task was already cancelled, resumes it
+    /// with `CancellationError` and returns false so the process is never launched.
+    func install(_ continuation: CheckedContinuation<PythonProcessResult, Error>) -> Bool {
         lock.lock()
-        defer { lock.unlock() }
-        return timedOut
-    }
-}
-
-private final class ProcessContinuationBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-    private let continuation: CheckedContinuation<PythonProcessResult, Error>
-    private let outputPipe: Pipe
-    private let errorPipe: Pipe
-
-    init(
-        continuation: CheckedContinuation<PythonProcessResult, Error>,
-        outputPipe: Pipe,
-        errorPipe: Pipe
-    ) {
+        if cancelled {
+            finished = true
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
         self.continuation = continuation
-        self.outputPipe = outputPipe
-        self.errorPipe = errorPipe
+        lock.unlock()
+        return true
     }
 
-    func resume(_ result: Result<PythonProcessResult, Error>) {
+    /// Returns true when cancellation arrived before the launch completed.
+    func markLaunched() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !didResume else { return }
-        didResume = true
+        launched = true
+        return cancelled
+    }
 
-        outputPipe.fileHandleForReading.readabilityHandler = nil
-        errorPipe.fileHandleForReading.readabilityHandler = nil
+    func finish(_ result: Result<PythonProcessResult, Error>) {
+        lock.lock()
+        guard !finished, let continuation else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        self.continuation = nil
+        lock.unlock()
 
         switch result {
         case .success(let value):
@@ -206,5 +228,48 @@ private final class ProcessContinuationBox: @unchecked Sendable {
         case .failure(let error):
             continuation.resume(throwing: error)
         }
+    }
+
+    /// Cancels the run: stops the child (via `terminate`) and resumes the caller
+    /// immediately with `CancellationError`.
+    func cancel(terminate: (Process) -> Void) {
+        lock.lock()
+        cancelled = true
+        let shouldTerminate = launched && !finished
+        let task = timeoutTask
+        lock.unlock()
+
+        task?.cancel()
+        if shouldTerminate {
+            terminate(process)
+        }
+        finish(.failure(CancellationError()))
+    }
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
+    }
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOut
+    }
+
+    func setTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        timeoutTask = task
+        let alreadyDone = finished
+        lock.unlock()
+        if alreadyDone { task.cancel() }
+    }
+
+    func cancelTimeout() {
+        lock.lock()
+        let task = timeoutTask
+        lock.unlock()
+        task?.cancel()
     }
 }

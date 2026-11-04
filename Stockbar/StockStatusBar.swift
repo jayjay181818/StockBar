@@ -971,7 +971,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             await self.dataModel.cacheCoordinator.clearSuspension(for: symbol)
             self.suspensionNotice = nil
             self.updatePopover(trade: self.realTimeTrade.trade, data: self.currentTradingData())
-            await self.dataModel.refreshSymbolsImmediately([symbol], reason: "manual retry")
+            await self.dataModel.refreshSymbolsImmediately([symbol], reason: "manual retry", force: true)
             self.refreshSuspensionNotice()
         }
     }
