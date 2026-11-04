@@ -67,6 +67,32 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.portfolioComposition.keys.sorted(), ["GOOD"])
     }
 
+    func testGainsUseOnlyValuedPositionsWithAReadableCost() async throws {
+        let date = Date(timeIntervalSince1970: 1_777_777_777)
+        let composition = PortfolioComposition(positions: [
+            PortfolioPosition(symbol: "GOOD", units: 5, avgCost: 40, currency: "USD"),
+            PortfolioPosition(symbol: "NOPRICE", units: 5, avgCost: 1_000, currency: "USD"),
+            PortfolioPosition(symbol: "NOCOST", units: 2, avgCost: .nan, currency: "USD")
+        ])
+        let input = HistoricalPortfolioCalculationInput(
+            startDate: date.addingTimeInterval(-60),
+            endDate: date.addingTimeInterval(60),
+            priceSnapshots: [
+                "GOOD": [PriceSnapshot(timestamp: date, price: 50, previousClose: 45, symbol: "GOOD")],
+                "NOCOST": [PriceSnapshot(timestamp: date, price: 30, previousClose: 30, symbol: "NOCOST")]
+            ],
+            composition: composition,
+            preferredCurrency: "USD"
+        )
+
+        let snapshots = await HistoricalPortfolioCalculationService().calculateSnapshots(input)
+        let snapshot = try XCTUnwrap(snapshots.first)
+
+        XCTAssertEqual(snapshot.totalValue, 310, accuracy: 0.01)
+        XCTAssertEqual(snapshot.totalCost, 200, accuracy: 0.01)
+        XCTAssertEqual(snapshot.totalGains, 50, accuracy: 0.01)
+    }
+
     // MARK: - History retention and merging
 
     func testThinnedPriceHistoryKeepsRecentPointsAndOneCloseFromEachOlderDay() {

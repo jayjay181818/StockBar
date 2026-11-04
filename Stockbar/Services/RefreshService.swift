@@ -242,6 +242,7 @@ class RefreshService {
                 dataModel.historicalDataManager.recordLivePortfolioSample(
                     totalValue: summary.totalValue,
                     totalGains: summary.totalGain,
+                    currency: summary.currency,
                     timestamp: now
                 )
                 Task { dataModel.historicalDataManager.recordSnapshot(from: dataModel) }

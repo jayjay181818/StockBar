@@ -139,7 +139,7 @@ final class RiskMetricsServiceTests: XCTestCase {
 
     func testSharpeRatio_WithNegativeReturns() async throws {
         // Given: Consistently negative returns
-        let returns = Array(repeating: -0.01, count: 252) // -1% daily loss
+        let returns = (0..<252).map { $0 % 2 == 0 ? -0.008 : -0.012 } // ~-1% daily loss with some variance (a constant series has undefined Sharpe)
         let riskFreeRate = 0.04
 
         // When: Calculate Sharpe Ratio
@@ -188,7 +188,7 @@ final class RiskMetricsServiceTests: XCTestCase {
         XCTAssertNotNil(sortino)
         if let sortino = sortino {
             XCTAssertGreaterThan(sortino, -10, "Sortino ratio should be reasonable")
-            XCTAssertLessThan(sortino, 15, "Sortino ratio should be reasonable")
+            XCTAssertLessThan(sortino, 30, "Sortino ratio should be reasonable (full-sample downside deviation)")
         }
     }
 
@@ -400,5 +400,151 @@ final class RiskMetricsServiceTests: XCTestCase {
         let metrics = try XCTUnwrap(result)
 
         XCTAssertEqual(metrics.maxDrawdown, 0, accuracy: 0.0001)
+    }
+
+    // MARK: - Daily resampling, flows and optional ratios
+
+    private func position(_ symbol: String, units: Double, price: Double, currency: String = "USD") -> PositionSnapshot {
+        PositionSnapshot(symbol: symbol, units: units, priceAtDate: price, valueAtDate: units * price, currency: currency)
+    }
+
+    private func snapshot(_ date: Date, positions: [PositionSnapshot], convert: (Double, String) -> Double = { amount, _ in amount }) -> HistoricalPortfolioSnapshot {
+        let total = positions.reduce(0) { $0 + convert($1.valueAtDate, $1.currency) }
+        return HistoricalPortfolioSnapshot(
+            date: date, totalValue: total, totalGains: 0, totalCost: total, currency: "USD",
+            portfolioComposition: Dictionary(positions.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    func testDailyCloses_KeepsLastValueOfEachDay() {
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000) // UTC midnight
+        let dates = [day1 + 100, day1 + 300, day1 + 600, day1 + 86_400 + 300, day1 + 86_400 + 100]
+        let values = [100.0, 101.0, 102.0, 110.0, 105.0]
+
+        let daily = RiskMetricsService.dailyCloses(dates: dates, values: values, calendar: utcCalendar)
+
+        XCTAssertEqual(daily.values, [102.0, 110.0])
+        XCTAssertEqual(daily.dates.count, 2)
+    }
+
+    func testComprehensiveMetrics_IntradaySnapshotsAreResampledToDaily() async throws {
+        // 5-minute data over 3 days: day closes 100, 110, 99 -> only 2 daily returns.
+        let midnight = Date(timeIntervalSince1970: 1_699_920_000)
+        var dates: [Date] = []
+        var values: [Double] = []
+        let closes = [100.0, 110.0, 99.0]
+        for (dayIndex, close) in closes.enumerated() {
+            for step in 0..<50 {
+                dates.append(midnight.addingTimeInterval(Double(dayIndex) * 86_400 + Double(step) * 300))
+                values.append(step == 49 ? close : close + Double(step % 7))
+            }
+        }
+
+        let computed = await service.calculateComprehensiveRiskMetrics(portfolioValues: values, dates: dates)
+        let metrics = try XCTUnwrap(computed)
+
+        // Daily returns are +10% and -10%; sample stddev = 0.1414 -> annualized ~2.245.
+        let stdResult = await service.calculateStandardDeviation([0.1, -0.1])
+        let dailyStd = try XCTUnwrap(stdResult)
+        let expected = dailyStd * sqrt(252.0)
+        XCTAssertEqual(metrics.volatility, expected, accuracy: 0.001)
+        // Peak 110 on day 2, trough 99 on day 3: exactly 1 calendar day, 10% drawdown.
+        XCTAssertEqual(metrics.maxDrawdown, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(metrics.maxDrawdownDuration, 1)
+    }
+
+    func testMaxDrawdown_WithDatesReportsCalendarDays() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let dates = [0, 1, 11, 12].map { start.addingTimeInterval(Double($0) * 86_400) }
+
+        let drawdown = await service.calculateMaxDrawdown(portfolioValues: [100, 120, 90, 100], dates: dates)
+        let result = try XCTUnwrap(drawdown)
+
+        XCTAssertEqual(result.maxDrawdown, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(result.duration, 10)
+    }
+
+    func testFlowAdjustedSeries_SellingHalfIsNotADrawdown() throws {
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000)
+        let snapshots = [
+            snapshot(day1, positions: [position("AAPL", units: 10, price: 100)]),
+            snapshot(day1 + 86_400, positions: [position("AAPL", units: 5, price: 100)]),   // sold half, flat price
+            snapshot(day1 + 2 * 86_400, positions: [position("AAPL", units: 5, price: 110)]) // +10% on remaining units
+        ]
+
+        let series = try XCTUnwrap(RiskMetricsService.flowAdjustedDailySeries(
+            snapshots: snapshots, convert: { amount, _ in amount }, calendar: utcCalendar))
+
+        XCTAssertEqual(series.returns.count, 2)
+        XCTAssertEqual(series.returns[0], 0.0, accuracy: 0.0001)
+        XCTAssertEqual(series.returns[1], 0.10, accuracy: 0.0001)
+        XCTAssertEqual(series.values.min() ?? 0, 1000, accuracy: 0.001, "index must not fall when units are sold")
+        XCTAssertEqual(series.currentValue, 550, accuracy: 0.001)
+    }
+
+    func testFlowAdjustedSeries_BuyingMoreIsNotAGain() throws {
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000)
+        let snapshots = [
+            snapshot(day1, positions: [position("AAPL", units: 10, price: 100)]),
+            snapshot(day1 + 86_400, positions: [position("AAPL", units: 20, price: 100), position("MSFT", units: 5, price: 200)])
+        ]
+
+        let series = try XCTUnwrap(RiskMetricsService.flowAdjustedDailySeries(
+            snapshots: snapshots, convert: { amount, _ in amount }, calendar: utcCalendar))
+
+        XCTAssertEqual(series.returns, [0.0])
+    }
+
+    func testFlowAdjustedSeries_ConvertsMixedCurrenciesIncludingPence() throws {
+        // 1 GBP = 1.25 USD; GBX is pence.
+        let convert: (Double, String) -> Double = { amount, currency in
+            switch currency {
+            case "GBX": return amount / 100 * 1.25
+            case "GBP": return amount * 1.25
+            default: return amount
+            }
+        }
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000)
+        let snapshots = [
+            snapshot(day1, positions: [position("AAPL", units: 10, price: 100), position("VOD.L", units: 1000, price: 100, currency: "GBX")], convert: convert),
+            snapshot(day1 + 86_400, positions: [position("AAPL", units: 10, price: 100), position("VOD.L", units: 1000, price: 110, currency: "GBX")], convert: convert)
+        ]
+
+        let series = try XCTUnwrap(RiskMetricsService.flowAdjustedDailySeries(snapshots: snapshots, convert: convert, calendar: utcCalendar))
+
+        // AAPL = 1000 USD, VOD = 1000 GBX*... 1000 units * 100p = 1000 GBP-pence... = 10 GBP = 12.5 USD? no: 100000p = 1000 GBP = 1250 USD.
+        // Gain on VOD = 10% of 1250 = 125 on a 2250 base.
+        XCTAssertEqual(series.returns[0], 125.0 / 2250.0, accuracy: 0.0001)
+    }
+
+    func testComprehensiveMetrics_UndefinedRatiosAreNilNotZero() async throws {
+        // Constant growth: zero variance (no Sharpe) and no negative period (no Sortino).
+        var values = [100.0]
+        for _ in 0..<10 { values.append(values.last! * 1.01) }
+
+        let computed = await service.calculateComprehensiveRiskMetrics(portfolioValues: values)
+        let metrics = try XCTUnwrap(computed)
+
+        XCTAssertNil(metrics.sharpeRatio)
+        XCTAssertNil(metrics.sortinoRatio)
+        XCTAssertEqual(metrics.downsideDeviation, 0, accuracy: 1e-12)
+    }
+
+    func testDownsideDeviation_IsFullSampleAndAnnualized() async throws {
+        let returns = [0.02, -0.04, 0.01, -0.02]   // squares of shortfalls: 0.0016 + 0.0004 over 4 periods
+
+        let perPeriodResult = await service.calculateDownsideDeviation(returns)
+        let annualResult = await service.calculateDownsideDeviation(returns, periodsPerYear: 252)
+        let perPeriod = try XCTUnwrap(perPeriodResult)
+        let annual = try XCTUnwrap(annualResult)
+
+        XCTAssertEqual(perPeriod, sqrt(0.0020 / 4), accuracy: 1e-9)
+        XCTAssertEqual(annual, perPeriod * sqrt(252.0), accuracy: 1e-9)
     }
 }

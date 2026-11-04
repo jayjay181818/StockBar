@@ -633,9 +633,14 @@ struct PerformanceChartView: View {
             let interval = selectedTimeRange.suggestedInterval
 
             let useFolyncRoute = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts)
-            if !useFolyncRoute {
+            // A custom range has no fixed period to validate the cache against, so it always refetches.
+            if !useFolyncRoute, selectedTimeRange != .custom {
                 // Existing local OHLC remains untouched and is used whenever the Folync route is off.
-                let cachedData = try await ohlcFetchService.getCachedOHLCData(symbol: symbol)
+                let cachedData = try await ohlcFetchService.getCachedOHLCData(
+                    symbol: symbol,
+                    period: period,
+                    interval: interval
+                )
 
                 if !cachedData.isEmpty {
                     await MainActor.run {
@@ -643,7 +648,7 @@ struct PerformanceChartView: View {
                               configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                         ohlcData = cachedData
                         ohlcSourceStatus = .legacy
-                        ohlcCoverageLabel = "\(cachedData.count) points · local cache"
+                        ohlcCoverageLabel = "\(cachedData.count) points · \(interval) · local cache"
                         isLoadingOHLC = false
                     }
                     await Logger.shared.info("Loaded \(cachedData.count) cached OHLC data points for \(symbol)")
@@ -683,10 +688,29 @@ struct PerformanceChartView: View {
 
             await Logger.shared.info("Loaded \(dataPoints.count) OHLC data points for \(symbol)")
         } catch {
+            // Offline or provider failure: older local candles beat an empty chart.
+            let staleData: [OHLCDataPoint]
+            if !FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts),
+               selectedTimeRange != .custom {
+                staleData = (try? await ohlcFetchService.getCachedOHLCData(
+                    symbol: symbol,
+                    period: selectedTimeRange.yfinancePeriod,
+                    interval: selectedTimeRange.suggestedInterval,
+                    allowStale: true
+                )) ?? []
+            } else {
+                staleData = []
+            }
             await MainActor.run {
                 guard requestGeneration == ohlcRequestGeneration,
                       configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                 isLoadingOHLC = false
+                if !staleData.isEmpty {
+                    ohlcData = staleData
+                    ohlcSourceStatus = .legacy
+                    ohlcCoverageLabel = "\(staleData.count) points · \(selectedTimeRange.suggestedInterval) · stale local cache"
+                    return
+                }
                 ohlcData = []
                 if FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts) {
                     ohlcSourceStatus = .unavailable
@@ -1397,7 +1421,7 @@ struct PerformanceChartView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
-                    if let metrics = historicalDataManager.getPerformanceMetrics(for: selectedTimeRange) {
+                    if let metrics = portfolioPerformanceMetrics {
                         Text(metrics.formattedTotalReturn)
                             .font(.title2)
                             .fontWeight(.semibold)
@@ -1831,12 +1855,22 @@ struct PerformanceChartView: View {
         }
     }
 
+    /// Period metrics over the same range the portfolio chart shows.
+    private var portfolioPerformanceMetrics: PerformanceMetrics? {
+        historicalDataManager.getPerformanceMetrics(
+            for: selectedTimeRange,
+            customFrom: selectedTimeRange == .custom ? customStartDate : nil,
+            customTo: selectedTimeRange == .custom ? customEndDate : nil,
+            currency: dataModel?.preferredCurrency
+        )
+    }
+
     private func getRelevantPerformanceMetrics() -> PerformanceMetrics? {
         // Legacy snapshot metrics are not returns on the authoritative Folync series.
         guard !isFolyncPortfolioChart else { return nil }
         switch selectedChartType {
         case .portfolioValue, .portfolioGains:
-            return historicalDataManager.getPerformanceMetrics(for: selectedTimeRange)
+            return portfolioPerformanceMetrics
         case .individualStock(let symbol):
             return historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange)
         }

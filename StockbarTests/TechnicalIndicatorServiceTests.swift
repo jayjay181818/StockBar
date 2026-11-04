@@ -331,6 +331,33 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
     // MARK: - Helper Methods
 
+    func testRSI_IsHundredForSteadyGainsWhateverThePriceScale() {
+        let rising = (0..<30).map { makeBar(day: $0, close: 0.50 + Double($0) * 0.01) }
+        let flat = (0..<30).map { makeBar(day: $0, close: 0.50) }
+
+        XCTAssertEqual(service.calculateRSI(data: rising, period: 14).map(\.1), Array(repeating: 100, count: 16))
+        XCTAssertEqual(service.calculateRSI(data: flat, period: 14).last?.1, 50)
+    }
+
+    func testMACD_PairsFastAndSlowEMAsFromTheSameBar() {
+        let data = createMockOHLCData(count: 60, startPrice: 100, volatility: 0.03)
+        let fast = service.calculateEMA(data: data, period: 12)
+        let slow = service.calculateEMA(data: data, period: 26)
+
+        let macd = service.calculateMACD(data: data)
+
+        let last = try? XCTUnwrap(macd.last)
+        XCTAssertEqual(last?.timestamp, data.last?.timestamp)
+        XCTAssertEqual(last?.macdLine ?? .nan, fast[fast.count - 1].1 - slow[slow.count - 1].1, accuracy: 1e-9)
+    }
+
+    private func makeBar(day: Int, close: Double) -> OHLCDataPoint {
+        OHLCDataPoint(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000 + Double(day) * 86_400),
+            open: close, high: close, low: close, close: close, volume: 1000
+        )
+    }
+
     private func createMockOHLCData(count: Int, startPrice: Double, volatility: Double = 0.02) -> [OHLCDataPoint] {
         var data: [OHLCDataPoint] = []
         var price = startPrice

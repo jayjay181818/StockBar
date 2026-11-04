@@ -552,7 +552,7 @@ struct PortfolioMenuPopoverView: View {
             GridRow {
                 let change = displayedChange
                 MenuPopoverStatBox(
-                    label: "\(selectedRangeLabel) P&L",
+                    label: changeLabel,
                     value: MenuPopoverFormatter.currencyExact(change?.value, currency: summary.currency, includeSign: true),
                     subValue: MenuPopoverFormatter.percent(change?.percent),
                     valueColor: StockbarPalette.signed(change?.value, neutral: .primary)
@@ -569,8 +569,10 @@ struct PortfolioMenuPopoverView: View {
         summary.ownedPositionCount == 1 ? "1 position" : "\(summary.ownedPositionCount) positions"
     }
 
-    private var selectedRangeLabel: String {
-        viewModel.selectedTimeRange == .day ? "Today's" : viewModel.selectedTimeRange.description
+    /// Longer ranges show the change in market value, which includes money
+    /// added or taken out, so they are not labelled as profit.
+    private var changeLabel: String {
+        viewModel.selectedTimeRange == .day ? "Today's P&L" : "\(viewModel.selectedTimeRange.description) Value Change"
     }
 }
 

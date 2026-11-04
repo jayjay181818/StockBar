@@ -1644,6 +1644,67 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertTrue(decoded[0].showInMenuBar)
     }
 
+    func testLivePortfolioSamplesOnlyJoinASeriesInTheirCurrency() {
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        manager.recordLivePortfolioSample(totalValue: 4_321.5, totalGains: 21.5, currency: "GBP", timestamp: now.addingTimeInterval(-60))
+
+        let gbpValues = manager.getStoredPortfolioValues(for: .day, currency: "GBP").map(\.value)
+        let usdValues = manager.getStoredPortfolioValues(for: .day, currency: "USD").map(\.value)
+
+        XCTAssertTrue(gbpValues.contains { abs($0 - 4_321.5) < 0.0001 })
+        XCTAssertFalse(usdValues.contains { abs($0 - 4_321.5) < 0.0001 })
+    }
+
+    func testPerformanceMetricsUseDailyClosesAndOnlyAnnualiseLongSpans() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!
+        func point(_ hours: Double, _ value: Double) -> ChartDataPoint {
+            ChartDataPoint(date: start.addingTimeInterval(hours * 3_600), value: value)
+        }
+        // Three intraday samples on day one, then one close each on days two and three.
+        let shortSeries = [point(0, 100), point(1, 90), point(2, 100), point(24, 110), point(48, 99)]
+
+        let short = try XCTUnwrap(HistoricalDataManager.performanceMetrics(
+            points: shortSeries, previousPoint: nil, currency: "GBP", calendar: calendar
+        ))
+        XCTAssertEqual(short.totalReturn, -1, accuracy: 0.0001)
+        XCTAssertEqual(short.winRate ?? -1, 50, accuracy: 0.0001, "Two daily returns: +10%, then -10%")
+        XCTAssertNil(short.annualizedReturn, "Two days must not be annualised")
+        XCTAssertEqual(short.currency, "GBP")
+
+        let longSeries = [point(0, 100), point(24 * 365.25, 110)]
+        let long = try XCTUnwrap(HistoricalDataManager.performanceMetrics(
+            points: longSeries, previousPoint: nil, currency: "GBP", calendar: calendar
+        ))
+        XCTAssertEqual(long.annualizedReturn ?? .nan, 10, accuracy: 0.01)
+    }
+
+    func testCustomPortfolioRangeUsesTheChosenDates() {
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let from = now.addingTimeInterval(-200 * 86_400)
+        let to = now.addingTimeInterval(-150 * 86_400)
+
+        let bounds = manager.portfolioRangeBounds(for: .custom, customFrom: from, customTo: to, now: now)
+        XCTAssertEqual(bounds.start, from)
+        XCTAssertEqual(bounds.end, to)
+        XCTAssertEqual(manager.portfolioRangeBounds(for: .month, customFrom: from, customTo: to, now: now).end, now)
+    }
+
+    func testPriceHistoryCoverageNeedsPointsNearTheRangeStart() {
+        let end = Date()
+        let start = end.addingTimeInterval(-30 * 86_400)
+        let recent = (0..<20).map {
+            PriceSnapshot(timestamp: end.addingTimeInterval(-Double($0) * 3_600), price: 10, previousClose: 10, symbol: "X")
+        }.reversed()
+        let early = [PriceSnapshot(timestamp: start.addingTimeInterval(86_400), price: 10, previousClose: 10, symbol: "X")]
+
+        XCTAssertFalse(HistoricalDataManager.snapshotsReachRangeStart(Array(recent), from: start, to: end))
+        XCTAssertTrue(HistoricalDataManager.snapshotsReachRangeStart(early + recent, from: start, to: end))
+    }
+
     private func makeRealTimeTrade(
         symbol: String,
         units: String,
