@@ -2198,3 +2198,43 @@ final class PortfolioBackupFormatTests: XCTestCase {
         XCTAssertEqual(trade.position.positionAvgCost, 150.5)
     }
 }
+
+final class PriceAlertConditionTests: XCTestCase {
+    func testPercentChangeIsMeasuredFromPreviousCloseAndFiresOnce() {
+        let alert = PriceAlert(symbol: "AV.L", condition: .percentChange, threshold: 5)
+        // A slow 1%-per-refresh climb from a 100 close.
+        let prices: [Double] = [101, 102, 103, 104, 105.2, 106, 107]
+        var last = 100.0
+        var fired: [Double] = []
+        for price in prices {
+            if alert.conditionMet(currentPrice: price, previousPrice: last, previousClose: 100) { fired.append(price) }
+            last = price
+        }
+        XCTAssertEqual(fired, [105.2], "Fires when the day's move first reaches 5%, then not again")
+        XCTAssertTrue(alert.conditionMet(currentPrice: 94, previousPrice: 99, previousClose: 100), "Falls count too")
+        XCTAssertFalse(alert.conditionMet(currentPrice: 110, previousPrice: 104, previousClose: .nan), "No close, no % alert")
+    }
+
+    func testAboveAndBelowStillFireOnCrossing() {
+        let above = PriceAlert(symbol: "AAPL", condition: .above, threshold: 150)
+        XCTAssertTrue(above.conditionMet(currentPrice: 151, previousPrice: 149))
+        XCTAssertFalse(above.conditionMet(currentPrice: 152, previousPrice: 151))
+        let below = PriceAlert(symbol: "AAPL", condition: .below, threshold: 150)
+        XCTAssertTrue(below.conditionMet(currentPrice: 149, previousPrice: 150))
+    }
+
+    func testStoredIdentityAndCooldownSurviveRebuilding() {
+        let id = UUID()
+        let created = Date(timeIntervalSince1970: 1_000)
+        let triggered = Date(timeIntervalSince1970: 2_000)
+        var alert = PriceAlert(
+            id: id, symbol: "AAPL", condition: .above, threshold: 150,
+            isEnabled: true, createdAt: created, lastTriggered: triggered
+        )
+        alert.isEnabled = false
+        XCTAssertEqual(alert.id, id)
+        XCTAssertEqual(alert.createdAt, created)
+        XCTAssertEqual(alert.lastTriggered, triggered)
+        XCTAssertFalse(alert.conditionMet(currentPrice: 151, previousPrice: 149), "Paused alerts never fire")
+    }
+}

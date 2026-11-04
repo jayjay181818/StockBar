@@ -100,7 +100,7 @@ History accumulates as Stockbar runs (Settings → Refresh → Chart Data Collec
 
 ## Alerts
 
-Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves by a percentage; the sheet shows the symbol's current price for reference. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted from their row or its right-click menu.
+Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves from the previous close by a percentage; the sheet shows the symbol's current price for reference. Above and below alerts fire when the price crosses the level, so the sheet warns if the price is already past it. Alerts work for every holding, including ones priced by Folync or Trading 212. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted from their row or its right-click menu.
 
 ## Currencies and UK stocks
 
