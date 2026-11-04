@@ -240,7 +240,6 @@ class HistoricalDataManager: ObservableObject {
     
     // Full history stays in Core Data; only the active working set is retained.
     private let maxDataPoints = 1_800
-    private let maxPortfolioSnapshots = 1_800
     
     private var snapshotInterval: TimeInterval = 300 // 5 minutes (restored from 30 seconds)
     private var lastSnapshotTime: Date = Date.distantPast
@@ -1651,11 +1650,14 @@ class HistoricalDataManager: ObservableObject {
             portfolioSnapshots = Array(portfolioSnapshots.suffix(targetLimit))
         }
         
-        // Clean up individual stock data
+        // Bound stock history by resolution, not count, so long backfills survive.
         for symbol in priceSnapshots.keys {
-            if let snapshots = priceSnapshots[symbol], snapshots.count > targetLimit {
-                priceSnapshots[symbol] = Array(snapshots.suffix(targetLimit))
-                Task { await logger.debug("📊 Trimmed \(symbol) from \(snapshots.count) to \(targetLimit) snapshots") }
+            if let snapshots = priceSnapshots[symbol] {
+                let thinned = Self.thinnedPriceHistory(snapshots)
+                if thinned.count != snapshots.count {
+                    priceSnapshots[symbol] = thinned
+                    Task { await logger.debug("📊 Thinned \(symbol) from \(snapshots.count) to \(thinned.count) snapshots") }
+                }
             }
         }
         
@@ -1702,9 +1704,8 @@ class HistoricalDataManager: ObservableObject {
             Task {
                 await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).")
 
-                // Clear in-memory price snapshots - will load from Core Data on demand
-                await MainActor.run { self.priceSnapshots = [:] }
-                await logger.info("HistoricalDataManager: In-memory priceSnapshots map cleared; will load from Core Data on demand.")
+                // Core Data is the store of record; load each symbol's history.
+                await self.reloadStoredPriceHistory()
 
                 // Load portfolio snapshots from Core Data
                 let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
@@ -1860,8 +1861,8 @@ class HistoricalDataManager: ObservableObject {
             // Force more aggressive cleanup during maintenance
             // Temporarily reduce limits for maintenance cleanup
             for symbol in priceSnapshots.keys {
-                if let snapshots = priceSnapshots[symbol], snapshots.count > 1800 {
-                    priceSnapshots[symbol] = Array(snapshots.suffix(1800))
+                if let snapshots = priceSnapshots[symbol] {
+                    priceSnapshots[symbol] = Self.thinnedPriceHistory(snapshots)
                 }
             }
             
@@ -2043,13 +2044,14 @@ class HistoricalDataManager: ObservableObject {
             // Sort by timestamp to maintain chronological order
             priceSnapshots[symbol]?.sort { $0.timestamp < $1.timestamp }
             
-            // Clean up old data if we exceed the limit
-            if let count = priceSnapshots[symbol]?.count, count > maxDataPoints {
-                priceSnapshots[symbol] = Array(priceSnapshots[symbol]?.suffix(maxDataPoints) ?? [])
-                Task { await logger.debug("Trimmed \(symbol) snapshots to \(maxDataPoints) most recent") }
+            if let current = priceSnapshots[symbol] {
+                priceSnapshots[symbol] = Self.thinnedPriceHistory(current)
             }
-            
-            // Save the updated data
+
+            // Persist the imported history; saveHistoricalData stores metadata only.
+            // The Core Data save skips timestamps it already has.
+            let toPersist = newSnapshots
+            Task { await self.savePriceSnapshotsToCoreData(toPersist) }
             saveHistoricalData()
             notePriceDataChanged(for: symbol)
             
@@ -2730,12 +2732,6 @@ class HistoricalDataManager: ObservableObject {
         
         let calculationManager = BackgroundCalculationManager.shared
         
-        // Clear existing portfolio snapshots
-        calculationManager.updateProgress(completed: 40, status: "Clearing existing data")
-        await MainActor.run {
-            self.historicalPortfolioSnapshots.removeAll()
-        }
-        
         // Find the earliest available historical data
         calculationManager.updateProgress(completed: 45, status: "Finding earliest data")
         let earliestDate = findEarliestHistoricalData()
@@ -2754,12 +2750,86 @@ class HistoricalDataManager: ObservableObject {
         
         calculationManager.updateProgress(completed: 85, status: "Storing portfolio snapshots")
         await MainActor.run {
-            self.historicalPortfolioSnapshots = snapshots.sorted { $0.date < $1.date }
+            self.historicalPortfolioSnapshots = Self.mergePortfolioHistory(
+                existing: self.historicalPortfolioSnapshots,
+                recalculated: snapshots
+            )
         }
         
-        await logger.info("🔄 FULL RECALC: Generated \(snapshots.count) portfolio snapshots") 
+        await logger.info("🔄 FULL RECALC: Generated \(snapshots.count) portfolio snapshots; history now holds \(historicalPortfolioSnapshots.count) (recorded days kept, gaps filled)")
     }
     
+    /// Bounds in-memory price history by resolution instead of count: every
+    /// point from the last `intradayDays` (enough for the 1M charts), then the last point of each earlier
+    /// day. A newest-N cap let dense intraday samples push a multi-year daily
+    /// backfill out of memory.
+    nonisolated static func thinnedPriceHistory(
+        _ snapshots: [PriceSnapshot],
+        now: Date = Date(),
+        intradayDays: Int = 31,
+        calendar: Calendar = .current
+    ) -> [PriceSnapshot] {
+        let cutoff = now.addingTimeInterval(-Double(intradayDays) * 86_400)
+        var result: [PriceSnapshot] = []
+        var lastDay: Date?
+        for snapshot in snapshots.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard snapshot.timestamp < cutoff else {
+                result.append(snapshot)
+                continue
+            }
+            let day = calendar.startOfDay(for: snapshot.timestamp)
+            if day == lastDay {
+                result[result.count - 1] = snapshot
+            } else {
+                result.append(snapshot)
+                lastDay = day
+            }
+        }
+        return result
+    }
+
+    /// Loads stored price history from Core Data for the given symbols (all
+    /// stored symbols when nil), merging with anything recorded in memory since.
+    func reloadStoredPriceHistory(for symbols: Set<String>? = nil) async {
+        let targets: [String]
+        if let symbols {
+            targets = Array(symbols)
+        } else {
+            do {
+                targets = try await coreDataService.fetchStoredPriceSymbols()
+            } catch {
+                await logger.error("❌ Could not list stored price history: \(error)")
+                return
+            }
+        }
+        var loadedCount = 0
+        for symbol in targets {
+            guard let stored = try? await coreDataService.fetchAllPriceSnapshots(for: symbol), !stored.isEmpty else { continue }
+            let inMemory = priceSnapshots[symbol] ?? []
+            let storedKeys = Set(stored.map { snapshotTimestampKey($0.timestamp) })
+            let merged = stored + inMemory.filter { !storedKeys.contains(snapshotTimestampKey($0.timestamp)) }
+            priceSnapshots[symbol] = Self.thinnedPriceHistory(merged)
+            loadedCount += priceSnapshots[symbol]?.count ?? 0
+            notePriceDataChanged(for: symbol)
+        }
+        await logger.info("HistoricalDataManager: Loaded stored price history for \(targets.count) symbols (\(loadedCount) points in memory)")
+    }
+
+    /// Recorded snapshots are the record of what the portfolio was actually
+    /// worth, so a recalculation only fills calendar days that have none. It
+    /// must never replace them: it is limited by the price history available
+    /// and works from today's holdings, and replacing recorded days with it
+    /// threw away intraday history and real past values.
+    nonisolated static func mergePortfolioHistory(
+        existing: [HistoricalPortfolioSnapshot],
+        recalculated: [HistoricalPortfolioSnapshot],
+        calendar: Calendar = .current
+    ) -> [HistoricalPortfolioSnapshot] {
+        let recordedDays = Set(existing.map { calendar.startOfDay(for: $0.date) })
+        let fills = recalculated.filter { !recordedDays.contains(calendar.startOfDay(for: $0.date)) }
+        return (existing + fills).sorted { $0.date < $1.date }
+    }
+
     /// Performs incremental portfolio update for new dates only
     private func performIncrementalPortfolioUpdate(using dataModel: DataModel) async {
         let calculationManager = BackgroundCalculationManager.shared
@@ -2795,11 +2865,8 @@ class HistoricalDataManager: ObservableObject {
         await MainActor.run {
             self.historicalPortfolioSnapshots.append(contentsOf: newSnapshots)
             self.historicalPortfolioSnapshots.sort { $0.date < $1.date }
-            
-            // Clean up if we exceed the limit
-            if self.historicalPortfolioSnapshots.count > maxPortfolioSnapshots {
-                self.historicalPortfolioSnapshots = Array(self.historicalPortfolioSnapshots.suffix(maxPortfolioSnapshots))
-            }
+            // No count cap here: trimming to the newest points threw away the
+            // long-range history the 1M/1Y/All charts and risk metrics read.
         }
         
         await logger.info("🔄 INCREMENTAL: Added \(newSnapshots.count) new portfolio snapshots") 

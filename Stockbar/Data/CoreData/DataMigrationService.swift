@@ -58,6 +58,9 @@ final class DataMigrationService: @unchecked Sendable {
         static let tradingInfoMigrated = "tradingInfoMigratedToCoreData"
         static let migrationVersion = "coreDataMigrationVersion"
         static let needsRetroactiveCalculationAfterMigration = "needsRetroactiveCalculationAfterMigration" // New flag
+        /// Set once the pre-v3 PortfolioSnapshotEntity rows are deleted, so a
+        /// migration that fails later does not delete history again next launch.
+        static let preV3PortfolioSnapshotsDeleted = "preV3PortfolioSnapshotsDeleted"
     }
     
     // Increment this version due to PortfolioSnapshotEntity schema change
@@ -136,10 +139,14 @@ final class DataMigrationService: @unchecked Sendable {
             if migrationVersionStored < 3 {
                 Task { await Logger.shared.info("DataMigrationService: Migrating schema aspects related to pre-version 3 for PortfolioSnapshotEntity. Stored version: \(migrationVersionStored).") }
 
-                // Delete old entities regardless, as the schema might be incompatible even if empty.
-                // This is harmless on a fresh install (migrationVersionStored == 0) as it will delete nothing.
-                try await deleteOldPortfolioSnapshotEntities()
-                Task { await Logger.shared.info("DataMigrationService: Attempted deletion of old PortfolioSnapshotEntity instances (if any existed).") }
+                // Delete the old-schema entities exactly once. Without its own marker this
+                // ran on every launch until verification passed, deleting newly
+                // computed snapshots each time.
+                if !userDefaults.bool(forKey: MigrationKeys.preV3PortfolioSnapshotsDeleted) {
+                    try await deleteOldPortfolioSnapshotEntities()
+                    userDefaults.set(true, forKey: MigrationKeys.preV3PortfolioSnapshotsDeleted)
+                    Task { await Logger.shared.info("DataMigrationService: Deleted old PortfolioSnapshotEntity instances (if any existed).") }
+                }
 
                 // Only set the retroactive calculation flag if we are upgrading from an actual previous version (1 or 2)
                 // that would have had data in the old format.
@@ -362,8 +369,12 @@ final class DataMigrationService: @unchecked Sendable {
                 Task { await Logger.shared.error("Failed to decode legacy portfolio snapshots: \(error)") }
             }
         }
-        
-        return allSnapshots
+
+        // Both keys can hold the same dates. Keep the first (enhanced) snapshot per
+        // date so the copy and the verification count compare like with like;
+        // duplicates made verification fail on every launch.
+        var seenDates: Set<Date> = []
+        return allSnapshots.filter { seenDates.insert($0.date).inserted }
     }
     
     private func convertLegacyPortfolioSnapshot(_ legacy: PortfolioSnapshot) -> HistoricalPortfolioSnapshot {

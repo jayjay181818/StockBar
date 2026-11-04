@@ -1455,7 +1455,8 @@ class PortfolioCalculationTests: XCTestCase {
         // Given
         let manager = HistoricalDataManager.shared
         let symbol = "TESTBACKFILL-\(UUID().uuidString)"
-        let dayStart = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        // Within the full-detail retention window, so intraday points are kept.
+        let dayStart = Calendar.current.startOfDay(for: Date().addingTimeInterval(-2 * 86_400))
         let afternoonStart = dayStart.addingTimeInterval(14 * 60 * 60)
         let existingSnapshots = (0..<10).map { index in
             PriceSnapshot(
