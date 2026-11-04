@@ -161,8 +161,8 @@ fileprivate func helperMethod() { }  // ✅ When needed
 
 **Actor Isolation:**
 ```swift
-actor RefreshCoordinator {
-    func scheduleRefresh() async { }
+actor CacheCoordinator {
+    func setSuccessfulFetch(for symbol: String, at time: Date) { }
 }
 ```
 

@@ -15,7 +15,6 @@ class RefreshService {
     // MARK: - Dependencies
     private let networkService: NetworkService
     private let cacheCoordinator: CacheCoordinator
-    private let refreshCoordinator: RefreshCoordinator
     private weak var dataModel: DataModel?
 
     // MARK: - State
@@ -49,11 +48,9 @@ class RefreshService {
     // MARK: - Initialization
     init(networkService: NetworkService,
          cacheCoordinator: CacheCoordinator,
-         refreshCoordinator: RefreshCoordinator,
          refreshInterval: TimeInterval = 300) {
         self.networkService = networkService
         self.cacheCoordinator = cacheCoordinator
-        self.refreshCoordinator = refreshCoordinator
         self.refreshInterval = refreshInterval
         self.scheduler = RefreshPassScheduler { [weak self] request in
             await self?.runRefreshPass(request)
