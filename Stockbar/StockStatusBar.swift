@@ -57,6 +57,27 @@ struct TradingData {
     }
 }
 
+enum StatusItemAccessibility {
+    /// Spoken direction for a change, so colour and arrows are never the only signal.
+    static func direction(of change: Double) -> String {
+        guard change.isFinite else { return "change unavailable" }
+        if change > 0 { return "up" }
+        if change < 0 { return "down" }
+        return "unchanged"
+    }
+}
+
+/// Decides whether a mouse-down belongs to a status item's own button.
+enum StatusButtonClickPolicy {
+    /// True when the event was delivered to the button's window, or (for global events,
+    /// which carry no window) the pointer is inside it.
+    static func isStatusButtonEvent(eventWindow: NSWindow?, buttonWindow: NSWindow?, mouseLocation: NSPoint) -> Bool {
+        guard let buttonWindow else { return false }
+        if let eventWindow { return eventWindow === buttonWindow }
+        return buttonWindow.frame.contains(mouseLocation)
+    }
+}
+
 enum MenuBarSymbolPresentation {
     static func title(for tradeName: String) -> String {
         tradeName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,7 +151,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         super.init()
         
         mainStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        mainStatusItem?.autosaveName = "com.stockbar.portfolio"
+        mainStatusItem?.autosaveName = StockbarAutosavePolicy.statusItemName("com.stockbar.portfolio")
 
         // CRITICAL: Ensure the status item is visible
         mainStatusItem?.isVisible = true
@@ -336,7 +357,8 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
 
         let attributed = NSAttributedString(string: combined, attributes: attributes)
         button.toolTip = "Portfolio value and today's change (\(summary.currency)). Click for details."
-        button.setAccessibilityLabel("Portfolio \(combined), today")
+        // Colour must not be the only signal for direction.
+        button.setAccessibilityLabel("Portfolio \(combined), today \(StatusItemAccessibility.direction(of: dayGain))")
         button.attributedTitle = attributed
         button.attributedAlternateTitle = attributed
     }
@@ -403,8 +425,11 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private func startMainPopoverEventMonitors() {
         stopMainPopoverEventMonitors()
         
-        popoverGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            guard let self, self.mainPopover?.isShown == true else { return }
+        // A click on the status button is handled by the button's own action, which
+        // toggles the popover. Closing it here as well would make the toggle reopen it.
+        popoverGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.mainPopover?.isShown == true,
+                  !self.isMainStatusButtonEvent(event) else { return }
             self.mainPopover?.performClose(nil)
             self.stopMainPopoverEventMonitors()
         }
@@ -414,12 +439,20 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
                   let popoverWindow = self.mainPopover?.contentViewController?.view.window else {
                 return event
             }
-            if event.window != popoverWindow {
+            if event.window != popoverWindow, !self.isMainStatusButtonEvent(event) {
                 self.mainPopover?.performClose(nil)
                 self.stopMainPopoverEventMonitors()
             }
             return event
         }
+    }
+
+    private func isMainStatusButtonEvent(_ event: NSEvent) -> Bool {
+        StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: event.window,
+            buttonWindow: mainStatusItem?.button?.window,
+            mouseLocation: NSEvent.mouseLocation
+        )
     }
     
     private func stopMainPopoverEventMonitors() {
@@ -543,7 +576,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
-        return "com.stockbar.ticker.\(stableSymbol)"
+        return StockbarAutosavePolicy.statusItemName("com.stockbar.ticker.\(stableSymbol)")
     }
 
     func update(realTimeTrade: RealTimeTrade) {
@@ -681,7 +714,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     private func updateTitle(trade: Trade, displaySymbol: String, data: TradingData) {
         let displayCandidate = data.displayPrice.isFinite && data.displayPrice > 0 ? data.displayPrice : nil
         let currentCandidate = data.currentPrice.isFinite && data.currentPrice > 0 ? data.currentPrice : nil
-        let safeDisplay = displayCandidate ?? currentCandidate ?? 0
+        // Unknown stays NaN so the title shows "—" rather than a price of 0.00.
+        let safeDisplay = displayCandidate ?? currentCandidate ?? Double.nan
         let changeSummary = rollingDayChangeSummary(trade: trade, data: data)
 
         // Use formatting service for title generation
@@ -725,7 +759,9 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             item.button?.alternateTitle = displaySymbol
             let kind = trade.isWatchlistOnly ? "Watchlist" : "Holding"
             item.button?.toolTip = "\(displaySymbol) — \(kind). Click for details."
-            item.button?.setAccessibilityLabel("\(displaySymbol), \(kind.lowercased()): \(formatted.string)")
+            item.button?.setAccessibilityLabel(
+                "\(displaySymbol), \(kind.lowercased()): \(formatted.string), \(StatusItemAccessibility.direction(of: changeSummary.change))"
+            )
         }
     }
     
@@ -895,8 +931,9 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     private func startPopoverEventMonitors() {
         stopPopoverEventMonitors()
 
-        popoverGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            guard let self else { return }
+        // Clicks on this item's own status button are handled by its toggle action.
+        popoverGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, !self.isStatusButtonEvent(event) else { return }
             guard let popoverWindow = self.detailPopover?.contentViewController?.view.window else {
                 if self.detailPopover?.isShown == true {
                     self.detailPopover?.performClose(nil)
@@ -922,6 +959,9 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
                event.window == popoverWindow {
                 return event
             }
+            if self.isStatusButtonEvent(event) {
+                return event
+            }
 
             if self.detailPopover?.isShown == true {
                 self.detailPopover?.performClose(nil)
@@ -929,6 +969,14 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             }
             return event
         }
+    }
+
+    private func isStatusButtonEvent(_ event: NSEvent) -> Bool {
+        StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: event.window,
+            buttonWindow: item.button?.window,
+            mouseLocation: NSEvent.mouseLocation
+        )
     }
 
     private func stopPopoverEventMonitors() {

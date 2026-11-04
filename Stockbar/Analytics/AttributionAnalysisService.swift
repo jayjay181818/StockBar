@@ -43,8 +43,9 @@ actor AttributionAnalysisService {
 
         guard let startSnapshot = filteredData.first,
               let endSnapshot = filteredData.last,
-              startSnapshot.totalValue > 0 else {
-            await Logger.shared.error("📊 Unable to determine start/end snapshots or start value is zero")
+              startSnapshot.totalValue.isFinite, startSnapshot.totalValue > 0,
+              endSnapshot.totalValue.isFinite else {
+            await Logger.shared.error("📊 Unable to determine start/end snapshots or start/end value is zero or not finite")
             return nil
         }
 
@@ -65,7 +66,9 @@ actor AttributionAnalysisService {
             guard let startPosition = startSnapshot.portfolioComposition[symbol],
                   let endPosition = endSnapshot.portfolioComposition[symbol],
                   startPosition.priceAtDate.isFinite, startPosition.priceAtDate > 0,
-                  endPosition.priceAtDate.isFinite else {
+                  endPosition.priceAtDate.isFinite,
+                  startPosition.units.isFinite, startPosition.valueAtDate.isFinite,
+                  endPosition.valueAtDate.isFinite else {
                 continue
             }
 
@@ -82,6 +85,12 @@ actor AttributionAnalysisService {
             let nativeGain = startPosition.units * (endPosition.priceAtDate - startPosition.priceAtDate)
             let dollarContribution = convert(nativeGain, startPosition.currency, baseCurrency)
             let contribution = (dollarContribution / startValue) * 100
+
+            // A missing FX rate or bad data point must not poison totals and percentages.
+            guard stockReturn.isFinite, startPositionValue.isFinite, endPositionValue.isFinite,
+                  avgWeight.isFinite, dollarContribution.isFinite, contribution.isFinite else {
+                continue
+            }
 
             stockContributions.append(StockContribution(
                 symbol: symbol,
@@ -477,24 +486,7 @@ actor AttributionAnalysisService {
     // MARK: - Helper Methods
 
     private func getSectorForSymbol(_ symbol: String) -> String {
-        // Basic sector mapping - should be expanded
-        let sectorMap: [String: String] = [
-            "AAPL": "Technology",
-            "MSFT": "Technology",
-            "GOOGL": "Technology",
-            "GOOG": "Technology",
-            "AMZN": "Consumer Cyclical",
-            "TSLA": "Consumer Cyclical",
-            "META": "Technology",
-            "NVDA": "Technology",
-            "JPM": "Financials",
-            "V": "Financials",
-            "JNJ": "Healthcare",
-            "PFE": "Healthcare",
-            "XOM": "Energy",
-            "CVX": "Energy"
-        ]
-
-        return sectorMap[symbol] ?? "Unknown"
+        // One sector table for the whole app (see SectorAnalysisService.Sector).
+        SectorAnalysisService.Sector.forSymbol(symbol).rawValue
     }
 }

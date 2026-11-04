@@ -276,6 +276,20 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
         folyncOverlayBaseline = nil
     }
 
+    /// Ends a legacy refresh attempt that produced no rates. The attempt is recorded as
+    /// completed even though it failed, so a fresh install that has never been online
+    /// (`lastRefreshTime` still `.distantPast`) can warn that values use hard-coded rates.
+    @MainActor
+    func finishFailedLegacyRefresh() {
+        _ = activateLatestHistoricalRatesIfAvailable()
+        lastRefreshSuccess = false
+        sourceStatus = .legacy
+        setRateRefreshInFlight(false)
+        if exchangeRates.isEmpty {
+            noteFallbackUsage("initial exchange-rate refresh failed")
+        }
+    }
+
     private func refreshLegacyRates() {
         do {
             try providerPolicy.authorize(.directFX)
@@ -300,10 +314,7 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
                   let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
                 Task { @MainActor [weak self] in
-                    _ = self?.activateLatestHistoricalRatesIfAvailable()
-                    self?.lastRefreshSuccess = false
-                    self?.sourceStatus = .legacy
-                    self?.setRateRefreshInFlight(false)
+                    self?.finishFailedLegacyRefresh()
                 }
                 return
             }
@@ -594,10 +605,14 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     private let fallbackNoticeLock = NSLock()
     private var hasNotedFallback = false
     private var rateRefreshInFlight = false
+    /// True once any refresh attempt has finished, whether or not it obtained rates.
+    /// Distinct from `lastRefreshTime`, which only moves on success.
+    private var firstRefreshAttemptCompleted = false
 
     private func setRateRefreshInFlight(_ inFlight: Bool) {
         fallbackNoticeLock.lock()
         rateRefreshInFlight = inFlight
+        if !inFlight { firstRefreshAttemptCompleted = true }
         fallbackNoticeLock.unlock()
     }
 
@@ -609,9 +624,16 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
         // finished. That is an unfinished state, not a degraded one, so don't
         // flash the "rates unavailable" banner while a refresh is still in
         // flight or has not been attempted at all.
-        guard lastRefreshTime != Date.distantPast else { return }
-
+        //
+        // A failed first attempt leaves `lastRefreshTime` at `.distantPast`, so
+        // "no success yet" alone must not suppress the warning once an attempt
+        // has finished.
         fallbackNoticeLock.lock()
+        let attempted = firstRefreshAttemptCompleted
+        guard lastRefreshTime != Date.distantPast || attempted else {
+            fallbackNoticeLock.unlock()
+            return
+        }
         let inFlight = rateRefreshInFlight
         let alreadyNoted = hasNotedFallback
         if !inFlight { hasNotedFallback = true }

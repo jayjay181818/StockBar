@@ -25,6 +25,10 @@ struct PortfolioAnalyticsView: View {
     @State private var analyticsCoverage = 0
     @State private var completeDayCoverage = false
     @State private var analyticsRevision = 0
+    /// Bumped by portfolio updates; the debounced `.task(id:)` below reacts to it.
+    @State private var portfolioUpdateTick = 0
+    /// True once a calculation has produced results, so later recalculations keep them visible.
+    @State private var hasLoadedOnce = false
 
     private let correlationService = CorrelationMatrixService()
     private let sectorService = SectorAnalysisService()
@@ -45,6 +49,24 @@ struct PortfolioAnalyticsView: View {
             case .all: return Int.max
             }
         }
+
+        /// Calendar days of price history used for correlation. Never shorter than the
+        /// minimum needed for `minimumCorrelationDays` trading days; "All" is bounded.
+        var correlationLookbackDays: Int {
+            switch self {
+            case .all: return 5 * 365
+            default: return max(days, PortfolioAnalyticsView.minimumLookbackCalendarDays)
+            }
+        }
+    }
+
+    /// 20 trading days need about a month of calendar history.
+    static let minimumLookbackCalendarDays = 30
+
+    private struct AnalyticsTrigger: Hashable {
+        let range: TimeRange
+        let currency: String
+        let tick: Int
     }
 
     var body: some View {
@@ -53,7 +75,7 @@ struct PortfolioAnalyticsView: View {
                 // Header
                 headerSection
 
-                if isLoading {
+                if isLoading && !hasLoadedOnce {
                     ProgressView("Calculating portfolio analytics...")
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 40)
@@ -89,19 +111,21 @@ struct PortfolioAnalyticsView: View {
         .sheet(isPresented: $showAttributionSheet) {
             AttributionAnalysisView(dataModel: dataModel)
         }
-        .onAppear {
-            Task {
-                await calculateAnalytics()
+        // One task for every trigger. SwiftUI cancels the previous run when the id changes, and the
+        // sleep debounces bursts of price updates. The first calculation runs immediately, and
+        // earlier results stay on screen while a recalculation is in flight.
+        .task(id: AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency, tick: portfolioUpdateTick)) {
+            if hasLoadedOnce {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
             }
+            await calculateAnalytics()
         }
-        .onChange(of: dataModel.preferredCurrency) { _, _ in
-            Task { await calculateAnalytics() }
+        .onReceive(dataModel.$realTimeTrades.dropFirst()) { _ in
+            portfolioUpdateTick += 1
         }
-        .onReceive(dataModel.$realTimeTrades) { _ in
-            Task { await calculateAnalytics() }
-        }
-        .onReceive(dataModel.$folyncPortfolioSnapshot) { _ in
-            Task { await calculateAnalytics() }
+        .onReceive(dataModel.$folyncPortfolioSnapshot.dropFirst()) { _ in
+            portfolioUpdateTick += 1
         }
     }
 
@@ -119,11 +143,7 @@ struct PortfolioAnalyticsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 250)
-                .onChange(of: selectedTimeRange) {
-                    Task {
-                        await calculateAnalytics()
-                    }
-                }
+                .help("Price history window used for the correlation analysis")
             }
         }
     }
@@ -147,10 +167,14 @@ struct PortfolioAnalyticsView: View {
                         innerRadius: .ratio(0.5),
                         angularInset: 1.5
                     )
-                    .foregroundStyle(by: .value("Sector", allocation.sector.displayName))
+                    .foregroundStyle(by: .value("Sector", sectorLabel(allocation.sector)))
                 }
                 .frame(height: 300)
                 .chartLegend(position: .trailing)
+                .accessibilityLabel("Sector allocation")
+                .accessibilityValue(sectorAllocations
+                    .map { "\(sectorLabel($0.sector)) \(String(format: "%.1f", $0.percentageOfPortfolio)) percent" }
+                    .joined(separator: ", "))
 
                 // Sector Breakdown Table
                 VStack(spacing: 4) {
@@ -160,7 +184,7 @@ struct PortfolioAnalyticsView: View {
                                 .fill(colorForSector(allocation.sector))
                                 .frame(width: 10, height: 10)
 
-                            Text(allocation.sector.displayName)
+                            Text(sectorLabel(allocation.sector))
                                 .font(.subheadline)
 
                             Spacer()
@@ -175,16 +199,26 @@ struct PortfolioAnalyticsView: View {
                                     .foregroundColor(.secondary)
                             }
 
-                            Text(completeDayCoverage ? "\(allocation.dayChangePercent >= 0 ? "+" : "")\(allocation.dayChangePercent, specifier: "%.2f")%" : "—")
+                            // Unknown day change is a dash in a neutral colour, never green.
+                            Text(completeDayCoverage ? AttributionFormat.signedPercent(allocation.dayChangePercent) : "—")
                                 .font(.caption)
-                                .foregroundColor(allocation.dayChangePercent >= 0 ? .green : .red)
+                                .foregroundColor(StockbarPalette.signed(completeDayCoverage ? allocation.dayChangePercent : nil))
                                 .frame(width: 70, alignment: .trailing)
+                                .accessibilityLabel(completeDayCoverage
+                                    ? "Day change \(AttributionFormat.spokenPercent(allocation.dayChangePercent))"
+                                    : "Day change unavailable")
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
                         .background(Color.gray.opacity(0.05))
                         .cornerRadius(6)
                     }
+                }
+
+                if let unclassified = diversificationAnalysis?.unclassifiedPercentage, unclassified > 0 {
+                    Text("\(unclassified, specifier: "%.1f")% of the portfolio is in holdings with no known sector (shown as Unclassified).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -228,6 +262,12 @@ struct PortfolioAnalyticsView: View {
                 .background(Color.blue.opacity(0.1))
                 .cornerRadius(10)
 
+                if analysis.unclassifiedPercentage > 0 {
+                    Text("\(analysis.unclassifiedPercentage, specifier: "%.1f")% of the portfolio has no known sector and is excluded from this score.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 // Recommendations
                 if !analysis.recommendations.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -249,6 +289,10 @@ struct PortfolioAnalyticsView: View {
                     .background(Color.gray.opacity(0.05))
                     .cornerRadius(8)
                 }
+            } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
+                Text("Diversification unavailable: \(analysis.unclassifiedPercentage, specifier: "%.0f")% of the portfolio has no known sector.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             } else {
                 Text(analyticsCoverage == 0 ? "No valued positions available" : "Diversification unavailable: some prices or exchange rates are missing")
                     .font(.caption)
@@ -270,21 +314,9 @@ struct PortfolioAnalyticsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                // Color Legend
-                HStack {
-                    Text("-1.0")
-                        .font(.caption2)
-                    Rectangle()
-                        .fill(LinearGradient(
-                            colors: [.red, .white, .green],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                        .frame(height: 20)
-                    Text("+1.0")
-                        .font(.caption2)
-                }
-                .padding(.top, 8)
+                Text("Based on the last \(selectedTimeRange.correlationLookbackDays) days of shared price history.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 if let metrics = diversificationMetrics {
                     HStack(spacing: 20) {
@@ -433,6 +465,10 @@ struct PortfolioAnalyticsView: View {
 
     // MARK: - Color Helpers
 
+    private func sectorLabel(_ sector: SectorAnalysisService.Sector) -> String {
+        sector == .unknown ? "Unclassified" : sector.displayName
+    }
+
     private func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
         switch sector {
         case .technology: return .blue
@@ -447,16 +483,6 @@ struct PortfolioAnalyticsView: View {
         case .basicMaterials: return .mint
         case .communicationServices: return .indigo
         case .unknown: return .gray
-        }
-    }
-
-    private func colorForCorrelation(_ correlation: Double) -> Color {
-        if correlation >= 0.7 {
-            return .green.opacity(min(1.0, correlation))
-        } else if correlation <= -0.7 {
-            return .red.opacity(min(1.0, abs(correlation)))
-        } else {
-            return .white
         }
     }
 
@@ -486,7 +512,7 @@ struct PortfolioAnalyticsView: View {
         let revision = analyticsRevision + 1
         analyticsRevision = revision
         isLoading = true
-        defer { isLoading = false }
+        defer { if analyticsRevision == revision { isLoading = false } }
 
         // Calculate sector allocations
         var positions: [String: Double] = [:]
@@ -559,7 +585,9 @@ struct PortfolioAnalyticsView: View {
             self.analyticsCurrency = preferredCurrency
             self.analyticsCoverage = covered
             self.completeDayCoverage = completeCoverage && completeDay
+            self.hasLoadedOnce = true
         }
+        guard !Task.isCancelled else { return }
 
         // Correlation uses stored daily price history aligned by date.
         let symbols = dataModel.realTimeTrades
@@ -607,11 +635,10 @@ struct PortfolioAnalyticsView: View {
     }
 
     private static let minimumCorrelationDays = 20
-    private static let correlationLookbackDays = 180
 
     private func fetchHistoricalDataForCorrelation(symbols: [String]) -> [String: [PriceSnapshot]] {
         let end = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -Self.correlationLookbackDays, to: end) ?? end
+        let start = Calendar.current.date(byAdding: .day, value: -selectedTimeRange.correlationLookbackDays, to: end) ?? end
         var history: [String: [PriceSnapshot]] = [:]
         for symbol in Set(symbols) {
             let snapshots = HistoricalDataManager.shared.getPriceSnapshots(for: symbol, from: start, to: end)

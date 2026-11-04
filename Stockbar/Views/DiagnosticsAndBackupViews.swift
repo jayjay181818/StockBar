@@ -20,7 +20,12 @@ struct DebugLogView: View {
     private let logger = Logger.shared
     // CRITICAL FIX: Use @State for timer to ensure proper cleanup
     @State private var timerCancellable: AnyCancellable?
-    
+    @State private var confirmingClear = false
+    @State private var exportErrorMessage: String?
+    /// True while the newest entry (the top of the list) is in view. New logs only pull the
+    /// view back to the top when the reader is already there.
+    @State private var isScrolledToTop = true
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header with controls - compact layout
@@ -47,7 +52,7 @@ struct DebugLogView: View {
                     }
 
                     Button(role: .destructive) {
-                        clearLogs()
+                        confirmingClear = true
                     } label: {
                         Label("Clear Logs", systemImage: "trash")
                     }
@@ -91,9 +96,15 @@ struct DebugLogView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
                 )
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y <= geometry.contentInsets.top + 8
+                } action: { _, atTop in
+                    isScrolledToTop = atTop
+                }
                 .onChange(of: logEntries.count) { _, _ in
-                    // Auto-scroll to top when new logs are added (newest logs are now at top)
-                    if !logEntries.isEmpty {
+                    // Newest logs are at the top. Follow them only if the reader is already
+                    // there; otherwise leave the scroll position alone.
+                    if isScrolledToTop, !logEntries.isEmpty {
                         withAnimation(.easeOut(duration: 0.3)) {
                             proxy.scrollTo(0, anchor: .top)
                         }
@@ -130,6 +141,56 @@ struct DebugLogView: View {
         .onChange(of: useTailMode) { _, _ in
             refreshLogs()
         }
+        .confirmationDialog("Clear all logs?", isPresented: $confirmingClear) {
+            Button("Export Logs, Then Clear…") { exportThenClearLogs() }
+            Button("Clear Without Exporting", role: .destructive) { clearLogs() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clearing permanently deletes the diagnostic log. Export a copy first if you may need it to investigate a problem.")
+        }
+        .alert("Couldn't export logs", isPresented: Binding(
+            get: { exportErrorMessage != nil },
+            set: { if !$0 { exportErrorMessage = nil } }
+        )) {
+            Button("OK") { exportErrorMessage = nil }
+        } message: {
+            Text("\(exportErrorMessage ?? "") The logs were not cleared.")
+        }
+    }
+
+    /// Saves a copy of the log file where the user chooses, and clears the log only if that worked.
+    private func exportThenClearLogs() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "stockbar-logs-\(DebugLogView.exportTimestamp()).log"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let destination = panel.url else { return }
+            Task { @MainActor in
+                do {
+                    let sourcePath = await logger.getLogFilePath()
+                    let fallback = logEntries.joined(separator: "\n")
+                    try await Task.detached {
+                        let data: Data
+                        if let sourcePath, FileManager.default.fileExists(atPath: sourcePath) {
+                            data = try Data(contentsOf: URL(fileURLWithPath: sourcePath))
+                        } else {
+                            data = Data(fallback.utf8)
+                        }
+                        try data.write(to: destination, options: .atomic)
+                    }.value
+                    clearLogs()
+                } catch {
+                    exportErrorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private static func exportTimestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate]
+        return formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
     }
     
     private func refreshLogs() {
@@ -367,9 +428,9 @@ struct BackupPreviewView: View {
                 HStack {
                     Text(stock.symbol)
                         .frame(width: 100, alignment: .leading)
-                    Text("\(String(format: "%.2f", stock.units)) units")
-                        .frame(width: 120, alignment: .leading)
-                    Text("@ \(stock.costCurrency ?? "USD") \(String(format: "%.2f", stock.avgPositionCost))")
+                    Text("\(BackupPreviewFormat.units(stock.units)) units")
+                        .frame(width: 140, alignment: .leading)
+                    Text("@ \(BackupPreviewFormat.cost(stock.avgPositionCost, currency: stock.costCurrency))")
                         .foregroundColor(.secondary)
                     Spacer()
                 }
@@ -396,5 +457,27 @@ private enum BackupRestoreSafetyError: LocalizedError {
 
     var errorDescription: String? {
         "Stockbar could not save a copy of your current portfolio first, so nothing was restored. Check the backup folder is writable and try again."
+    }
+}
+
+/// Number formats for the restore preview: fractional shares and sub-penny costs are shown in
+/// full rather than rounded to two decimals, and missing values are a dash.
+enum BackupPreviewFormat {
+    static func units(_ value: Double, locale: Locale = .current) -> String {
+        guard value.isFinite else { return "—" }
+        return MenuPopoverFormatter.units(value, locale: locale)
+    }
+
+    static func cost(_ value: Double, currency: String?, locale: Locale = .current) -> String {
+        guard value.isFinite else { return "—" }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 4
+        let number = formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+        let code = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return "\(code.isEmpty ? "USD" : code) \(number)"
     }
 }

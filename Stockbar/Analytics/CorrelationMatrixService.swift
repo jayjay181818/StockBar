@@ -16,7 +16,9 @@ actor CorrelationMatrixService {
     /// Correlation matrix with metadata
     struct CorrelationMatrix {
         let symbols: [String]
-        let matrix: [[Double]]  // NxN matrix of correlation coefficients
+        /// NxN matrix of correlation coefficients; `nil` where the correlation is undefined
+        /// (a zero-variance series, or too little data).
+        let matrix: [[Double?]]
         let timestamp: Date
 
         /// Get correlation between two symbols
@@ -28,6 +30,17 @@ actor CorrelationMatrixService {
                 return nil
             }
             return matrix[index1][index2]
+        }
+
+        /// Defined off-diagonal pairs (upper triangle) in matrix order.
+        func definedPairs() -> [(i: Int, j: Int, value: Double)] {
+            var pairs: [(i: Int, j: Int, value: Double)] = []
+            for i in 0..<symbols.count {
+                for j in (i + 1)..<symbols.count where i < matrix.count && j < matrix[i].count {
+                    if let value = matrix[i][j] { pairs.append((i, j, value)) }
+                }
+            }
+            return pairs
         }
     }
 
@@ -51,11 +64,14 @@ actor CorrelationMatrixService {
         /// Overall diversification score (0-100, higher is better)
         var diversificationScore: Double {
             // Combine multiple factors
-            let correlationFactor = (1.0 - averageCorrelation) * 40  // Max 40 points
-            let concentrationFactor = (1.0 - concentrationScore) * 30  // Max 30 points
-            let effectiveFactor = min(effectiveN / 10.0, 1.0) * 30  // Max 30 points
+            // Negative average correlation or a degenerate concentration must not push
+            // any factor (or the total) outside its documented range.
+            let correlationFactor = max(0, min(1, 1.0 - averageCorrelation)) * 40  // Max 40 points
+            let concentrationFactor = max(0, min(1, 1.0 - concentrationScore)) * 30  // Max 30 points
+            let effectiveFactor = max(0, min(effectiveN / 10.0, 1.0)) * 30  // Max 30 points
 
-            return correlationFactor + concentrationFactor + effectiveFactor
+            let total = correlationFactor + concentrationFactor + effectiveFactor
+            return total.isFinite ? max(0, min(100, total)) : 0
         }
 
         /// Risk level based on diversification
@@ -97,7 +113,7 @@ actor CorrelationMatrixService {
 
         let symbols = Array(returns.keys).sorted()
         let n = symbols.count
-        var matrix = Array(repeating: Array(repeating: 0.0, count: n), count: n)
+        var matrix = Array(repeating: Array<Double?>(repeating: nil, count: n), count: n)
 
         for i in 0..<n {
             for j in 0..<n {
@@ -105,7 +121,7 @@ actor CorrelationMatrixService {
                     matrix[i][j] = 1.0  // Perfect correlation with self
                 } else if let returns1 = returns[symbols[i]],
                           let returns2 = returns[symbols[j]] {
-                    matrix[i][j] = pearsonCorrelation(returns1, returns2)
+                    matrix[i][j] = Self.pearsonCorrelation(returns1, returns2)
                 }
             }
         }
@@ -118,27 +134,43 @@ actor CorrelationMatrixService {
     /// - Parameters:
     ///   - x: First return series
     ///   - y: Second return series
-    /// - Returns: Correlation coefficient (-1 to +1)
-    private func pearsonCorrelation(_ x: [Double], _ y: [Double]) -> Double {
-        guard x.count == y.count, x.count > 1 else {
-            return 0.0
+    /// - Returns: Correlation coefficient (-1 to +1), or `nil` when it is undefined
+    ///   (series of different length, fewer than two points, non-finite values or a
+    ///   zero-variance series).
+    nonisolated static func pearsonCorrelation(_ x: [Double], _ y: [Double]) -> Double? {
+        guard x.count == y.count, x.count > 1,
+              x.allSatisfy(\.isFinite), y.allSatisfy(\.isFinite) else {
+            return nil
         }
 
         let n = Double(x.count)
-        let sumX = x.reduce(0, +)
-        let sumY = y.reduce(0, +)
-        let sumXY = zip(x, y).map(*).reduce(0, +)
-        let sumX2 = x.map { $0 * $0 }.reduce(0, +)
-        let sumY2 = y.map { $0 * $0 }.reduce(0, +)
+        let meanX = x.reduce(0, +) / n
+        let meanY = y.reduce(0, +) / n
 
-        let numerator = n * sumXY - sumX * sumY
-        let denominator = sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY))
-
-        guard denominator > 0 else {
-            return 0.0
+        var sumXY = 0.0
+        var sumX2 = 0.0
+        var sumY2 = 0.0
+        for (a, b) in zip(x, y) {
+            let dx = a - meanX
+            let dy = b - meanY
+            sumXY += dx * dy
+            sumX2 += dx * dx
+            sumY2 += dy * dy
         }
 
-        return numerator / denominator
+        // A constant series has no variance (allow for rounding in the mean).
+        func isConstant(_ sumSquares: Double, mean: Double) -> Bool {
+            let scale = max(abs(mean), 1e-12)
+            return sumSquares <= n * pow(scale * 1e-9, 2)
+        }
+        guard !isConstant(sumX2, mean: meanX), !isConstant(sumY2, mean: meanY) else {
+            return nil
+        }
+
+        let denominator = sqrt(sumX2 * sumY2)
+        guard denominator.isFinite, denominator > 0 else { return nil }
+
+        return max(-1, min(1, sumXY / denominator))
     }
 
     // MARK: - Diversification Metrics
@@ -157,29 +189,16 @@ actor CorrelationMatrixService {
         await Logger.shared.debug("📊 Calculating diversification metrics")
 
         let symbols = correlationMatrix.symbols
-        let matrix = correlationMatrix.matrix
-        let n = symbols.count
-
         // Calculate average correlation (excluding diagonal)
-        var sumCorrelations = 0.0
-        var pairCount = 0
-        for i in 0..<n {
-            for j in (i+1)..<n {
-                sumCorrelations += matrix[i][j]
-                pairCount += 1
-            }
-        }
-        let averageCorrelation = pairCount > 0 ? sumCorrelations / Double(pairCount) : 0.0
+        // Undefined (nil) correlations are left out rather than counted as zero.
+        let definedValues = correlationMatrix.definedPairs().map(\.value)
+        let averageCorrelation = definedValues.isEmpty
+            ? 0.0
+            : definedValues.reduce(0, +) / Double(definedValues.count)
 
         // Find max and min correlations
-        var maxCorr = -1.0
-        var minCorr = 1.0
-        for i in 0..<n {
-            for j in (i+1)..<n {
-                maxCorr = max(maxCorr, matrix[i][j])
-                minCorr = min(minCorr, matrix[i][j])
-            }
-        }
+        let maxCorr = definedValues.max() ?? 0.0
+        let minCorr = definedValues.min() ?? 0.0
 
         // Calculate effective number of independent positions
         // effectiveN = 1 / sum(weight_i^2)
@@ -239,7 +258,7 @@ actor CorrelationMatrixService {
                 let secondSymbol = symbols[j]
                 let secondWeight = weights[secondSymbol] ?? 0.0
                 let secondVolatility = volatilities[secondSymbol] ?? 0.0
-                let corr = matrix[i][j]
+                let corr = matrix[i][j] ?? 0.0
 
                 variance += firstWeight * secondWeight * firstVolatility * secondVolatility * corr
             }
@@ -256,19 +275,10 @@ actor CorrelationMatrixService {
         count: Int = 5
     ) async -> [CorrelationPair] {
         let symbols = correlationMatrix.symbols
-        let matrix = correlationMatrix.matrix
-        let n = symbols.count
 
-        var pairs: [CorrelationPair] = []
-
-        for i in 0..<n {
-            for j in (i+1)..<n {
-                pairs.append(CorrelationPair(
-                    symbol1: symbols[i],
-                    symbol2: symbols[j],
-                    correlation: matrix[i][j]
-                ))
-            }
+        // Pairs with an undefined correlation are skipped.
+        let pairs = correlationMatrix.definedPairs().map {
+            CorrelationPair(symbol1: symbols[$0.i], symbol2: symbols[$0.j], correlation: $0.value)
         }
 
         return Array(pairs.sorted { $0.correlation > $1.correlation }.prefix(count))
@@ -280,19 +290,10 @@ actor CorrelationMatrixService {
         count: Int = 5
     ) async -> [CorrelationPair] {
         let symbols = correlationMatrix.symbols
-        let matrix = correlationMatrix.matrix
-        let n = symbols.count
 
-        var pairs: [CorrelationPair] = []
-
-        for i in 0..<n {
-            for j in (i+1)..<n {
-                pairs.append(CorrelationPair(
-                    symbol1: symbols[i],
-                    symbol2: symbols[j],
-                    correlation: matrix[i][j]
-                ))
-            }
+        // Pairs with an undefined correlation are skipped.
+        let pairs = correlationMatrix.definedPairs().map {
+            CorrelationPair(symbol1: symbols[$0.i], symbol2: symbols[$0.j], correlation: $0.value)
         }
 
         return Array(pairs.sorted { $0.correlation < $1.correlation }.prefix(count))

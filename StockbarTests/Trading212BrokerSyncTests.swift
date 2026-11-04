@@ -1462,6 +1462,62 @@ final class Trading212BrokerSyncTests: XCTestCase {
         )
     }
 
+    func testActionCredentialsUseTypedValuesWithoutTouchingStorage() throws {
+        var loadCalls = 0
+        let resolved = try Trading212ActionCredentials.resolve(apiKey: " key ", apiSecret: "secret") {
+            loadCalls += 1
+            return Trading212AuthConfiguration(apiKey: "stored", apiSecret: "stored")
+        }
+
+        XCTAssertEqual(loadCalls, 0, "typed credentials must be used from memory")
+        XCTAssertTrue(resolved.isUnsaved)
+        XCTAssertEqual(resolved.credentials, Trading212AuthConfiguration(apiKey: "key", apiSecret: "secret"))
+    }
+
+    func testActionCredentialsFallBackToStoredAndRejectIncompleteTypedValues() throws {
+        let stored = Trading212AuthConfiguration(apiKey: "stored-key", apiSecret: "stored-secret")
+        let fromStore = try Trading212ActionCredentials.resolve(apiKey: "  ", apiSecret: "") { stored }
+        XCTAssertFalse(fromStore.isUnsaved)
+        XCTAssertEqual(fromStore.credentials, stored)
+
+        var loadCalls = 0
+        XCTAssertThrowsError(try Trading212ActionCredentials.resolve(apiKey: "only-a-key", apiSecret: "") {
+            loadCalls += 1
+            return stored
+        })
+        XCTAssertEqual(loadCalls, 0, "a half-typed pair is an error, not a silent fallback to stored credentials")
+    }
+
+    func testLinkSelectionSeparatesExactMatchesFromQuantityMismatches() throws {
+        let exactPreview = makePreview(
+            instrumentId: "AV_EQ", providerTicker: "AVl_EQ", manualSymbol: "AV.L",
+            quantity: 10, averagePrice: 400, brokerPrice: 450, currentValue: 4500)
+        let exactRow = try XCTUnwrap(exactPreview.rows.first)
+        let mismatchRow = Trading212ImportPreviewRow(
+            id: exactRow.id + "-mismatch", account: exactRow.account, providerTicker: "BP_EQ",
+            instrumentId: "BP_EQ", displaySymbol: "BP", displayName: "BP", quantity: 12,
+            averagePrice: exactRow.averagePrice, brokerProvidedPrice: exactRow.brokerProvidedPrice,
+            currentValue: exactRow.currentValue, totalCost: exactRow.totalCost,
+            unrealizedProfitLoss: exactRow.unrealizedProfitLoss, fxImpact: nil,
+            mappingConfidence: .high,
+            manualMatch: Trading212ManualHoldingMatch(
+                symbol: "BP.L", instrumentId: "BP_EQ", displayName: "BP", quantity: 10, averageCost: 400,
+                currency: "GBX", isWatchlistOnly: false, resolutionConfidence: .high),
+            additionalManualMatchCount: 0, conflictStatus: .manualQuantityMismatch,
+            valueSource: .brokerProvidedLivePositionData, warnings: [])
+        let preview = Trading212ImportPreview(
+            account: exactPreview.account, accountSummary: nil, rows: [exactRow, mismatchRow],
+            metadataAvailable: true, generatedAt: exactPreview.generatedAt, warnings: [])
+
+        let selection = Trading212LinkSelection(preview: preview)
+
+        XCTAssertEqual(selection.exactMatches.map(\.id), [exactRow.id])
+        XCTAssertEqual(selection.mismatches.map(\.id), [mismatchRow.id])
+        XCTAssertEqual(selection.exactMatchesOnlyPreview.rows.map(\.id), [exactRow.id],
+                       "the default link action must not include differing quantities")
+        XCTAssertEqual(selection.exactMatchesOnlyPreview.account, preview.account)
+    }
+
     private func makeAccount() -> BrokerAccountIdentity {
         BrokerAccountIdentity(
             broker: "Trading212",

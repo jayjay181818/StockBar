@@ -790,6 +790,40 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         XCTAssertFalse(result.string.isEmpty, "Should generate formatted string")
     }
 
+    func testZeroChangeIsNeutralWithoutArrowOrGreen() async throws {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .compact
+        settings.arrowStyle = .simple
+
+        let result = await service.formatStockTitle(
+            symbol: "AAPL", price: 175.23, change: 0, changePct: 0,
+            currency: "USD", settings: settings, useColorCoding: true)
+
+        XCTAssertFalse(result.string.contains("▲"), "zero change must not show an up arrow: \(result.string)")
+        XCTAssertFalse(result.string.contains("▼"))
+        XCTAssertFalse(result.string.contains("+0"), "zero change carries no sign: \(result.string)")
+        var sawGreenOrRed = false
+        result.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: result.length)) { value, _, _ in
+            if let color = value as? NSColor, color.isGreenishForTest || color.isReddishForTest {
+                sawGreenOrRed = true
+            }
+        }
+        XCTAssertFalse(sawGreenOrRed, "zero change is neither gain nor loss")
+    }
+
+    func testMissingPriceShowsDashNotZero() async throws {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .expanded
+
+        for missing in [Double.nan, 0, -1] {
+            let result = await service.formatStockTitle(
+                symbol: "AAPL", price: missing, change: .nan, changePct: .nan,
+                currency: "USD", settings: settings, useColorCoding: false)
+            XCTAssertTrue(result.string.contains("—"), "price \(missing) must render as a dash: \(result.string)")
+            XCTAssertFalse(result.string.contains("0.00"), "missing price must not render as 0.00: \(result.string)")
+        }
+    }
+
     // MARK: - Currency Symbol Tests
 
     func testCurrencySymbol_USD() async throws {
@@ -891,5 +925,105 @@ final class PortfolioMenuBarTitleFormatterTests: XCTestCase {
         XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "^GSPC"), "Index")
         XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "SHOP.TO"), "Toronto Stock Exchange")
         XCTAssertEqual(SymbolMetadata.exchangeDisplayName(for: "BTC-USD"), "Crypto")
+    }
+}
+
+@MainActor
+final class StatusButtonClickPolicyTests: XCTestCase {
+    private func window(at origin: NSPoint) -> NSWindow {
+        NSWindow(contentRect: NSRect(origin: origin, size: NSSize(width: 60, height: 24)),
+                 styleMask: [.borderless], backing: .buffered, defer: true)
+    }
+
+    func testEventDeliveredToTheButtonWindowIsIgnored() {
+        let button = window(at: NSPoint(x: 100, y: 100))
+        let other = window(at: NSPoint(x: 400, y: 400))
+
+        XCTAssertTrue(StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: button, buttonWindow: button, mouseLocation: .zero))
+        XCTAssertFalse(StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: other, buttonWindow: button, mouseLocation: NSPoint(x: 110, y: 110)))
+    }
+
+    func testGlobalEventWithoutWindowUsesThePointerLocation() {
+        let button = window(at: NSPoint(x: 100, y: 100))
+
+        XCTAssertTrue(StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: nil, buttonWindow: button, mouseLocation: NSPoint(x: 110, y: 110)))
+        XCTAssertFalse(StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: nil, buttonWindow: button, mouseLocation: NSPoint(x: 500, y: 500)))
+        XCTAssertFalse(StatusButtonClickPolicy.isStatusButtonEvent(
+            eventWindow: nil, buttonWindow: nil, mouseLocation: NSPoint(x: 110, y: 110)))
+    }
+}
+
+final class BackupPreviewFormatTests: XCTestCase {
+    private let locale = Locale(identifier: "en_US")
+
+    func testUnitsKeepFractionalSharesInsteadOfRoundingToTwoDecimals() {
+        XCTAssertEqual(BackupPreviewFormat.units(0.123456, locale: locale), "0.123456")
+        XCTAssertEqual(BackupPreviewFormat.units(1_250, locale: locale), "1,250")
+        XCTAssertEqual(BackupPreviewFormat.units(.nan, locale: locale), "—")
+    }
+
+    func testCostKeepsSubPennyPrecisionAndMissingIsADash() {
+        XCTAssertEqual(BackupPreviewFormat.cost(12.5, currency: "GBP", locale: locale), "GBP 12.50")
+        XCTAssertEqual(BackupPreviewFormat.cost(0.0123, currency: "USD", locale: locale), "USD 0.0123")
+        XCTAssertEqual(BackupPreviewFormat.cost(10, currency: nil, locale: locale), "USD 10.00")
+        XCTAssertEqual(BackupPreviewFormat.cost(.nan, currency: "USD", locale: locale), "—")
+    }
+}
+
+@MainActor
+final class HoldingsAndStatusViewHelperTests: XCTestCase {
+    func testMoveSkipsHiddenRowsAndStopsAtTheEdges() {
+        // Rows 1 and 3 are hidden (a benchmark and a search filter), so 0, 2 and 4 are visible.
+        let visible = [0, 2, 4]
+
+        XCTAssertEqual(HoldingsEditing.moveDestination(from: 2, by: -1, visibleIndices: visible), 0)
+        XCTAssertEqual(HoldingsEditing.moveDestination(from: 2, by: 1, visibleIndices: visible), 4)
+        XCTAssertNil(HoldingsEditing.moveDestination(from: 0, by: -1, visibleIndices: visible), "first visible row cannot move up")
+        XCTAssertNil(HoldingsEditing.moveDestination(from: 4, by: 1, visibleIndices: visible), "last visible row cannot move down")
+        XCTAssertNil(HoldingsEditing.moveDestination(from: 1, by: 1, visibleIndices: visible), "a hidden row is not movable")
+        XCTAssertNil(HoldingsEditing.moveDestination(from: 2, by: 0, visibleIndices: visible))
+    }
+
+    func testCurrencyOptionsCoverEverySupportedCurrencyAndKeepLegacyCodes() {
+        let options = HoldingsEditing.currencyOptions(current: nil)
+
+        XCTAssertTrue(options.contains("GBX"))
+        for currency in DataModel.supportedCurrencies {
+            XCTAssertTrue(options.contains(currency), "\(currency) must be selectable")
+        }
+        XCTAssertTrue(options.contains("CAD") && options.contains("AUD"))
+        XCTAssertEqual(Set(options).count, options.count, "no duplicates")
+        XCTAssertTrue(HoldingsEditing.currencyOptions(current: "CHF").contains("CHF"))
+        XCTAssertEqual(HoldingsEditing.currencyOptions(current: "USD"), options)
+    }
+
+    func testOldestPriceUpdateIsNotHiddenByFresherQuotes() {
+        let result = StockbarRelativeTime.oldest([1_700_000_500, 1_700_000_000, 1_700_009_000])
+        XCTAssertEqual(result.date, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(result.missingCount, 0)
+
+        let withMissing = StockbarRelativeTime.oldest([1_700_000_500, nil, 0])
+        XCTAssertEqual(withMissing.date, Date(timeIntervalSince1970: 1_700_000_500))
+        XCTAssertEqual(withMissing.missingCount, 2, "a position that never updated is counted, not skipped")
+
+        let none = StockbarRelativeTime.oldest([])
+        XCTAssertNil(none.date)
+        XCTAssertEqual(none.missingCount, 0)
+    }
+
+    func testStatusItemDirectionWordsAndVerificationStatusText() {
+        XCTAssertEqual(StatusItemAccessibility.direction(of: 1.5), "up")
+        XCTAssertEqual(StatusItemAccessibility.direction(of: -1.5), "down")
+        XCTAssertEqual(StatusItemAccessibility.direction(of: 0), "unchanged")
+        XCTAssertEqual(StatusItemAccessibility.direction(of: .nan), "change unavailable")
+
+        XCTAssertEqual(DataSourcesSettingsView.statusDescription(.success), "Verified")
+        XCTAssertEqual(DataSourcesSettingsView.statusDescription(.failure), "Verification failed")
+        XCTAssertEqual(DataSourcesSettingsView.statusDescription(.none), "Not verified")
+        XCTAssertEqual(DataSourcesSettingsView.statusDescription(.verifying), "Verifying")
     }
 }

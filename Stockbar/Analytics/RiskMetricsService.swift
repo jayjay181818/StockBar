@@ -70,6 +70,42 @@ actor RiskMetricsService {
         return (sorted.map(\.date), sorted.map(\.value))
     }
 
+    /// Brings every snapshot's portfolio-level amounts into `targetCurrency`. A snapshot recorded
+    /// in another currency has `totalValue`, `totalGains` and `totalCost` converted with `convert`
+    /// (which also handles pence); one that cannot be converted (no rate) is dropped and counted,
+    /// so a USD total is never read as GBP. Position currencies are converted separately by the
+    /// caller's per-position converter.
+    nonisolated static func normalizingSnapshotCurrencies(
+        _ snapshots: [HistoricalPortfolioSnapshot],
+        to targetCurrency: String,
+        convert: (_ amount: Double, _ from: String, _ to: String) -> Double
+    ) -> (snapshots: [HistoricalPortfolioSnapshot], convertedCount: Int, droppedCount: Int) {
+        let target = targetCurrency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var result: [HistoricalPortfolioSnapshot] = []
+        var converted = 0
+        var dropped = 0
+        for snapshot in snapshots {
+            let source = snapshot.currency.trimmingCharacters(in: .whitespacesAndNewlines)
+            if source.uppercased() == target {
+                result.append(snapshot)
+                continue
+            }
+            let value = convert(snapshot.totalValue, source, target)
+            let gains = convert(snapshot.totalGains, source, target)
+            let cost = convert(snapshot.totalCost, source, target)
+            guard !source.isEmpty, value.isFinite, gains.isFinite, cost.isFinite else {
+                dropped += 1
+                continue
+            }
+            converted += 1
+            result.append(HistoricalPortfolioSnapshot(
+                date: snapshot.date, totalValue: value, totalGains: gains, totalCost: cost,
+                currency: targetCurrency, portfolioComposition: snapshot.portfolioComposition
+            ))
+        }
+        return (result, converted, dropped)
+    }
+
     /// Builds a daily, trade-flow-adjusted series. Each day's return revalues the
     /// previous day's holdings at the new prices (`prevValue * priceNow / pricePrev`),
     /// so buying or selling units never registers as performance.
@@ -142,22 +178,25 @@ actor RiskMetricsService {
     ///   - portfolioValue: Current portfolio value for absolute VaR
     /// - Returns: VaR as a positive number (potential loss)
     func calculateVaR(returns: [Double], confidenceLevel: Double, portfolioValue: Double) async -> Double? {
-        guard !returns.isEmpty, confidenceLevel > 0, confidenceLevel < 1 else {
+        let finiteReturns = returns.filter { $0.isFinite }
+        guard !finiteReturns.isEmpty, confidenceLevel > 0, confidenceLevel < 1,
+              portfolioValue.isFinite else {
             return nil
         }
 
         // Sort returns from worst to best
-        let sortedReturns = returns.sorted()
+        let sortedReturns = finiteReturns.sorted()
 
         // Find the percentile index
         let index = Int(Double(sortedReturns.count) * (1.0 - confidenceLevel))
         let clampedIndex = min(max(index, 0), sortedReturns.count - 1)
 
-        // VaR is the return at the percentile (as a positive loss value)
+        // VaR is a loss: a percentile return at or above zero means no loss at that
+        // confidence level, not a loss of the same magnitude.
         let varReturn = sortedReturns[clampedIndex]
 
         // Convert to absolute value loss
-        let varAbsolute = abs(varReturn * portfolioValue)
+        let varAbsolute = max(0, -varReturn) * portfolioValue
 
         await logger.debug("📊 VaR(\(Int(confidenceLevel * 100))%): \(String(format: "%.2f%%", varReturn * 100)) or $\(String(format: "%.2f", varAbsolute))")
 

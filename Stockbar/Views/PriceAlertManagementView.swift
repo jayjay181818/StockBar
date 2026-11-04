@@ -84,6 +84,7 @@ struct PriceAlertRow: View {
     @ObservedObject var dataModel: DataModel
     @ObservedObject private var alertService = PriceAlertService.shared
     @State private var isHovered = false
+    @State private var confirmingDelete = false
 
     private var currency: String {
         if let symbol = alert.symbol {
@@ -160,7 +161,7 @@ struct PriceAlertRow: View {
                 .accessibilityLabel(alert.isEnabled ? "Pause alert for \(alert.symbol ?? "portfolio")" : "Resume alert for \(alert.symbol ?? "portfolio")")
 
                 Button(role: .destructive) {
-                    alertService.removeAlert(id: alert.id)
+                    confirmingDelete = true
                 } label: {
                     Image(systemName: "trash")
                         .font(.title3)
@@ -180,7 +181,16 @@ struct PriceAlertRow: View {
         }
         .contextMenu {
             Button(alert.isEnabled ? "Pause Alert" : "Resume Alert") { alertService.toggleAlert(id: alert.id) }
-            Button("Delete Alert", role: .destructive) { alertService.removeAlert(id: alert.id) }
+            Button("Delete Alert", role: .destructive) { confirmingDelete = true }
+        }
+        .confirmationDialog(
+            "Delete the alert for \(alert.symbol ?? "portfolio")?",
+            isPresented: $confirmingDelete
+        ) {
+            Button("Delete", role: .destructive) { alertService.removeAlert(id: alert.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency)). This cannot be undone.")
         }
     }
 }

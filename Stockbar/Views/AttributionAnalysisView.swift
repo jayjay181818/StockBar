@@ -88,6 +88,8 @@ struct AttributionAnalysisView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
+            .help("Recalculate attribution")
+            .accessibilityLabel("Recalculate attribution")
 
             Button(action: {
                 dismiss()
@@ -97,6 +99,7 @@ struct AttributionAnalysisView: View {
             }
             .buttonStyle(.borderless)
             .help("Close")
+            .accessibilityLabel("Close attribution")
         }
         .padding(.horizontal)
     }
@@ -105,7 +108,8 @@ struct AttributionAnalysisView: View {
 
     private var timeRangePicker: some View {
         Picker("Time Range", selection: $selectedTimeRange) {
-            ForEach(ChartTimeRange.allCases, id: \.self) { range in
+            // Attribution has no custom date range, so `.custom` would always fail.
+            ForEach(ChartTimeRange.allCases.filter { $0 != .custom }, id: \.self) { range in
                 Text(range.description).tag(range)
             }
         }
@@ -119,8 +123,9 @@ struct AttributionAnalysisView: View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             metricCard(
                 title: "Return (excl. new money)",
-                value: String(format: "%.2f%%", result.portfolioReturn),
-                color: result.portfolioReturn >= 0 ? .green : .red
+                value: AttributionFormat.signedPercent(result.portfolioReturn),
+                color: StockbarPalette.signed(result.portfolioReturn),
+                spokenValue: AttributionFormat.spokenPercent(result.portfolioReturn)
             )
 
             metricCard(
@@ -139,14 +144,14 @@ struct AttributionAnalysisView: View {
             if let netCashFlow = result.netCashFlow {
                 metricCard(
                     title: "Net Cash Flow",
-                    value: formatCurrency(netCashFlow),
-                    color: netCashFlow >= 0 ? .green : .red
+                    value: formatSignedCurrency(netCashFlow),
+                    color: StockbarPalette.signed(netCashFlow)
                 )
             }
         }
     }
 
-    private func metricCard(title: String, value: String, color: Color) -> some View {
+    private func metricCard(title: String, value: String, color: Color, spokenValue: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.caption)
@@ -161,6 +166,9 @@ struct AttributionAnalysisView: View {
         .padding()
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(spokenValue ?? value)
     }
 
     // MARK: - TWR vs MWR Comparison
@@ -175,7 +183,7 @@ struct AttributionAnalysisView: View {
                     Text("Time-Weighted Return")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(String(format: "%.2f%%", comparison.timeWeightedReturn))
+                    Text(AttributionFormat.signedPercent(comparison.timeWeightedReturn))
                         .font(.title3)
                         .fontWeight(.bold)
                         .foregroundColor(.blue)
@@ -185,7 +193,7 @@ struct AttributionAnalysisView: View {
                     Text("Money-Weighted Return")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(String(format: "%.2f%%", comparison.moneyWeightedReturn))
+                    Text(AttributionFormat.signedPercent(comparison.moneyWeightedReturn))
                         .font(.title3)
                         .fontWeight(.bold)
                         .foregroundColor(.orange)
@@ -195,7 +203,7 @@ struct AttributionAnalysisView: View {
                     Text("Difference")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(String(format: "%.2f%%", comparison.difference))
+                    Text(AttributionFormat.signedPercent(comparison.difference))
                         .font(.title3)
                         .fontWeight(.bold)
                         .foregroundColor(comparison.favorsTWR ? .green : .red)
@@ -247,15 +255,22 @@ struct AttributionAnalysisView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.2f%%", contribution.stockReturn))
+                Text(AttributionFormat.signedPercent(contribution.stockReturn))
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                Text(formatCurrency(contribution.dollarContribution))
+                Text(formatSignedCurrency(contribution.dollarContribution))
                     .font(.body)
-                    .foregroundColor(contribution.isPositive ? .green : .red)
+                    .foregroundColor(StockbarPalette.signed(contribution.dollarContribution))
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(contribution.symbol)
+        .accessibilityValue(
+            "\(AttributionFormat.direction(contribution.dollarContribution)) of "
+            + "\(formatCurrency(abs(contribution.dollarContribution))), "
+            + "stock return \(AttributionFormat.spokenPercent(contribution.stockReturn))"
+        )
     }
 
     // MARK: - Sector Breakdown
@@ -281,7 +296,7 @@ struct AttributionAnalysisView: View {
                     .font(.body)
                     .fontWeight(.medium)
 
-                Text("\(sector.stockCount) stocks")
+                Text("\(sector.stockCount) \(sector.stockCount == 1 ? "stock" : "stocks")")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -289,40 +304,71 @@ struct AttributionAnalysisView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.2f%%", sector.totalContribution))
+                Text(AttributionFormat.signedPercent(sector.totalContribution))
                     .font(.body)
-                    .foregroundColor(sector.isPositive ? .green : .red)
+                    .foregroundColor(StockbarPalette.signed(sector.totalContribution))
 
-                Text(formatCurrency(sector.dollarContribution))
+                Text(formatSignedCurrency(sector.dollarContribution))
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(sector.sectorName), \(sector.stockCount) \(sector.stockCount == 1 ? "stock" : "stocks")")
+        .accessibilityValue(
+            "\(AttributionFormat.direction(sector.dollarContribution)) of "
+            + "\(formatCurrency(abs(sector.dollarContribution))), "
+            + "\(AttributionFormat.spokenPercent(sector.totalContribution)) contribution"
+        )
     }
 
     // MARK: - Waterfall Chart
 
     private func waterfallChartView(_ result: AttributionAnalysisResult) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let bars = WaterfallBars.make(from: result.waterfallData)
+        let domain = WaterfallBars.yDomain(for: bars)
+
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Contribution Waterfall")
                 .font(.headline)
 
-            Chart(result.waterfallData) { dataPoint in
+            // Floating bars: each contribution runs from the running total before it to the
+            // running total after it; start and end values are full bars from the baseline.
+            Chart(bars) { bar in
                 BarMark(
-                    x: .value("Label", dataPoint.label),
-                    y: .value("Value", dataPoint.value)
+                    x: .value("Step", bar.label),
+                    yStart: .value("From", bar.isSummary ? domain.lowerBound : bar.start),
+                    yEnd: .value("To", bar.end)
                 )
-                .foregroundStyle(dataPoint.isSummary ? Color.blue : (dataPoint.isPositive ? Color.green : Color.red))
-                .opacity(dataPoint.isSummary ? 1.0 : 0.7)
+                .foregroundStyle(bar.isSummary ? Color.blue : (bar.value >= 0 ? Color.green : Color.red))
+                .opacity(bar.isSummary ? 1.0 : 0.8)
+                .accessibilityLabel(bar.label)
+                .accessibilityValue(bar.isSummary
+                    ? formatCurrency(bar.end)
+                    : "\(AttributionFormat.direction(bar.value)) of \(formatCurrency(abs(bar.value)))")
             }
             .frame(height: 250)
+            .chartYScale(domain: domain)
             .chartYAxis {
                 AxisMarks(position: .leading)
             }
+            .accessibilityLabel("Contribution waterfall")
+            .accessibilityValue(waterfallSummary(result, bars: bars))
+
+            Text("Blue bars are the starting and ending portfolio value; green and red bars add to or subtract from the running total. “Trades & Other” reconciles deposits, withdrawals and FX moves.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
         .padding()
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
+    }
+
+    private func waterfallSummary(_ result: AttributionAnalysisResult, bars: [WaterfallBars.Bar]) -> String {
+        let steps = bars.filter { !$0.isSummary }
+        let parts = steps.map { "\($0.label) \(AttributionFormat.direction($0.value)) \(formatCurrency(abs($0.value)))" }
+        return "From \(formatCurrency(result.startingValue)) to \(formatCurrency(result.endingValue)). "
+            + (parts.isEmpty ? "No contributions." : parts.joined(separator: "; "))
     }
 
     // MARK: - Loading & Error Views
@@ -408,11 +454,73 @@ struct AttributionAnalysisView: View {
 
     // MARK: - Helper Methods
 
+    private var displayCurrency: String { dataModel?.preferredCurrency ?? "USD" }
+
+    /// Missing or non-finite values show a dash, never a fabricated "$0.00".
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = dataModel?.preferredCurrency ?? "USD"
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
+        guard value.isFinite else { return "—" }
+        return HoldingsCurrencyFormatter.amount(value, currency: displayCurrency)
+    }
+
+    private func formatSignedCurrency(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        return HoldingsCurrencyFormatter.signedAmount(value, currency: displayCurrency)
+    }
+}
+
+/// Text formats that do not rely on colour to convey direction.
+enum AttributionFormat {
+    static func signedPercent(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        return value == 0 ? "0.00%" : String(format: "%+.2f%%", value)
+    }
+
+    static func spokenPercent(_ value: Double) -> String {
+        guard value.isFinite else { return "unavailable" }
+        if value == 0 { return "unchanged" }
+        return String(format: "%@ %.2f percent", value > 0 ? "up" : "down", abs(value))
+    }
+
+    /// "gain" / "loss" / "no change" wording for an amount.
+    static func direction(_ value: Double) -> String {
+        guard value.isFinite else { return "unavailable" }
+        if value == 0 { return "no change" }
+        return value > 0 ? "gain" : "loss"
+    }
+}
+
+/// Floating-bar geometry for the attribution waterfall, derived from the cumulative values the
+/// attribution service already reconciles (including its "Trades & Other" step).
+enum WaterfallBars {
+    struct Bar: Identifiable {
+        let id: UUID
+        let label: String
+        let value: Double
+        /// Running total before this step (the baseline for a summary bar).
+        let start: Double
+        /// Running total after this step.
+        let end: Double
+        let isSummary: Bool
+    }
+
+    static func make(from data: [WaterfallDataPoint]) -> [Bar] {
+        data.compactMap { point in
+            guard point.value.isFinite, point.cumulativeValue.isFinite else { return nil }
+            if point.isSummary {
+                return Bar(id: point.id, label: point.label, value: point.value,
+                           start: 0, end: point.cumulativeValue, isSummary: true)
+            }
+            return Bar(id: point.id, label: point.label, value: point.value,
+                       start: point.cumulativeValue - point.value, end: point.cumulativeValue, isSummary: false)
+        }
+    }
+
+    /// A y-range that makes small contributions visible against a large portfolio value.
+    static func yDomain(for bars: [Bar]) -> ClosedRange<Double> {
+        let levels = bars.flatMap { $0.isSummary ? [$0.end] : [$0.start, $0.end] }
+        guard let low = levels.min(), let high = levels.max() else { return 0...1 }
+        let padding = max((high - low) * 0.15, abs(high) * 0.001, 0.01)
+        return (low - padding)...(high + padding)
     }
 }
 
