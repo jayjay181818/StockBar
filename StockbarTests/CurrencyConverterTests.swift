@@ -268,6 +268,83 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertEqual(converter.sourceStatus, .partial)
         XCTAssertEqual(legacyRequests.value, 0)
     }
+
+    func testMinorUnitCurrenciesConvertThroughTheirMajorCurrency() {
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "ZAR": 18, "ILS": 3.7],
+            refreshOnInit: false,
+            loadHistoryOnInit: false
+        )
+
+        XCTAssertEqual(converter.convert(amount: 1_800, from: "ZAc", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 1_800, from: "ZAC", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 370, from: "ILA", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 1, from: "USD", to: "ILA"), 370, accuracy: 0.000_001)
+        XCTAssertEqual(CurrencyConverter.minorUnitMajorCurrency("GBX"), "GBP")
+        XCTAssertNil(CurrencyConverter.minorUnitMajorCurrency("USD"))
+    }
+
+    func testRatesBecomeStaleAfterADayWithoutARefresh() async {
+        let router = FixedFolyncFXRouter(result: .folync(
+            rates: ["USD": 1, "GBP": 0.8],
+            asOf: Date(),
+            status: .current
+        ))
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "GBP": 0.75],
+            refreshOnInit: false,
+            loadHistoryOnInit: false,
+            supplementalRouter: router
+        )
+
+        await converter.refreshRatesFromConfiguredSource(force: true)
+
+        XCTAssertFalse(converter.ratesAreStale(now: Date()))
+        XCTAssertTrue(converter.ratesAreStale(now: Date().addingTimeInterval(25 * 3600)))
+    }
+
+    @MainActor
+    func testPositionWithoutAnExchangeRateIsLeftOutOfTotals() async {
+        let router = FixedFolyncFXRouter(result: .folync(
+            rates: ["USD": 1, "GBP": 0.8],
+            asOf: Date(),
+            status: .partial
+        ))
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "GBP": 0.75, "CHF": 0.9],
+            refreshOnInit: false,
+            loadHistoryOnInit: false,
+            supplementalRouter: router
+        )
+        await converter.refreshRatesFromConfiguredSource(force: true)
+        XCTAssertTrue(converter.convert(amount: 1, from: "CHF", to: "USD").isNaN)
+
+        let trades = [
+            makeTrade(symbol: "AAPL", currency: "USD", price: 110, previousClose: 100),
+            makeTrade(symbol: "NESN.SW", currency: "CHF", price: 90, previousClose: 80)
+        ]
+        let service = PortfolioCalculationService(currencyConverter: converter)
+        let summary = service.calculateDisplayPortfolioSummary(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(summary.totalValue, 1_100, accuracy: 0.001)
+        XCTAssertEqual(summary.totalCost, 1_000, accuracy: 0.001)
+        XCTAssertEqual(summary.dayGain, 100, accuracy: 0.001)
+        XCTAssertEqual(summary.ownedPositionCount, 1)
+        XCTAssertTrue(service.calculateNetGains(trades: trades, preferredCurrency: "USD").amount.isFinite)
+        XCTAssertTrue(service.calculateNetValue(trades: trades, preferredCurrency: "USD").amount.isFinite)
+    }
+
+    private func makeTrade(symbol: String, currency: String, price: Double, previousClose: Double) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = previousClose
+        info.currency = currency
+        let trade = Trade(
+            name: symbol,
+            position: Position(unitSize: "10", positionAvgCost: "100", currency: currency, costCurrency: currency)
+        )
+        return RealTimeTrade(trade: trade, realTimeInfo: info)
+    }
 }
 
 private actor FixedFolyncFXRouter: FolyncSupplementalFXRouting {

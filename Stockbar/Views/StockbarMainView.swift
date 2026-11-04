@@ -1037,7 +1037,8 @@ private struct StockbarDataHealthView: View {
     private var exchangeRateStatus: (title: String, color: Color) {
         if currencyConverter.isUsingFallbackRates { return ("Approximate", .orange) }
         if currencyConverter.lastRefreshTime == .distantPast { return ("Not updated yet", .secondary) }
-        return currencyConverter.lastRefreshSuccess ? ("Live", .green) : ("Update failed", .orange)
+        guard currencyConverter.lastRefreshSuccess else { return ("Update failed", .orange) }
+        return currencyConverter.ratesAreStale() ? ("Stale", .orange) : ("Live", .green)
     }
 
     private func pricesValue(now: Date) -> String {

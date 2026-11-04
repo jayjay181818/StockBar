@@ -11,10 +11,43 @@ public struct CurrencyRateSnapshot: Codable, Sendable {
 public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     public static let shared = CurrencyConverter()
 
-    @Published public var exchangeRates: [String: Double] = [:]
+    @Published public var exchangeRates: [String: Double] = [:] {
+        didSet { storeRateState() }
+    }
     @Published public var lastRefreshTime: Date = Date.distantPast
     @Published public var lastRefreshSuccess: Bool = false
-    @Published private(set) var sourceStatus: FolyncSupplementalSourceStatus = .legacy
+    @Published private(set) var sourceStatus: FolyncSupplementalSourceStatus = .legacy {
+        didSet { storeRateState() }
+    }
+
+    /// `convert` runs on background calculation tasks while the main thread
+    /// replaces the rates, so it reads this lock-protected copy instead of the
+    /// published dictionary (a data race otherwise).
+    private let rateStateLock = NSLock()
+    private var lockedRates: [String: Double] = [:]
+    private var lockedSourceStatus: FolyncSupplementalSourceStatus = .legacy
+    private var periodicRefreshTimer: Timer?
+
+    /// Rates older than this are labelled stale rather than live.
+    static let staleRateAge: TimeInterval = 24 * 3_600
+
+    private func storeRateState() {
+        rateStateLock.lock()
+        lockedRates = exchangeRates
+        lockedSourceStatus = sourceStatus
+        rateStateLock.unlock()
+    }
+
+    private func rateState() -> (rates: [String: Double], status: FolyncSupplementalSourceStatus) {
+        rateStateLock.lock()
+        defer { rateStateLock.unlock() }
+        return (lockedRates, lockedSourceStatus)
+    }
+
+    /// True when the last successful fetch is older than `staleRateAge`.
+    public func ratesAreStale(now: Date = Date()) -> Bool {
+        lastRefreshTime != .distantPast && now.timeIntervalSince(lastRefreshTime) > Self.staleRateAge
+    }
 
     /// True once any conversion has had to fall back to the hard-coded
     /// approximate rates below. Surfaced in the UI so a portfolio total computed
@@ -90,11 +123,20 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
             lastRefreshSuccess = true
         }
 
+        storeRateState()
         if loadHistoryOnInit {
             loadRateHistory()
         }
         if refreshOnInit {
             refreshRates()
+            // Rates were fetched only at launch, so a long-running menu-bar
+            // session kept converting with launch-day rates.
+            let timer = Timer(timeInterval: 3_600, repeats: true) { [weak self] _ in
+                self?.refreshRates()
+            }
+            timer.tolerance = 300
+            RunLoop.main.add(timer, forMode: .common)
+            periodicRefreshTimer = timer
         }
     }
 
@@ -239,8 +281,10 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
             try providerPolicy.authorize(.directFX)
         } catch {
             Task { await Logger.shared.warning("💱 [CurrencyConverter] Direct FX request blocked: \(error.localizedDescription)") }
-            lastRefreshSuccess = false
-            sourceStatus = .unavailable
+            Task { @MainActor [weak self] in
+                self?.lastRefreshSuccess = false
+                self?.sourceStatus = .unavailable
+            }
             setRateRefreshInFlight(false)
             return
         }
@@ -409,22 +453,22 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     }
 
     public func convert(amount: Double, from: String, to: String) -> Double {
-        let sourceIsPence = Self.isPenceCurrency(from)
-        let targetIsPence = Self.isPenceCurrency(to)
-        let sourceCurrency = sourceIsPence ? "GBP" : Self.normalizedCurrencyCode(from)
-        let targetCurrency = targetIsPence ? "GBP" : Self.normalizedCurrencyCode(to)
-
-        if sourceIsPence && targetIsPence {
+        // Minor units (pence GBp/GBX, South African cents ZAc, Israeli agorot ILA)
+        // convert through their major currency at 1/100.
+        let sourceMinor = Self.minorUnitMajorCurrency(from)
+        let targetMinor = Self.minorUnitMajorCurrency(to)
+        if let sourceMinor, sourceMinor == targetMinor {
             return amount
         }
-
-        if sourceIsPence {
-            return convert(amount: amount / 100, from: "GBP", to: targetCurrency)
+        if let sourceMinor {
+            return convert(amount: amount / 100, from: sourceMinor, to: to)
         }
-
-        if targetIsPence {
-            return convert(amount: amount, from: sourceCurrency, to: "GBP") * 100
+        if let targetMinor {
+            return convert(amount: amount, from: from, to: targetMinor) * 100
         }
+        let sourceCurrency = Self.normalizedCurrencyCode(from)
+        let targetCurrency = Self.normalizedCurrencyCode(to)
+        let (exchangeRates, sourceStatus) = rateState()
 
         // If same currency, return original amount
         if sourceCurrency == targetCurrency {
@@ -504,6 +548,16 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
 
     private static func normalizedCurrencyCode(_ currency: String) -> String {
         currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    /// The major currency for a 1/100 minor-unit code, or nil.
+    static func minorUnitMajorCurrency(_ currency: String) -> String? {
+        if isPenceCurrency(currency) { return "GBP" }
+        switch currency.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "ZAc", "ZAC": return "ZAR"
+        case "ILA": return "ILS"
+        default: return nil
+        }
     }
 
     static func isPenceCurrency(_ currency: String) -> Bool {

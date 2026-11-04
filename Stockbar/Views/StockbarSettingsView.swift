@@ -347,7 +347,7 @@ struct StockbarSettingsView: View {
                     Text(dataModel.currencyConverter.getTimeSinceRefresh())
                         .foregroundStyle(dataModel.currencyConverter.lastRefreshSuccess ? Color.secondary : Color.orange)
                     Button {
-                        dataModel.currencyConverter.refreshRates()
+                        dataModel.currencyConverter.refreshRates(force: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }

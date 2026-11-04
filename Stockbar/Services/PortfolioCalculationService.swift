@@ -127,6 +127,7 @@ class PortfolioCalculationService {
             }
             
             logger.post(.debug, "Gain calculation for \(symbol): currentPrice=\(currentPrice), adjustedCost=\(adjustedCost), units=\(units), currency=\(currency ?? "nil"), rawGains=\(rawGains), gainsInUSD=\(gainsInUSD)")
+            guard gainsInUSD.isFinite else { continue } // no exchange rate for this currency
             totalGainsUSD += gainsInUSD
         }
         
@@ -197,6 +198,7 @@ class PortfolioCalculationService {
             }
             
             logger.post(.debug, "Value calculation for \(symbol): currentPrice=\(currentPrice), units=\(units), currency=\(currency ?? "nil"), marketValueInStockCurrency=\(marketValueInStockCurrency), marketValueInUSD=\(marketValueInUSD)")
+            guard marketValueInUSD.isFinite else { continue } // no exchange rate for this currency
             totalValueUSD += marketValueInUSD
         }
         
@@ -250,20 +252,30 @@ class PortfolioCalculationService {
             let symbol = realTimeTradeItem.trade.name
             let currency = info.currency ?? "USD"
             let currentValueUSD = convertToUSD(amount: displayPrice * units, currency: currency)
+            // A currency with no available rate converts to NaN; one such
+            // position must not turn every total and the menu-bar title into NaN.
+            guard currentValueUSD.isFinite else {
+                logger.post(.warning, "No exchange rate for \(currency); \(symbol) is left out of portfolio totals")
+                continue
+            }
             totalValueUSD += currentValueUSD
             ownedPositionCount += 1
 
             if prevClosePrice.isFinite, prevClosePrice > 0 {
                 let prevValueUSD = convertToUSD(amount: prevClosePrice * units, currency: currency)
-                totalPrevCloseUSD += prevValueUSD
-                dayGainUSD += currentValueUSD - prevValueUSD
+                if prevValueUSD.isFinite {
+                    totalPrevCloseUSD += prevValueUSD
+                    dayGainUSD += currentValueUSD - prevValueUSD
+                }
             }
 
             let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: symbol)
             if adjustedCost.isFinite, adjustedCost > 0 {
                 let costUSD = convertToUSD(amount: adjustedCost * units, currency: currency)
-                totalCostUSD += costUSD
-                totalGainUSD += currentValueUSD - costUSD
+                if costUSD.isFinite {
+                    totalCostUSD += costUSD
+                    totalGainUSD += currentValueUSD - costUSD
+                }
             }
         }
 
