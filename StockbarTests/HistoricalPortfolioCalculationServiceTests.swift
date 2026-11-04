@@ -144,6 +144,28 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(HistoricalDataManager.mergePortfolioHistory(existing: recorded, recalculated: []).count, recorded.count)
     }
 
+    func testOldPortfolioHistoryKeepsOneSnapshotPerDayInMemory() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = calendar.startOfDay(for: now)
+        func snapshot(daysAgo: Double, value: Double) -> HistoricalPortfolioSnapshot {
+            HistoricalPortfolioSnapshot(
+                date: today.addingTimeInterval(-daysAgo * 86_400), totalValue: value, totalGains: 0,
+                totalCost: value, currency: "GBP", portfolioComposition: [:]
+            )
+        }
+        // Three intraday samples on an old day and on a recent day.
+        let old = [snapshot(daysAgo: 99.8, value: 1), snapshot(daysAgo: 99.5, value: 2), snapshot(daysAgo: 99.2, value: 3)]
+        let recent = [snapshot(daysAgo: 4.8, value: 4), snapshot(daysAgo: 4.5, value: 5), snapshot(daysAgo: 4.2, value: 6)]
+
+        let thinned = HistoricalDataManager.thinnedPortfolioHistory(
+            (recent + old).shuffled(), fullResolutionDays: 90, now: now, calendar: calendar
+        )
+
+        XCTAssertEqual(thinned.map(\.totalValue), [3, 4, 5, 6], "Old days keep their last snapshot; recent days keep every sample")
+    }
+
     func testPortfolioCompositionHashIsStableAcrossLaunches() {
         let positions = [
             PortfolioPosition(symbol: "SSE.L", units: 10, avgCost: 15, currency: "GBP"),

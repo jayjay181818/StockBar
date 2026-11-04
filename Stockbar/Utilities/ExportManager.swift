@@ -19,7 +19,8 @@ final class ExportManager {
         chartData: [ChartDataPoint],
         chartType: ChartType,
         timeRange: ChartTimeRange,
-        metrics: PerformanceMetrics?
+        metrics: PerformanceMetrics?,
+        filterNotes: [String] = []
     ) {
         let fileName = generateFileName(type: "csv", chartType: chartType, timeRange: timeRange)
         
@@ -35,6 +36,7 @@ final class ExportManager {
                     chartType: chartType,
                     timeRange: timeRange,
                     metrics: metrics,
+                    filterNotes: filterNotes,
                     to: url
                 )
             }
@@ -65,10 +67,11 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
+        filterNotes: [String],
         to url: URL
     ) {
         do {
-            var csvContent = generateCSVHeader(chartType: chartType, timeRange: timeRange, metrics: metrics)
+            var csvContent = generateCSVHeader(chartType: chartType, timeRange: timeRange, metrics: metrics, filterNotes: filterNotes)
             csvContent += generateCSVData(chartData: chartData)
             
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
@@ -103,7 +106,8 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
-        chartImage: NSImage?
+        chartImage: NSImage?,
+        filterNotes: [String] = []
     ) {
         let fileName = generateFileName(type: "pdf", chartType: chartType, timeRange: timeRange)
         
@@ -120,6 +124,7 @@ final class ExportManager {
                     timeRange: timeRange,
                     metrics: metrics,
                     chartImage: chartImage,
+                    filterNotes: filterNotes,
                     to: url
                 )
             }
@@ -132,6 +137,7 @@ final class ExportManager {
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
         chartImage: NSImage?,
+        filterNotes: [String],
         to url: URL
     ) {
         do {
@@ -140,7 +146,8 @@ final class ExportManager {
                 chartType: chartType,
                 timeRange: timeRange,
                 metrics: metrics,
-                chartImage: chartImage
+                chartImage: chartImage,
+                filterNotes: filterNotes
             )
             
             try pdfData.write(to: url)
@@ -157,7 +164,8 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
-        chartImage: NSImage?
+        chartImage: NSImage?,
+        filterNotes: [String]
     ) -> Data {
         let pdfData = NSMutableData()
         let pageSize = CGSize(width: 612, height: 792) // US Letter size
@@ -181,6 +189,9 @@ final class ExportManager {
         dateFormatter.timeStyle = .short
         let exportDate = "Generated on \(dateFormatter.string(from: Date()))"
         drawText(context: context, text: exportDate, point: CGPoint(x: 50, y: 720), fontSize: 12)
+        for (index, note) in filterNotes.enumerated() {
+            drawText(context: context, text: "Filter: \(note)", point: CGPoint(x: 50, y: 704 - CGFloat(index) * 14), fontSize: 10)
+        }
         
         // Draw chart image if available
         if let chartImage = chartImage {
@@ -218,11 +229,14 @@ final class ExportManager {
         return "\(basePrefix)-\(chartName)-\(rangeName)-\(timestamp).\(type)"
     }
     
-    private func generateCSVHeader(chartType: ChartType, timeRange: ChartTimeRange, metrics: PerformanceMetrics?) -> String {
+    private func generateCSVHeader(chartType: ChartType, timeRange: ChartTimeRange, metrics: PerformanceMetrics?, filterNotes: [String]) -> String {
         var header = "# Stockbar Export Report\n"
         header += "# Chart Type: \(chartType.title)\n"
         header += "# Time Range: \(timeRange.description)\n"
         header += "# Generated: \(CSVExportFormatter.isoDate(Date()))\n"
+        for note in filterNotes {
+            header += "# Filter: \(note)\n"
+        }
         
         if let metrics = metrics {
             header += "# \n"
@@ -242,6 +256,34 @@ final class ExportManager {
         return header
     }
     
+    /// Human-readable notes for every filter that narrowed an exported series.
+    nonisolated static func filterNotes(
+        valueThreshold: Double,
+        dateWindow: (from: Date, toExclusive: Date)?,
+        selectedPoints: Int,
+        calendar: Calendar = .current
+    ) -> [String] {
+        var notes: [String] = []
+        if valueThreshold > 0 {
+            let threshold = valueThreshold.rounded() == valueThreshold && abs(valueThreshold) < 1e15
+                ? String(Int(valueThreshold)) : CSVExportFormatter.number(valueThreshold)
+            notes.append("values below \(threshold) excluded")
+        }
+        if let dateWindow {
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            let lastDay = calendar.date(byAdding: .day, value: -1, to: dateWindow.toExclusive) ?? dateWindow.toExclusive
+            notes.append("dates \(formatter.string(from: dateWindow.from)) to \(formatter.string(from: lastDay))")
+        }
+        if selectedPoints > 0 {
+            notes.append("only the \(selectedPoints) selected point(s)")
+        }
+        return notes
+    }
+
     private func generateCSVData(chartData: [ChartDataPoint]) -> String {
         CSVExportFormatter.chartDataRows(chartData)
     }

@@ -57,6 +57,13 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
             } else {
                 self.updateStoreLoadState(.loaded)
                 Task { await Logger.shared.info("Core Data store loaded successfully with performance optimizations") }
+                // Nothing reads persistent history, so it only grows. It must stay
+                // enabled (turning it off makes Core Data open the store read-only),
+                // so trim it once the app has settled.
+                Task.detached(priority: .background) {
+                    try? await Task.sleep(for: .seconds(30))
+                    await self.purgePersistentHistory(olderThan: 7 * 86_400)
+                }
             }
         })
         
@@ -165,6 +172,19 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Deletes persistent history transactions older than `age` seconds.
+    func purgePersistentHistory(olderThan age: TimeInterval, now: Date = Date()) async {
+        let cutoff = now.addingTimeInterval(-age)
+        do {
+            try await performBackgroundTask { context in
+                _ = try context.execute(NSPersistentHistoryChangeRequest.deleteHistory(before: cutoff))
+            }
+            await Logger.shared.debug("Purged Core Data history before \(cutoff.ISO8601Format())")
+        } catch {
+            await Logger.shared.warning("Core Data history purge failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Batch Operations
     
     func performOptimizedBatchTask<T: Sendable>(_ block: @Sendable @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
