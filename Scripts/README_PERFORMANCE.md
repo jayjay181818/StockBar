@@ -8,7 +8,7 @@
 
 2. **Run Performance Test**
    ```bash
-   cd "/Users/user/Downloads/Stockbar Claude/Stockbar/Scripts"
+   cd Scripts  # from the repository root
    ./measure_performance.sh
    ```
 

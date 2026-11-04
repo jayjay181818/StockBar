@@ -157,3 +157,22 @@ GITHUB_RELEASE_*.md
 /default.profraw
 .claude/settings.local.json
 Docs/Opus5_Findings_2026-07-26_archive.md
+
+# Secrets and local data (never commit)
+.env
+.env.*
+*.env
+*.pem
+*.p12
+*.key
+*.mobileprovision
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local agent tool settings
+.codex/
+
+# Folync/Stockbar compatibility notes (private)
+/stockbarintegrationchangelog.md
+/README_Folync.md
