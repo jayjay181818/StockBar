@@ -18,6 +18,8 @@ class BackupService {
     private let backupDirectoryName = "Backups"
     private let backupFilePrefix = "portfolio_backup_"
     private let backupFileExtension = "json"
+    /// The newest backups are always kept, whatever their age.
+    private let minimumBackupsKept = 5
 
     /// Default retention period in days
     var retentionDays: Int {
@@ -215,26 +217,38 @@ class BackupService {
 
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date())!
 
-        var deletedCount = 0
-        for fileURL in contents {
-            guard fileURL.pathExtension == backupFileExtension,
-                  fileURL.lastPathComponent.starts(with: backupFilePrefix),
-                  fileURL.standardizedFileURL != keptURL?.standardizedFileURL else {
-                continue
-            }
-
+        var dated: [(url: URL, created: Date)] = []
+        for fileURL in contents where fileURL.pathExtension == backupFileExtension
+            && fileURL.lastPathComponent.starts(with: backupFilePrefix) {
             let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-            if let creationDate = attributes[.creationDate] as? Date,
-               creationDate < cutoffDate {
-                try fileManager.removeItem(at: fileURL)
-                deletedCount += 1
-                await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
-            }
+            dated.append((fileURL, attributes[.creationDate] as? Date ?? .distantPast))
+        }
+
+        var deletedCount = 0
+        for fileURL in Self.backupsToDelete(dated, cutoff: cutoffDate, minimumKept: minimumBackupsKept, keeping: keptURL) {
+            try fileManager.removeItem(at: fileURL)
+            deletedCount += 1
+            await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
         }
 
         if deletedCount > 0 {
             await logger.info("Cleaned up \(deletedCount) old backup(s)")
         }
+    }
+
+    /// Backups older than the cutoff, except the newest `minimumKept` (so a
+    /// long gap between launches never deletes every backup) and `keptURL`.
+    nonisolated static func backupsToDelete(
+        _ backups: [(url: URL, created: Date)],
+        cutoff: Date,
+        minimumKept: Int,
+        keeping keptURL: URL?
+    ) -> [URL] {
+        backups
+            .sorted { $0.created > $1.created }
+            .dropFirst(minimumKept)
+            .filter { $0.created < cutoff && $0.url.standardizedFileURL != keptURL?.standardizedFileURL }
+            .map(\.url)
     }
 
     /// Deletes a specific backup file

@@ -140,7 +140,7 @@ rm -rf ~/Library/Application\ Support/Stockbar ~/Library/Application\ Support/co
 rm -rf ~/Library/Caches/stockbar-cache ~/Library/Logs/com.stockbar
 ```
 
-Trading 212 and Folync credentials can be removed from Keychain Access or from Settings → Connections before uninstalling.
+Before uninstalling, clear Trading 212 credentials from Settings → Connections. Other saved credentials, including any Folync token, can be removed in Keychain Access.
 
 ## Privacy and security
 

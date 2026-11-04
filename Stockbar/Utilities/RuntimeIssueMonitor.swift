@@ -39,7 +39,8 @@ actor RuntimeIssueMonitor {
 
         monitoringTask = Task { [weak self] in
             while !Task.isCancelled {
-                let logs = await logger.getTailLogs(maxLines: maxLines)
+                // Raw lines: a leak check on already-redacted text could never fire.
+                let logs = await logger.getTailLogs(maxLines: maxLines, redacted: false)
                 let snapshot = Self.scan(logs: logs)
                 await self?.publish(snapshot: snapshot, logger: logger)
 

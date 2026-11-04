@@ -113,7 +113,7 @@ class ChartAnnotationService: ObservableObject {
     private func saveAnnotations() {
         do {
             let data = try JSONEncoder().encode(annotations)
-            try data.write(to: storageURL)
+            try data.write(to: storageURL, options: .atomic)
         } catch {
             Task {
                 await logger.error("❌ Failed to save annotations: \(error.localizedDescription)")
@@ -123,18 +123,52 @@ class ChartAnnotationService: ObservableObject {
     
     private func loadAnnotations() {
         guard FileManager.default.fileExists(atPath: storageURL.path) else { return }
-        
+
         do {
             let data = try Data(contentsOf: storageURL)
-            annotations = try JSONDecoder().decode([ChartAnnotation].self, from: data)
-            
-            Task {
-                await logger.info("✅ Loaded \(annotations.count) annotations from disk")
+            let decoded = try Self.decodeAnnotations(from: data)
+            annotations = decoded.annotations
+            if decoded.droppedCount > 0 {
+                // Keep the original so unreadable entries are not lost on the next save.
+                preserveUnreadableFile(reason: "\(decoded.droppedCount) unreadable entries")
+            }
+            Task { [count = annotations.count] in
+                await logger.info("✅ Loaded \(count) annotations from disk")
             }
         } catch {
-            Task {
-                await logger.error("❌ Failed to load annotations: \(error.localizedDescription)")
-            }
+            preserveUnreadableFile(reason: error.localizedDescription)
+        }
+    }
+
+    /// Decodes entries one at a time so one bad entry does not discard the rest.
+    nonisolated static func decodeAnnotations(from data: Data) throws -> (annotations: [ChartAnnotation], droppedCount: Int) {
+        let entries = try JSONDecoder().decode([LossyAnnotation].self, from: data)
+        let annotations = entries.compactMap(\.value)
+        return (annotations, entries.count - annotations.count)
+    }
+
+    private struct LossyAnnotation: Decodable {
+        let value: ChartAnnotation?
+
+        init(from decoder: Decoder) throws {
+            value = try? ChartAnnotation(from: decoder)
+        }
+    }
+
+    /// Moves the file aside (or copies it when some entries loaded) so a later
+    /// save cannot overwrite annotations that failed to load.
+    private func preserveUnreadableFile(reason: String) {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let backupURL = storageURL.deletingPathExtension()
+            .appendingPathExtension("unreadable-\(stamp).json")
+        do {
+            try FileManager.default.copyItem(at: storageURL, to: backupURL)
+        } catch {
+            Task { await logger.error("❌ Could not preserve unreadable annotations file: \(error.localizedDescription)") }
+            return
+        }
+        Task {
+            await logger.error("❌ Annotations file was partly unreadable (\(reason)); kept a copy at \(backupURL.lastPathComponent)")
         }
     }
 }
