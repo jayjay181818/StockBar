@@ -284,7 +284,9 @@ class DataModel: ObservableObject {
         // scales; analytics read these snapshots without display-time guards.
         Task { @MainActor [weak self] in
             let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded()
-            self?.historicalDataManager.invalidatePriceData(for: repairedSymbols)
+            guard let self, !repairedSymbols.isEmpty else { return }
+            self.historicalDataManager.invalidatePriceData(for: repairedSymbols)
+            await self.historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
         }
 
         // Initialize memory optimization

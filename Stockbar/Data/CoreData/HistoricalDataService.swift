@@ -5,6 +5,7 @@ protocol HistoricalDataServiceProtocol: Sendable {
     func savePriceSnapshots(_ snapshots: [PriceSnapshot]) async throws
     func fetchPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
     func fetchAllPriceSnapshots(for symbol: String) async throws -> [PriceSnapshot]
+    func fetchStoredPriceSymbols() async throws -> [String]
     func fetchPriceSnapshotsPaginated(for symbol: String, from startDate: Date, to endDate: Date, offset: Int, limit: Int) async throws -> [PriceSnapshot]
     func savePortfolioSnapshot(_ snapshot: HistoricalPortfolioSnapshot) async throws
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot]
@@ -153,6 +154,17 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
         }
     }
     
+    /// Distinct symbols with stored price history.
+    func fetchStoredPriceSymbols() async throws -> [String] {
+        return try await coreDataStack.performBackgroundTask { context in
+            let request = NSFetchRequest<NSDictionary>(entityName: "PriceSnapshotEntity")
+            request.resultType = .dictionaryResultType
+            request.propertiesToFetch = ["symbol"]
+            request.returnsDistinctResults = true
+            return try context.fetch(request).compactMap { $0["symbol"] as? String }
+        }
+    }
+
     func fetchPriceSnapshotsPaginated(
         for symbol: String,
         from startDate: Date,

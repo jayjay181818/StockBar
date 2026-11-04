@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct PriceSnapshot: Codable, Identifiable, Sendable {
@@ -216,7 +217,9 @@ struct PortfolioComposition: Codable, Hashable, Sendable {
         let combined = positions.sorted { $0.symbol < $1.symbol }
             .map { "\($0.symbol):\($0.units):\($0.avgCost)" }
             .joined(separator: "|")
-        return String(combined.hashValue)
+        // A stable digest: String.hashValue is seeded per process, so a stored
+        // hash never matched after relaunch and forced a full recalculation.
+        return SHA256.hash(data: Data(combined.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
