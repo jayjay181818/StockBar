@@ -129,6 +129,8 @@ actor SectorAnalysisService {
             "GILD": .healthcare, "VRTX": .healthcare, "ISRG": .healthcare, "REGN": .healthcare,
             "CI": .healthcare, "HUM": .healthcare, "BSX": .healthcare, "MDT": .healthcare,
             "HIMS": .healthcare, "OSCR": .healthcare, "SAGE": .healthcare,
+            // Cybin (now HELP) and Definium Therapeutics (formerly MindMed, MNMD).
+            "HELP": .healthcare, "CYBN": .healthcare, "DFTX": .healthcare, "MNMD": .healthcare,
 
             // Financials
             "BRK.B": .financials, "JPM": .financials, "V": .financials, "MA": .financials,
@@ -184,6 +186,7 @@ actor SectorAnalysisService {
             // Technology
             "SGE.L": .technology, // Sage Group
             "DARK.L": .technology,
+            "SMSD.L": .technology, // Samsung Electronics GDR
 
             // Healthcare
             "AZN.L": .healthcare, "GSK.L": .healthcare, "HIK.L": .healthcare, "SN.L": .healthcare,
@@ -198,6 +201,7 @@ actor SectorAnalysisService {
             "FRAS.L": .consumerCyclical, "NEXT.L": .consumerCyclical, "BDEV.L": .consumerCyclical,
             "PSON.L": .consumerCyclical, "BRBY.L": .consumerCyclical, "CPG.L": .consumerCyclical,
             "TW.L": .consumerCyclical, "PSN.L": .consumerCyclical, "SMWH.L": .consumerCyclical,
+            "CARD.L": .consumerCyclical, // Card Factory
 
             // Consumer Defensive
             "TSCO.L": .consumerDefensive, "SBRY.L": .consumerDefensive, "OCDO.L": .consumerDefensive,
@@ -229,7 +233,8 @@ actor SectorAnalysisService {
 
             // Basic Materials
             "RIO.L": .basicMaterials, "GLEN.L": .basicMaterials,
-            "ANTO.L": .basicMaterials, "CRH.L": .basicMaterials, "JMAT.L": .basicMaterials
+            "ANTO.L": .basicMaterials, "CRH.L": .basicMaterials, "JMAT.L": .basicMaterials,
+            "COPG.L": .basicMaterials // Global X Copper Miners ETF
         ]
     }
 

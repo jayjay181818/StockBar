@@ -403,6 +403,11 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         XCTAssertEqual(Sector.forSymbol("EZJ.L"), .industrials)
         XCTAssertEqual(Sector.forSymbol("PSN.L"), .consumerCyclical)
         XCTAssertEqual(Sector.forSymbol("OSCR"), .healthcare)
+        XCTAssertEqual(Sector.forSymbol("SMSD.L"), .technology)
+        XCTAssertEqual(Sector.forSymbol("CARD.L"), .consumerCyclical)
+        XCTAssertEqual(Sector.forSymbol("COPG.L"), .basicMaterials)
+        XCTAssertEqual(Sector.forSymbol("HELP"), .healthcare)
+        XCTAssertEqual(Sector.forSymbol("DFTX"), .healthcare)
         XCTAssertEqual(Sector.forSymbol("VOD.L"), .communicationServices)
     }
 
