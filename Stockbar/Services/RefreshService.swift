@@ -173,7 +173,7 @@ class RefreshService {
                 return
             }
 
-            let resultDict = Dictionary(uniqueKeysWithValues: results.map { ($0.symbol.uppercased(), $0) })
+            let resultDict = Dictionary(firstValuesFor: results.map { ($0.symbol.uppercased(), $0) })
 
             let targetedSet = Set(finalSymbolsToRefresh.map { $0.uppercased() })
 

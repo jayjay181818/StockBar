@@ -323,6 +323,16 @@ struct InstrumentResolutionResult: Equatable {
 }
 
 struct BrokerAccountIdentity: Equatable {
+    /// The parts of a broker account key that survive an account label edit
+    /// or API key rotation: broker, environment, account type and the hashed
+    /// Trading 212 account id. Nil without an account id, because nothing
+    /// stable then identifies the account.
+    static func stableIdentity(ofKey key: String) -> String? {
+        let parts = key.components(separatedBy: "|")
+        guard parts.count == 6, parts[5] != "no-account-id", !parts[5].isEmpty else { return nil }
+        return [parts[0], parts[1], parts[2], parts[5]].joined(separator: "|")
+    }
+
     let broker: String
     let brokerAccountKey: String
     let apiAccountIdHash: String?

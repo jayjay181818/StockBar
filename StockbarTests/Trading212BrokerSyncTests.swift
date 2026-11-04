@@ -26,6 +26,11 @@ final class Trading212BrokerSyncTests: XCTestCase {
                        "After sleep, use the next minute boundary without replaying missed polls")
     }
 
+    func testDictionaryFirstValuesForKeepsFirstValueInsteadOfTrapping() {
+        let values = Dictionary(firstValuesFor: [("AV.L", 1), ("", 2), ("AV.L", 3), ("", 4)])
+        XCTAssertEqual(values, ["AV.L": 1, "": 2], "Duplicate symbols (including blank rows) must not crash")
+    }
+
     func testFolyncFailedPollBackoffSlowsRejectedTokensAndHonoursRetryAfter() {
         let now = Date(timeIntervalSince1970: 1_800_000_000).addingTimeInterval(5)
         XCTAssertEqual(FolyncRefreshSchedule.backoff(after: FolyncPortfolioSourceError.unauthorized, at: now),
@@ -276,6 +281,112 @@ final class Trading212BrokerSyncTests: XCTestCase {
 
     func testDeletesLinkedHoldingAndLinkWhenBrokerPositionIsMissingAndDeletionEnabled() {
         let linkedAt = Date(timeIntervalSince1970: 100)
+        let missing = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let held = makeLink(
+            instrumentId: "LSE:SSE",
+            providerTicker: "SSEl_EQ",
+            manualSymbol: "SSE.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [missing, held]
+        )
+        let trades = ["AV.L", "SSE.L"].map {
+            Trade(name: $0, position: Position(unitSize: "500", positionAvgCost: "486.26", currency: "GBX", costCurrency: "GBX"))
+        }
+        let preview = makePreview(
+            instrumentId: "LSE:SSE",
+            providerTicker: "SSEl_EQ",
+            manualSymbol: "SSE.L",
+            quantity: 500,
+            averagePrice: 486.26,
+            brokerPrice: 620,
+            currentValue: 3_100
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: trades,
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(plan.deletedManualSymbols, ["AV.L"])
+        XCTAssertEqual(plan.deletedLinkIDs, [missing.id])
+        XCTAssertTrue(plan.missingLinkedSymbols.isEmpty)
+    }
+
+    func testRekeyedMovesLinksWhenAccountLabelOrAPIKeyChanges() throws {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 2,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        // Same account id; new label hash and API key fingerprint.
+        let renamed = BrokerAccountIdentity(
+            broker: "Trading212",
+            brokerAccountKey: "Trading212|live|isa|newlabel|newcredential|account",
+            apiAccountIdHash: "account",
+            accountLabel: "My ISA",
+            accountType: .stocksAndSharesISA,
+            taxWrapper: "ISA",
+            environment: .live,
+            credentialFingerprint: "newcredential"
+        )
+
+        let moved = try XCTUnwrap(snapshot.rekeyed(to: renamed, now: Date(timeIntervalSince1970: 300)))
+
+        XCTAssertEqual(moved.positions.map(\.brokerAccountKey), [renamed.brokerAccountKey])
+        XCTAssertEqual(moved.positions.first?.manualSymbol, "AV.L")
+        XCTAssertEqual(moved.accounts.map(\.brokerAccountKey), [renamed.brokerAccountKey])
+        XCTAssertEqual(moved.accounts.first?.accountLabel, "My ISA")
+        XCTAssertEqual(moved.accounts.first?.linkedAt, linkedAt, "The original link date is kept")
+        XCTAssertNil(moved.rekeyed(to: renamed), "Re-keying twice is a no-op")
+    }
+
+    func testRekeyedLeavesOtherAccountsAndKeysWithoutAccountIDAlone() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 2,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [makeLink(instrumentId: "LSE:AV", providerTicker: "AVI_EQ", manualSymbol: "AV.L", manualCurrency: "GBX", linkedAt: linkedAt)]
+        )
+        func identity(_ key: String) -> BrokerAccountIdentity {
+            BrokerAccountIdentity(
+                broker: "Trading212", brokerAccountKey: key, apiAccountIdHash: nil, accountLabel: "ISA",
+                accountType: .stocksAndSharesISA, taxWrapper: "ISA", environment: .live, credentialFingerprint: "x"
+            )
+        }
+
+        XCTAssertNil(snapshot.rekeyed(to: identity("Trading212|live|isa|newlabel|newcredential|other-account")))
+        XCTAssertNil(snapshot.rekeyed(to: identity("Trading212|demo|isa|newlabel|newcredential|account")))
+        XCTAssertNil(snapshot.rekeyed(to: identity("Trading212|live|isa|newlabel|newcredential|no-account-id")))
+    }
+
+    func testEmptyBrokerResponseNeverDeletesLinkedHoldings() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
         let link = makeLink(
             instrumentId: "LSE:AV",
             providerTicker: "AVI_EQ",
@@ -303,10 +414,48 @@ final class Trading212BrokerSyncTests: XCTestCase {
             syncedAt: Date(timeIntervalSince1970: 200)
         )
 
-        XCTAssertEqual(plan.deletedManualSymbols, ["AV.L"])
-        XCTAssertEqual(plan.deletedLinkIDs, [link.id])
-        XCTAssertTrue(plan.tradeUpdates.isEmpty)
-        XCTAssertTrue(plan.missingLinkedSymbols.isEmpty)
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty, "An empty positions list is treated as an outage, not a sell-off")
+        XCTAssertTrue(plan.deletedLinkIDs.isEmpty)
+        XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
+    }
+
+    func testBrokerResponseMatchingNoLinkedHoldingNeverDeletes() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "LSE:AV",
+            providerTicker: "AVI_EQ",
+            manualSymbol: "AV.L",
+            manualCurrency: "GBX",
+            linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1,
+            updatedAt: linkedAt,
+            accounts: [makeLinkedAccount(linkedAt: linkedAt)],
+            positions: [link]
+        )
+        let unrelated = makeBrokerOnlyRow(
+            instrumentId: "US:MNMD",
+            providerTicker: "MNMD_US_EQ",
+            displaySymbol: "MNMD",
+            displayName: "Definium Therapeutics",
+            quantity: 50,
+            averagePrice: 25,
+            brokerPrice: 30,
+            currentValue: 1_500
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: [Trade(name: "AV.L", position: Position(unitSize: "500", positionAvgCost: "486.26", currency: "GBX"))],
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: makePreview(rows: [unrelated]),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+        XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
     }
 
     func testMissingBrokerPositionIsReportedButNotDeletedWhenDeletionDisabled() {

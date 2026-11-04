@@ -65,6 +65,16 @@ if [[ -n "$unscoped_app_storage" ]]; then
   echo "$unscoped_app_storage"
 fi
 
+# 7. Dictionary(uniqueKeysWithValues:) traps on a repeated key. Keys built from
+#    holdings or provider data can repeat, so use Dictionary(firstValuesFor:).
+trapping_dictionaries="$(
+  rg -n 'Dictionary\(uniqueKeysWithValues:' Stockbar -g '*.swift' || true
+)"
+if [[ -n "$trapping_dictionaries" ]]; then
+  fail "Dictionary(uniqueKeysWithValues:) traps on duplicate keys; use Dictionary(firstValuesFor:):"
+  echo "$trapping_dictionaries"
+fi
+
 if [[ "$status" -eq 0 ]]; then
   echo "Invariant validation passed"
 fi

@@ -33,7 +33,7 @@ struct InstrumentAliasRepairPlanner {
         alerts: [AliasMigrationAlert],
         preferredAliases: [String: String] = [:]
     ) -> AliasIdentityRepairResult {
-        let tradesBySymbol = Dictionary(uniqueKeysWithValues: trades.map { ($0.name.uppercased(), $0) })
+        let tradesBySymbol = Dictionary(firstValuesFor: trades.map { ($0.name.uppercased(), $0) })
         let duplicateGroups = Dictionary(grouping: links.positions, by: \.id).values.filter { $0.count > 1 }
         var aliases: [String: String] = [:]
         var quarantined = Set<String>()
@@ -322,7 +322,7 @@ struct InstrumentAliasStore {
         guard let value = defaults.dictionary(forKey: Self.aliasesKey) as? [String: String] else {
             return [:]
         }
-        return Dictionary(uniqueKeysWithValues: value.compactMap { key, value in
+        return Dictionary(firstValuesFor: value.compactMap { key, value in
             let alias = normalize(key)
             let survivor = normalize(value)
             return alias.isEmpty || survivor.isEmpty ? nil : (alias, survivor)
@@ -722,7 +722,7 @@ final class AliasIdentityMigrationService: @unchecked Sendable {
     }
 
     private func tradingInfoSignature(_ values: [String: TradingInfo]) throws -> Data {
-        let normalized = Dictionary(uniqueKeysWithValues: values.map { ($0.key.uppercased(), $0.value) })
+        let normalized = Dictionary(firstValuesFor: values.map { ($0.key.uppercased(), $0.value) })
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.nonConformingFloatEncodingStrategy = .convertToString(

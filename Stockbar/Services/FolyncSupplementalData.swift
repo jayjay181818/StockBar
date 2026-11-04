@@ -1137,7 +1137,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 && (row.rate ?? 0) > 0
                 && row.asOf != nil
         }
-        let rates = Dictionary(uniqueKeysWithValues: usableRows.compactMap { row -> (String, Double)? in
+        let rates = Dictionary(firstValuesFor: usableRows.compactMap { row -> (String, Double)? in
             guard row.quality != .unavailable,
                   let rate = row.rate,
                   rate.isFinite,

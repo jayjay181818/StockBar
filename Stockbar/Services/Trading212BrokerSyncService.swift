@@ -315,7 +315,7 @@ struct Trading212BrokerSyncPlanner {
                 && !quarantinedProviderKeys.contains($0.id)
         }
         let linkedInstrumentIDs = Set(linkedPositions.map(\.instrumentLinkID))
-        let rowsByInstrumentLinkID = Dictionary(uniqueKeysWithValues: preview.rows.compactMap { row -> (String, Trading212ImportPreviewRow)? in
+        let rowsByInstrumentLinkID = Dictionary(firstValuesFor: preview.rows.compactMap { row -> (String, Trading212ImportPreviewRow)? in
             guard let instrumentId = row.instrumentId else { return nil }
             return ("\(row.account.brokerAccountKey)|\(instrumentId)", row)
         })
@@ -326,6 +326,16 @@ struct Trading212BrokerSyncPlanner {
             "\($0.brokerAccountKey)|\($0.providerTicker.uppercased())"
         })
         let existingSymbols = Set(existingTrades.map { $0.name.uppercased() })
+        func row(for link: BrokerLinkedPosition) -> Trading212ImportPreviewRow? {
+            rowsByInstrumentLinkID[link.instrumentLinkID]
+                ?? rowsByProviderTicker["\(link.brokerAccountKey)|\(link.providerTicker.uppercased())"]?.first
+        }
+        // An empty response, or one matching none of the linked positions, is far
+        // more likely an outage or a re-keyed account than every linked position
+        // being sold at once, so it never deletes holdings; they report as missing.
+        let deletionAllowed = options.deleteMissingLinkedHoldings && linkedPositions.contains { link in
+            existingSymbols.contains(link.manualSymbol.uppercased()) && row(for: link) != nil
+        }
 
         var updates: [Trading212BrokerTradeUpdate] = []
         var deletedSymbols: [String] = []
@@ -338,11 +348,8 @@ struct Trading212BrokerSyncPlanner {
                 continue
             }
 
-            let row = rowsByInstrumentLinkID[link.instrumentLinkID]
-                ?? rowsByProviderTicker["\(link.brokerAccountKey)|\(link.providerTicker.uppercased())"]?.first
-
-            guard let row else {
-                if options.deleteMissingLinkedHoldings {
+            guard let row = row(for: link) else {
+                if deletionAllowed {
                     deletedSymbols.append(link.manualSymbol)
                     deletedLinkIDs.append(link.id)
                 } else {

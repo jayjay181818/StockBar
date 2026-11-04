@@ -78,6 +78,12 @@ class DataModel: ObservableObject {
     @Published var folyncCapabilities: FolyncCapabilities?
     @Published var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
     @Published private(set) var isInitialPortfolioSourceResolved = false
+    /// True after the startup load failed; portfolio writes are refused until a
+    /// restore or import succeeds.
+    @Published private(set) var portfolioLoadFailed = false
+    /// Last time a Trading 212 sync actually updated linked holdings. Market
+    /// refresh only defers to the broker while this is recent.
+    private var lastTrading212LinkedSyncAt: Date?
     var legacyPortfolioTrades: [RealTimeTrade]?
     var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
     var folyncRefreshTimer: Timer?
@@ -476,6 +482,10 @@ class DataModel: ObservableObject {
             // Initialize with empty trades if Core Data fails
             await MainActor.run {
                 self.realTimeTrades = []
+                // Every save replaces the whole stored portfolio, so the unread
+                // holdings would be lost by the next edit. Block writes until a
+                // restore or import replaces the portfolio deliberately.
+                self.portfolioLoadFailed = true
                 self.hasCompletedInitialTradeLoad = true
                 self.mayStartRuntimeSchedulers = false
                 self.ensureBenchmarkTracking()
@@ -527,7 +537,8 @@ class DataModel: ObservableObject {
     }
     
     internal func saveTradingInfo() {
-        let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades
+        guard !portfolioLoadFailed else { return }
+        let tradingInfoDict = Dictionary(firstValuesFor: realTimeTrades
             .filter { !isBenchmarkTrade($0) }
             .map { ($0.trade.name, $0.realTimeInfo) })
         
@@ -889,7 +900,7 @@ class DataModel: ObservableObject {
                 skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection or Sync Linked Holdings once."
             )
         }
-        let links = try await trading212BrokerLinkStore.loadSnapshot()
+        var links = try await trading212BrokerLinkStore.loadSnapshot()
         let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
         guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
             return Trading212BrokerSyncResult(
@@ -909,6 +920,10 @@ class DataModel: ObservableObject {
             includeMetadata: false,
             useCache: false
         )
+        if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+            await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
+        }
         let plan = trading212BrokerSyncPlanner.plan(
             existingTrades: realTimeTrades.map(\.trade),
             tradingInfoBySymbol: tradingInfoBySymbol(),
@@ -920,6 +935,7 @@ class DataModel: ObservableObject {
         )
 
         trading212BrokerValuationSnapshot = plan.valuationSnapshot
+        if !plan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
         applyTrading212BrokerSyncPlan(plan)
         if !plan.deletedLinkIDs.isEmpty {
             _ = try await trading212BrokerLinkStore.removePositions(ids: plan.deletedLinkIDs)
@@ -998,8 +1014,8 @@ class DataModel: ObservableObject {
         }
 
         let existingManualHoldings = realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) }
-        let links = try await trading212BrokerLinkStore.loadSnapshot()
-        let preview = try await trading212PreviewCoordinator.preview(
+        var links = try await trading212BrokerLinkStore.loadSnapshot()
+        var preview = try await trading212PreviewCoordinator.preview(
             settings: settings,
             credentials: credentials,
             existingManualHoldings: existingManualHoldings,
@@ -1007,6 +1023,20 @@ class DataModel: ObservableObject {
             includeMetadata: true,
             useCache: false
         )
+        if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
+            // The preview matched rows against the old keys; rebuild it so linked
+            // holdings are not mistaken for broker-only ones and imported again.
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+            preview = try await trading212PreviewCoordinator.preview(
+                settings: settings,
+                credentials: credentials,
+                existingManualHoldings: existingManualHoldings,
+                existingBrokerLinks: links,
+                includeMetadata: true,
+                useCache: false
+            )
+            await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
+        }
         let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
 
         guard !preview.rows.isEmpty || linkedPositionsForAccount.isEmpty else {
@@ -1032,6 +1062,7 @@ class DataModel: ObservableObject {
             syncedAt: Date()
         )
         trading212BrokerValuationSnapshot = syncPlan.valuationSnapshot
+        if !syncPlan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
         applyTrading212BrokerSyncPlan(syncPlan)
         if !syncPlan.deletedLinkIDs.isEmpty {
             _ = try await trading212BrokerLinkStore.removePositions(ids: syncPlan.deletedLinkIDs)
@@ -1144,6 +1175,14 @@ class DataModel: ObservableObject {
               credentialState.isReadyForBackgroundAccess else {
             return .empty
         }
+        // Defer to the broker only while its sync is actually updating linked
+        // holdings. If sync stops matching (revoked key, outage), market prices
+        // resume instead of freezing.
+        let freshnessWindow = max(15 * 60, TimeInterval(3 * settings.syncIntervalSeconds))
+        guard let lastSync = lastTrading212LinkedSyncAt,
+              Date().timeIntervalSince(lastSync) < freshnessWindow else {
+            return .empty
+        }
 
         do {
             let snapshot = try await trading212BrokerLinkStore.loadSnapshot()
@@ -1178,7 +1217,7 @@ class DataModel: ObservableObject {
     }
 
     private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
-        let updatesBySymbol = Dictionary(uniqueKeysWithValues: plan.tradeUpdates.map {
+        let updatesBySymbol = Dictionary(firstValuesFor: plan.tradeUpdates.map {
             ($0.manualSymbol.uppercased(), $0)
         })
         let deletedSymbols = Set(plan.deletedManualSymbols.map { $0.uppercased() })
@@ -1643,6 +1682,10 @@ class DataModel: ObservableObject {
 
     private func saveTrades(_ trades: [RealTimeTrade], allowEmptyPortfolio: Bool = false) {
         guard !isFolyncPortfolioActive else { return }
+        guard !portfolioLoadFailed else {
+            Task { await logger.warning("Skipped Core Data save: the stored portfolio failed to load and would be overwritten") }
+            return
+        }
         Task { await logger.debug("Saving \(trades.count) trades to Core Data") }
 
         // Filter on main actor to avoid crossing actor boundaries in detached task.
@@ -1699,6 +1742,7 @@ class DataModel: ObservableObject {
         }
 
         try await tradeDataService.saveAllTrades(portfolioTrades)
+        portfolioLoadFailed = false
 
         var existingInfo: [String: TradingInfo] = [:]
         for trade in realTimeTrades {

@@ -834,7 +834,7 @@ class HistoricalDataManager: ObservableObject {
             await savePriceSnapshotsToCoreData(currentPriceSnapshots)
             
             // Convert legacy portfolio snapshot to enhanced format for Core Data
-            let portfolioComposition: [String: PositionSnapshot] = Dictionary(uniqueKeysWithValues: 
+            let portfolioComposition: [String: PositionSnapshot] = Dictionary(firstValuesFor: 
                 dataModel.realTimeTrades.map { trade in
                     let positionSnapshot = PositionSnapshot(
                         symbol: trade.trade.name,
@@ -3057,7 +3057,7 @@ class HistoricalDataManager: ObservableObject {
         startDate: Date,
         endDate: Date
     ) -> [ChartDataPoint] {
-        let snapshotsBySymbol = Dictionary(uniqueKeysWithValues: positions.map { position in
+        let snapshotsBySymbol = Dictionary(firstValuesFor: positions.map { position in
             (
                 position.symbol,
                 allPortfolioMenuPriceSnapshots(for: position.symbol)

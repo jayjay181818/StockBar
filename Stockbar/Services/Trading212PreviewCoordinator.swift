@@ -259,7 +259,7 @@ struct Trading212PreviewCoordinator {
             includeMetadata: includeMetadata,
             useCache: useCache
         )
-        let metadataByTicker = Dictionary(uniqueKeysWithValues: snapshot.instruments.map { ($0.ticker.uppercased(), $0) })
+        let metadataByTicker = Dictionary(firstValuesFor: snapshot.instruments.map { ($0.ticker.uppercased(), $0) })
         let rows = snapshot.positions.map { position in
             let metadata = metadataByTicker[position.instrument.ticker.uppercased()]
             let resolution = resolver.resolveTrading212Position(
