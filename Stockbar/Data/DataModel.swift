@@ -19,23 +19,6 @@ extension String {
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
-/// Simple async lock used to serialize refresh operations so mutations
-/// to `realTimeTrades` always occur on the main actor in isolation.
-actor RefreshCoordinator {
-    private var isRefreshing = false
-
-    func withLock<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-        while isRefreshing {
-            await Task.yield()
-        }
-
-        isRefreshing = true
-        defer { isRefreshing = false }
-
-        return try await operation()
-    }
-}
-
 @MainActor
 class DataModel: ObservableObject {
     nonisolated static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
@@ -57,7 +40,6 @@ class DataModel: ObservableObject {
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
-    private let refreshCoordinator = RefreshCoordinator()
     private var pendingPersistenceTask: Task<Void, Never>?
     private let trading212SettingsStore = Trading212SettingsStore.shared
     private let trading212CredentialStore = Trading212CredentialStore.shared
@@ -245,7 +227,6 @@ class DataModel: ObservableObject {
             self.refreshService = RefreshService(
                 networkService: networkService,
                 cacheCoordinator: cacheCoordinator,
-                refreshCoordinator: refreshCoordinator,
                 refreshInterval: refreshInterval
             )
             self.refreshService.setDataModel(self)

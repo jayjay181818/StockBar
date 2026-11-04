@@ -15,8 +15,7 @@ macOS portfolio tracker with Swift/Python integration. `LSUIElement = false`: th
 ```
 DataModel (@MainActor ObservableObject)  central state hub
   ├── @Published realTimeTrades: [RealTimeTrade]   ← drives menu bar + all views
-  ├── RefreshCoordinator (actor)                   ← serializes refresh passes
-  ├── RefreshService                              ← refresh scheduling
+  ├── RefreshService                              ← refresh scheduling; RefreshPassScheduler serializes passes
   ├── CacheCoordinator (actor)                     ← TTL + backoff + circuit breaker
   ├── PythonNetworkService → python3 subprocess → get_stock_data.py
   ├── Trading212BrokerSyncService / Trading212Provider   ← broker-linked holdings
