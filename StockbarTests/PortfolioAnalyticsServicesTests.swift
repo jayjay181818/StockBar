@@ -524,6 +524,23 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
 }
 
 final class CSVExportFormatterTests: XCTestCase {
+    func testExportNotesEveryActiveFilter() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let from = Date(timeIntervalSince1970: 1_793_750_400) // 2026-11-04
+        let toExclusive = from.addingTimeInterval(3 * 86_400)  // through 2026-11-06
+
+        XCTAssertEqual(
+            ExportManager.filterNotes(valueThreshold: 0, dateWindow: nil, selectedPoints: 0, calendar: calendar),
+            [],
+            "An unfiltered export carries no filter notes"
+        )
+        XCTAssertEqual(
+            ExportManager.filterNotes(valueThreshold: 1500, dateWindow: (from, toExclusive), selectedPoints: 12, calendar: calendar),
+            ["values below 1500 excluded", "dates 2026-11-04 to 2026-11-06", "only the 12 selected point(s)"]
+        )
+    }
+
     func testDatesAreISO8601UTCWithoutCommasRegardlessOfLocale() {
         let date = Date(timeIntervalSince1970: 1_793_788_200) // 2026-11-04T10:30:00Z
         let formatted = CSVExportFormatter.isoDate(date)

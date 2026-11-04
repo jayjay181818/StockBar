@@ -414,17 +414,42 @@ final class UKPriceScaleRepairTests: XCTestCase {
             UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(172_800), price: 8.62, previousClose: 8.55)
         ]
 
-        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L")
+        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L", savedQuote: 8.6)
 
-        XCTAssertEqual(repaired.map(\.price), [8.5, 8.55, 8.62])
-        XCTAssertEqual(repaired.map(\.previousClose), [8.45, 8.5, 8.55])
+        XCTAssertEqual(repaired?.map(\.price), [8.5, 8.55, 8.62])
+        XCTAssertEqual(repaired?.map(\.previousClose), [8.45, 8.5, 8.55])
     }
 
     func testMigrationLeavesConsistentSeriesUnchanged() {
         let rows = [
             UKPriceSnapshotScaleMigrationService.Row(timestamp: .distantPast, price: 8.5, previousClose: 8.4),
-            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(), price: 8.6, previousClose: 8.5)
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(timeIntervalSince1970: 1_700_000_000), price: 8.55, previousClose: 8.5),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(), price: 8.6, previousClose: 8.55)
         ]
         XCTAssertEqual(UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L"), rows)
+    }
+
+    func testMigrationSkipsASymbolWhoseLatestRowsDisagreeWithoutASavedQuote() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let rows = [
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0, price: 8.5, previousClose: 8.4),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(86_400), price: 8.55, previousClose: 8.5),
+            // An old build wrote the newest row in pence: it must not become the reference.
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(172_800), price: 862, previousClose: 855)
+        ]
+        XCTAssertNil(UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L"))
+        XCTAssertNil(UKPriceSnapshotScaleMigrationService.repairedRows(Array(rows.prefix(2)), symbol: "IAG.L"),
+                     "Too few rows to trust the newest one")
+    }
+
+    func testSavedQuoteOverridesAWrongScaleNewestRow() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let rows = [
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0, price: 8.5, previousClose: 8.4),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(86_400), price: 862, previousClose: 850)
+        ]
+        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L", savedQuote: 8.7)
+        XCTAssertEqual(repaired?.map(\.price), [8.5, 8.62])
+        XCTAssertEqual(repaired?.map(\.previousClose), [8.4, 8.5])
     }
 }

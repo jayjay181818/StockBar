@@ -264,6 +264,11 @@ class DataModel: ObservableObject {
                 return
             }
 
+            // One-time repair of UK price snapshots stored on mixed pence/pound
+            // scales; analytics read these snapshots without display-time guards.
+            // Runs after the trades load so their saved quotes can be the reference.
+            await self.repairUKPriceSnapshotScaleIfNeeded()
+
             // Emergency recovery removed by user request
 
             await MainActor.run {
@@ -284,15 +289,6 @@ class DataModel: ObservableObject {
         // One-time rescale of UK OHLC rows stored in pence before the GBX->GBP
         // fix landed in get_ohlc_data.py. Runs before any chart reads the store.
         Task { await OHLCPenceMigrationService.shared.migrateIfNeeded() }
-
-        // One-time repair of UK price snapshots stored on mixed pence/pound
-        // scales; analytics read these snapshots without display-time guards.
-        Task { @MainActor [weak self] in
-            let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded()
-            guard let self, !repairedSymbols.isEmpty else { return }
-            self.historicalDataManager.invalidatePriceData(for: repairedSymbols)
-            await self.historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
-        }
 
         // Initialize memory optimization
         setupMemoryManagement()
@@ -355,6 +351,18 @@ class DataModel: ObservableObject {
     
     // MARK: - Migration Methods
     
+    private func repairUKPriceSnapshotScaleIfNeeded() async {
+        var savedQuotes: [String: Double] = [:]
+        for trade in realTimeTrades where SymbolMetadata.isUKSymbol(trade.trade.name) {
+            let price = trade.realTimeInfo.currentPrice
+            if price.isFinite, price > 0 { savedQuotes[trade.trade.name.uppercased()] = price }
+        }
+        let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded(savedQuotes: savedQuotes)
+        guard !repairedSymbols.isEmpty else { return }
+        historicalDataManager.invalidatePriceData(for: repairedSymbols)
+        await historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
+    }
+
     private func isBenchmarkSymbol(_ symbol: String) -> Bool {
         SymbolMetadata.isBenchmarkSymbol(symbol)
     }

@@ -180,7 +180,6 @@ class HistoricalDataManager: ObservableObject {
     private let encoder = JSONEncoder()
     
     // Performance optimization services
-    private let compressionService = DataCompressionService.shared
     private let chartDataService = OptimizedChartDataService.shared
     private let batchService = BatchProcessingService.shared
     private let memoryService = MemoryManagementService.shared
@@ -323,7 +322,7 @@ class HistoricalDataManager: ObservableObject {
     /// Force reload portfolio snapshots from Core Data (for debugging/refresh)
     func reloadPortfolioSnapshotsFromCoreData() async {
         await logger.info("🔄 Force reloading portfolio snapshots from Core Data...")
-        let snapshots = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+        let snapshots = Self.thinnedPortfolioHistory(await loadPortfolioSnapshotsFromCoreData(timeRange: .all))
         let count = snapshots.count
         await MainActor.run {
             self.historicalPortfolioSnapshots = snapshots
@@ -1530,7 +1529,9 @@ class HistoricalDataManager: ObservableObject {
                 await self.reloadStoredPriceHistory()
 
                 // Load portfolio snapshots from Core Data
-                let coreDataPortfolioSnaps = await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                let coreDataPortfolioSnaps = Self.thinnedPortfolioHistory(
+                    await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                )
                 await MainActor.run {
                     self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
                 }
@@ -2263,17 +2264,6 @@ class HistoricalDataManager: ObservableObject {
     
     // MARK: - Performance Optimization Methods
     
-    /// Performs comprehensive data compression and optimization
-    public func performDataOptimization() async throws {
-        await logger.info("⚡ Starting comprehensive data optimization") 
-        
-        await compressionService.performDataCompression()
-        await memoryService.performMemoryCleanup()
-        try await batchService.performDatabaseOptimization()
-        
-        Task { await logger.info("⚡ Data optimization completed") }
-    }
-
     func evictMemoryCachesForPressure(critical: Bool) {
         aliasHistoryCache.removeAll()
         stockDataCache.removeAll(keepingCapacity: false)
@@ -2308,31 +2298,6 @@ class HistoricalDataManager: ObservableObject {
         
         // Fallback to legacy method
         return getChartData(for: chartType, timeRange: timeRange, dataModel: nil)
-    }
-    
-    /// Performs lightweight performance optimization
-    public func performLightweightOptimization() async {
-        await logger.debug("⚡ Performing lightweight optimization") 
-        
-        await compressionService.performLightweightCompression()
-        await memoryService.optimizeChartDataMemory()
-        
-        await logger.debug("⚡ Lightweight optimization completed") 
-    }
-    
-    /// Gets comprehensive performance statistics
-    public func getPerformanceStats() async -> PerformanceStats {
-        let compressionStats = await compressionService.getCompressionStats()
-        let memoryStats = await memoryService.getMemoryStats()
-        let chartCacheStats = await chartDataService.getCacheStats()
-        
-        return PerformanceStats(
-            compressionStats: compressionStats,
-            memoryStats: memoryStats,
-            chartCacheStats: chartCacheStats,
-            totalDataPoints: getTotalDataPointCount(),
-            coreDataStorageSize: await estimateCoreDataStorageSize()
-        )
     }
     
     /// Performs batch operations for large data sets
@@ -2643,6 +2608,36 @@ class HistoricalDataManager: ObservableObject {
     /// must never replace them: it is limited by the price history available
     /// and works from today's holdings, and replacing recorded days with it
     /// threw away intraday history and real past values.
+    /// Days of portfolio history kept in memory at full resolution.
+    nonisolated static let fullResolutionPortfolioDays = 90
+
+    /// In-memory portfolio history: full resolution for the recent window, and
+    /// the last snapshot of each day before it (about 40k snapshots a year are
+    /// recorded). Core Data keeps every snapshot; this only bounds memory.
+    nonisolated static func thinnedPortfolioHistory(
+        _ snapshots: [HistoricalPortfolioSnapshot],
+        fullResolutionDays: Int = fullResolutionPortfolioDays,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [HistoricalPortfolioSnapshot] {
+        guard let cutoff = calendar.date(byAdding: .day, value: -fullResolutionDays, to: calendar.startOfDay(for: now)) else {
+            return snapshots
+        }
+        let sorted = snapshots.sorted { $0.date < $1.date }
+        var result: [HistoricalPortfolioSnapshot] = []
+        result.reserveCapacity(sorted.count)
+        for snapshot in sorted {
+            if snapshot.date < cutoff, let last = result.last,
+               calendar.isDate(last.date, inSameDayAs: snapshot.date),
+               last.currency == snapshot.currency {
+                result[result.count - 1] = snapshot
+            } else {
+                result.append(snapshot)
+            }
+        }
+        return result
+    }
+
     nonisolated static func mergePortfolioHistory(
         existing: [HistoricalPortfolioSnapshot],
         recalculated: [HistoricalPortfolioSnapshot],

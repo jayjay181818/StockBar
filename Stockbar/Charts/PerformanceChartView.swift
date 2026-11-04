@@ -2248,6 +2248,16 @@ struct PerformanceChartView: View {
         )
     }
 
+    /// Notes the filters that narrowed the exported series, so a file is never
+    /// mistaken for the full history.
+    private var exportFilterNotes: [String] {
+        ExportManager.filterNotes(
+            valueThreshold: valueThreshold,
+            dateWindow: (selectedTimeRange == .custom || dateFilterEnabled) ? customQueryRange : nil,
+            selectedPoints: selectedDataPoints.count
+        )
+    }
+
     private func exportToCSV() {
         let metrics = getRelevantPerformanceMetrics()
         let dataToExport = exportSeries()
@@ -2256,7 +2266,8 @@ struct PerformanceChartView: View {
             chartData: dataToExport,
             chartType: selectedChartType,
             timeRange: selectedTimeRange,
-            metrics: metrics
+            metrics: metrics,
+            filterNotes: exportFilterNotes
         )
     }
     
@@ -2270,20 +2281,21 @@ struct PerformanceChartView: View {
             chartType: selectedChartType,
             timeRange: selectedTimeRange,
             metrics: metrics,
-            chartImage: chartImage
+            chartImage: chartImage,
+            filterNotes: exportFilterNotes
         )
     }
     
     private func exportDetailedPortfolioCSV() {
         let startDate = selectedTimeRange.startDate()
-        let filteredSnapshots = historicalDataManager.historicalPortfolioSnapshots
-            .filter { $0.date >= startDate }
-            .sorted { $0.date < $1.date }
-        
-        exportManager.exportPortfolioSnapshotsToCSV(
-            snapshots: filteredSnapshots,
-            timeRange: selectedTimeRange
-        )
+        let timeRange = selectedTimeRange
+        Task {
+            // Read every stored snapshot: the in-memory history keeps only one per
+            // day for older dates.
+            let snapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: Date())
+                .sorted { $0.date < $1.date }
+            exportManager.exportPortfolioSnapshotsToCSV(snapshots: snapshots, timeRange: timeRange)
+        }
     }
     
     private func captureChartAsImage() -> NSImage? {

@@ -299,13 +299,10 @@ final class DataMigrationService: @unchecked Sendable {
             }
         }
         
-        // Remove duplicates based on symbol and timestamp
-        let uniqueSnapshots = Array(Set(allSnapshots.map { "\($0.symbol)_\($0.timestamp.timeIntervalSince1970)" }))
-            .compactMap { key in
-                allSnapshots.first { "\($0.symbol)_\($0.timestamp.timeIntervalSince1970)" == key }
-            }
-        
-        return uniqueSnapshots
+        // Remove duplicates based on symbol and timestamp, keeping the first of each
+        // in one pass (the old lookup per key was quadratic).
+        var seen = Set<String>()
+        return allSnapshots.filter { seen.insert("\($0.symbol)_\($0.timestamp.timeIntervalSince1970)").inserted }
     }
     
     // MARK: - Portfolio Snapshots Migration
