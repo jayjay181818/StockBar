@@ -38,7 +38,7 @@ actor RefreshCoordinator {
 
 @MainActor
 class DataModel: ObservableObject {
-    static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
+    nonisolated static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
     // MARK: - Properties
 

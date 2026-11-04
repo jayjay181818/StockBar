@@ -2094,6 +2094,29 @@ class PortfolioCalculationTests: XCTestCase {
             [404]
         )
     }
+
+    @MainActor
+    func testPriceChangeSignalOnlyAffectsTheSymbolsThatChanged() {
+        let manager = HistoricalDataManager.shared
+        let shown = "SHOWN-\(UUID().uuidString)"
+        let other = "OTHER-\(UUID().uuidString)"
+        defer {
+            manager.priceSnapshots.removeValue(forKey: shown)
+            manager.priceSnapshots.removeValue(forKey: other)
+        }
+
+        XCTAssertTrue(manager.priceDataChange(nil, affects: [shown]), "an unspecified change affects every chart")
+        XCTAssertTrue(manager.priceDataChange([shown.uppercased()], affects: [shown.lowercased()]))
+        XCTAssertFalse(manager.priceDataChange([other.uppercased()], affects: [shown]))
+
+        let before = manager.priceSeriesFingerprint(for: [shown])
+        manager.priceSnapshots[other] = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 1_000), price: 1, symbol: other)]
+        XCTAssertEqual(manager.priceSeriesFingerprint(for: [shown]), before, "another symbol's update must not reload this chart")
+
+        manager.priceSnapshots[shown] = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 2_000), price: 2, symbol: shown)]
+        XCTAssertNotEqual(manager.priceSeriesFingerprint(for: [shown]), before)
+    }
+
     @MainActor
     func testSymbolChartLoadsOnceOnPresentationAndCoalescesRangeAndPriceChanges() async {
         let suite = "StockbarTests.ChartLoads.\(UUID().uuidString)"

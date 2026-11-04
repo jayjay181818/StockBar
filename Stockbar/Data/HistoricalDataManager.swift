@@ -195,6 +195,9 @@ class HistoricalDataManager: ObservableObject {
         didSet { aliasHistoryCache.removeAll() }
     }
     @Published private(set) var priceDataRevision: Int = 0
+    /// Which series changed with each `priceDataRevision` bump: upper-cased
+    /// symbol and alias keys, or nil when every series may have changed.
+    let priceDataChanges = PassthroughSubject<Set<String>?, Never>()
     @Published private(set) var portfolioHistoryRevision: Int = 0
     @Published private(set) var folyncSupplementalConfigurationRevision: Int = 0
     @Published private(set) var folyncSourceStatusBySeries: [String: FolyncSupplementalSourceStatus] = [:]
@@ -472,51 +475,12 @@ class HistoricalDataManager: ObservableObject {
         return nil
     }
     
-    /// Get recent price snapshots optimized for memory cache
-    func getRecentPriceSnapshots(for symbol: String, days: Int = 30) -> [PriceSnapshot] {
-        let aliases = instrumentAliasStore.aliases(for: symbol)
-        let cacheKey = "recent_prices_\(aliases.joined(separator: "-"))_\(days)"
-        
-        if let cached: [PriceSnapshot] = retrieveFromCache([PriceSnapshot].self, key: cacheKey) {
-            return cached
-        }
-        
-        // Calculate from full dataset
-        let allSnapshots = aliasAwarePriceSnapshots(for: symbol)
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date.distantPast
-        let recentSnapshots = allSnapshots.filter { $0.timestamp >= cutoffDate }
-        
-        // Store in memory cache only for very small windows; otherwise prefer disk
-        let shouldUseMemory = days <= 7 && recentSnapshots.count <= 4_000
-        storeInCache(recentSnapshots, key: cacheKey, isRecent: shouldUseMemory)
-        
-        return recentSnapshots
-    }
-    
     /// Historical portfolio snapshots for a range. Filtering the in-memory
     /// array is cheap, and a cache here went stale (or stayed empty) whenever
     /// snapshots were loaded or merged without a new recording.
     func getHistoricalPortfolioSnapshots(timeRange: ChartTimeRange) -> [HistoricalPortfolioSnapshot] {
         let cutoffDate = timeRange.startDate()
         return historicalPortfolioSnapshots.filter { $0.date >= cutoffDate }
-    }
-    
-    /// Cache portfolio analytics to avoid recalculation
-    func getCachedPortfolioAnalytics(for timeRange: ChartTimeRange) -> PortfolioAnalytics? {
-        retrieveFromCache(PortfolioAnalytics.self, key: analyticsCacheKey(for: timeRange))
-    }
-    
-    func setCachedPortfolioAnalytics(_ analytics: PortfolioAnalytics, for timeRange: ChartTimeRange) {
-        storeInCache(
-            analytics,
-            key: analyticsCacheKey(for: timeRange),
-            isRecent: timeRange == .day || timeRange == .week
-        )
-    }
-
-    private func analyticsCacheKey(for timeRange: ChartTimeRange, now: Date = Date()) -> String {
-        let hourBucket = Int(now.timeIntervalSince1970 / 3_600)
-        return "analytics_\(timeRange.rawValue)_\(hourBucket)"
     }
     
     /// Invalidate cache when data changes
@@ -531,54 +495,12 @@ class HistoricalDataManager: ObservableObject {
         // Invalidate portfolio caches
         for timeRange in ChartTimeRange.allCases {
             cacheManager.remove(forKey: "portfolio_snapshots_\(timeRange.rawValue)")
-            cacheManager.remove(forKey: analyticsCacheKey(for: timeRange))
         }
         
         Task { await logger.debug("🗑️ Invalidated caches for symbol: \(symbol ?? "all")") }
     }
     
     // MARK: - Performance Enhancement Methods
-    
-    /// Get cached analytics or calculate and cache them
-    func getOrCalculateAnalytics(for timeRange: ChartTimeRange) -> PortfolioAnalytics? {
-        // Try to get from cache first
-        if let cached = getCachedPortfolioAnalytics(for: timeRange) {
-            Task { await logger.debug("📊 Using cached analytics for \(timeRange.rawValue)") }
-            return cached
-        }
-        
-        // Calculate analytics if not cached
-        let snapshots = getHistoricalPortfolioSnapshots(timeRange: timeRange)
-        guard !snapshots.isEmpty else { return nil }
-        
-        let analytics = calculatePortfolioAnalytics(from: snapshots)
-        
-        // Cache for future use
-        setCachedPortfolioAnalytics(analytics, for: timeRange)
-        Task { await logger.debug("📊 Calculated and cached analytics for \(timeRange.rawValue)") }
-        
-        return analytics
-    }
-    
-    /// Preload frequently accessed data into memory cache
-    func preloadFrequentlyAccessedData() {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self = self else { return }
-            
-            // Preload recent data for all symbols
-            for symbol in await self.priceSnapshots.keys {
-                _ = await self.getRecentPriceSnapshots(for: symbol, days: 7)  // Week data
-                _ = await self.getRecentPriceSnapshots(for: symbol, days: 30) // Month data
-            }
-            
-            // Preload common time ranges
-            for timeRange in [ChartTimeRange.day, .week, .month] {
-                _ = await self.getHistoricalPortfolioSnapshots(timeRange: timeRange)
-            }
-            
-            Task { await self.logger.debug("🚀 Preloaded frequently accessed data into memory cache") }
-        }
-    }
     
     /// Get cache performance metrics for monitoring
     func getCachePerformanceMetrics() -> (hitRate: Double, totalSize: String, memoryEntries: Int) {
@@ -590,159 +512,6 @@ class HistoricalDataManager: ObservableObject {
             totalSize: stats.totalSizeFormatted,
             memoryEntries: memoryEntries
         )
-    }
-    
-    /// Calculate comprehensive portfolio analytics from historical snapshots
-    func calculatePortfolioAnalytics(from snapshots: [HistoricalPortfolioSnapshot]) -> PortfolioAnalytics {
-        guard !snapshots.isEmpty else {
-            // Return empty analytics if no data
-            return PortfolioAnalytics(
-                timeRange: "empty",
-                totalReturn: 0, totalReturnPercent: 0, annualizedReturn: 0,
-                volatility: 0, sharpeRatio: 0, maxDrawdown: 0, maxDrawdownPercent: 0,
-                minValue: 0, maxValue: 0, averageValue: 0, finalValue: 0, initialValue: 0,
-                winningDays: 0, losingDays: 0, totalDays: 0, winRate: 0,
-                currency: "USD", bestDay: 0, worstDay: 0, consecutiveWins: 0, consecutiveLosses: 0
-            )
-        }
-        
-        let sortedSnapshots = snapshots.sorted { $0.date < $1.date }
-        let initialValue = sortedSnapshots.first?.totalValue ?? 0
-        let finalValue = sortedSnapshots.last?.totalValue ?? 0
-        let currency = sortedSnapshots.first?.currency ?? "USD"
-        
-        // Basic return calculations
-        let totalReturn = finalValue - initialValue
-        let totalReturnPercent = initialValue > 0 ? (totalReturn / initialValue) * 100 : 0
-        
-        // Calculate daily returns for advanced metrics
-        var dailyReturns: [Double] = []
-        var values: [Double] = []
-        var winningDays = 0
-        var losingDays = 0
-        
-        for i in 1..<sortedSnapshots.count {
-            let previousValue = sortedSnapshots[i-1].totalValue
-            let currentValue = sortedSnapshots[i].totalValue
-            values.append(currentValue)
-            
-            if previousValue > 0 {
-                let dailyReturn = (currentValue - previousValue) / previousValue
-                dailyReturns.append(dailyReturn)
-                
-                if dailyReturn > 0 {
-                    winningDays += 1
-                } else if dailyReturn < 0 {
-                    losingDays += 1
-                }
-            }
-        }
-        
-        // Annualized return calculation
-        let dayCount = sortedSnapshots.count
-        let years = Double(dayCount) / 365.25
-        let annualizedReturn = years > 0 ? (pow(finalValue / initialValue, 1.0 / years) - 1) * 100 : 0
-        
-        // Volatility (standard deviation of daily returns)
-        let avgDailyReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
-        let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - avgDailyReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance) * sqrt(252) * 100 // Annualized volatility as percentage
-        
-        // Sharpe ratio (assuming risk-free rate of 2%)
-        let riskFreeRate = 0.02
-        let sharpeRatio = volatility > 0 ? (annualizedReturn / 100 - riskFreeRate) / (volatility / 100) : 0
-        
-        // Maximum drawdown calculation
-        var peak = initialValue
-        var maxDrawdown: Double = 0
-        var maxDrawdownPercent: Double = 0
-        
-        for value in values {
-            if value > peak {
-                peak = value
-            } else {
-                let drawdown = peak - value
-                let drawdownPercent = peak > 0 ? (drawdown / peak) * 100 : 0
-                
-                if drawdown > maxDrawdown {
-                    maxDrawdown = drawdown
-                    maxDrawdownPercent = drawdownPercent
-                }
-            }
-        }
-        
-        // Value statistics
-        let minValue = values.min() ?? initialValue
-        let maxValue = values.max() ?? finalValue
-        let averageValue = values.isEmpty ? initialValue : values.reduce(0, +) / Double(values.count)
-        
-        // Best and worst day
-        let bestDay = dailyReturns.max() ?? 0
-        let worstDay = dailyReturns.min() ?? 0
-        
-        // Consecutive wins/losses
-        var currentWinStreak = 0
-        var currentLossStreak = 0
-        var maxWinStreak = 0
-        var maxLossStreak = 0
-        
-        for dailyReturn in dailyReturns {
-            if dailyReturn > 0 {
-                currentWinStreak += 1
-                currentLossStreak = 0
-                maxWinStreak = max(maxWinStreak, currentWinStreak)
-            } else if dailyReturn < 0 {
-                currentLossStreak += 1
-                currentWinStreak = 0
-                maxLossStreak = max(maxLossStreak, currentLossStreak)
-            }
-        }
-        
-        // Win rate
-        let totalTradingDays = winningDays + losingDays
-        let winRate = totalTradingDays > 0 ? Double(winningDays) / Double(totalTradingDays) * 100 : 0
-        
-        return PortfolioAnalytics(
-            timeRange: determineTimeRange(from: sortedSnapshots),
-            totalReturn: totalReturn,
-            totalReturnPercent: totalReturnPercent,
-            annualizedReturn: annualizedReturn,
-            volatility: volatility,
-            sharpeRatio: sharpeRatio,
-            maxDrawdown: maxDrawdown,
-            maxDrawdownPercent: maxDrawdownPercent,
-            minValue: minValue,
-            maxValue: maxValue,
-            averageValue: averageValue,
-            finalValue: finalValue,
-            initialValue: initialValue,
-            winningDays: winningDays,
-            losingDays: losingDays,
-            totalDays: dayCount,
-            winRate: winRate,
-            currency: currency,
-            bestDay: bestDay * 100, // Convert to percentage
-            worstDay: worstDay * 100, // Convert to percentage
-            consecutiveWins: maxWinStreak,
-            consecutiveLosses: maxLossStreak
-        )
-    }
-    
-    private func determineTimeRange(from snapshots: [HistoricalPortfolioSnapshot]) -> String {
-        guard let first = snapshots.first, let last = snapshots.last else { return "unknown" }
-        
-        let timeInterval = last.date.timeIntervalSince(first.date)
-        let days = timeInterval / (24 * 60 * 60)
-        
-        switch days {
-        case 0...2: return "1D"
-        case 3...10: return "1W"
-        case 11...40: return "1M"
-        case 41...120: return "3M"
-        case 121...200: return "6M"
-        case 201...400: return "1Y"
-        default: return "All"
-        }
     }
     
     func recordSnapshot(from dataModel: DataModel) {
@@ -3121,12 +2890,12 @@ class HistoricalDataManager: ObservableObject {
         stockDataCache.removeAll()
         stockDataCacheTimestamp.removeAll()
         folyncSupplementalConfigurationRevision &+= 1
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: nil)
     }
 
     func noteFolyncSupplementalConfigurationChanged() {
         folyncSupplementalConfigurationRevision &+= 1
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: nil)
     }
 
     func shouldFetchMenuPriceHistory(
@@ -3469,7 +3238,6 @@ class HistoricalDataManager: ObservableObject {
         folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil
     ) -> [PriceSnapshot] {
         let aliases = instrumentAliasStore.aliases(for: symbol)
-        let aliasKeys = Set(([symbol] + aliases).map(normalizedSeriesKey))
         // Folync overlays are per range. Without the caller's range there is no
         // way to know which overlay applies, so range-less reads use local data
         // (the most recently fetched overlay could be any range).
@@ -3518,7 +3286,7 @@ class HistoricalDataManager: ObservableObject {
             folyncCoverageBySeries[key] = metadata.coverageLabel
             invalidateStockDataCache(for: alias)
         }
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: aliases)
     }
 
     private func markFolyncSeriesUnavailable(
@@ -3541,7 +3309,7 @@ class HistoricalDataManager: ObservableObject {
             folyncCoverageBySeries.removeValue(forKey: key)
             invalidateStockDataCache(for: alias)
         }
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: aliases)
     }
 
     private func clearFolyncPriceOverlayForLegacy(
@@ -3564,7 +3332,7 @@ class HistoricalDataManager: ObservableObject {
             folyncCoverageBySeries.removeValue(forKey: key)
             invalidateStockDataCache(for: alias)
         }
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: aliases)
     }
 
     private func folyncLineSeriesKeys(
@@ -3743,7 +3511,37 @@ class HistoricalDataManager: ObservableObject {
 
     private func notePriceDataChanged(for symbol: String) {
         invalidateStockDataCache(for: symbol)
+        notePriceDataRevision(changed: [symbol])
+    }
+
+    private func notePriceDataRevision(changed symbols: Set<String>?) {
+        let keys = symbols.map { symbols in
+            Set(symbols.flatMap { [$0] + instrumentAliasStore.aliases(for: $0) }.map(normalizedSeriesKey))
+        }
         priceDataRevision &+= 1
+        priceDataChanges.send(keys)
+    }
+
+    /// Count and latest timestamp of the in-memory price series for `symbols`
+    /// and their aliases. Changes when any of those series gains or loses points.
+    func priceSeriesFingerprint(for symbols: [String]) -> [String] {
+        let wanted = Set(symbols.flatMap { [$0] + instrumentAliasStore.aliases(for: $0) }.map(normalizedSeriesKey))
+        return priceSnapshots
+            .filter { wanted.contains(normalizedSeriesKey($0.key)) }
+            .map { key, snapshots in
+                "\(key)|\(snapshots.count)|\(snapshots.last?.timestamp.timeIntervalSince1970 ?? 0)"
+            }
+            .sorted()
+    }
+
+    /// True when a `priceDataChanges` value can affect any of `symbols` (or
+    /// their aliases). A nil change affects everything.
+    func priceDataChange(_ changed: Set<String>?, affects symbols: [String]) -> Bool {
+        guard let changed else { return true }
+        return symbols.contains { symbol in
+            ([symbol] + instrumentAliasStore.aliases(for: symbol))
+                .contains { changed.contains(normalizedSeriesKey($0)) }
+        }
     }
 
     /// Drops in-memory price data for symbols whose stored snapshots changed
@@ -3755,7 +3553,7 @@ class HistoricalDataManager: ObservableObject {
             priceSnapshots.removeValue(forKey: key)
         }
         symbols.forEach { invalidateStockDataCache(for: $0) }
-        priceDataRevision &+= 1
+        notePriceDataRevision(changed: symbols)
     }
 
     private func invalidateStockDataCache(for symbol: String) {
