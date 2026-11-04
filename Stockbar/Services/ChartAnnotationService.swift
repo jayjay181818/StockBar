@@ -61,12 +61,19 @@ class ChartAnnotationService: ObservableObject {
     private let logger = Logger.shared
     private let storageURL: URL
     
-    private init() {
+    private convenience init() {
         // Store in Application Support directory
         let directory = StockbarRuntimeStorage.stockbarApplicationSupportDirectory()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        storageURL = directory.appendingPathComponent("chart_annotations.json")
-        
+        self.init(storageURL: directory.appendingPathComponent("chart_annotations.json"))
+    }
+
+    /// Uses `storageURL` instead of the app's annotation file (for tests).
+    init(storageURL: URL) {
+        try? FileManager.default.createDirectory(
+            at: storageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        self.storageURL = storageURL
         loadAnnotations()
     }
     
