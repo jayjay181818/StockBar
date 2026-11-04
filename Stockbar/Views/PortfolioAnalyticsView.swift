@@ -61,7 +61,7 @@ struct PortfolioAnalyticsView: View {
     }
 
     /// 20 trading days need about a month of calendar history.
-    static let minimumLookbackCalendarDays = 30
+    nonisolated static let minimumLookbackCalendarDays = 30
 
     private struct AnalyticsTrigger: Hashable {
         let range: TimeRange

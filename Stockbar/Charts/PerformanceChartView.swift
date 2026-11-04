@@ -170,10 +170,12 @@ struct PerformanceChartView: View {
             comparisonMode = false
             chartVisualizationStyle = .line
         }
-        .onChange(of: historicalDataManager.priceDataRevision) { _, _ in
-            // The revision does not say which symbol changed, so refresh quietly: the chart stays
-            // visible and is only replaced when the loaded series actually differs.
-            guard case .individualStock = selectedChartType else { return }
+        .onReceive(historicalDataManager.priceDataChanges) { changed in
+            // Reload quietly, and only when a shown or compared symbol changed: the chart
+            // stays visible and is only replaced when the loaded series actually differs.
+            guard case .individualStock(let symbol) = selectedChartType else { return }
+            let shown = [symbol] + (isComparisonActive ? selectedComparisonSymbols.sorted() : [])
+            guard historicalDataManager.priceDataChange(changed, affects: shown) else { return }
             scheduleSilentReload()
         }
         .onChange(of: historicalDataManager.historicalPortfolioSnapshots.last?.date) { _, _ in

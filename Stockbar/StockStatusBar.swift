@@ -71,7 +71,7 @@ enum StatusItemAccessibility {
 enum StatusButtonClickPolicy {
     /// True when the event was delivered to the button's window, or (for global events,
     /// which carry no window) the pointer is inside it.
-    static func isStatusButtonEvent(eventWindow: NSWindow?, buttonWindow: NSWindow?, mouseLocation: NSPoint) -> Bool {
+    @MainActor static func isStatusButtonEvent(eventWindow: NSWindow?, buttonWindow: NSWindow?, mouseLocation: NSPoint) -> Bool {
         guard let buttonWindow else { return false }
         if let eventWindow { return eventWindow === buttonWindow }
         return buttonWindow.frame.contains(mouseLocation)

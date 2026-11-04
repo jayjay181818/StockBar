@@ -70,6 +70,7 @@ class MenuChartViewModel: ObservableObject {
     private let historicalDataManager = HistoricalDataManager.shared
     private let logger = Logger.shared
     private var cancellables = Set<AnyCancellable>()
+    private var lastSeriesFingerprint: [String] = []
     private let reloadCoalescer = ChartReloadCoalescer()
     private var historyTask: Task<Void, Never>?
     private var isActive = false
@@ -86,15 +87,31 @@ class MenuChartViewModel: ObservableObject {
         self.benchmarkSymbol = benchmarkSymbol
         self.timeRangeSelectionStore = timeRangeSelectionStore
         self.selectedTimeRange = timeRangeSelectionStore.selectedTimeRange(for: symbol)
-        Publishers.Merge(
-            historicalDataManager.$priceSnapshots.dropFirst().map { _ in () },
-            historicalDataManager.$priceDataRevision.dropFirst().map { _ in () }
-        )
+        // Reload only when this chart's own symbol or benchmark changed, not on
+        // every other symbol's update.
+        historicalDataManager.$priceSnapshots.dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.loadChartData()
+                guard let self else { return }
+                let fingerprint = self.historicalDataManager.priceSeriesFingerprint(for: self.chartSymbols)
+                guard fingerprint != self.lastSeriesFingerprint else { return }
+                self.lastSeriesFingerprint = fingerprint
+                self.loadChartData()
             }
             .store(in: &cancellables)
+        historicalDataManager.priceDataChanges
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] changed in
+                guard let self,
+                      self.historicalDataManager.priceDataChange(changed, affects: self.chartSymbols) else { return }
+                self.loadChartData()
+            }
+            .store(in: &cancellables)
+        lastSeriesFingerprint = historicalDataManager.priceSeriesFingerprint(for: chartSymbols)
+    }
+
+    private var chartSymbols: [String] {
+        [symbol] + (benchmarkSymbol.map { [$0] } ?? [])
     }
 
     func activate() {
