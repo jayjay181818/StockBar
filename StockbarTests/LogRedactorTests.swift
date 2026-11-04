@@ -401,6 +401,27 @@ final class Trading212ResolverTests: XCTestCase {
         XCTAssertEqual(result.identity?.providerSymbols["trading212"], "AVl_EQ")
     }
 
+    func testTrading212LondonVenueMarkerBeatsUSDCurrency() {
+        // Given: a London-listed ETF that trades in USD.
+        let resolver = InstrumentResolver()
+        let position = Trading212Position(
+            averagePricePaid: nil,
+            currentPrice: nil,
+            instrument: Trading212Instrument(currency: "USD", isin: "IE00B5BMR087", name: "iShares Core S&P 500", ticker: "CSPXl_EQ"),
+            quantity: nil,
+            quantityAvailableForTrading: nil,
+            quantityInPies: nil,
+            walletImpact: nil
+        )
+
+        // When: resolving it without exchange metadata.
+        let result = resolver.resolveTrading212Position(position, metadata: nil, exchangeName: nil)
+
+        // Then: it stays on the London listing, matching a manual CSPX.L.
+        XCTAssertEqual(result.identity?.instrumentId, "LSE:CSPX")
+        XCTAssertEqual(result.identity?.providerSymbols["yfinance"], "CSPX.L")
+    }
+
     func testTrading212LegacyProviderTickerUsesMetadataShortNameForHims() {
         // Given: Trading 212 still exposes Hims & Hers through a legacy OAC provider ticker.
         let resolver = InstrumentResolver()

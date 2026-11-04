@@ -180,13 +180,30 @@ struct InstrumentResolver {
         if upperName.contains("NEW YORK") || upperName.contains("NYSE") {
             return "NYSE"
         }
-        if upperTicker.contains("_GB_") || currency == "GBP" || currency == "GBX" {
+        // The ticker's own venue markers beat the currency: London ETFs often
+        // trade in USD (CSPXl_EQ), and must not resolve to the US listing.
+        if upperTicker.contains("_US_") {
+            return "US"
+        }
+        if upperTicker.contains("_GB_") || hasLondonVenueMarker(providerTicker) {
             return "LSE"
         }
-        if upperTicker.contains("_US_") || currency == "USD" {
+        if currency == "GBP" || currency == "GBX" {
+            return "LSE"
+        }
+        if currency == "USD" {
             return "US"
         }
         return nil
+    }
+
+    /// Trading 212 marks London listings with a lowercase "l" after the symbol,
+    /// before the instrument suffix: "CSPXl_EQ", "AVl_EQ".
+    private func hasLondonVenueMarker(_ providerTicker: String) -> Bool {
+        let base = providerTicker.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: "_").first ?? ""
+        return base.count > 1 && base.hasSuffix("l")
+            && base.dropLast().contains(where: { $0.isLetter || $0.isNumber })
     }
 
     private func makeIdentity(
