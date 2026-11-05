@@ -372,7 +372,7 @@ struct StockbarSettingsView: View {
         } header: {
             Text("Python")
         } footer: {
-            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv if it is installed, otherwise Python 3.10 or later from Homebrew or python.org. Needs an internet connection and usually takes under a minute.")
+            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv or Python 3.10 or later if installed; otherwise downloads uv for Stockbar's own use, so nothing needs installing first. Needs an internet connection and usually takes under a minute.")
         }
         .task { await pythonSetup.refreshInterpreterInfo() }
     }
