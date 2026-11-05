@@ -350,7 +350,7 @@ struct StockbarSettingsView: View {
     private var pythonSection: some View {
         Section {
             LabeledContent {
-                Text(pythonSetup.interpreterVersion ?? "Checking…")
+                Text(pythonSetup.interpreterVersion ?? (pythonSetup.isCheckingVersion ? "Checking…" : "Not available"))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             } label: {

@@ -34,6 +34,7 @@ final class PythonEnvironmentSetup {
     private(set) var interpreterSource: InterpreterSource = .system
     /// "Python 3.13.1", or nil while checking or when the interpreter cannot run.
     private(set) var interpreterVersion: String?
+    private(set) var isCheckingVersion = false
 
     var isRunning: Bool {
         if case .running = state { return true }
@@ -80,6 +81,8 @@ final class PythonEnvironmentSetup {
             managedInterpreter: PythonConfiguration.managedInterpreterPath()
         )
         interpreterVersion = nil
+        isCheckingVersion = true
+        defer { isCheckingVersion = false }
         let runner = PythonProcessRunner(config: config, providerPolicy: providerPolicy, workerPool: nil)
         guard let result = try? await runner.run(arguments: ["--version"], timeoutSeconds: 10, logContext: "python version"),
               result.exitCode == 0 else { return }
