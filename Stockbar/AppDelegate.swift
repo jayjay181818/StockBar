@@ -413,7 +413,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         To install them, open Terminal and run:
         \(installCommand)
 
-        If pip reports an "externally managed environment" (common with Homebrew Python), create a virtual environment, then point Stockbar at it and relaunch:
+        Recommended instead: give Stockbar its own environment with a current Python. From the source checkout run `bash script/setup_python_env.sh`, then relaunch. Stockbar uses ~/Library/Application Support/Stockbar/python-env automatically.
+
+        To use another virtual environment, point Stockbar at it and relaunch:
         defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
         """
         alert.alertStyle = .informational
