@@ -143,16 +143,12 @@ final class PythonProcessRunnerTests: XCTestCase {
         let managed = "/Stockbar/python-env/bin/python3"
 
         XCTAssertEqual(
-            PythonConfiguration.resolveInterpreterPath(configured: "/opt/custom/python3", managedInterpreter: managed) { _ in true },
+            PythonConfiguration.resolveInterpreterPath(configured: "/opt/custom/python3", managedInterpreter: managed),
             "/opt/custom/python3"
         )
-        XCTAssertEqual(
-            PythonConfiguration.resolveInterpreterPath(configured: nil, managedInterpreter: managed) { $0 == managed },
-            managed
-        )
-        XCTAssertEqual(
-            PythonConfiguration.resolveInterpreterPath(configured: "", managedInterpreter: managed) { _ in false },
-            PythonConfiguration.defaultInterpreterPath
-        )
+        // No system-Python fallback: Stockbar's own environment is used even
+        // before it exists, so the launch check offers to set it up.
+        XCTAssertEqual(PythonConfiguration.resolveInterpreterPath(configured: nil, managedInterpreter: managed), managed)
+        XCTAssertEqual(PythonConfiguration.resolveInterpreterPath(configured: "", managedInterpreter: managed), managed)
     }
 }

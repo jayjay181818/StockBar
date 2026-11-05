@@ -1,22 +1,17 @@
 # Python Dependencies for Stockbar
-# Install with: pip3 install -r requirements.txt
+# Stockbar installs these in its own environment (Settings > Advanced > Python),
+# with a current Python. Requires Python 3.10 or later; Apple's /usr/bin/python3
+# 3.9 cannot run them. To use another interpreter:
+#   python3 -m pip install -r requirements.txt
 
 # Stock data fetching
 yfinance==1.2.0
 # yfinance 1.2.0 relies on pandas behaviour that pandas 4 removes.
 pandas<4
 
-# HTTP stack. Stockbar's own environment (Python 3.10+ with OpenSSL) gets the
-# patched releases, which need Python 3.10+. Apple's /usr/bin/python3 3.9 is
-# built on LibreSSL, which urllib3 2.x does not support, so the fallback keeps
-# the last versions it can run.
-# The launch-time check reads these pins and understands only plain
-# python_version markers; see PythonRequirements.swift.
-requests==2.34.2; python_version >= "3.10"
-requests==2.32.5; python_version < "3.10"
-urllib3==2.8.0; python_version >= "3.10"
-urllib3==1.26.20; python_version < "3.10"
+# HTTP stack
+requests==2.34.2
+urllib3==2.8.0
 
-# Recommended: Stockbar's own environment (Settings > Advanced > Python),
-# a current Python with OpenSSL. Apple's /usr/bin/python3 3.9 with LibreSSL
-# remains the fallback and must keep working.
+# The launch-time check reads the name==version pins (with at most a plain
+# python_version marker); see PythonRequirements.swift.
