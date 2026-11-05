@@ -209,6 +209,14 @@ final class SettingsTransferModel {
             return
         }
         self.prepared = nil
+        // Close the import sheet first, so its spinner is never left showing
+        // behind the alert, then bring this menu-bar app forward: otherwise the
+        // alert can open behind the main window and the import looks stuck.
+        progress = nil
+        sheet = nil
+        NSApp.activate()
+        // Let the sheet finish closing before the modal alert takes over.
+        await Task.yield()
         presentRelaunchPrompt()
     }
 
@@ -231,6 +239,7 @@ final class SettingsTransferModel {
         alert.informativeText = "Stockbar needs to relaunch to use the imported settings."
         alert.addButton(withTitle: "Relaunch Now")
         alert.addButton(withTitle: "Quit")
+        alert.window.level = .floating
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else {
             NSApp.terminate(nil)

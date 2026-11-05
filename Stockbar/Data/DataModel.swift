@@ -296,7 +296,9 @@ class DataModel {
             // Wait 60 seconds after app startup to avoid interfering with initial data loading
             try? await Task.sleep(nanoseconds: 60_000_000_000)
 
-            guard mayStartRuntimeSchedulers else { return }
+            // A settings import pauses background work until Stockbar relaunches;
+            // this delayed work must not write the old in-memory state meanwhile.
+            guard mayStartRuntimeSchedulers, !isBackgroundWorkPausedForImport else { return }
 
             // Check if migration service indicates retroactive calculation is needed
             if migrationService.needsRetroactiveCalculation {
@@ -312,8 +314,11 @@ class DataModel {
             }
 
             // AUTO-BACKFILL: Delegate to HistoricalDataCoordinator for startup backfill
+            guard !isBackgroundWorkPausedForImport else { return }
             let symbols = legacyHistoryBackfillSymbols(from: realTimeTrades.map { $0.trade.name })
-            await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols)
+            await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols) { [weak self] in
+                self?.isBackgroundWorkPausedForImport ?? true
+            }
         }
 
         // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
