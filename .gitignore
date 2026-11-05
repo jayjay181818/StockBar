@@ -156,6 +156,7 @@ GITHUB_RELEASE_*.md
 /artifacts/
 /default.profraw
 .claude/settings.local.json
+.claude/worktrees/
 Docs/Opus5_Findings_2026-07-26_archive.md
 
 # Secrets and local data (never commit)
@@ -169,6 +170,20 @@ Docs/Opus5_Findings_2026-07-26_archive.md
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.p8
+*.cer
+*.provisionprofile
+*.keychain
+*.keychain-db
+*.netrc
+.netrc
+secrets.*
+*.secret
+*token*.txt
+credentials*.json
+.venv/
+*.xcresult
+codex-images/
 
 # Local agent tool settings
 .codex/

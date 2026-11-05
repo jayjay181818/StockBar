@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # Actions used by .github/workflows/ci.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: testing
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+    open-pull-requests-limit: 3
+
+  # Pinned packages for the bundled Python market-data helper.
+  - package-ecosystem: pip
+    directory: /Stockbar/Resources
+    target-branch: testing
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python-helper:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(python)"
+    open-pull-requests-limit: 3
+    ignore:
+      # The runtime target is Apple's /usr/bin/python3 3.9 built against
+      # LibreSSL; urllib3 2.x requires OpenSSL 1.1.1+.
+      - dependency-name: urllib3
+        versions: [">=2"]
