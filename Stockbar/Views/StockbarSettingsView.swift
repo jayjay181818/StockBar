@@ -533,6 +533,10 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 }
 
 /// Menu bar text rendered the way it appears in the menu bar.
+/// Shown inside `LabeledContent("Preview")`, which already gives it its
+/// accessibility label. Do not add another: with both, SwiftUI resolved the
+/// row's label and this text's label through each other until the app
+/// crashed whenever VoiceOver or another accessibility client read the page.
 private struct MenuBarPreview: View {
     let text: String
 
@@ -543,6 +547,5 @@ private struct MenuBarPreview: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(StockbarPalette.hoverFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .accessibilityLabel("Menu bar preview: \(text)")
     }
 }
