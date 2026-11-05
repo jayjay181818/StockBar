@@ -92,8 +92,8 @@ final class PythonEnvironmentSetupTests: XCTestCase {
     func testInterpreterSource() {
         let managed = "/Support/python-env/bin/python3"
 
-        XCTAssertEqual(PythonEnvironmentSetup.source(of: managed, configured: "/x/python3", managedInterpreter: managed), .configured)
-        XCTAssertEqual(PythonEnvironmentSetup.source(of: managed, configured: nil, managedInterpreter: managed), .stockbar)
-        XCTAssertEqual(PythonEnvironmentSetup.source(of: "/usr/bin/python3", configured: "", managedInterpreter: managed), .system)
+        XCTAssertEqual(PythonEnvironmentSetup.source(configured: "/x/python3", managedInterpreter: managed) { _ in false }, .configured)
+        XCTAssertEqual(PythonEnvironmentSetup.source(configured: nil, managedInterpreter: managed) { $0 == managed }, .stockbar)
+        XCTAssertEqual(PythonEnvironmentSetup.source(configured: "", managedInterpreter: managed) { _ in false }, .notSetUp)
     }
 }

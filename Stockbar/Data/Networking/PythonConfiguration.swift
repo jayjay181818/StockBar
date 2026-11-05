@@ -11,16 +11,13 @@ import Foundation
 struct PythonConfiguration: Sendable {
     // MARK: - Properties
     
-    /// Path to the Python interpreter (e.g. /usr/bin/python3, /opt/homebrew/bin/python3)
+    /// Path to the Python interpreter: Stockbar's own environment unless the
+    /// `pythonInterpreterPath` setting names another one.
     let interpreterPath: String
     
     /// Environment variables to pass to the process
     let environment: [String: String]
     
-    /// The fallback interpreter when none is configured and Stockbar's own
-    /// environment has not been set up.
-    static let defaultInterpreterPath = "/usr/bin/python3"
-
     /// Stockbar's own Python environment, created by `script/setup_python_env.sh`
     /// with a current Python and the pinned requirements.
     static func managedInterpreterPath() -> String {
@@ -29,20 +26,16 @@ struct PythonConfiguration: Sendable {
     }
 
     /// An explicit `pythonInterpreterPath` setting wins; otherwise Stockbar's own
-    /// environment when it exists, then the system Python.
-    static func resolveInterpreterPath(
-        configured: String?,
-        managedInterpreter: String,
-        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-    ) -> String {
+    /// environment, even before it is set up. There is no system-Python
+    /// fallback: Apple's /usr/bin/python3 3.9 cannot run the pinned packages.
+    static func resolveInterpreterPath(configured: String?, managedInterpreter: String) -> String {
         if let configured, !configured.isEmpty { return configured }
-        if isExecutable(managedInterpreter) { return managedInterpreter }
-        return defaultInterpreterPath
+        return managedInterpreter
     }
     
     // MARK: - Initialization
     
-    init(interpreterPath: String = PythonConfiguration.defaultInterpreterPath,
+    init(interpreterPath: String = PythonConfiguration.managedInterpreterPath(),
          environment: [String: String] = [:]) {
         self.interpreterPath = interpreterPath
         self.environment = environment

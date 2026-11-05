@@ -25,13 +25,13 @@ final class PythonEnvironmentSetup {
         case configured
         /// Stockbar's own environment.
         case stockbar
-        /// The system Python fallback.
-        case system
+        /// Stockbar's own environment, not set up yet.
+        case notSetUp
     }
 
     private(set) var state: State = .idle
     private(set) var interpreterPath = ""
-    private(set) var interpreterSource: InterpreterSource = .system
+    private(set) var interpreterSource: InterpreterSource = .notSetUp
     /// "Python 3.13.1", or nil while checking or when the interpreter cannot run.
     private(set) var interpreterVersion: String?
     private(set) var isCheckingVersion = false
@@ -63,12 +63,12 @@ final class PythonEnvironmentSetup {
     }
 
     nonisolated static func source(
-        of interpreterPath: String,
         configured: String?,
-        managedInterpreter: String
+        managedInterpreter: String,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> InterpreterSource {
         if let configured, !configured.isEmpty { return .configured }
-        return interpreterPath == managedInterpreter ? .stockbar : .system
+        return isExecutable(managedInterpreter) ? .stockbar : .notSetUp
     }
 
     /// Reads the interpreter the bridge would use now, and its version.
@@ -76,7 +76,6 @@ final class PythonEnvironmentSetup {
         let config = PythonConfiguration.load()
         interpreterPath = config.interpreterPath
         interpreterSource = Self.source(
-            of: config.interpreterPath,
             configured: StockbarRuntimeStorage.userDefaults.string(forKey: "pythonInterpreterPath"),
             managedInterpreter: PythonConfiguration.managedInterpreterPath()
         )

@@ -289,7 +289,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !dependenciesAreCompatible {
             await Logger.shared.warning("Python packages are missing or do not match the supported versions")
-            showPythonDependencyAlert()
+            showPythonDependencyAlert(
+                interpreterExists: FileManager.default.isExecutableFile(atPath: interpreterPath)
+            )
         } else {
             await Logger.shared.info("✅ Python dependencies verified")
         }
@@ -389,41 +391,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// blocking alert here silently froze the rest of startup (trade loading,
     /// the first refresh pass, every UI update) until it was dismissed.
     @MainActor
-    private func showPythonDependencyAlert() {
+    private func showPythonDependencyAlert(interpreterExists: Bool) {
         let installCommand = Self.pythonInstallCommand(
             interpreterPath: PythonConfiguration.load().interpreterPath,
             requirementsPath: Bundle.main.url(forResource: "requirements", withExtension: "txt")?.path
         )
 
         let alert = NSAlert()
-        alert.messageText = "Python Dependencies Required"
-        alert.informativeText = """
-        Stockbar needs its pinned Python packages for the configured interpreter.
-
-        Recommended: choose Set Up Automatically. Stockbar installs a current Python and its packages in its own environment (Application Support/Stockbar/python-env) and uses it from the next refresh. You can also do this later in Settings > Advanced > Python.
-
-        Or install the packages for the current interpreter from Terminal:
-        \(installCommand)
-
-        To use another virtual environment, point Stockbar at it and relaunch:
-        defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
-        """
+        alert.messageText = interpreterExists ? "Python Dependencies Required" : "Set Up Stockbar's Python"
+        let reason = interpreterExists
+            ? "Stockbar needs its pinned Python packages for the configured interpreter."
+            : "Stockbar fetches market data with its own Python environment, which is not set up yet."
+        let setUpText = """
+            Recommended: choose Set Up Automatically. Stockbar installs a current Python and its packages in its own environment (Application Support/Stockbar/python-env) and uses it from the next refresh. It needs an internet connection and nothing installed first. You can also do this later in Settings > Advanced > Python.
+            """
+        let manualText = """
+            Or install the packages for the current interpreter (Python 3.10 or later) from Terminal:
+            \(installCommand)
+            """
+        let otherVenvText = """
+            To use another virtual environment, point Stockbar at it and relaunch:
+            defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
+            """
+        alert.informativeText = ([reason, setUpText] + (interpreterExists ? [manualText] : []) + [otherVenvText])
+            .joined(separator: "\n\n")
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Set Up Automatically")
-        alert.addButton(withTitle: "Copy Command")
-        alert.addButton(withTitle: "Open Terminal")
+        if interpreterExists {
+            // Copying a pip command only helps for an interpreter that exists.
+            alert.addButton(withTitle: "Copy Command")
+            alert.addButton(withTitle: "Open Terminal")
+        }
         alert.addButton(withTitle: "Dismiss")
 
         presentAlert(alert) { [weak self] response in
             switch response {
             case .alertFirstButtonReturn:
                 Task { @MainActor in await self?.setUpPythonEnvironment() }
-            case .alertSecondButtonReturn:
+            case .alertSecondButtonReturn where interpreterExists:
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(installCommand, forType: .string)
                 Task { await Logger.shared.info("Python install command copied to clipboard") }
-            case .alertThirdButtonReturn:
+            case .alertThirdButtonReturn where interpreterExists:
                 if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
                     NSWorkspace.shared.open(terminal)
                 }

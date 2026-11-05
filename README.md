@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 3.1.1** | **macOS 15.4+** | **Swift 6 language mode**
+**Version 3.2.0** | **macOS 15.4+** | **Swift 6 language mode**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
@@ -102,13 +102,13 @@ Broker data and market data are intentionally separate. Trading 212 is the sourc
 ### Prerequisites
 1. macOS 15.4 or later.
 2. A current Xcode for local development (see the project's build settings for the Swift language mode).
-3. Python for the market-data helper. Recommended: give Stockbar its own environment with a current Python (uses `uv` if installed, otherwise Python 3.10+):
+3. Python for the market-data helper. Recommended: give Stockbar its own environment with a current Python (uses `uv` or Python 3.10+ if installed, otherwise downloads a pinned, checksum-verified `uv` for Stockbar's own use):
 
    ```bash
    bash script/setup_python_env.sh
    ```
 
-   Stockbar picks it up automatically. Alternatively, install the pins into Python 3.9+ (`/usr/bin/python3` is the fallback; on 3.9 it gets older urllib3 and requests releases without current security fixes):
+   Stockbar picks it up automatically, and the app offers the same setup on first launch. Alternatively, install the pins into another Python 3.10+ and set `pythonInterpreterPath` to it (Apple's `/usr/bin/python3` 3.9 is not supported):
 
    ```bash
    python3 -m pip install -r Stockbar/Resources/requirements.txt
@@ -222,7 +222,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 ### Market Data
 - Missing manual/watchlist quotes usually indicate provider fallback, yfinance, or network issues.
 - FMP `403` messages usually indicate key/plan limits; keys are redacted in logs.
-- Python `urllib3`/LibreSSL warnings can appear from the local Python environment and are separate from Trading 212 broker sync.
+- If no market data arrives, check **Settings → Advanced → Python**; "Not set up" means Stockbar's own Python needs **Set Up**.
 
 ### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
 - macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
@@ -273,7 +273,14 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## Release History
 
-### Version 3.1.1 (Current) - Python Security Update
+### Version 3.2.0 (Current) - Stockbar's Own Python Everywhere
+- **Setup**: Settings > Advanced > Python > Set Up works on a Mac with nothing installed. Stockbar downloads a pinned, checksum-verified uv and keeps it and its Python in its own folders.
+- **Python**: Apple's `/usr/bin/python3` 3.9 is no longer used. After updating, Stockbar asks once to set up its own Python.
+- **Market Data**: yfinance 1.8.0; the pandas warnings on every fetch are gone.
+- **Fixes**: Fetch errors say when Stockbar's Python is not set up and point to Set Up.
+- See [Changelogs/release_notes_v3.2.0.md](./Changelogs/release_notes_v3.2.0.md).
+
+### Version 3.1.1 - Python Security Update
 - **Security**: Stockbar's own Python environment installs urllib3 2.8.0 and requests 2.34.2, which fix eight published vulnerabilities. Rebuild it from Settings > Advanced > Python to pick them up.
 - **Fallback**: Apple's `/usr/bin/python3` 3.9 keeps urllib3 1.26.20 and requests 2.32.5, the last versions it can run.
 - **Fixes**: The launch-time dependency check reads the interpreter's Python version and checks the pins meant for it.
@@ -366,4 +373,4 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-Last updated: November 5, 2026 - Version 3.1.1
+Last updated: November 5, 2026 - Version 3.2.0

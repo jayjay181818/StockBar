@@ -98,7 +98,8 @@ final class PythonRequirementsTests: XCTestCase {
         )
         let requirements = PythonRequirements(contents: contents)
 
-        for python in [python39, python313] {
+        // Stockbar's own environment uses 3.13; 3.10 is the oldest supported Python.
+        for python in [PythonVersion(major: 3, minor: 10), python313] {
             let matching = requirements.pins.filter { $0.marker?.matches(python) ?? true }
             XCTAssertEqual(
                 Set(matching.map(\.name)),
