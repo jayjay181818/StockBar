@@ -84,6 +84,20 @@ enum StockbarRelauncher {
         return runID
     }
 
+    /// Quits once the caller's work has returned.
+    ///
+    /// `applicationShouldTerminate` answers `.terminateLater` and replies from
+    /// main-actor tasks after pending saves finish. `terminate(_:)` called from
+    /// inside a main-actor task waits for that reply while blocking those
+    /// tasks, so the app never quits. Running it from the run loop instead
+    /// leaves the main actor free to send the reply.
+    @MainActor
+    static func quitAfterCurrentWork() {
+        RunLoop.main.perform {
+            MainActor.assumeIsolated { NSApp.terminate(nil) }
+        }
+    }
+
     /// Starts the helper, then quits. Throws without quitting if the helper
     /// cannot be started.
     @MainActor
@@ -106,6 +120,6 @@ enum StockbarRelauncher {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        NSApp.terminate(nil)
+        quitAfterCurrentWork()
     }
 }
