@@ -4,7 +4,7 @@ import SwiftUI
 /// Comprehensive risk analytics dashboard displaying portfolio risk metrics
 /// Shows VaR, Sharpe ratio, beta, maximum drawdown, and other risk measures
 struct RiskAnalyticsView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
 
     @State private var isCalculating = false
     @State private var riskMetrics: RiskMetricsService.RiskMetrics?

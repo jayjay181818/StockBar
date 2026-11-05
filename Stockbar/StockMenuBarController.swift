@@ -53,7 +53,7 @@ class StockMenuBarController: NSObject {
     // MARK: - Private Methods
     
     private func setupDataBinding() {
-        self.data.$isInitialPortfolioSourceResolved
+        ObservationPublisher.values(self.data, \.isInitialPortfolioSourceResolved)
             .removeDuplicates()
             .filter { $0 }
             .receive(on: DispatchQueue.main)
@@ -71,7 +71,7 @@ class StockMenuBarController: NSObject {
             }
             .store(in: &cancellables)
 
-        self.data.$hideAllMenuBarItems
+        ObservationPublisher.values(self.data, \.hideAllMenuBarItems)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -79,7 +79,7 @@ class StockMenuBarController: NSObject {
             }
             .store(in: &cancellables)
 
-        self.data.$requireExternalDisplayForMenuBarStocks
+        ObservationPublisher.values(self.data, \.requireExternalDisplayForMenuBarStocks)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -87,7 +87,7 @@ class StockMenuBarController: NSObject {
             }
             .store(in: &cancellables)
 
-        self.data.$isExternalDisplayConnected
+        ObservationPublisher.values(self.data, \.isExternalDisplayConnected)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -281,13 +281,10 @@ class StockMenuBarController: NSObject {
     /// This is driven entirely by events — `didChangeScreenParameters`,
     /// `didBecomeActive` and system wake — never by polling. It used to also run
     /// on a 10s timer, which meant ~8,600 no-op passes a day, each one doing a
-    /// WindowServer round-trip, an unconditional `@Published` write and a full
-    /// status-item reformat.
+    /// WindowServer round-trip, a model write and a full status-item reformat.
     ///
-    /// The early return matters: `data.isExternalDisplayConnected` is
-    /// `@Published` on the app's central `ObservableObject`, and Combine fires
-    /// `objectWillChange` on *assignment*, not on change — so writing an
-    /// identical value still invalidates the whole SwiftUI tree.
+    /// The early return still matters: Observation skips notifying for an
+    /// identical value, but the status-item resync below would run anyway.
     private func refreshExternalDisplayState() {
         let isConnected = ExternalDisplayDetector.isExternalDisplayConnected()
         let previousValue = data.isExternalDisplayConnected

@@ -2,7 +2,7 @@ import Combine
 import SwiftUI
 
 struct DataSourcesSettingsView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     
     @State private var fmpApiKey: String = ""
     @State private var twelveDataApiKey: String = ""

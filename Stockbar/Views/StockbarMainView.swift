@@ -4,8 +4,8 @@ import SwiftUI
 
 @MainActor
 struct StockbarMainView: View {
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject var navigationState: StockbarMainNavigationState
+    let dataModel: DataModel
+    let navigationState: StockbarMainNavigationState
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode = "system"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRefreshing = false
@@ -174,8 +174,9 @@ struct StockbarMainView: View {
 }
 
 @MainActor
-final class StockbarMainNavigationState: ObservableObject {
-    @Published var selectedSection: StockbarMainSection {
+@Observable
+final class StockbarMainNavigationState {
+    var selectedSection: StockbarMainSection {
         didSet { defaults.set(selectedSection.rawValue, forKey: "mainWindow.selectedSection") }
     }
     private let defaults: UserDefaults
@@ -256,8 +257,8 @@ private enum ProfitLossDisplayMode {
 
 @MainActor
 private struct StockbarHoldingsView: View {
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject private var currencyConverter = CurrencyConverter.shared
+    let dataModel: DataModel
+    private let currencyConverter = CurrencyConverter.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchText = ""
     @State private var isEditing = false
@@ -494,21 +495,26 @@ private struct StockbarHoldingsView: View {
     }
 
     private var holdingsTable: some View {
-        GeometryReader { geometry in
+        // Read the rows here, while the page's body is evaluated. GeometryReader
+        // builds its content later, during layout, and Observation does not
+        // re-run it when the rows change in the same update that shows the table.
+        let indices = visibleIndices
+        let trades = dataModel.realTimeTrades
+        return GeometryReader { geometry in
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 0) {
                     HoldingsHeaderRow()
                     Divider()
                     ScrollView(.vertical) {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(visibleIndices, id: \.self) { index in
-                                let realTimeTrade = dataModel.realTimeTrades[index]
+                            ForEach(indices, id: \.self) { index in
+                                let realTimeTrade = trades[index]
                                 HoldingsEditableRow(
                                     realTimeTrade: realTimeTrade,
                                     dataModel: dataModel,
                                     rowIndex: index,
-                                    canMoveUp: HoldingsEditing.moveDestination(from: index, by: -1, visibleIndices: visibleIndices) != nil,
-                                    canMoveDown: HoldingsEditing.moveDestination(from: index, by: 1, visibleIndices: visibleIndices) != nil,
+                                    canMoveUp: HoldingsEditing.moveDestination(from: index, by: -1, visibleIndices: indices) != nil,
+                                    canMoveDown: HoldingsEditing.moveDestination(from: index, by: 1, visibleIndices: indices) != nil,
                                     onDelete: { requestRemoval(of: realTimeTrade) },
                                     onMove: { move(from: index, by: $0) }
                                 )
@@ -604,7 +610,7 @@ private struct HoldingsHeaderRow: View {
 
 @MainActor
 private struct HoldingsEditableRow: View {
-    @ObservedObject var realTimeTrade: RealTimeTrade
+    @Bindable var realTimeTrade: RealTimeTrade
     let dataModel: DataModel
     let rowIndex: Int
     let canMoveUp: Bool
@@ -886,7 +892,7 @@ private struct ProfitLossCell: View {
 
 @MainActor
 private struct StockbarBackupsView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingRestoreSheet = false
     @State private var status: BackupStatusMessage?
@@ -997,8 +1003,8 @@ private struct StockbarBackupsView: View {
 
 @MainActor
 private struct StockbarDataHealthView: View {
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject private var currencyConverter: CurrencyConverter
+    let dataModel: DataModel
+    private let currencyConverter: CurrencyConverter
 
     init(dataModel: DataModel) {
         self.dataModel = dataModel
