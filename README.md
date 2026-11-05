@@ -102,7 +102,13 @@ Broker data and market data are intentionally separate. Trading 212 is the sourc
 ### Prerequisites
 1. macOS 15.4 or later.
 2. A current Xcode for local development (see the project's build settings for the Swift language mode).
-3. Python 3.9+ with the pinned helper dependencies for the market-data subprocess path:
+3. Python for the market-data helper. Recommended: give Stockbar its own environment with a current Python (uses `uv` if installed, otherwise Python 3.10+):
+
+   ```bash
+   bash script/setup_python_env.sh
+   ```
+
+   Stockbar picks it up automatically. Alternatively, install the pins into Python 3.9+ (`/usr/bin/python3` is the fallback):
 
    ```bash
    python3 -m pip install -r Stockbar/Resources/requirements.txt

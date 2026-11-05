@@ -18,14 +18,18 @@ actor PythonProcessRunner: PythonProcessRunning {
     /// interpreter, config-file and quote-cache settings changed after launch take effect.
     private let pinnedConfig: PythonConfiguration?
     private let providerPolicy: StockbarProviderAccessPolicy
+    /// Serves bridge script requests from a running worker; nil runs every request as its own process.
+    private let workerPool: PythonWorkerPool?
     private let logger = Logger.shared
 
     init(
         config: PythonConfiguration? = nil,
-        providerPolicy: StockbarProviderAccessPolicy = .current
+        providerPolicy: StockbarProviderAccessPolicy = .current,
+        workerPool: PythonWorkerPool? = .shared
     ) {
         self.pinnedConfig = config
         self.providerPolicy = providerPolicy
+        self.workerPool = workerPool
     }
 
     func run(
@@ -37,6 +41,20 @@ actor PythonProcessRunner: PythonProcessRunning {
         try Task.checkCancellation()
 
         let config = pinnedConfig ?? PythonConfiguration.load()
+        if let workerPool, let request = PythonWorkerRequest(arguments: arguments) {
+            do {
+                if let result = try await workerPool.run(
+                    request, config: config, timeoutSeconds: timeoutSeconds, logContext: logContext
+                ) {
+                    return result
+                }
+            } catch PythonWorkerError.unavailable(let reason) {
+                // A broken worker must not cost the request: run it directly.
+                await logger.warning("\(logContext): Python worker unavailable (\(reason)); running the script directly")
+                try Task.checkCancellation()
+            }
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = arguments

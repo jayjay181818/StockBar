@@ -17,8 +17,28 @@ struct PythonConfiguration: Sendable {
     /// Environment variables to pass to the process
     let environment: [String: String]
     
-    /// The default interpreter path if none is configured
+    /// The fallback interpreter when none is configured and Stockbar's own
+    /// environment has not been set up.
     static let defaultInterpreterPath = "/usr/bin/python3"
+
+    /// Stockbar's own Python environment, created by `script/setup_python_env.sh`
+    /// with a current Python and the pinned requirements.
+    static func managedInterpreterPath() -> String {
+        StockbarRuntimeStorage.stockbarApplicationSupportDirectory()
+            .appendingPathComponent("python-env/bin/python3").path
+    }
+
+    /// An explicit `pythonInterpreterPath` setting wins; otherwise Stockbar's own
+    /// environment when it exists, then the system Python.
+    static func resolveInterpreterPath(
+        configured: String?,
+        managedInterpreter: String,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String {
+        if let configured, !configured.isEmpty { return configured }
+        if isExecutable(managedInterpreter) { return managedInterpreter }
+        return defaultInterpreterPath
+    }
     
     // MARK: - Initialization
     
@@ -31,7 +51,10 @@ struct PythonConfiguration: Sendable {
     /// Loads configuration from UserDefaults or environment, falling back to defaults
     static func load() -> PythonConfiguration {
         let defaults = StockbarRuntimeStorage.userDefaults
-        let path = defaults.string(forKey: "pythonInterpreterPath") ?? defaultInterpreterPath
+        let path = resolveInterpreterPath(
+            configured: defaults.string(forKey: "pythonInterpreterPath"),
+            managedInterpreter: managedInterpreterPath()
+        )
         var environment: [String: String] = [:]
         if let configPath = ConfigurationManager.shared.getConfigFilePath() {
             environment["STOCKBAR_CONFIG_FILE"] = configPath

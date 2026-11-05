@@ -48,7 +48,7 @@ Before contributing, ensure you have:
 
 - **macOS 15.4+** for development
 - **A current Xcode** (the project builds in Swift 6 language mode; see the build settings)
-- **Python 3.9+**, with `python3 -m pip install -r Stockbar/Resources/requirements.txt`
+- **Python**: `bash script/setup_python_env.sh` (recommended; a current Python in Stockbar's own environment), or Python 3.9+ with `python3 -m pip install -r Stockbar/Resources/requirements.txt`
 - **Git** for version control
 - Basic familiarity with Swift and SwiftUI
 
@@ -76,7 +76,10 @@ cd stockbar
 ### 2. Install Python Dependencies
 
 ```bash
-# Install the project dependency pins in the intended environment
+# Recommended: Stockbar's own environment, which the app uses automatically
+bash script/setup_python_env.sh
+
+# Or install the project dependency pins in another environment
 pip3 install -r Stockbar/Resources/requirements.txt
 ```
 
