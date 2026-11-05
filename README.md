@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 3.0.1** | **macOS 15.4+** | **Swift 6 language mode**
+**Version 3.1.0** | **macOS 15.4+** | **Swift 6 language mode**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
@@ -273,7 +273,15 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## Release History
 
-### Version 3.0.1 (Current) - Keychain And Exchange-Rate Fixes
+### Version 3.1.0 (Current) - Faster Market Data And Stockbar's Own Python
+- **Performance**: Persistent Python workers serve quotes, history and OHLC requests without restarting Python each time; live quotes load about a second faster.
+- **Python**: Settings > Advanced > Python shows the interpreter in use and can set up Stockbar's own Python 3.13 environment.
+- **Interface**: Shared models use Swift Observation, so only views whose data changed redraw. A holding added from the empty Holdings table appears immediately.
+- **Fixes**: Settings > Menu Bar no longer crashes under VoiceOver.
+- **Development**: The app compiles in Swift 6 language mode.
+- See [Changelogs/release_notes_v3.1.0.md](./Changelogs/release_notes_v3.1.0.md).
+
+### Version 3.0.1 - Keychain And Exchange-Rate Fixes
 - **Keychain**: Folync says when it is waiting for Keychain access, and a pending Keychain prompt no longer stalls Folync supplemental data.
 - **Exchange Rates**: A failed rate fetch is retried after five minutes instead of an hour.
 - **Logs**: Routine history trimming no longer logs a warning.
@@ -352,4 +360,4 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-Last updated: November 5, 2026 - Version 3.0.1
+Last updated: November 5, 2026 - Version 3.1.0
