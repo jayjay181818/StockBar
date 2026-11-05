@@ -139,6 +139,18 @@ final class PythonProcessRunnerTests: XCTestCase {
         XCTAssertNotEqual(buddhist.string(from: date), argument)
     }
 
+    func testMissingInterpreterErrorPointsToSetUpForStockbarsOwnEnvironment() {
+        let managed = NetworkError.pythonInterpreterNotFound(PythonConfiguration.managedInterpreterPath())
+        let custom = NetworkError.pythonInterpreterNotFound("/opt/custom/python3")
+
+        XCTAssertEqual(
+            managed.localizedDescription,
+            "Stockbar's own Python is not set up. Open Settings > Advanced > Python and choose Set Up."
+        )
+        XCTAssertTrue(custom.localizedDescription.contains("/opt/custom/python3"), custom.localizedDescription)
+        XCTAssertTrue(custom.localizedDescription.contains("Python 3.10 or later"), custom.localizedDescription)
+    }
+
     func testInterpreterPrefersTheSettingThenStockbarsOwnEnvironment() {
         let managed = "/Stockbar/python-env/bin/python3"
 
