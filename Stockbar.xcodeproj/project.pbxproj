@@ -15,6 +15,7 @@
 		04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */; };
 		04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */; };
 		04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */; };
+		04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003F /* PythonRequirementsTests.swift */; };
 		04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */; };
 		04C0FFEE000000000000001A /* PortfolioAnalyticsServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */; };
 		04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */; };
@@ -44,6 +45,7 @@
 		04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPublisherTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonWorkerPoolTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonEnvironmentSetupTests.swift; sourceTree = "<group>"; };
+		04C0FFEE000000000000003F /* PythonRequirementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRequirementsTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarFormattingServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioAnalyticsServicesTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RiskMetricsServiceTests.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 				04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */,
 				04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */,
 				04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */,
+				04C0FFEE000000000000003F /* PythonRequirementsTests.swift */,
 				04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */,
 				04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */,
 				04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */,
@@ -292,6 +295,7 @@
 				04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */,
 				04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */,
 				04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */,
+				04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */,
 				04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */,
 				04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */,
 				04C0FFEE0000000000000A03 /* RefreshSchedulerTests.swift in Sources */,
@@ -452,7 +456,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 310;
+				CURRENT_PROJECT_VERSION = 311;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
@@ -464,7 +468,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.0;
+				MARKETING_VERSION = 3.1.1;
 					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					REGISTER_APP_GROUPS = YES;
@@ -482,7 +486,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 310;
+				CURRENT_PROJECT_VERSION = 311;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -495,7 +499,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.0;
+				MARKETING_VERSION = 3.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
