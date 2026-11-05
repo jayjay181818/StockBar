@@ -5,7 +5,7 @@
 
 A minor release that makes Stockbar's own Python the only built-in way to fetch market data. Setup now works on a Mac with nothing installed, Apple's outdated Python 3.9 is no longer used, and yfinance is current. No stored data changes.
 
-**After updating:** if Stockbar was using Apple's `/usr/bin/python3`, it asks once to **Set Up Stockbar's Python**. Choose **Set Up Automatically**; it needs an internet connection and usually takes under a minute. Until then, prices from the Python providers (yfinance, FMP, Twelve Data, Stooq) are unavailable. Trading 212 and Folync data are not affected.
+**After updating:** if Stockbar was using Apple's `/usr/bin/python3`, it asks once to **Set Up Stockbar's Python**. If it already used its own Python environment, it shows **Python Dependencies Required** instead, because the pinned versions changed. Either way, choose **Set Up Automatically**; it needs an internet connection and usually takes under a minute. Until then, prices from the Python providers (yfinance, FMP, Twelve Data, Stooq) are unavailable. Trading 212 and Folync data are not affected.
 
 ## Setup on any Mac
 

@@ -73,6 +73,24 @@ final class StockbarProviderAccessPolicyTests: XCTestCase {
         )
     }
 
+    func testPythonDependencyAlertOffersPipCommandOnlyForAnExistingCustomInterpreter() {
+        let managed = "/Users/me/Library/Application Support/Stockbar/python-env/bin/python3"
+
+        // Stockbar's own environment has no pip; Set Up Automatically rebuilds it.
+        XCTAssertFalse(AppDelegate.offersManualPythonInstall(
+            interpreterPath: managed, managedInterpreterPath: managed, interpreterExists: true
+        ))
+        XCTAssertFalse(AppDelegate.offersManualPythonInstall(
+            interpreterPath: managed, managedInterpreterPath: managed, interpreterExists: false
+        ))
+        XCTAssertTrue(AppDelegate.offersManualPythonInstall(
+            interpreterPath: "/opt/homebrew/bin/python3", managedInterpreterPath: managed, interpreterExists: true
+        ))
+        XCTAssertFalse(AppDelegate.offersManualPythonInstall(
+            interpreterPath: "/opt/homebrew/bin/python3", managedInterpreterPath: managed, interpreterExists: false
+        ))
+    }
+
     func testEnabledFolyncBenchmarkRouteSuppressesLegacyRefreshBeforeFirstOverlay() {
         let symbols = ["AAPL", "^FTSE", "^GSPC"]
 

@@ -392,16 +392,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// the first refresh pass, every UI update) until it was dismissed.
     @MainActor
     private func showPythonDependencyAlert(interpreterExists: Bool) {
+        let interpreterPath = PythonConfiguration.load().interpreterPath
         let installCommand = Self.pythonInstallCommand(
-            interpreterPath: PythonConfiguration.load().interpreterPath,
+            interpreterPath: interpreterPath,
             requirementsPath: Bundle.main.url(forResource: "requirements", withExtension: "txt")?.path
+        )
+        let offersManualInstall = Self.offersManualPythonInstall(
+            interpreterPath: interpreterPath,
+            managedInterpreterPath: PythonConfiguration.managedInterpreterPath(),
+            interpreterExists: interpreterExists
         )
 
         let alert = NSAlert()
         alert.messageText = interpreterExists ? "Python Dependencies Required" : "Set Up Stockbar's Python"
-        let reason = interpreterExists
-            ? "Stockbar needs its pinned Python packages for the configured interpreter."
-            : "Stockbar fetches market data with its own Python environment, which is not set up yet."
+        let reason: String
+        if !interpreterExists {
+            reason = "Stockbar fetches market data with its own Python environment, which is not set up yet."
+        } else if offersManualInstall {
+            reason = "Stockbar needs its pinned Python packages for the configured interpreter."
+        } else {
+            reason = "Stockbar's own Python environment has missing or outdated packages, for example after an update."
+        }
         let setUpText = """
             Recommended: choose Set Up Automatically. Stockbar installs a current Python and its packages in its own environment (Application Support/Stockbar/python-env) and uses it from the next refresh. It needs an internet connection and nothing installed first. You can also do this later in Settings > Advanced > Python.
             """
@@ -413,12 +424,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             To use another virtual environment, point Stockbar at it and relaunch:
             defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
             """
-        alert.informativeText = ([reason, setUpText] + (interpreterExists ? [manualText] : []) + [otherVenvText])
+        alert.informativeText = ([reason, setUpText] + (offersManualInstall ? [manualText] : []) + [otherVenvText])
             .joined(separator: "\n\n")
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Set Up Automatically")
-        if interpreterExists {
-            // Copying a pip command only helps for an interpreter that exists.
+        if offersManualInstall {
             alert.addButton(withTitle: "Copy Command")
             alert.addButton(withTitle: "Open Terminal")
         }
@@ -428,12 +438,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             switch response {
             case .alertFirstButtonReturn:
                 Task { @MainActor in await self?.setUpPythonEnvironment() }
-            case .alertSecondButtonReturn where interpreterExists:
+            case .alertSecondButtonReturn where offersManualInstall:
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(installCommand, forType: .string)
                 Task { await Logger.shared.info("Python install command copied to clipboard") }
-            case .alertThirdButtonReturn where interpreterExists:
+            case .alertThirdButtonReturn where offersManualInstall:
                 if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
                     NSWorkspace.shared.open(terminal)
                 }
@@ -459,6 +469,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         alert.addButton(withTitle: "OK")
         presentAlert(alert) { _ in }
+    }
+
+    /// Whether the dependency alert offers a pip command. Only for an interpreter
+    /// set with `pythonInterpreterPath` that exists. Stockbar's own environment
+    /// is usually built by uv, without pip, so the command would fail there;
+    /// Set Up Automatically rebuilds it instead.
+    nonisolated static func offersManualPythonInstall(
+        interpreterPath: String,
+        managedInterpreterPath: String,
+        interpreterExists: Bool
+    ) -> Bool {
+        interpreterExists && interpreterPath != managedInterpreterPath
     }
 
     /// Shell command using absolute, quoted paths so it works from any
