@@ -42,11 +42,21 @@ struct Trading212DataSourceSection: View {
         .onAppear(perform: loadSettings)
         .alert("Link matched holdings?", isPresented: $showingLinkConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Link") {
-                linkMatchedHoldings()
+            if let preview {
+                let selection = Trading212LinkSelection(preview: preview)
+                if selection.exactMatches.isEmpty == false {
+                    Button(selection.mismatches.isEmpty ? "Link" : "Link Exact Matches Only") {
+                        linkMatchedHoldings(includeQuantityMismatches: false)
+                    }
+                }
+                if selection.mismatches.isEmpty == false {
+                    Button("Link Including Differing Quantities", role: .destructive) {
+                        linkMatchedHoldings(includeQuantityMismatches: true)
+                    }
+                }
             }
         } message: {
-            Text("StockBar will save broker links for exact manual matches only. Broker-only rows will not be imported by this action.")
+            Text(linkConfirmationMessage)
         }
         .alert("Import broker-only holdings?", isPresented: $showingBrokerOnlyImportConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -391,9 +401,23 @@ struct Trading212DataSourceSection: View {
     }
 
     private func canLinkPreview(_ preview: Trading212ImportPreview) -> Bool {
-        preview.rows.contains { row in
-            row.conflictStatus == .manualHoldingMatch || row.conflictStatus == .manualQuantityMismatch
+        let selection = Trading212LinkSelection(preview: preview)
+        return !selection.exactMatches.isEmpty || !selection.mismatches.isEmpty
+    }
+
+    private var linkConfirmationMessage: String {
+        guard let preview else { return "Run Preview Import before linking broker holdings." }
+        let selection = Trading212LinkSelection(preview: preview)
+        var message = "StockBar will save broker links for \(selection.exactMatches.count) exact manual match(es). Broker-only rows will not be imported by this action."
+        if !selection.mismatches.isEmpty {
+            let listed = selection.mismatches.prefix(6).map { row in
+                "\(row.manualMatch?.symbol ?? row.displaySymbol): manual \(format(row.manualMatch?.quantity)) vs Trading 212 \(format(row.quantity))"
+            }
+            let more = selection.mismatches.count > listed.count ? "\n…and \(selection.mismatches.count - listed.count) more" : ""
+            message += "\n\n\(selection.mismatches.count) holding(s) have a different quantity and are NOT linked unless you choose to include them. Once linked, the Trading 212 quantity replaces the manual one on the next sync:\n"
+                + listed.joined(separator: "\n") + more
         }
+        return message
     }
 
     private func canImportBrokerOnly(_ preview: Trading212ImportPreview) -> Bool {
@@ -487,29 +511,45 @@ struct Trading212DataSourceSection: View {
         }
     }
 
-    private func credentialsForAction() throws -> Trading212AuthConfiguration {
-        if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            !apiSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let credentials = Trading212AuthConfiguration(apiKey: apiKey, apiSecret: apiSecret)
-            _ = try Trading212AuthHeaderBuilder().authorizationHeader(for: credentials)
-            try credentialStore.save(credentials, environment: settings.environment)
-            return credentials.normalized
+    /// Credentials for a test or preview. Typed values are used from memory and are NOT saved
+    /// until the request succeeds (or the user presses Save), so a typo never replaces the
+    /// working credentials in Keychain.
+    private func credentialsForAction() throws -> Trading212ActionCredentials {
+        let environment = settings.environment
+        return try Trading212ActionCredentials.resolve(apiKey: apiKey, apiSecret: apiSecret) {
+            try credentialStore.load(environment: environment)
         }
-        return try credentialStore.load(environment: settings.environment)
+    }
+
+    /// Saves typed credentials after the broker accepted them.
+    private func persistValidatedCredentials(_ credentials: Trading212AuthConfiguration, environment: Trading212Environment) {
+        do {
+            try credentialStore.save(credentials, environment: environment)
+            apiKey = ""
+            apiSecret = ""
+            refreshKeychainStatus()
+        } catch {
+            statusMessage = LogRedactor.redact(error.localizedDescription)
+        }
     }
 
     func testConnection() {
         do {
-            let credentials = try credentialsForAction()
+            let action = try credentialsForAction()
+            let environment = settings.environment
             saveSettings(restartScheduler: false)
             dataModel.suspendTrading212LinkedSyncScheduler()
             isTesting = true
             Task {
-                let result = await coordinator.testConnection(settings: settings, credentials: credentials)
+                let result = await coordinator.testConnection(settings: settings, credentials: action.credentials)
                 isTesting = false
+                if result.accountDataAvailable, action.isUnsaved {
+                    persistValidatedCredentials(action.credentials, environment: environment)
+                }
                 refreshKeychainStatus()
                 dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
-                statusMessage = "\(result.environment.displayName): \(result.safeMessage) Positions: \(result.positionCount)."
+                let savedNote = result.accountDataAvailable && action.isUnsaved ? " Credentials saved to Keychain." : ""
+                statusMessage = "\(result.environment.displayName): \(result.safeMessage) Positions: \(result.positionCount).\(savedNote)"
             }
         } catch {
             statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -518,7 +558,8 @@ struct Trading212DataSourceSection: View {
 
     private func previewImport() {
         do {
-            let credentials = try credentialsForAction()
+            let action = try credentialsForAction()
+            let environment = settings.environment
             saveSettings(restartScheduler: false)
             dataModel.suspendTrading212LinkedSyncScheduler()
             let existingManualHoldings = dataModel.realTimeTrades.map { manualHoldingSnapshot(from: $0) }
@@ -527,10 +568,13 @@ struct Trading212DataSourceSection: View {
                 do {
                     let result = try await coordinator.preview(
                         settings: settings,
-                        credentials: credentials,
+                        credentials: action.credentials,
                         existingManualHoldings: existingManualHoldings
                     )
                     preview = result
+                    if action.isUnsaved {
+                        persistValidatedCredentials(action.credentials, environment: environment)
+                    }
                     statusMessage = "Preview loaded from \(settings.environment.displayName). Rows: \(result.rows.count)."
                 } catch {
                     statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -544,17 +588,23 @@ struct Trading212DataSourceSection: View {
         }
     }
 
-    private func linkMatchedHoldings() {
+    private func linkMatchedHoldings(includeQuantityMismatches: Bool) {
         guard let preview else {
             statusMessage = "Run Preview Import before linking broker holdings."
             return
         }
 
+        // Exact matches only unless the user explicitly chose to include differing quantities.
+        let selection = Trading212LinkSelection(preview: preview)
+        let previewToLink = includeQuantityMismatches ? preview : selection.exactMatchesOnlyPreview
+
         isLinking = true
         Task {
             do {
-                let result = try await brokerLinkStore.linkMatchedHoldings(from: preview)
-                statusMessage = "Linked \(result.linkedCount) matched Trading 212 holding(s). Broker-only rows were not imported."
+                let result = try await brokerLinkStore.linkMatchedHoldings(from: previewToLink)
+                let skipped = includeQuantityMismatches ? 0 : selection.mismatches.count
+                let skippedNote = skipped > 0 ? " \(skipped) holding(s) with a different quantity were not linked." : ""
+                statusMessage = "Linked \(result.linkedCount) matched Trading 212 holding(s). Broker-only rows were not imported.\(skippedNote)"
                 dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             } catch {
                 statusMessage = LogRedactor.redact(error.localizedDescription)
@@ -700,5 +750,55 @@ struct Trading212DataSourceSection: View {
 
     private func finite(_ value: Double) -> Double? {
         value.isFinite ? value : nil
+    }
+}
+
+
+/// Which preview rows a "link matched holdings" action would touch.
+struct Trading212LinkSelection {
+    let preview: Trading212ImportPreview
+
+    /// Rows whose manual holding has the same quantity as the broker position.
+    var exactMatches: [Trading212ImportPreviewRow] {
+        preview.rows.filter { $0.conflictStatus == .manualHoldingMatch }
+    }
+
+    /// Rows matched to a manual holding with a different quantity.
+    var mismatches: [Trading212ImportPreviewRow] {
+        preview.rows.filter { $0.conflictStatus == .manualQuantityMismatch }
+    }
+
+    /// The preview reduced to exact matches, safe to hand to the link store.
+    var exactMatchesOnlyPreview: Trading212ImportPreview {
+        Trading212ImportPreview(
+            account: preview.account,
+            accountSummary: preview.accountSummary,
+            rows: exactMatches,
+            metadataAvailable: preview.metadataAvailable,
+            generatedAt: preview.generatedAt,
+            warnings: preview.warnings
+        )
+    }
+}
+
+/// Credentials chosen for a Test or Preview action, resolved without touching storage.
+struct Trading212ActionCredentials: Equatable {
+    let credentials: Trading212AuthConfiguration
+    /// True when the credentials were typed and have not been saved yet.
+    let isUnsaved: Bool
+
+    /// Uses typed values when either field is filled (validating them), otherwise `loadStored`.
+    static func resolve(
+        apiKey: String,
+        apiSecret: String,
+        loadStored: () throws -> Trading212AuthConfiguration
+    ) throws -> Trading212ActionCredentials {
+        if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !apiSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let typed = Trading212AuthConfiguration(apiKey: apiKey, apiSecret: apiSecret)
+            _ = try Trading212AuthHeaderBuilder().authorizationHeader(for: typed)
+            return Trading212ActionCredentials(credentials: typed.normalized, isUnsaved: true)
+        }
+        return Trading212ActionCredentials(credentials: try loadStored(), isUnsaved: false)
     }
 }

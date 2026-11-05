@@ -193,6 +193,7 @@ final class Trading212AuthTests: XCTestCase {
         // Given: A test-only Keychain namespace and valid fake credentials.
         let service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
         let store = Trading212CredentialStore(service: service)
+        defer { removeKeychainItems(service: service, store: store) }
         let credentials = Trading212AuthConfiguration(apiKey: "api-key-123", apiSecret: "secret-456")
 
         // When: StockBar saves credentials.
@@ -211,6 +212,7 @@ final class Trading212AuthTests: XCTestCase {
         // Given: A test-only Keychain namespace and valid fake credentials.
         let service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
         let store = Trading212CredentialStore(service: service)
+        defer { removeKeychainItems(service: service, store: store) }
         let credentials = Trading212AuthConfiguration(apiKey: "api-key-123", apiSecret: "secret-456")
         try store.save(credentials, environment: .live)
 
@@ -230,6 +232,7 @@ final class Trading212AuthTests: XCTestCase {
         // Given: Fake credentials saved in the old two-item Keychain layout.
         let service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
         let store = Trading212CredentialStore(service: service)
+        defer { removeKeychainItems(service: service, store: store) }
         try saveLegacyKeychainValue("legacy-key", service: service, account: "demo.apiKey")
         try saveLegacyKeychainValue("legacy-secret", service: service, account: "demo.apiSecret")
 
@@ -276,6 +279,18 @@ final class Trading212AuthTests: XCTestCase {
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw Trading212CredentialStoreError.keychainStatus(status)
+        }
+    }
+
+    /// Best-effort removal of every item a test may have left under its unique service,
+    /// including on early exit from a failed assertion or throw.
+    private func removeKeychainItems(service: String, store: Trading212CredentialStore) {
+        for environment in [Trading212Environment.live, .demo] {
+            try? store.delete(environment: environment)
+        }
+        for account in ["live.credentials.v2", "demo.credentials.v2",
+                        "live.apiKey", "live.apiSecret", "demo.apiKey", "demo.apiSecret"] {
+            deleteKeychainValue(service: service, account: account)
         }
     }
 

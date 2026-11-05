@@ -1,6 +1,29 @@
 import AppKit
 import SwiftUI
 
+/// Window frames and status-item positions are persisted by AppKit in the *standard*
+/// defaults, bypassing the acceptance defaults suite. While acceptance isolation is
+/// active the window frame is not saved at all and status items get run-specific names,
+/// so the production layout is never overwritten.
+enum StockbarAutosavePolicy {
+    /// Autosave name for a window frame, or nil when it must not be saved or restored.
+    static func windowFrameName(
+        _ base: String,
+        acceptance: StockbarAcceptanceRuntime = StockbarRuntimeStorage.acceptance
+    ) -> String? {
+        acceptance.isEnabled ? nil : base
+    }
+
+    /// Autosave name for a status item; suffixed with the run ID under acceptance.
+    static func statusItemName(
+        _ base: String,
+        acceptance: StockbarAcceptanceRuntime = StockbarRuntimeStorage.acceptance
+    ) -> String {
+        guard acceptance.isEnabled else { return base }
+        return "\(base).acceptance.\(acceptance.runID ?? "run")"
+    }
+}
+
 @MainActor
 final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
     private enum WindowMetrics {
@@ -46,8 +69,12 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = WindowMetrics.minimumSize
         window.setContentSize(initialContentSize())
         // Restore the user's last size/position and keep saving it.
-        shouldCenterOnNextShow = !window.setFrameUsingName(Self.frameAutosaveName)
-        window.setFrameAutosaveName(Self.frameAutosaveName)
+        // Acceptance runs skip this: frames are stored in the standard defaults, which
+        // isolation does not redirect, so they would overwrite the real window position.
+        if let autosaveName = StockbarAutosavePolicy.windowFrameName(Self.frameAutosaveName) {
+            shouldCenterOnNextShow = !window.setFrameUsingName(autosaveName)
+            window.setFrameAutosaveName(autosaveName)
+        }
 
         self.window = window
         self.hostingController = hostingController

@@ -45,10 +45,11 @@ final class TradeDataService: @unchecked Sendable {
         await TradeDataWriteGate.shared.wait()
         do {
             try await CoreDataStack.shared.performBackgroundTask { context in
-                // Delete existing trades more efficiently with a batch delete request
-                let fetchRequest: NSFetchRequest<NSFetchRequestResult> = TradeEntity.fetchRequest()
-                let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-                try context.execute(deleteRequest)
+                // Delete in the context, not with a batch request: a batch delete
+                // commits on its own, so a failed save would leave no trades at all.
+                for existing in try context.fetch(TradeEntity.fetchRequest()) {
+                    context.delete(existing)
+                }
                 
                 // Create new trade entities
                 for trade in uniqueTrades {
@@ -170,10 +171,10 @@ final class TradeDataService: @unchecked Sendable {
     /// Saves all trading info
     func saveAllTradingInfo(_ tradingInfoDict: [String: TradingInfo]) async throws {
         try await CoreDataStack.shared.performBackgroundTask { context in
-            // Delete existing trading info efficiently
-            let fetchRequest: NSFetchRequest<NSFetchRequestResult> = TradingInfoEntity.fetchRequest()
-            let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-            try context.execute(deleteRequest)
+            // Deleted in the same save as the inserts, so a failure keeps the old rows.
+            for existing in try context.fetch(TradingInfoEntity.fetchRequest()) {
+                context.delete(existing)
+            }
             
             // Create new trading info entities
             for (symbol, tradingInfo) in tradingInfoDict {

@@ -15,8 +15,7 @@ macOS portfolio tracker with Swift/Python integration. `LSUIElement = false`: th
 ```
 DataModel (@MainActor ObservableObject)  central state hub
   ├── @Published realTimeTrades: [RealTimeTrade]   ← drives menu bar + all views
-  ├── RefreshCoordinator (actor)                   ← serializes refresh passes
-  ├── RefreshService                              ← refresh scheduling
+  ├── RefreshService                              ← refresh scheduling; RefreshPassScheduler serializes passes
   ├── CacheCoordinator (actor)                     ← TTL + backoff + circuit breaker
   ├── PythonNetworkService → python3 subprocess → get_stock_data.py
   ├── Trading212BrokerSyncService / Trading212Provider   ← broker-linked holdings
@@ -38,11 +37,11 @@ Three sources coexist and must stay non-destructive to each other:
 - Timeout values and batch sizing live in `Stockbar/Data/Networking/NetworkService.swift`; inspect the relevant operation when changing fetch behavior.
 - Failed fetches return a placeholder `StockFetchResult` with `.nan` prices rather than throwing, so metadata survives.
 - `PythonConfiguration.validateSymbol/sanitizeSymbol` restrict symbols to `A-Z0-9.^=-` to prevent argument injection — route new symbol paths through them.
-- Providers inside the script: yfinance (primary), FMP, Twelve Data, Stooq; order configurable via `DATA_SOURCE_PRIORITY`. Python-side quote cache at `~/Library/Caches/stockbar-cache/quote_cache.json` (passed by the app via `STOCKBAR_CACHE_FILE`, acceptance-aware; a legacy `~/.stockbar_cache.json` is moved there once), lock-file guarded with atomic replace.
+- Providers inside the script: live quotes use a fixed order (yfinance, Twelve Data, the Yahoo quote API, then FMP); historical data follows `DATA_SOURCE_PRIORITY` (default yfinance, then FMP). Python-side quote cache at `~/Library/Caches/stockbar-cache/quote_cache.json` (passed by the app via `STOCKBAR_CACHE_FILE`, acceptance-aware; a legacy `~/.stockbar_cache.json` is moved there once), lock-file guarded with atomic replace.
 - `ENABLE_USER_SCRIPT_SANDBOXING = NO` and the app must stay unsandboxed — the subprocess bridge depends on it. The entitlement validator checks app sandbox and server permissions; the Xcode project defines script sandboxing.
 
 ### UI layer
-- **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over nine sections — Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
+- **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over ten sections — Overview, Holdings, Alerts, Charts, Risk, Allocation, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
 - **Menu bar**: `StockMenuBarController` + `StockStatusBar`, one `NSStatusItem` per visible symbol, Combine-driven; also handles external-display polling for status-item visibility.
 - **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `VolumeChartView`, `MenuPriceChartView`, `SparklineView`.
 

@@ -244,6 +244,21 @@ def set_cache(symbol, result):
         save_cache_unlocked(current_cache)
     return True
 
+def exchange_today(index, symbol):
+    """Current calendar date in the exchange's timezone.
+
+    Bar dates in yfinance history are in the exchange timezone, so comparing
+    them with the Mac's local date can treat today's partial bar as complete.
+    Prefer the history index timezone; fall back to the symbol's market date.
+    """
+    tz = getattr(index, 'tz', None)
+    if tz is not None:
+        try:
+            return datetime.now(tz).date()
+        except Exception:
+            pass
+    return datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
+
 def market_date_for_symbol(symbol):
     tz = None
     try:
@@ -370,16 +385,28 @@ def history_symbol_for_prev_close(symbol):
         return upper.replace('.XC', '.L')
     return upper
 
+# Only a trailing London suffix is a suffix; a plain replace() would also rewrite
+# ".L" inside tickers such as "ABC.LON" or "A.LSE.L".
+LSE_SUFFIX_PATTERN = re.compile(r'\.(?:LON|L)$')
+
 def handle_lse_symbol(symbol):
-    """Convert London Stock Exchange symbols for FMP API"""
+    """Convert London Stock Exchange symbols for FMP API (alias-resolved)."""
     upper = resolve_symbol_alias(symbol)
-    if upper.endswith('.XC'):
-        return upper.replace('.XC', '.L')
-    if upper.endswith('.L'):
-        return symbol.upper()
-    elif upper.endswith('.LON'):
-        return symbol.upper().replace('.LON', '.L')
-    return symbol.upper()
+    return LSE_SUFFIX_PATTERN.sub('.L', upper)
+
+def resolve_market_state(reported_state, clock_state, now_market):
+    """Pick the market state: Yahoo's own marketState when present (it knows
+    holidays and early closes), otherwise the clock-derived state, forced to
+    CLOSED on weekends. Public holidays are not modelled here."""
+    if isinstance(reported_state, str):
+        normalized = reported_state.strip().upper()
+        if normalized in ("REGULAR", "PRE", "POST"):
+            return normalized
+        if normalized in ("CLOSED", "PREPRE", "POSTPOST"):
+            return "CLOSED"
+    if now_market.weekday() >= 5:
+        return "CLOSED"
+    return clock_state
 
 def normalize_currency(raw_currency, symbol):
     """Normalize currency codes and detect pence-based quotes."""
@@ -406,10 +433,10 @@ def handle_twelvedata_symbol(symbol):
     if upper == '^FTSE':
         return 'FTSE', None
     if upper.endswith('.XC'):
-        upper = upper.replace('.XC', '.L')
-    if upper.endswith('.L') or upper.endswith('.LON'):
+        upper = upper[:-len('.XC')] + '.L'
+    if LSE_SUFFIX_PATTERN.search(upper):
         # Strip suffix, specify exchange in params
-        return upper.replace('.L', '').replace('.LON', ''), "LSE"
+        return LSE_SUFFIX_PATTERN.sub('', upper), "LSE"
     return upper, None
 
 def fetch_historical_data_twelvedata(symbol, start_date, end_date):
@@ -502,13 +529,12 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
 def handle_stooq_symbol(symbol):
     """Convert symbols for Stooq (e.g. AV.L -> AV.UK)"""
     # Stooq uses .UK for LSE
-    if symbol.upper().endswith('.L'):
-        return symbol.upper().replace('.L', '.UK')
-    elif symbol.upper().endswith('.LON'):
-        return symbol.upper().replace('.LON', '.UK')
+    upper = resolve_symbol_alias(symbol)
+    if LSE_SUFFIX_PATTERN.search(upper):
+        return LSE_SUFFIX_PATTERN.sub('.UK', upper)
     # US stocks typically have .US suffix or just ticker, Stooq often needs .US for common ones
     # but let's stick to LSE fallback focus for now.
-    return symbol.upper()
+    return upper
 
 def fetch_historical_data_stooq(symbol, start_date, end_date):
     """Fetch historical data from Stooq (CSV)"""
@@ -624,7 +650,7 @@ def fetch_real_time_quote_yfinance(symbol):
         daily_hist = daily_hist.sort_index()
         
         # Remove today's data if it's incomplete (during market hours)
-        today = datetime.now().date()
+        today = exchange_today(daily_hist.index, symbol)
         complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
         
         if not complete_days.empty:
@@ -640,6 +666,7 @@ def fetch_real_time_quote_yfinance(symbol):
         pre_market_price = None
         post_market_price = None
         market_state = "REGULAR"
+        reported_market_state = None
         
         currency = None
 
@@ -647,6 +674,7 @@ def fetch_real_time_quote_yfinance(symbol):
         try:
             info = ticker.info
             currency = info.get('currency') or info.get('financialCurrency')
+            reported_market_state = info.get('marketState')
             
             # Extract timestamp from regularMarketTime
             if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
@@ -711,19 +739,11 @@ def fetch_real_time_quote_yfinance(symbol):
             
             # Simplified LSE market hours logic for brevity in this view
             if (current_hour_market >= 7 and current_hour_market < 8):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
                 market_state = "REGULAR"
             elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
         else:
@@ -745,21 +765,19 @@ def fetch_real_time_quote_yfinance(symbol):
             current_minute_market = now_market.minute
             
             if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
                 market_state = "REGULAR"
             elif current_hour_market >= 16 and current_hour_market < 20:
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
+
+        market_state = resolve_market_state(reported_market_state, market_state, now_market)
+        if market_state == "PRE" and pre_market_price is not None:
+            current_price = pre_market_price
+        elif market_state == "POST" and post_market_price is not None:
+            current_price = post_market_price
 
         normalized_currency, uses_pence = normalize_currency(currency, symbol)
         if uses_pence:
@@ -1223,6 +1241,21 @@ def fetch_real_time_quote(symbol):
     fmp_result = fetch_real_time_quote_fmp(symbol)
     return validated_provider_quote(symbol, "FMP", fmp_result)
 
+def yfinance_reported_currency(ticker):
+    """Currency reported by yfinance for a ticker (history metadata, then fast_info, then info)."""
+    for getter in (
+        lambda: ticker.history_metadata.get('currency'),
+        lambda: ticker.fast_info['currency'],
+        lambda: ticker.info.get('currency'),
+    ):
+        try:
+            value = getter()
+            if value:
+                return value
+        except Exception:
+            continue
+    return None
+
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
     if not YFINANCE_AVAILABLE:
@@ -1246,6 +1279,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 
             historical_data = []
             prev_close_raw = None
+            _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
             
             for date, row in hist.iterrows():
                 close_price_raw = float(row['Close'])
@@ -1255,7 +1289,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 else:
                     previous_close_raw = float(row['Open'])
                 
-                if symbol.upper().endswith('.L'):
+                if uses_pence:
                     close_price = close_price_raw / 100.0
                     previous_close = previous_close_raw / 100.0
                 else:
@@ -1298,6 +1332,7 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
         return []
     
     historical_data = []
+    reported_currency = data.get('currency')
     for entry in data['historical']:
         try:
             date_obj = datetime.strptime(entry['date'], '%Y-%m-%d')
@@ -1306,7 +1341,8 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
             close_price = entry['close']
             previous_close = entry.get('open', close_price)
             
-            if api_symbol.endswith('.L'):
+            _, uses_pence = normalize_currency(entry.get('currency') or reported_currency, api_symbol)
+            if uses_pence:
                 close_price = close_price / 100.0
                 previous_close = previous_close / 100.0
             
@@ -1500,6 +1536,19 @@ def output_error(error_code, message, symbol=None, retry_after=None):
 
     print_json(error_obj)
 
+def finite_ohlc_value(value):
+    """A price as a finite float, or None when missing or non-finite."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+def ohlc_volume(value):
+    """Share count as an int; a missing or non-finite volume becomes 0."""
+    number = finite_ohlc_value(value)
+    return int(number) if number is not None else 0
+
 def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
     """Fetch OHLC data using yfinance"""
     if not YFINANCE_AVAILABLE:
@@ -1512,19 +1561,19 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
         if hist.empty:
             return None
 
+        # Scale by the currency yfinance reports, as the history path does, so
+        # a .L listing quoted in GBP or USD is not divided by 100.
+        _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
+        divisor = 100.0 if uses_pence else 1.0
+
         ohlc_data = []
         for date, row in hist.iterrows():
-            open_price = float(row['Open'])
-            high_price = float(row['High'])
-            low_price = float(row['Low'])
-            close_price = float(row['Close'])
-            volume = int(row['Volume'])
-
-            if symbol.upper().endswith('.L'):
-                open_price /= 100.0
-                high_price /= 100.0
-                low_price /= 100.0
-                close_price /= 100.0
+            prices = [finite_ohlc_value(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
+            # A row with a missing price (often today's partial bar) would become
+            # null in the JSON and fail decoding of the whole response, so skip it.
+            if any(price is None for price in prices):
+                continue
+            open_price, high_price, low_price, close_price = (price / divisor for price in prices)
 
             ohlc_data.append({
                 'timestamp': int(date.timestamp()),
@@ -1533,8 +1582,12 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
                 'high': high_price,
                 'low': low_price,
                 'close': close_price,
-                'volume': volume
+                # Indices and FX often have no volume; that must not fail the fetch.
+                'volume': ohlc_volume(row['Volume'])
             })
+
+        if not ohlc_data:
+            return None
 
         print(f"yfinance retrieved {len(ohlc_data)} OHLC data points for {symbol} (period={period}, interval={interval})", file=sys.stderr)
         return ohlc_data

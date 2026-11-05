@@ -37,17 +37,11 @@ struct HistoricalPortfolioCalculationService: Sendable {
             return []
         }
 
-        let totalInvestmentCost = calculateTotalInvestmentCost(
-            composition: input.composition,
-            preferredCurrency: input.preferredCurrency
-        )
-
         guard sortedDates.count > 100 else {
             return calculateSnapshots(
                 for: sortedDates,
                 priceSnapshots: sortedPriceSnapshots,
                 composition: input.composition,
-                totalInvestmentCost: totalInvestmentCost,
                 preferredCurrency: input.preferredCurrency
             )
         }
@@ -64,7 +58,6 @@ struct HistoricalPortfolioCalculationService: Sendable {
                         for: dates,
                         priceSnapshots: sortedPriceSnapshots,
                         composition: input.composition,
-                        totalInvestmentCost: totalInvestmentCost,
                         preferredCurrency: input.preferredCurrency
                     )
                 }
@@ -82,13 +75,16 @@ struct HistoricalPortfolioCalculationService: Sendable {
         for dates: [Date],
         priceSnapshots: [String: [PriceSnapshot]],
         composition: PortfolioComposition,
-        totalInvestmentCost: Double,
         preferredCurrency: String
     ) -> [HistoricalPortfolioSnapshot] {
         let converter = CurrencyConverter.shared
 
         return dates.compactMap { date in
             var totalValueUSD = 0.0
+            // Cost and gains cover only valued positions with a readable cost,
+            // so a missing price or a blank Avg Cost cannot skew or NaN them.
+            var costedValueUSD = 0.0
+            var totalCostUSD = 0.0
             var positionSnapshots: [String: PositionSnapshot] = [:]
             var validPositions = 0
 
@@ -122,6 +118,15 @@ struct HistoricalPortfolioCalculationService: Sendable {
 
                 totalValueUSD += valueInUSD
                 validPositions += 1
+                let costInUSD = convertToUSD(
+                    amount: position.avgCost * position.units,
+                    currency: position.currency,
+                    converter: converter
+                )
+                if costInUSD.isFinite, costInUSD > 0 {
+                    costedValueUSD += valueInUSD
+                    totalCostUSD += costInUSD
+                }
                 positionSnapshots[position.symbol] = PositionSnapshot(
                     symbol: position.symbol,
                     units: position.units,
@@ -142,29 +147,26 @@ struct HistoricalPortfolioCalculationService: Sendable {
                 preferredCurrency: preferredCurrency,
                 converter: converter
             )
-            let totalGains = finalValue - totalInvestmentCost
+            let totalCost = convertFromUSD(
+                amount: totalCostUSD,
+                preferredCurrency: preferredCurrency,
+                converter: converter
+            )
+            let totalGains = convertFromUSD(
+                amount: costedValueUSD - totalCostUSD,
+                preferredCurrency: preferredCurrency,
+                converter: converter
+            )
 
             return HistoricalPortfolioSnapshot(
                 date: date,
                 totalValue: finalValue,
                 totalGains: totalGains,
-                totalCost: totalInvestmentCost,
+                totalCost: totalCost,
                 currency: preferredCurrency,
                 portfolioComposition: positionSnapshots
             )
         }
-    }
-
-    private static func calculateTotalInvestmentCost(
-        composition: PortfolioComposition,
-        preferredCurrency: String
-    ) -> Double {
-        let converter = CurrencyConverter.shared
-        let totalCostUSD = composition.positions.reduce(0.0) { total, position in
-            let positionCost = position.avgCost * position.units
-            return total + convertToUSD(amount: positionCost, currency: position.currency, converter: converter)
-        }
-        return convertFromUSD(amount: totalCostUSD, preferredCurrency: preferredCurrency, converter: converter)
     }
 
     private static func convertToUSD(amount: Double, currency: String, converter: CurrencyConverter) -> Double {

@@ -8,7 +8,9 @@ struct StockbarOverviewView: View {
     @ObservedObject var navigationState: StockbarMainNavigationState
     @StateObject private var chartModel: PortfolioMenuChartViewModel
     @State private var selectedSymbol = ""
-    @State private var selectedDate: Date?
+    /// The point under the pointer. Only written when it changes, so moving along one point does not re-render.
+    @State private var hoveredPoint: MenuChartDataPoint?
+    @State private var summaryCache = DisplaySummaryCache()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, navigationState: StockbarMainNavigationState) {
@@ -24,7 +26,10 @@ struct StockbarOverviewView: View {
         ))
     }
 
-    private var summary: DisplayPortfolioSummary { dataModel.calculateDisplayPortfolioSummary() }
+    /// Computed once per render pass (see `DisplaySummaryCache`).
+    private var summary: DisplayPortfolioSummary {
+        summaryCache.summary { dataModel.calculateDisplayPortfolioSummary() }
+    }
     private var holdings: [RealTimeTrade] {
         dataModel.realTimeTrades.filter {
             !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
@@ -50,6 +55,7 @@ struct StockbarOverviewView: View {
     }
 
     var body: some View {
+        let _ = summaryCache.beginPass()
         GeometryReader { geometry in
             let showsSideInspector = geometry.size.width >= 1000
             HStack(spacing: 0) {
@@ -87,7 +93,7 @@ struct StockbarOverviewView: View {
         .onChange(of: summary.totalValue) { _, _ in updateChart() }
         .onChange(of: summary.currency) { _, _ in updateChart() }
         .onChange(of: summary.valuationSource) { _, _ in updateChart() }
-        .onChange(of: chartModel.selectedTimeRange) { _, _ in selectedDate = nil }
+        .onChange(of: chartModel.selectedTimeRange) { _, _ in hoveredPoint = nil }
     }
 
     private var header: some View {
@@ -207,11 +213,18 @@ struct StockbarOverviewView: View {
         return (minimum - padding)...(maximum + padding)
     }
 
-    private var hoveredPoint: MenuChartDataPoint? {
-        guard let selectedDate else { return nil }
-        return chartModel.chartData.min {
-            abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate))
-        }
+    /// Maps the chart's selected x position to the nearest stored point.
+    private var hoverSelection: Binding<Date?> {
+        Binding(
+            get: { hoveredPoint?.date },
+            set: { date in
+                let data = chartModel.chartData
+                let nearest = date
+                    .flatMap { ChartSeriesProcessing.nearestIndex(in: data.map(\.date), to: $0) }
+                    .map { data[$0] }
+                if nearest?.id != hoveredPoint?.id { hoveredPoint = nearest }
+            }
+        )
     }
 
     @ViewBuilder private var chart: some View {
@@ -251,7 +264,7 @@ struct StockbarOverviewView: View {
                 }
             }
             .chartYScale(domain: domain)
-            .chartXSelection(value: $selectedDate)
+            .chartXSelection(value: hoverSelection)
             .chartYAxis {
                 AxisMarks(position: .leading) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
@@ -402,6 +415,8 @@ struct StockbarOverviewView: View {
     }
 
     private func updateChart() {
+        // Called from event handlers between renders, so don't reuse the last render's summary.
+        summaryCache.beginPass()
         chartModel.update(currentValue: summary.totalValue, currentTrades: dataModel.realTimeTrades,
                           preferredCurrency: summary.currency, valuationSource: summary.valuationSource)
     }

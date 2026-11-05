@@ -19,7 +19,8 @@ final class ExportManager {
         chartData: [ChartDataPoint],
         chartType: ChartType,
         timeRange: ChartTimeRange,
-        metrics: PerformanceMetrics?
+        metrics: PerformanceMetrics?,
+        filterNotes: [String] = []
     ) {
         let fileName = generateFileName(type: "csv", chartType: chartType, timeRange: timeRange)
         
@@ -35,6 +36,7 @@ final class ExportManager {
                     chartType: chartType,
                     timeRange: timeRange,
                     metrics: metrics,
+                    filterNotes: filterNotes,
                     to: url
                 )
             }
@@ -65,10 +67,11 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
+        filterNotes: [String],
         to url: URL
     ) {
         do {
-            var csvContent = generateCSVHeader(chartType: chartType, timeRange: timeRange, metrics: metrics)
+            var csvContent = generateCSVHeader(chartType: chartType, timeRange: timeRange, metrics: metrics, filterNotes: filterNotes)
             csvContent += generateCSVData(chartData: chartData)
             
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
@@ -84,38 +87,8 @@ final class ExportManager {
     
     private func performPortfolioCSVExport(snapshots: [HistoricalPortfolioSnapshot], to url: URL) {
         do {
-            var csvContent = "Date,Total Value,Total Gains,Total Cost,Currency"
-            
-            // Add individual position headers
-            let allSymbols = Set(snapshots.flatMap { $0.portfolioComposition.keys }).sorted()
-            for symbol in allSymbols {
-                csvContent += ",\(symbol) Units,\(symbol) Price,\(symbol) Value"
-            }
-            csvContent += "\n"
-            
-            // Add data rows
-            for snapshot in snapshots {
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateStyle = .short
-                dateFormatter.timeStyle = .none
-                
-                csvContent += "\(dateFormatter.string(from: snapshot.date)),"
-                csvContent += "\(snapshot.totalValue),"
-                csvContent += "\(snapshot.totalGains),"
-                csvContent += "\(snapshot.totalCost),"
-                csvContent += "\(snapshot.currency)"
-                
-                // Add position data
-                for symbol in allSymbols {
-                    if let position = snapshot.portfolioComposition[symbol] {
-                        csvContent += ",\(position.units),\(position.priceAtDate),\(position.valueAtDate)"
-                    } else {
-                        csvContent += ",0,0,0"
-                    }
-                }
-                csvContent += "\n"
-            }
-            
+            let csvContent = CSVExportFormatter.portfolioSnapshotsCSV(snapshots)
+
             try csvContent.write(to: url, atomically: true, encoding: .utf8)
             Task { await logger.info("Successfully exported detailed portfolio CSV to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
@@ -133,7 +106,8 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
-        chartImage: NSImage?
+        chartImage: NSImage?,
+        filterNotes: [String] = []
     ) {
         let fileName = generateFileName(type: "pdf", chartType: chartType, timeRange: timeRange)
         
@@ -150,6 +124,7 @@ final class ExportManager {
                     timeRange: timeRange,
                     metrics: metrics,
                     chartImage: chartImage,
+                    filterNotes: filterNotes,
                     to: url
                 )
             }
@@ -162,6 +137,7 @@ final class ExportManager {
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
         chartImage: NSImage?,
+        filterNotes: [String],
         to url: URL
     ) {
         do {
@@ -170,7 +146,8 @@ final class ExportManager {
                 chartType: chartType,
                 timeRange: timeRange,
                 metrics: metrics,
-                chartImage: chartImage
+                chartImage: chartImage,
+                filterNotes: filterNotes
             )
             
             try pdfData.write(to: url)
@@ -187,7 +164,8 @@ final class ExportManager {
         chartType: ChartType,
         timeRange: ChartTimeRange,
         metrics: PerformanceMetrics?,
-        chartImage: NSImage?
+        chartImage: NSImage?,
+        filterNotes: [String]
     ) -> Data {
         let pdfData = NSMutableData()
         let pageSize = CGSize(width: 612, height: 792) // US Letter size
@@ -211,6 +189,9 @@ final class ExportManager {
         dateFormatter.timeStyle = .short
         let exportDate = "Generated on \(dateFormatter.string(from: Date()))"
         drawText(context: context, text: exportDate, point: CGPoint(x: 50, y: 720), fontSize: 12)
+        for (index, note) in filterNotes.enumerated() {
+            drawText(context: context, text: "Filter: \(note)", point: CGPoint(x: 50, y: 704 - CGFloat(index) * 14), fontSize: 10)
+        }
         
         // Draw chart image if available
         if let chartImage = chartImage {
@@ -248,11 +229,14 @@ final class ExportManager {
         return "\(basePrefix)-\(chartName)-\(rangeName)-\(timestamp).\(type)"
     }
     
-    private func generateCSVHeader(chartType: ChartType, timeRange: ChartTimeRange, metrics: PerformanceMetrics?) -> String {
+    private func generateCSVHeader(chartType: ChartType, timeRange: ChartTimeRange, metrics: PerformanceMetrics?, filterNotes: [String]) -> String {
         var header = "# Stockbar Export Report\n"
         header += "# Chart Type: \(chartType.title)\n"
         header += "# Time Range: \(timeRange.description)\n"
-        header += "# Generated: \(DateFormatter.localizedString(from: Date(), dateStyle: .full, timeStyle: .short))\n"
+        header += "# Generated: \(CSVExportFormatter.isoDate(Date()))\n"
+        for note in filterNotes {
+            header += "# Filter: \(note)\n"
+        }
         
         if let metrics = metrics {
             header += "# \n"
@@ -267,22 +251,41 @@ final class ExportManager {
         }
         
         header += "# \n"
-        header += "Date,Value\n"
+        header += CSVExportFormatter.row(["Date", "Value"])
         
         return header
     }
     
-    private func generateCSVData(chartData: [ChartDataPoint]) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .short
-        dateFormatter.timeStyle = .short
-        
-        var csvData = ""
-        for dataPoint in chartData {
-            csvData += "\(dateFormatter.string(from: dataPoint.date)),\(dataPoint.value)\n"
+    /// Human-readable notes for every filter that narrowed an exported series.
+    nonisolated static func filterNotes(
+        valueThreshold: Double,
+        dateWindow: (from: Date, toExclusive: Date)?,
+        selectedPoints: Int,
+        calendar: Calendar = .current
+    ) -> [String] {
+        var notes: [String] = []
+        if valueThreshold > 0 {
+            let threshold = valueThreshold.rounded() == valueThreshold && abs(valueThreshold) < 1e15
+                ? String(Int(valueThreshold)) : CSVExportFormatter.number(valueThreshold)
+            notes.append("values below \(threshold) excluded")
         }
-        
-        return csvData
+        if let dateWindow {
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            let lastDay = calendar.date(byAdding: .day, value: -1, to: dateWindow.toExclusive) ?? dateWindow.toExclusive
+            notes.append("dates \(formatter.string(from: dateWindow.from)) to \(formatter.string(from: lastDay))")
+        }
+        if selectedPoints > 0 {
+            notes.append("only the \(selectedPoints) selected point(s)")
+        }
+        return notes
+    }
+
+    private func generateCSVData(chartData: [ChartDataPoint]) -> String {
+        CSVExportFormatter.chartDataRows(chartData)
     }
     
     private func drawText(context: CGContext, text: String, point: CGPoint, fontSize: CGFloat, bold: Bool = false) {
@@ -352,5 +355,80 @@ final class ExportManager {
         Task {
             await StockbarNotificationPoster.post(title: title, body: body, playSound: success)
         }
+    }
+}
+
+
+// MARK: - CSV formatting
+
+/// Locale-independent CSV building: ISO 8601 dates, `.` decimals, RFC 4180 quoting and
+/// protection against spreadsheet formula injection in text cells.
+enum CSVExportFormatter {
+    /// Characters that make a spreadsheet treat a text cell as a formula.
+    private static let formulaPrefixes: Set<Character> = ["=", "+", "-", "@", "\t", "\r"]
+
+    /// UTC ISO 8601 timestamp (`2026-11-04T10:30:00Z`); never contains a comma.
+    static func isoDate(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: date)
+    }
+
+    /// Plain decimal text in the POSIX locale; non-finite values become an empty cell.
+    static func number(_ value: Double) -> String {
+        guard value.isFinite else { return "" }
+        return "\(value)"
+    }
+
+    /// A text cell: neutralises leading `= + - @` (and tab / CR) with a single quote and
+    /// applies RFC 4180 quoting when it contains a comma, quote or line break.
+    static func text(_ value: String) -> String {
+        var cell = value
+        if let first = cell.first, formulaPrefixes.contains(first) {
+            cell = "'" + cell
+        }
+        let needsQuotes = cell.contains { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" }
+            || cell.hasPrefix(" ") || cell.hasSuffix(" ")
+        guard needsQuotes else { return cell }
+        return "\"" + cell.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    /// One CRLF-terminated record of raw text cells (each passes through `text`).
+    static func row(_ fields: [String]) -> String {
+        fields.map(text).joined(separator: ",") + "\r\n"
+    }
+
+    static func chartDataRows(_ chartData: [ChartDataPoint]) -> String {
+        chartData.map { "\(isoDate($0.date)),\(number($0.value))\r\n" }.joined()
+    }
+
+    static func portfolioSnapshotsCSV(_ snapshots: [HistoricalPortfolioSnapshot]) -> String {
+        let allSymbols = Set(snapshots.flatMap { $0.portfolioComposition.keys }).sorted()
+
+        var header = ["Date", "Total Value", "Total Gains", "Total Cost", "Currency"]
+        for symbol in allSymbols {
+            header += ["\(symbol) Units", "\(symbol) Price", "\(symbol) Value"]
+        }
+        var csv = row(header)
+
+        for snapshot in snapshots {
+            var cells = [
+                isoDate(snapshot.date),
+                number(snapshot.totalValue),
+                number(snapshot.totalGains),
+                number(snapshot.totalCost),
+                text(snapshot.currency)
+            ]
+            for symbol in allSymbols {
+                if let position = snapshot.portfolioComposition[symbol] {
+                    cells += [number(position.units), number(position.priceAtDate), number(position.valueAtDate)]
+                } else {
+                    cells += ["0", "0", "0"]
+                }
+            }
+            csv += cells.joined(separator: ",") + "\r\n"
+        }
+        return csv
     }
 }

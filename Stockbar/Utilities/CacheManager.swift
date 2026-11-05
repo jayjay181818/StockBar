@@ -56,6 +56,9 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
     // Disk Cache - file-based storage for medium-term data
     internal var diskCacheDirectory: URL
     internal let diskCacheQueue = DispatchQueue(label: "com.stockbar.cache.disk", qos: .utility)
+    /// In-memory access counts/times for disk entries (guarded by `diskCacheQueue`).
+    /// Not persisted: disk files are only rewritten when their contents change.
+    private var diskAccessStats: [String: (count: Int, lastAccessed: Date)] = [:]
     
     // Archived Cache - compressed long-term storage
     internal var archiveCacheDirectory: URL
@@ -254,6 +257,33 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
         return nil
     }
     
+    /// Same lookup as `retrieve(_:forKey:)`, but disk and archive reads happen off the
+    /// calling thread. Prefer this from `@MainActor` code.
+    func retrieveAsync<T: Codable & Sendable>(_ type: T.Type, forKey key: String) async -> T? {
+        if let value = retrieveFromMemoryCache(type, key: key) {
+            updateStatistics(for: .memory, operation: .hit)
+            return value
+        }
+        updateStatistics(for: .memory, operation: .miss)
+
+        if let value = await retrieveFromDiskCacheAsync(type, key: key) {
+            updateStatistics(for: .disk, operation: .hit)
+            promoteToMemoryCache(value, key: key)
+            return value
+        }
+        updateStatistics(for: .disk, operation: .miss)
+
+        if let value = await retrieveFromArchiveCacheAsync(type, key: key) {
+            updateStatistics(for: .archived, operation: .hit)
+            promoteToHigherTier(value, key: key)
+            return value
+        }
+        updateStatistics(for: .archived, operation: .miss)
+
+        Task { await logger.debug("🔍 Cache miss for key: \(key)") }
+        return nil
+    }
+
     /// Remove value from all cache tiers
     func remove(forKey key: String) {
         memoryCacheQueue.async { [weak self] in
@@ -264,6 +294,7 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
             guard let self = self else { return }
             let fileURL = self.diskCacheDirectory.appendingPathComponent("\(key).cache")
             try? FileManager.default.removeItem(at: fileURL)
+            self.diskAccessStats.removeValue(forKey: key)
         }
         
         archiveCacheQueue.async { [weak self] in
@@ -285,6 +316,7 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
             guard let self = self else { return }
             try? FileManager.default.removeItem(at: self.diskCacheDirectory)
             try? FileManager.default.createDirectory(at: self.diskCacheDirectory, withIntermediateDirectories: true)
+            self.diskAccessStats.removeAll()
         }
         
         archiveCacheQueue.async { [weak self] in
@@ -352,44 +384,64 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Reads a disk-cache entry. Must run on `diskCacheQueue`. Access is tracked in
+    /// memory only: rewriting the file on every hit made each read a disk write.
+    private func readDiskCacheEntry<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
+        let fileURL = diskCacheDirectory.appendingPathComponent("\(key).cache")
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let entry = try decoder.decode(CacheEntry.self, from: data)
+            let value = try entry.getValue(as: type, decoder: decoder)
+            let previous = diskAccessStats[key]
+            diskAccessStats[key] = (count: (previous?.count ?? entry.accessCount) + 1, lastAccessed: Date())
+            return value
+        } catch {
+            Task { await logger.error("❌ Failed to read disk cache for \(key): \(error)") }
+            try? FileManager.default.removeItem(at: fileURL)
+            diskAccessStats.removeValue(forKey: key)
+            return nil
+        }
+    }
+
     private func retrieveFromDiskCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
-        return diskCacheQueue.sync {
-            let fileURL = diskCacheDirectory.appendingPathComponent("\(key).cache")
-            
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-            
-            do {
-                let data = try Data(contentsOf: fileURL)
-                let entry = try decoder.decode(CacheEntry.self, from: data)
-                
-                // Update access time by rewriting the entry
-                let updatedEntry = entry.withUpdatedAccess()
-                let updatedData = try encoder.encode(updatedEntry)
-                try updatedData.write(to: fileURL)
-                
-                return try entry.getValue(as: type, decoder: decoder)
-            } catch {
-                Task { await logger.error("❌ Failed to read disk cache for \(key): \(error)") }
-                try? FileManager.default.removeItem(at: fileURL)
-                return nil
+        return diskCacheQueue.sync { readDiskCacheEntry(type, key: key) }
+    }
+
+    private func retrieveFromDiskCacheAsync<T: Codable & Sendable>(_ type: T.Type, key: String) async -> T? {
+        await withCheckedContinuation { continuation in
+            diskCacheQueue.async { [self] in
+                continuation.resume(returning: readDiskCacheEntry(type, key: key))
             }
         }
     }
-    
+
+    private func readArchiveCacheEntry<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
+        let fileURL = archiveCacheDirectory.appendingPathComponent("\(key).archive")
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let entry = try decoder.decode(CacheEntry.self, from: data)
+            return try entry.getValue(as: type, decoder: decoder)
+        } catch {
+            Task { await logger.error("❌ Failed to read archive cache for \(key): \(error)") }
+            try? FileManager.default.removeItem(at: fileURL)
+            return nil
+        }
+    }
+
     private func retrieveFromArchiveCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
-        return archiveCacheQueue.sync {
-            let fileURL = archiveCacheDirectory.appendingPathComponent("\(key).archive")
-            
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-            
-            do {
-                let data = try Data(contentsOf: fileURL)
-                let entry = try decoder.decode(CacheEntry.self, from: data)
-                return try entry.getValue(as: type, decoder: decoder)
-            } catch {
-                Task { await logger.error("❌ Failed to read archive cache for \(key): \(error)") }
-                try? FileManager.default.removeItem(at: fileURL)
-                return nil
+        return archiveCacheQueue.sync { readArchiveCacheEntry(type, key: key) }
+    }
+
+    private func retrieveFromArchiveCacheAsync<T: Codable & Sendable>(_ type: T.Type, key: String) async -> T? {
+        await withCheckedContinuation { continuation in
+            archiveCacheQueue.async { [self] in
+                continuation.resume(returning: readArchiveCacheEntry(type, key: key))
             }
         }
     }

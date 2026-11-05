@@ -18,6 +18,8 @@ class BackupService {
     private let backupDirectoryName = "Backups"
     private let backupFilePrefix = "portfolio_backup_"
     private let backupFileExtension = "json"
+    /// The newest backups are always kept, whatever their age.
+    private let minimumBackupsKept = 5
 
     /// Default retention period in days
     var retentionDays: Int {
@@ -80,8 +82,14 @@ class BackupService {
         return await performBackup(trades: trades, automatic: false)
     }
 
+    /// Safety backup taken just before a restore. Its retention cleanup never
+    /// deletes `keeping`, the backup about to be restored.
+    func performPreRestoreBackup(trades: [RealTimeTrade], keeping restoreURL: URL) async -> Bool {
+        return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
+    }
+
     /// Core backup implementation
-    private func performBackup(trades: [RealTimeTrade], automatic: Bool) async -> Bool {
+    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
         do {
             let backupDir = try getBackupDirectory()
 
@@ -120,6 +128,7 @@ class BackupService {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
+            encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
 
             let jsonData = try encoder.encode(exportData)
             try jsonData.write(to: backupURL)
@@ -128,7 +137,7 @@ class BackupService {
             lastBackupDate = Date()
 
             // Cleanup old backups
-            try await cleanupOldBackups()
+            try await cleanupOldBackups(keeping: keptURL)
 
             await logger.info("Backup successful: \(filename)")
             return true
@@ -173,6 +182,7 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         let exportData = try decoder.decode([PortfolioExportData].self, from: data)
         let trades = exportData
@@ -192,6 +202,7 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         return try decoder.decode([PortfolioExportData].self, from: data)
             .filter { !SymbolMetadata.isBenchmarkSymbol($0.symbol) }
@@ -200,31 +211,44 @@ class BackupService {
     // MARK: - Cleanup
 
     /// Removes backups older than retention period
-    private func cleanupOldBackups() async throws {
+    private func cleanupOldBackups(keeping keptURL: URL? = nil) async throws {
         let backupDir = try getBackupDirectory()
         let contents = try fileManager.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)
 
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date())!
 
-        var deletedCount = 0
-        for fileURL in contents {
-            guard fileURL.pathExtension == backupFileExtension,
-                  fileURL.lastPathComponent.starts(with: backupFilePrefix) else {
-                continue
-            }
-
+        var dated: [(url: URL, created: Date)] = []
+        for fileURL in contents where fileURL.pathExtension == backupFileExtension
+            && fileURL.lastPathComponent.starts(with: backupFilePrefix) {
             let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-            if let creationDate = attributes[.creationDate] as? Date,
-               creationDate < cutoffDate {
-                try fileManager.removeItem(at: fileURL)
-                deletedCount += 1
-                await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
-            }
+            dated.append((fileURL, attributes[.creationDate] as? Date ?? .distantPast))
+        }
+
+        var deletedCount = 0
+        for fileURL in Self.backupsToDelete(dated, cutoff: cutoffDate, minimumKept: minimumBackupsKept, keeping: keptURL) {
+            try fileManager.removeItem(at: fileURL)
+            deletedCount += 1
+            await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
         }
 
         if deletedCount > 0 {
             await logger.info("Cleaned up \(deletedCount) old backup(s)")
         }
+    }
+
+    /// Backups older than the cutoff, except the newest `minimumKept` (so a
+    /// long gap between launches never deletes every backup) and `keptURL`.
+    nonisolated static func backupsToDelete(
+        _ backups: [(url: URL, created: Date)],
+        cutoff: Date,
+        minimumKept: Int,
+        keeping keptURL: URL?
+    ) -> [URL] {
+        backups
+            .sorted { $0.created > $1.created }
+            .dropFirst(minimumKept)
+            .filter { $0.created < cutoff && $0.url.standardizedFileURL != keptURL?.standardizedFileURL }
+            .map(\.url)
     }
 
     /// Deletes a specific backup file

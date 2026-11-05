@@ -3,7 +3,9 @@
 # Stockbar data restore script.
 #
 # This restores the files captured by backup_stockbar_data.sh. It does not
-# include Keychain items, and it never stops Stockbar automatically.
+# include Keychain items, and it never stops Stockbar automatically. Current
+# UserDefaults, config, cache and database files are saved to a
+# StockbarDataModel_pre_restore_* directory before anything is overwritten.
 
 set -euo pipefail
 umask 077
@@ -95,6 +97,37 @@ fi
 require_stockbar_stopped
 echo
 
+echo "[0/4] Saving current data before restore..."
+mkdir -p "${STOCKBAR_DATA_DIR}"
+RESTORE_STAMP=$(date +%Y%m%d_%H%M%S)
+SAFETY_BACKUP="${STOCKBAR_DATA_DIR}/StockbarDataModel_pre_restore_${RESTORE_STAMP}"
+if [[ -e "${SAFETY_BACKUP}" ]]; then
+    fail "safety backup path already exists at ${SAFETY_BACKUP}; refusing to overwrite it"
+fi
+mkdir "${SAFETY_BACKUP}" || fail "cannot create safety backup directory ${SAFETY_BACKUP}; restore aborted before any change"
+
+if ! "${DEFAULTS_COMMAND}" export com.stockbar "${SAFETY_BACKUP}/UserDefaults.plist"; then
+    # A missing domain (fresh install) has nothing to preserve; any other
+    # failure must stop the restore before current settings are replaced.
+    if "${DEFAULTS_COMMAND}" read com.stockbar >/dev/null 2>&1; then
+        fail "cannot export current UserDefaults to ${SAFETY_BACKUP}; restore aborted before any change"
+    fi
+    echo "Note: no existing com.stockbar defaults to preserve"
+fi
+if [[ -f "${CONFIG_FILE}" ]]; then
+    cp "${CONFIG_FILE}" "${SAFETY_BACKUP}/.stockbar_config.json" || fail "cannot save current config file; restore aborted before any change"
+fi
+if [[ -f "${CACHE_FILE}" ]]; then
+    cp "${CACHE_FILE}" "${SAFETY_BACKUP}/quote_cache.json" || fail "cannot save current cache file; restore aborted before any change"
+fi
+for file in "StockbarDataModel.sqlite" "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
+    if [[ -f "${STOCKBAR_DATA_DIR}/${file}" ]]; then
+        cp "${STOCKBAR_DATA_DIR}/${file}" "${SAFETY_BACKUP}/${file}" || fail "cannot save current ${file}; restore aborted before any change"
+    fi
+done
+echo "Current UserDefaults, config, cache and database files preserved in: ${SAFETY_BACKUP}"
+echo
+
 echo "[1/4] Restoring UserDefaults..."
 if [[ -f "${BACKUP_PATH}/UserDefaults.plist" ]]; then
     "${DEFAULTS_COMMAND}" import com.stockbar "${BACKUP_PATH}/UserDefaults.plist"
@@ -105,22 +138,7 @@ fi
 echo
 
 echo "[2/4] Restoring Core Data..."
-mkdir -p "${STOCKBAR_DATA_DIR}"
 if [[ -f "${BACKUP_PATH}/StockbarDataModel.sqlite" ]]; then
-    RESTORE_STAMP=$(date +%Y%m%d_%H%M%S)
-    SAFETY_BACKUP="${STOCKBAR_DATA_DIR}/StockbarDataModel_pre_restore_${RESTORE_STAMP}"
-    if [[ -e "${SAFETY_BACKUP}" ]]; then
-        fail "safety backup path already exists at ${SAFETY_BACKUP}; refusing to overwrite it"
-    fi
-    mkdir "${SAFETY_BACKUP}"
-
-    for file in "StockbarDataModel.sqlite" "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
-        if [[ -f "${STOCKBAR_DATA_DIR}/${file}" ]]; then
-            cp "${STOCKBAR_DATA_DIR}/${file}" "${SAFETY_BACKUP}/${file}"
-        fi
-    done
-    echo "Current database files preserved in: ${SAFETY_BACKUP}"
-
     cp "${BACKUP_PATH}/StockbarDataModel.sqlite" "${STOCKBAR_DATA_DIR}/"
     for sidecar in "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
         if [[ -f "${BACKUP_PATH}/${sidecar}" ]]; then

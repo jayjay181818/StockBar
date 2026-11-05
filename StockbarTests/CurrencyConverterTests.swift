@@ -247,6 +247,26 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertEqual(requestCount, 1, "A failed attempt must still start the retry cooldown")
     }
 
+    @MainActor
+    func testFreshInstallWarnsAboutHardCodedRatesAfterFirstAttemptFails() async {
+        let converter = CurrencyConverter(
+            exchangeRates: [:], refreshOnInit: false, loadHistoryOnInit: false,
+            supplementalRouter: FixedFolyncFXRouter(result: .legacy))
+
+        // Before any refresh attempt finishes, conversions are "not ready", not "degraded".
+        _ = converter.convert(amount: 100, from: "USD", to: "GBP")
+        await Task.yield()
+        XCTAssertFalse(converter.isUsingFallbackRates)
+
+        // The first attempt fails with no saved history: lastRefreshTime stays distantPast.
+        converter.finishFailedLegacyRefresh()
+        for _ in 0..<100 where !converter.isUsingFallbackRates { await Task.yield() }
+
+        XCTAssertEqual(converter.lastRefreshTime, .distantPast)
+        XCTAssertTrue(converter.isUsingFallbackRates, "a fresh install on hard-coded rates must be flagged")
+        XCTAssertEqual(converter.convert(amount: 100, from: "USD", to: "GBP"), 74, accuracy: 0.001)
+    }
+
     func testIncompleteFolyncCrossRateNeverSplicesHardCodedLegacyValues() async {
         let legacyRequests = LockedRequestCounter()
         let router = FixedFolyncFXRouter(result: .folync(
@@ -267,6 +287,83 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertTrue(converter.convert(amount: 80, from: "GBP", to: "EUR").isNaN)
         XCTAssertEqual(converter.sourceStatus, .partial)
         XCTAssertEqual(legacyRequests.value, 0)
+    }
+
+    func testMinorUnitCurrenciesConvertThroughTheirMajorCurrency() {
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "ZAR": 18, "ILS": 3.7],
+            refreshOnInit: false,
+            loadHistoryOnInit: false
+        )
+
+        XCTAssertEqual(converter.convert(amount: 1_800, from: "ZAc", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 1_800, from: "ZAC", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 370, from: "ILA", to: "USD"), 1, accuracy: 0.000_001)
+        XCTAssertEqual(converter.convert(amount: 1, from: "USD", to: "ILA"), 370, accuracy: 0.000_001)
+        XCTAssertEqual(CurrencyConverter.minorUnitMajorCurrency("GBX"), "GBP")
+        XCTAssertNil(CurrencyConverter.minorUnitMajorCurrency("USD"))
+    }
+
+    func testRatesBecomeStaleAfterADayWithoutARefresh() async {
+        let router = FixedFolyncFXRouter(result: .folync(
+            rates: ["USD": 1, "GBP": 0.8],
+            asOf: Date(),
+            status: .current
+        ))
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "GBP": 0.75],
+            refreshOnInit: false,
+            loadHistoryOnInit: false,
+            supplementalRouter: router
+        )
+
+        await converter.refreshRatesFromConfiguredSource(force: true)
+
+        XCTAssertFalse(converter.ratesAreStale(now: Date()))
+        XCTAssertTrue(converter.ratesAreStale(now: Date().addingTimeInterval(25 * 3600)))
+    }
+
+    @MainActor
+    func testPositionWithoutAnExchangeRateIsLeftOutOfTotals() async {
+        let router = FixedFolyncFXRouter(result: .folync(
+            rates: ["USD": 1, "GBP": 0.8],
+            asOf: Date(),
+            status: .partial
+        ))
+        let converter = CurrencyConverter(
+            exchangeRates: ["USD": 1, "GBP": 0.75, "CHF": 0.9],
+            refreshOnInit: false,
+            loadHistoryOnInit: false,
+            supplementalRouter: router
+        )
+        await converter.refreshRatesFromConfiguredSource(force: true)
+        XCTAssertTrue(converter.convert(amount: 1, from: "CHF", to: "USD").isNaN)
+
+        let trades = [
+            makeTrade(symbol: "AAPL", currency: "USD", price: 110, previousClose: 100),
+            makeTrade(symbol: "NESN.SW", currency: "CHF", price: 90, previousClose: 80)
+        ]
+        let service = PortfolioCalculationService(currencyConverter: converter)
+        let summary = service.calculateDisplayPortfolioSummary(trades: trades, preferredCurrency: "USD")
+
+        XCTAssertEqual(summary.totalValue, 1_100, accuracy: 0.001)
+        XCTAssertEqual(summary.totalCost, 1_000, accuracy: 0.001)
+        XCTAssertEqual(summary.dayGain, 100, accuracy: 0.001)
+        XCTAssertEqual(summary.ownedPositionCount, 1)
+        XCTAssertTrue(service.calculateNetGains(trades: trades, preferredCurrency: "USD").amount.isFinite)
+        XCTAssertTrue(service.calculateNetValue(trades: trades, preferredCurrency: "USD").amount.isFinite)
+    }
+
+    private func makeTrade(symbol: String, currency: String, price: Double, previousClose: Double) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = previousClose
+        info.currency = currency
+        let trade = Trade(
+            name: symbol,
+            position: Position(unitSize: "10", positionAvgCost: "100", currency: currency, costCurrency: currency)
+        )
+        return RealTimeTrade(trade: trade, realTimeInfo: info)
     }
 }
 
@@ -317,17 +414,42 @@ final class UKPriceScaleRepairTests: XCTestCase {
             UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(172_800), price: 8.62, previousClose: 8.55)
         ]
 
-        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L")
+        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L", savedQuote: 8.6)
 
-        XCTAssertEqual(repaired.map(\.price), [8.5, 8.55, 8.62])
-        XCTAssertEqual(repaired.map(\.previousClose), [8.45, 8.5, 8.55])
+        XCTAssertEqual(repaired?.map(\.price), [8.5, 8.55, 8.62])
+        XCTAssertEqual(repaired?.map(\.previousClose), [8.45, 8.5, 8.55])
     }
 
     func testMigrationLeavesConsistentSeriesUnchanged() {
         let rows = [
             UKPriceSnapshotScaleMigrationService.Row(timestamp: .distantPast, price: 8.5, previousClose: 8.4),
-            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(), price: 8.6, previousClose: 8.5)
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(timeIntervalSince1970: 1_700_000_000), price: 8.55, previousClose: 8.5),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: Date(), price: 8.6, previousClose: 8.55)
         ]
         XCTAssertEqual(UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L"), rows)
+    }
+
+    func testMigrationSkipsASymbolWhoseLatestRowsDisagreeWithoutASavedQuote() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let rows = [
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0, price: 8.5, previousClose: 8.4),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(86_400), price: 8.55, previousClose: 8.5),
+            // An old build wrote the newest row in pence: it must not become the reference.
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(172_800), price: 862, previousClose: 855)
+        ]
+        XCTAssertNil(UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L"))
+        XCTAssertNil(UKPriceSnapshotScaleMigrationService.repairedRows(Array(rows.prefix(2)), symbol: "IAG.L"),
+                     "Too few rows to trust the newest one")
+    }
+
+    func testSavedQuoteOverridesAWrongScaleNewestRow() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let rows = [
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0, price: 8.5, previousClose: 8.4),
+            UKPriceSnapshotScaleMigrationService.Row(timestamp: t0.addingTimeInterval(86_400), price: 862, previousClose: 850)
+        ]
+        let repaired = UKPriceSnapshotScaleMigrationService.repairedRows(rows, symbol: "IAG.L", savedQuote: 8.7)
+        XCTAssertEqual(repaired?.map(\.price), [8.5, 8.62])
+        XCTAssertEqual(repaired?.map(\.previousClose), [8.4, 8.5])
     }
 }

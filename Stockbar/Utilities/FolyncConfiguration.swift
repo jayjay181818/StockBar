@@ -195,10 +195,19 @@ actor FolyncSnapshotCache {
     func load(endpoint: String, scopeID: String) throws -> FolyncCachedSnapshot? {
         let url = fileURL(endpoint: endpoint, scopeID: scopeID)
         guard fileManager.fileExists(atPath: url.path) else { return nil }
-        let cached = try JSONDecoder().decode(FolyncCachedSnapshot.self, from: Data(contentsOf: url))
-        guard cached.endpoint == endpoint, cached.scopeID == scopeID else { return nil }
-        _ = try FolyncPortfolioDecoder().decodeSnapshot(JSONEncoder().encode(cached.snapshot))
-        return cached
+        do {
+            let cached = try JSONDecoder().decode(FolyncCachedSnapshot.self, from: Data(contentsOf: url))
+            guard cached.endpoint == endpoint, cached.scopeID == scopeID else { return nil }
+            _ = try FolyncPortfolioDecoder().decodeSnapshot(JSONEncoder().encode(cached.snapshot))
+            return cached
+        } catch {
+            try? fileManager.removeItem(at: url)
+            let redacted = LogRedactor.redact(error.localizedDescription)
+            Task {
+                await Logger.shared.warning("Removed unreadable Folync snapshot cache: \(redacted)")
+            }
+            throw error
+        }
     }
 
     func save(_ cached: FolyncCachedSnapshot) throws {

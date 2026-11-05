@@ -20,6 +20,7 @@ Output:
 
 import sys
 import json
+import math
 from datetime import datetime
 
 try:
@@ -48,6 +49,22 @@ def uses_pence_quotes(symbol, reported_currency):
     if reported_currency is not None:
         return str(reported_currency).strip() in ("GBp", "GBX")
     return symbol.upper().endswith(('.L', '.LON'))
+
+
+def finite_float(value):
+    """float(value) when it is a finite number, else None (NaN/inf/non-numeric)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def safe_volume(value):
+    """Share count as an int; missing or non-finite volume (common on indices and
+    FX) becomes 0 rather than failing the whole response."""
+    number = finite_float(value)
+    return int(number) if number is not None else 0
 
 
 def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
@@ -100,15 +117,32 @@ def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
             timestamp = index.isoformat()
 
             # Extract OHLC values, converting GBX -> GBP where applicable.
-            # Volume is a share count and must never be scaled.
+            # Volume is a share count and must never be scaled. Rows with a
+            # non-finite price are skipped: NaN is not valid JSON and would
+            # make the whole response unparseable for the app.
+            prices = [finite_float(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
+            if any(price is None for price in prices):
+                continue
+            open_price, high_price, low_price, close_price = prices
+
             ohlc_data.append({
                 "timestamp": timestamp,
-                "open": float(row['Open']) / pence_divisor,
-                "high": float(row['High']) / pence_divisor,
-                "low": float(row['Low']) / pence_divisor,
-                "close": float(row['Close']) / pence_divisor,
-                "volume": int(row['Volume'])
+                "open": open_price / pence_divisor,
+                "high": high_price / pence_divisor,
+                "low": low_price / pence_divisor,
+                "close": close_price / pence_divisor,
+                "volume": safe_volume(row['Volume'])
             })
+
+        if not ohlc_data:
+            return {
+                "success": False,
+                "symbol": symbol,
+                "period": period,
+                "interval": interval,
+                "data": [],
+                "error": f"No valid price data available for {symbol}"
+            }
 
         return {
             "success": True,
@@ -171,7 +205,7 @@ def main():
     result = fetch_ohlc_data(symbol, period, interval)
 
     # Output JSON
-    print(json.dumps(result, indent=None))
+    print(json.dumps(result, indent=None, allow_nan=False))
 
 
 if __name__ == "__main__":

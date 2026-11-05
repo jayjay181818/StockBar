@@ -112,6 +112,14 @@ Automatically, at most every five minutes, from exchangerate-api.com or from Fol
 
 Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, or set to appear only with an external display. Each holding's **Menu Bar** switch in Holdings controls its own item. macOS may also hide items when the menu bar is full.
 
+### The portfolio total isn't in the menu bar.
+
+It is usually there but hidden: a full menu bar, the notch or a menu-bar manager can push it out of sight. Open the manager's hidden section, or quit a few other menu-bar apps. Settings → Menu Bar → **Show portfolio total in the menu bar** must also be on.
+
+### After an update, Folync says "not configured" and Allocation is empty.
+
+macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync stays off, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. Locally built ad-hoc-signed copies ask after every rebuild.
+
 ### Colours aren't showing.
 
 Turn on **Color Coding** in Settings → General. Unchanged values are intentionally shown in the normal text colour.
@@ -140,7 +148,7 @@ rm -rf ~/Library/Application\ Support/Stockbar ~/Library/Application\ Support/co
 rm -rf ~/Library/Caches/stockbar-cache ~/Library/Logs/com.stockbar
 ```
 
-Trading 212 and Folync credentials can be removed from Keychain Access or from Settings → Connections before uninstalling.
+Before uninstalling, clear Trading 212 credentials from Settings → Connections. Other saved credentials, including any Folync token, can be removed in Keychain Access.
 
 ## Privacy and security
 

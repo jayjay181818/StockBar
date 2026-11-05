@@ -141,6 +141,76 @@ class RecoveryScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires STOCKBAR_DEFAULTS_COMMAND", result.stderr)
 
+    def logging_defaults(self, export_exit=0, read_exit=0):
+        """Stub that logs each call and records the state of the live data on import."""
+        log = self.root / "defaults.log"
+        self.defaults.write_text(
+            "#!/bin/bash\n"
+            "echo \"$1\" >> \"$STOCKBAR_DEFAULTS_LOG\"\n"
+            "case $1 in\n"
+            f"  export) [[ {export_exit} -eq 0 ]] && printf 'current-defaults\\n' > \"$3\"; exit {export_exit};;\n"
+            f"  read) exit {read_exit};;\n"
+            "  import) cp \"$STOCKBAR_SAFETY_PROBE\"/UserDefaults.plist \"$STOCKBAR_PROBE_OUT\" 2>/dev/null;\n"
+            "          ls \"$STOCKBAR_SAFETY_PROBE\" > \"$STOCKBAR_PROBE_LS\";;\n"
+            "esac\n"
+        )
+        self.defaults.chmod(stat.S_IRWXU)
+        return log
+
+    def test_current_data_is_saved_before_defaults_import_or_overwrite(self):
+        self.seed("before")
+        backup = self.create_backup()
+        self.seed("after")
+        log = self.logging_defaults()
+        env = self.env()
+        env["STOCKBAR_DEFAULTS_LOG"] = str(log)
+        env["STOCKBAR_SAFETY_PROBE"] = "/nonexistent"
+        # Resolve the safety directory at import time from the live data dir.
+        self.defaults.write_text(
+            self.defaults.read_text().replace(
+                'cp "$STOCKBAR_SAFETY_PROBE"/UserDefaults.plist',
+                'd=$(ls -d "$STOCKBAR_DATA_PROBE"/StockbarDataModel_pre_restore_* | head -1);'
+                ' cp "$d"/UserDefaults.plist',
+            ).replace(
+                'ls "$STOCKBAR_SAFETY_PROBE"',
+                'ls -A "$d"',
+            )
+        )
+        env["STOCKBAR_DATA_PROBE"] = str(self.data)
+        env["STOCKBAR_PROBE_OUT"] = str(self.root / "probe-defaults.plist")
+        env["STOCKBAR_PROBE_LS"] = str(self.root / "probe-ls")
+
+        result = self.run_script(RESTORE, backup.name, input_text="yes\n", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log.read_text().split(), ["export", "import"])
+        # At import time the safety directory already held the current data.
+        self.assertEqual((self.root / "probe-defaults.plist").read_text(), "current-defaults\n")
+        saved = (self.root / "probe-ls").read_text().split()
+        for name in (".stockbar_config.json", "quote_cache.json", "StockbarDataModel.sqlite"):
+            self.assertIn(name, saved)
+        safety = sorted(self.data.glob("StockbarDataModel_pre_restore_*"))[-1]
+        self.assertEqual((safety / ".stockbar_config.json").read_text(), '{"key":"after"}\n')
+        self.assertEqual((safety / "quote_cache.json").read_text(), "after-cache")
+        self.assertEqual((safety / "UserDefaults.plist").read_text(), "current-defaults\n")
+        self.assertEqual((self.config_dir / ".stockbar_config.json").read_text(), '{"key":"before"}\n')
+
+    def test_restore_aborts_without_changes_when_defaults_export_fails(self):
+        self.seed("before")
+        backup = self.create_backup()
+        self.seed("after")
+        log = self.logging_defaults(export_exit=1, read_exit=0)
+        env = self.env()
+        env["STOCKBAR_DEFAULTS_LOG"] = str(log)
+
+        result = self.run_script(RESTORE, backup.name, input_text="yes\n", env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("restore aborted before any change", result.stderr)
+        self.assertNotIn("import", log.read_text().split())
+        self.assertEqual((self.data / "StockbarDataModel.sqlite").read_text(), "after-db")
+        self.assertEqual((self.config_dir / ".stockbar_config.json").read_text(), '{"key":"after"}\n')
+
     def test_restore_rechecks_process_after_confirmation(self):
         self.seed("before")
         backup = self.create_backup()

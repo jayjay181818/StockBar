@@ -33,21 +33,61 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         let runtime = try StockbarAcceptanceRuntime.resolveCurrent(
             environment: environment,
             fileManager: .default,
-            processIdentifier: 4242
+            processIdentifier: 4242,
+            uniqueSuffix: "run-0001"
         )
 
-        // Then: Every process-wide writer is rooted in a deterministic temporary test domain.
+        // Then: Every process-wide writer is rooted in a per-run temporary test domain.
         XCTAssertTrue(runtime.isEnabled)
-        XCTAssertEqual(runtime.runID, "xctest-4242")
+        XCTAssertEqual(runtime.runID, "xctest-4242-run-0001")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
-        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.xctest-4242")
+        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.xctest-4242-run-0001")
         XCTAssertEqual(
             runtime.folyncKeychainService,
-            "com.stockbar.folync.acceptance.xctest-4242"
+            "com.stockbar.folync.acceptance.xctest-4242-run-0001"
         )
         let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path + "/"
         XCTAssertTrue(try runtime.root.unwrap().standardizedFileURL.path.hasPrefix(temporaryRoot))
         XCTAssertTrue(try runtime.cacheRoot.unwrap().isDescendant(of: runtime.root.unwrap()))
+    }
+
+    func testAutomaticXCTestRunIDsDifferForReusedProcessIdentifiers() throws {
+        // Given: Two runs that happen to get the same PID.
+        let environment = ["XCTestConfigurationFilePath": "/tmp/StockbarTests.xctestconfiguration"]
+
+        // When: Resolving with the default (random) suffix.
+        let first = try StockbarAcceptanceRuntime.resolveCurrent(environment: environment, processIdentifier: 4242)
+        let second = try StockbarAcceptanceRuntime.resolveCurrent(environment: environment, processIdentifier: 4242)
+
+        // Then: They never share a root, defaults suite or Keychain namespace, and the ID stays valid.
+        XCTAssertNotEqual(first.runID, second.runID)
+        XCTAssertNotEqual(first.root, second.root)
+        XCTAssertNotEqual(first.folyncKeychainService, second.folyncKeychainService)
+        XCTAssertTrue(try XCTUnwrap(first.runID).count <= 64)
+    }
+
+    func testAutomaticXCTestCleanupRemovesRootButNeverExplicitAcceptanceRoots() throws {
+        // Given: An automatic XCTest runtime with files in its root.
+        let environment = ["XCTestConfigurationFilePath": "/tmp/StockbarTests.xctestconfiguration"]
+        let automatic = try StockbarAcceptanceRuntime.resolveCurrent(environment: environment, processIdentifier: 4242)
+        let automaticRoot = try automatic.root.unwrap()
+        try FileManager.default.createDirectory(at: automaticRoot, withIntermediateDirectories: true)
+
+        // When: The cleanup runs.
+        automatic.removeAutomaticTestArtifacts()
+
+        // Then: The automatic root is gone.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: automaticRoot.path))
+
+        // And: An explicit acceptance runtime is left alone.
+        let explicit = try StockbarAcceptanceRuntime.resolve(environment: [
+            "STOCKBAR_ACCEPTANCE_ROOT": root.path,
+            "STOCKBAR_ACCEPTANCE_RUN_ID": "acceptance-12345678",
+            "STOCKBAR_DISABLE_LIVE_PROVIDERS": "1"
+        ])
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        explicit.removeAutomaticTestArtifacts()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
     }
 
     func testCurrentProcessRuntimePrefersExplicitAcceptanceEnvironmentDuringXCTest() throws {
@@ -202,5 +242,29 @@ private extension URL {
         let candidate = standardizedFileURL.path
         let prefix = root.standardizedFileURL.path + "/"
         return candidate.hasPrefix(prefix)
+    }
+}
+
+final class StockbarAutosavePolicyTests: XCTestCase {
+    private let production = StockbarAcceptanceRuntime(
+        root: nil, runID: nil,
+        folyncKeychainService: StockbarAcceptanceRuntime.productionFolyncKeychainService,
+        liveProviderRequestsAllowed: true)
+    private let acceptance = StockbarAcceptanceRuntime(
+        root: URL(fileURLWithPath: "/tmp/stockbar-acceptance-test", isDirectory: true), runID: "run-12345678",
+        folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+        liveProviderRequestsAllowed: false)
+
+    func testProductionKeepsTheRealAutosaveNames() {
+        XCTAssertEqual(StockbarAutosavePolicy.windowFrameName("StockbarMainWindow", acceptance: production), "StockbarMainWindow")
+        XCTAssertEqual(StockbarAutosavePolicy.statusItemName("com.stockbar.portfolio", acceptance: production), "com.stockbar.portfolio")
+    }
+
+    func testAcceptanceNeverUsesTheProductionAutosaveNames() {
+        XCTAssertNil(StockbarAutosavePolicy.windowFrameName("StockbarMainWindow", acceptance: acceptance),
+                     "the window frame must not be saved or restored under acceptance")
+        let statusName = StockbarAutosavePolicy.statusItemName("com.stockbar.portfolio", acceptance: acceptance)
+        XCTAssertNotEqual(statusName, "com.stockbar.portfolio")
+        XCTAssertTrue(statusName.hasSuffix(".acceptance.run-12345678"))
     }
 }

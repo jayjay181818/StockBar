@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+command -v rg >/dev/null 2>&1 || { echo "ripgrep (rg) is required: brew install ripgrep" >&2; exit 1; }
 
 # Enforces invariants that CLAUDE.md states but that were previously only
 # convention. Each of these had at least one real violation in the codebase;
