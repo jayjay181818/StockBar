@@ -9,6 +9,6 @@ urllib3==1.26.20
 pandas<4
 
 # Minimum Python version: 3.8+
-# Recommended: Stockbar's own environment (bash script/setup_python_env.sh),
+# Recommended: Stockbar's own environment (Settings > Advanced > Python),
 # a current Python with OpenSSL. Apple's /usr/bin/python3 3.9 with LibreSSL
 # remains the fallback and must keep working.
