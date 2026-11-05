@@ -10,7 +10,7 @@ A macOS portfolio tracker that lives in the menu bar and the Dock. It shows live
 
 ### What do I need?
 
-macOS 15.4 or later, Python 3.9 or later with the packages pinned in `requirements.txt`, and an internet connection for new prices.
+macOS 15.4 or later, Python 3.9 or later with the packages pinned in `requirements.txt`, and an internet connection for new prices. Stockbar's own environment (**Settings → Advanced → Python → Set Up**) is recommended. Apple's `/usr/bin/python3` 3.9 still works, but it gets older HTTP packages without current security fixes.
 
 ### Does it work offline?
 
@@ -34,7 +34,7 @@ Everything is local:
 
 ### Why do I see a "Python Dependencies Required" alert?
 
-Stockbar fetches market data through a bundled Python script. The alert appears when the configured interpreter is missing a pinned package or has a different version. Click **Copy Command** and run it in Terminal. With Homebrew Python you may need a virtual environment:
+Stockbar fetches market data through a bundled Python script. The alert appears when the configured interpreter is missing a pinned package or has a different version, for example after an update raises a pin. Choose **Set Up Automatically** to build or rebuild Stockbar's own environment. To use another interpreter instead, click **Copy Command** and run it in Terminal. With Homebrew Python you may need a virtual environment:
 
 ```bash
 python3 -m venv ~/stockbar-venv
@@ -42,7 +42,7 @@ python3 -m venv ~/stockbar-venv
 defaults write com.stockbar pythonInterpreterPath "$HOME/stockbar-venv/bin/python3"
 ```
 
-Relaunch Stockbar afterwards; it re-checks whenever the interpreter changes.
+Relaunch Stockbar afterwards; it re-checks whenever the interpreter or the pinned versions change.
 
 ### Can Stockbar start at login?
 

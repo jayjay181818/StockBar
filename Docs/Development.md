@@ -42,9 +42,9 @@ The app source folder is synchronized into Xcode. New app Swift files compile au
 
 ## Branches, releases and dependencies
 
-Work on a branch and open a pull request into `testing`; do not push to `testing` or `main` directly. CI runs on every pull request to either branch. To release, bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the project, add `Changelogs/release_notes_vX.Y.Z.md`, update the README version and release history, then tag `vX.Y.Z` on the merged commit.
+Work on a branch and open a pull request into `testing`; do not push to `testing` or `main` directly. CI runs on every pull request to either branch. To release, bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the project, add `Changelogs/release_notes_vX.Y.Z.md`, update the README version and release history, then tag `vX.Y.Z` (annotated) on the merge commit in `testing`. Publish a GitHub release for the tag with the release notes as its body, and bring `main` up to date with a pull request from `testing`.
 
-[Dependabot](../.github/dependabot.yml) opens weekly, grouped pull requests into `testing` for GitHub Actions and the pinned Python helper packages. `urllib3` stays on 1.26.x because the runtime target is Apple's `/usr/bin/python3` 3.9 with LibreSSL; check that CI's Python tests pass before merging any helper update.
+[Dependabot](../.github/dependabot.yml) opens weekly, grouped pull requests into `testing` for GitHub Actions and the pinned Python helper packages. `requirements.txt` pins urllib3 and requests twice with `python_version` markers: current releases for Stockbar's own environment (3.10+), and the last releases Apple's `/usr/bin/python3` 3.9 with LibreSSL can run. Dependabot ignores both packages because it cannot tell the lines apart; bump the `>= "3.10"` lines by hand. The launch-time check understands only plain `python_version` markers (see `PythonRequirements.swift`). CI runs the Python tests on 3.13 (`python-current`) and 3.9 (`validate`); check both pass before merging any helper update.
 
 Before publishing, search the diff for credentials, tokens, private hostnames, personal paths and real portfolio data. Private notes belong in ignored files (see [.gitignore](../.gitignore)).
 

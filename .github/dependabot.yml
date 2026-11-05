@@ -27,8 +27,11 @@ updates:
     commit-message:
       prefix: "chore(python)"
     open-pull-requests-limit: 3
+    # requirements.txt pins urllib3 and requests twice, split by python_version
+    # markers: current releases for Stockbar's own environment (3.10+) and the
+    # last releases Apple's /usr/bin/python3 3.9 (LibreSSL) can run. Dependabot
+    # cannot tell those lines apart, so both packages are updated by hand: bump
+    # only the >= "3.10" lines and keep the 3.9 lines as they are.
     ignore:
-      # The runtime target is Apple's /usr/bin/python3 3.9 built against
-      # LibreSSL; urllib3 2.x requires OpenSSL 1.1.1+.
       - dependency-name: urllib3
-        versions: [">=2"]
+      - dependency-name: requests
