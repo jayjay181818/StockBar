@@ -381,7 +381,7 @@ struct StockbarSettingsView: View {
         switch pythonSetup.interpreterSource {
         case .configured: "Set by the pythonInterpreterPath setting: \(pythonSetup.interpreterPath)"
         case .stockbar: "Stockbar's own environment"
-        case .system: "System Python (\(pythonSetup.interpreterPath))"
+        case .notSetUp: "Not set up. Prices need Stockbar's own environment."
         }
     }
 
@@ -391,7 +391,7 @@ struct StockbarSettingsView: View {
         case .idle:
             Text(pythonSetup.interpreterSource == .stockbar
                  ? "In use. Rebuild to reinstall the pinned packages."
-                 : "Faster and more reliable than the system Python.")
+                 : "Choose Set Up to install it.")
         case .running(let progress):
             Text(progress)
         case .succeeded:
