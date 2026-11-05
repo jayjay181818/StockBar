@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 3.0.1** | **macOS 15.4+** | **Swift 5 mode, complete strict-concurrency checking**
+**Version 3.0.1** | **macOS 15.4+** | **Swift 6 language mode**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 

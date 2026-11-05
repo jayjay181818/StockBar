@@ -19,7 +19,7 @@ class LoggerTests: XCTestCase {
         let logger = Logger.shared
         
         // Test that very long log messages are properly truncated
-        let longMessage = String(repeating: "A", count: 1500)
+        _ = String(repeating: "A", count: 1500)
         let logs = await logger.getTailLogs(maxLines: 10)
         
         // Should not crash and should return some result
