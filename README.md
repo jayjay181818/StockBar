@@ -218,9 +218,10 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - FMP `403` messages usually indicate key/plan limits; keys are redacted in logs.
 - Python `urllib3`/LibreSSL warnings can appear from the local Python environment and are separate from Trading 212 broker sync.
 
-### Folync Shows "Not Configured" After An Update Or Rebuild
-- macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read, so Folync reports "not configured", exchange rates don't refresh and Allocation stays empty.
-- Choose **Always Allow** in the prompt. Locally built ad-hoc-signed builds ask again after every rebuild; builds signed with a stable identity ask once.
+### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
+- macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
+- Choose **Always Allow** in the prompt; everything recovers within a minute.
+- `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
 
 ### Menu Bar Item Missing
 - A full menu bar, the notch, or a menu-bar manager can hide the portfolio item. Check the manager's hidden section first.
