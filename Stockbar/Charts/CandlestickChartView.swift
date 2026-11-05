@@ -33,7 +33,7 @@ struct CandlestickChartView: View {
     @State private var showGridLines: Bool
     @State private var showCrosshair: Bool
 
-    @ObservedObject private var annotationService = ChartAnnotationService.shared
+    private let annotationService = ChartAnnotationService.shared
     
     @State private var showAnnotationEditor = false
     @State private var selectedAnnotation: ChartAnnotation?

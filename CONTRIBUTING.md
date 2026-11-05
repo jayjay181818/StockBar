@@ -169,8 +169,9 @@ actor CacheCoordinator {
 **Main Actor for UI:**
 ```swift
 @MainActor
-class DataModel: ObservableObject {
-    @Published var realTimeTrades: [RealTimeTrade]
+@Observable
+class DataModel {
+    var realTimeTrades: [RealTimeTrade]
 }
 ```
 
@@ -275,7 +276,7 @@ private func helper() { }
 ```swift
 @State private var selectedTab: Int = 0        // Local UI state
 @AppStorage("currency") private var currency: String  // Persisted preference
-@Published var realTimeTrades: [RealTimeTrade]       // Observable data
+let dataModel: DataModel                              // @Observable model; reads are tracked
 ```
 
 **View composition:**

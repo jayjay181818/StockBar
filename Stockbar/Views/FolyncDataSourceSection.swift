@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct FolyncDataSourceSection: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @State private var endpoint = ""
     @State private var token = ""
     @State private var hasStoredToken = false

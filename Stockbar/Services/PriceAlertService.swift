@@ -10,6 +10,7 @@
 import AppKit
 import CoreData
 import Foundation
+import Observation
 @preconcurrency import UserNotifications
 
 // MARK: - Alert Types
@@ -120,10 +121,11 @@ struct PriceAlert: Codable, Identifiable {
 
 // MARK: - Price Alert Service
 @MainActor
-class PriceAlertService: ObservableObject {
+@Observable
+class PriceAlertService {
     static let shared = PriceAlertService()
 
-    @Published private(set) var alerts: [PriceAlert] = []
+    private(set) var alerts: [PriceAlert] = []
     
     private let coreDataStack = CoreDataStack.shared
 
@@ -165,8 +167,8 @@ class PriceAlertService: ObservableObject {
     }
 
     // Track last known prices to detect threshold crossings
-    private var lastKnownPrices: [String: Double] = [:]
-    private var lastKnownPortfolioValue: Double = 0.0
+    @ObservationIgnored private var lastKnownPrices: [String: Double] = [:]
+    @ObservationIgnored private var lastKnownPortfolioValue: Double = 0.0
 
     private init() {
         // Migrate from UserDefaults to Core Data if needed

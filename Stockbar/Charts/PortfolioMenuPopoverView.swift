@@ -211,13 +211,12 @@ final class PortfolioMenuChartViewModel: ObservableObject {
         self.selectedTimeRange = initialRange
         self.preferredCurrency = preferredCurrency
         self.valuationSource = valuationSource
-        Publishers.MergeMany([
-            historicalDataManager.$priceSnapshots.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-            historicalDataManager.$priceDataRevision.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-            historicalDataManager.$historicalPortfolioSnapshots.dropFirst().map { _ in () }.eraseToAnyPublisher(),
-            historicalDataManager.$folyncSupplementalConfigurationRevision.dropFirst().map { _ in () }.eraseToAnyPublisher()
-        ])
-            .receive(on: DispatchQueue.main)
+        ObservationPublisher.changes { [historicalDataManager] in
+            _ = historicalDataManager.priceSnapshots
+            _ = historicalDataManager.priceDataRevision
+            _ = historicalDataManager.historicalPortfolioSnapshots
+            _ = historicalDataManager.folyncSupplementalConfigurationRevision
+        }
             .sink { [weak self] _ in self?.loadChartData() }
             .store(in: &cancellables)
     }
@@ -360,7 +359,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
 
 @MainActor
 struct PortfolioMenuPopoverView: View {
-    @ObservedObject private var dataModel: DataModel
+    private let dataModel: DataModel
     @StateObject private var viewModel: PortfolioMenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
     @State private var summaryCache = DisplaySummaryCache()
@@ -487,7 +486,7 @@ struct PortfolioMenuPopoverView: View {
         .onReceive(dataModel.tradeContentPublisher) { _ in
             refreshChartModel()
         }
-        .onReceive(dataModel.$portfolioMenuBarDisplaySettings.dropFirst()) { _ in
+        .onChange(of: dataModel.portfolioMenuBarDisplaySettings) { _, _ in
             refreshChartModel()
         }
     }

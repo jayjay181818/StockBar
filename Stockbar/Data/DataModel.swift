@@ -3,6 +3,7 @@
 
 import Combine
 import Foundation
+import Observation
 import Security
 
 extension String {
@@ -20,7 +21,8 @@ extension String {
 // Removed OSLog import to avoid name clashes with our custom Logger
 
 @MainActor
-class DataModel: ObservableObject {
+@Observable
+class DataModel {
     nonisolated static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
     // MARK: - Properties
@@ -33,57 +35,56 @@ class DataModel: ObservableObject {
     internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
-    private var cancellables = Set<AnyCancellable>()// Keep as is
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()// Keep as is
     private let tradeContentDidChange = PassthroughSubject<Void, Never>()
-    private var tradeContentCancellables = Set<AnyCancellable>()
     internal var historicalDataManager: HistoricalDataManager { HistoricalDataManager.shared }
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
-    private var pendingPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingPersistenceTask: Task<Void, Never>?
     private let trading212SettingsStore = Trading212SettingsStore.shared
     private let trading212CredentialStore = Trading212CredentialStore.shared
     private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
     private let trading212BrokerLinkStore = BrokerLinkStore.shared
     private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
     private let trading212BrokerOnlyImportPlanner = Trading212BrokerOnlyImportPlanner()
-    private var trading212BrokerSyncTask: Task<Void, Never>?
-    private var trading212BrokerSyncTimer: Timer?
-    private var trading212ScheduledFailureCount = 0
-    private var trading212NextScheduledAttempt = Date.distantPast
+    @ObservationIgnored private var trading212BrokerSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var trading212BrokerSyncTimer: Timer?
+    @ObservationIgnored private var trading212ScheduledFailureCount = 0
+    @ObservationIgnored private var trading212NextScheduledAttempt = Date.distantPast
     /// Identifies the current scheduled cycle, so a cancelled older cycle
     /// cannot clear the handle of a newer one.
-    private var trading212BrokerSyncGeneration = 0
-    private var lastTrading212ScheduledReconciliation = Date.distantPast
-    private var isTrading212BrokerSyncInProgress = false
-    private var isTrading212HoldingReconciliationInProgress = false
-    @Published private(set) var trading212BrokerValuationSnapshot: Trading212BrokerValuationSnapshot?
-    @Published var folyncPortfolioSnapshot: FolyncPortfolioSnapshot?
-    @Published var folyncConnectionState: FolyncConnectionState = .notConfigured
-    @Published var folyncCapabilities: FolyncCapabilities?
-    @Published var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
-    @Published private(set) var isInitialPortfolioSourceResolved = false
+    @ObservationIgnored private var trading212BrokerSyncGeneration = 0
+    @ObservationIgnored private var lastTrading212ScheduledReconciliation = Date.distantPast
+    @ObservationIgnored private var isTrading212BrokerSyncInProgress = false
+    @ObservationIgnored private var isTrading212HoldingReconciliationInProgress = false
+    private(set) var trading212BrokerValuationSnapshot: Trading212BrokerValuationSnapshot?
+    var folyncPortfolioSnapshot: FolyncPortfolioSnapshot?
+    var folyncConnectionState: FolyncConnectionState = .notConfigured
+    var folyncCapabilities: FolyncCapabilities?
+    var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
+    private(set) var isInitialPortfolioSourceResolved = false
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.
-    @Published private(set) var portfolioLoadFailed = false
+    private(set) var portfolioLoadFailed = false
     /// Last time a Trading 212 sync actually updated linked holdings. Market
     /// refresh only defers to the broker while this is recent.
-    private var lastTrading212LinkedSyncAt: Date?
+    @ObservationIgnored private var lastTrading212LinkedSyncAt: Date?
     /// A trade change is waiting out the save debounce.
-    private var hasPendingDebouncedTradeSave = false
-    var legacyPortfolioTrades: [RealTimeTrade]?
-    var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
-    var folyncRefreshTimer: Timer?
-    var folyncRefreshTask: Task<Void, Never>?
-    var folyncRefreshGeneration = UUID()
-    var folyncRefreshRequestID: UUID?
-    @Published var folyncLastCheckedAt: Date?
-    @Published var folyncNextCheckAt: Date?
-    var folyncSupplementalRefreshTimer: Timer?
-    var folyncSupplementalRefreshTask: Task<Void, Never>?
-    var folyncETag: String?
+    @ObservationIgnored private var hasPendingDebouncedTradeSave = false
+    @ObservationIgnored var legacyPortfolioTrades: [RealTimeTrade]?
+    @ObservationIgnored var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
+    @ObservationIgnored var folyncRefreshTimer: Timer?
+    @ObservationIgnored var folyncRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var folyncRefreshGeneration = UUID()
+    @ObservationIgnored var folyncRefreshRequestID: UUID?
+    var folyncLastCheckedAt: Date?
+    var folyncNextCheckAt: Date?
+    @ObservationIgnored var folyncSupplementalRefreshTimer: Timer?
+    @ObservationIgnored var folyncSupplementalRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var folyncETag: String?
     /// Set after a rejected token or rate limit; automatic polls wait until then.
-    var folyncBackoffUntil: Date?
+    @ObservationIgnored var folyncBackoffUntil: Date?
 
     var isFolyncPortfolioActive: Bool { folyncPortfolioSnapshot != nil }
 
@@ -101,36 +102,42 @@ class DataModel: ObservableObject {
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
-    private var refreshService: RefreshService!
-    private var portfolioCalculationService: PortfolioCalculationService!
-    private var historicalDataCoordinator: HistoricalDataCoordinator!
+    @ObservationIgnored private var refreshService: RefreshService!
+    @ObservationIgnored private var portfolioCalculationService: PortfolioCalculationService!
+    @ObservationIgnored private var historicalDataCoordinator: HistoricalDataCoordinator!
     private let chartAnnotationService = ChartAnnotationService.shared
     
-    @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
-    @Published var showColorCoding: Bool = (StockbarRuntimeStorage.userDefaults.object(forKey: "showColorCoding") as? Bool) ?? true {
+    var realTimeTrades: [RealTimeTrade] = [] {
+        didSet { realTimeTradesRevision &+= 1 }
+    }
+    /// Bumped on every assignment to `realTimeTrades`, including reassigning the
+    /// same rows after editing them in place (broker sync), so views can react
+    /// to whole-portfolio updates without diffing rows.
+    private(set) var realTimeTradesRevision = 0
+    var showColorCoding: Bool = (StockbarRuntimeStorage.userDefaults.object(forKey: "showColorCoding") as? Bool) ?? true {
         didSet {
             StockbarRuntimeStorage.userDefaults.set(showColorCoding, forKey: "showColorCoding")
         }
     }
-    @Published var preferredCurrency: String = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
+    var preferredCurrency: String = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
         didSet {
             StockbarRuntimeStorage.userDefaults.set(preferredCurrency, forKey: "preferredCurrency")
         }
     }
-    @Published var showMarketIndicators: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "showMarketIndicators") {
+    var showMarketIndicators: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "showMarketIndicators") {
         didSet {
             StockbarRuntimeStorage.userDefaults.set(showMarketIndicators, forKey: "showMarketIndicators")
         }
     }
 
     // MARK: - Menu Bar Display Settings (UI Enhancement v2.3.0)
-    @Published var menuBarDisplaySettings: MenuBarDisplaySettings = MenuBarDisplaySettings.load() {
+    var menuBarDisplaySettings: MenuBarDisplaySettings = MenuBarDisplaySettings.load() {
         didSet {
             menuBarDisplaySettings.save()
         }
     }
 
-    @Published var portfolioMenuBarDisplaySettings: PortfolioMenuBarDisplaySettings = {
+    var portfolioMenuBarDisplaySettings: PortfolioMenuBarDisplaySettings = {
         let defaultCurrency = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD"
         return PortfolioMenuBarDisplaySettings.load(defaultCurrency: defaultCurrency)
     }() {
@@ -139,19 +146,19 @@ class DataModel: ObservableObject {
         }
     }
 
-    @Published var hideAllMenuBarItems: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "hideAllMenuBarItems") {
+    var hideAllMenuBarItems: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "hideAllMenuBarItems") {
         didSet {
             StockbarRuntimeStorage.userDefaults.set(hideAllMenuBarItems, forKey: "hideAllMenuBarItems")
         }
     }
 
-    @Published var requireExternalDisplayForMenuBarStocks: Bool = MenuBarVisibilityPolicy.loadRequireExternalDisplay() {
+    var requireExternalDisplayForMenuBarStocks: Bool = MenuBarVisibilityPolicy.loadRequireExternalDisplay() {
         didSet {
             MenuBarVisibilityPolicy.saveRequireExternalDisplay(requireExternalDisplayForMenuBarStocks)
         }
     }
 
-    @Published var isExternalDisplayConnected: Bool = false
+    var isExternalDisplayConnected: Bool = false
 
     var shouldShowStockMenuBarItems: Bool {
         MenuBarVisibilityPolicy.shouldShowStockItems(
@@ -163,7 +170,7 @@ class DataModel: ObservableObject {
 
     private let logger = Logger.shared
 
-    @Published var refreshInterval: TimeInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
+    var refreshInterval: TimeInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
         didSet {
             StockbarRuntimeStorage.userDefaults.set(refreshInterval, forKey: "refreshInterval")
             // Update RefreshService interval when changed
@@ -174,17 +181,17 @@ class DataModel: ObservableObject {
     }
     
     // MARK: - Historical Data Backfill State
-    private var hasRunStartupBackfill = false // Prevent duplicate startup tasks
+    @ObservationIgnored private var hasRunStartupBackfill = false // Prevent duplicate startup tasks
     
     // Cache management now handled by CacheCoordinator service
     
     // MARK: - Memory Management
-    private var memoryOptimizer: MemoryOptimizedDataModel?
-    private var isMemoryOptimizationEnabled = true
-    private var hasCompletedInitialTradeLoad = false
-    private var mayStartRuntimeSchedulers = false
+    @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
+    @ObservationIgnored private var isMemoryOptimizationEnabled = true
+    @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    @ObservationIgnored private var mayStartRuntimeSchedulers = false
 
-    @Published var userData: UserData {
+    var userData: UserData {
         didSet {
             // Save data whenever it changes
             saveUserData()
@@ -206,7 +213,7 @@ class DataModel: ObservableObject {
         self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
 
         // Initialize userData first without triggering persistence during construction.
-        _userData = Published(initialValue: Self.loadUserData(decoder: decoder))
+        _userData = Self.loadUserData(decoder: decoder)
 
         // Initialize realTimeTrades first - will be loaded async after init
         self.realTimeTrades = []
@@ -1605,8 +1612,8 @@ class DataModel: ObservableObject {
     // MARK: - Trade Update Trigger
     
     /// Manually triggers a save of all trades.
-    /// Use this when updating properties within a RealTimeTrade object (like units or cost)
-    /// which doesn't automatically trigger the @Published realTimeTrades publisher.
+    /// Use this when updating properties within a RealTimeTrade object (like units or cost),
+    /// which changes the trade's content but not the `realTimeTrades` array.
     func triggerTradeUpdate() {
         guard !isFolyncPortfolioActive else { return }
         tradeContentDidChange.send()
@@ -1615,7 +1622,6 @@ class DataModel: ObservableObject {
 
     func persistPortfolioAfterUserEdit(allowEmptyPortfolio: Bool = false) {
         guard !isFolyncPortfolioActive else { return }
-        objectWillChange.send()
         ensureBenchmarkTracking()
 
         let validTrades = realTimeTrades.filter { trade in
@@ -1695,17 +1701,13 @@ class DataModel: ObservableObject {
                 saveUserOrder(validPortfolioTrades)
                 saveTradingInfo()
             }
-
-            objectWillChange.send()
         }
     }
 
-    // Keep setupPublishers and saveTrades as they are
     private func setupPublishers() {
-        // Merge updates from $realTimeTrades (array changes) and manual triggers (content changes)
-        // Reduced debounce to 2.0 seconds for faster saving
+        // Save after array changes and explicit content-edit triggers.
         Publishers.Merge(
-            $realTimeTrades.map { _ in () },
+            ObservationPublisher.values(self, \.realTimeTrades).map { _ in () },
             tradeUpdateTrigger
         )
         .handleEvents(receiveOutput: { [weak self] _ in self?.hasPendingDebouncedTradeSave = true })
@@ -1715,25 +1717,19 @@ class DataModel: ObservableObject {
         }
         .store(in: &cancellables)
 
-        $realTimeTrades
-            .receive(on: RunLoop.main)
-            .sink { [weak self] trades in
-                guard let self = self else { return }
-                self.bindTradeContentObservers(for: trades)
-                self.tradeContentDidChange.send()
+        // Content changes: the array, or any trade's position or quote. One
+        // observation covers every row and re-tracks when rows are replaced.
+        ObservationPublisher.values { [weak self] in
+            for trade in self?.realTimeTrades ?? [] {
+                _ = trade.trade
+                _ = trade.realTimeInfo
             }
-            .store(in: &cancellables)
-    }
-
-    private func bindTradeContentObservers(for trades: [RealTimeTrade]) {
-        tradeContentCancellables.removeAll()
-        for trade in trades {
-            trade.objectWillChange
-                .sink { [weak self] _ in
-                    self?.tradeContentDidChange.send()
-                }
-                .store(in: &tradeContentCancellables)
         }
+        .receive(on: RunLoop.main)
+        .sink { [weak self] in
+            self?.tradeContentDidChange.send()
+        }
+        .store(in: &cancellables)
     }
 
     private func saveTrades(_ trades: [RealTimeTrade], allowEmptyPortfolio: Bool = false) {
