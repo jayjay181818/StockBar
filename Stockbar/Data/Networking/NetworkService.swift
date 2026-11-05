@@ -44,7 +44,10 @@ enum NetworkError: LocalizedError, Sendable {
         case .scriptExecutionError(let details):
             return "Python script execution failed: \(details)"
         case .pythonInterpreterNotFound(let path):
-            return "Python 3 interpreter not found at \(path). Please ensure Python 3 is installed and accessible."
+            if path == PythonConfiguration.managedInterpreterPath() {
+                return "Stockbar's own Python is not set up. Open Settings > Advanced > Python and choose Set Up."
+            }
+            return "Python interpreter not found at \(path). Install Python 3.10 or later there, or change the pythonInterpreterPath setting."
         case .scriptNotFound(let name):
             return "Python script '\(name)' not found in the app bundle."
         case .rateLimit(let retryAfter):
@@ -414,8 +417,9 @@ actor PythonNetworkService: NetworkService {
         }
         
         guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            await logger.error(error.localizedDescription)
+            throw error
         }
 
         guard PythonConfiguration.validateSymbol(symbol) else {
@@ -541,8 +545,9 @@ actor PythonNetworkService: NetworkService {
         }
 
         guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            await logger.error(error.localizedDescription)
+            throw error
         }
 
         let arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
@@ -640,8 +645,9 @@ actor PythonNetworkService: NetworkService {
         }
 
         guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            await logger.error(error.localizedDescription)
+            throw error
         }
 
         let safeSymbols = symbols.filter { PythonConfiguration.validateSymbol($0) }
@@ -745,8 +751,9 @@ actor PythonNetworkService: NetworkService {
         }
         
         guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
+            await logger.error(error.localizedDescription)
+            throw error
         }
         
         do {
