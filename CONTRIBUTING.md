@@ -536,10 +536,10 @@ Fixes #(issue number)
 **Description:**
 ```markdown
 ## Environment
-- Stockbar Version: [e.g., 2.2.10]
+- Stockbar Version: [e.g., 3.2.0]
 - macOS Version: [e.g., macOS 15.4]
-- Python Version: [e.g., 3.11.5]
-- yfinance Version: [e.g., 0.2.28]
+- Python Version: [e.g., 3.13.18]
+- yfinance Version: [e.g., 1.8.0]
 
 ## Bug Description
 Clear description of what the bug is

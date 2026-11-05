@@ -34,7 +34,7 @@ Everything is local:
 
 ### Why do I see a "Set Up Stockbar's Python" or "Python Dependencies Required" alert?
 
-Stockbar fetches market data through a bundled Python script. "Set Up Stockbar's Python" appears when its own environment does not exist yet, for example on a new Mac or after updating from a version that used `/usr/bin/python3`. "Python Dependencies Required" appears when the interpreter is missing a pinned package or has a different version, for example after an update raises a pin. Choose **Set Up Automatically** to build or rebuild Stockbar's own environment. To use another interpreter instead, click **Copy Command** and run it in Terminal. With Homebrew Python you may need a virtual environment:
+Stockbar fetches market data through a bundled Python script. "Set Up Stockbar's Python" appears when its own environment does not exist yet, for example on a new Mac or after updating from a version that used `/usr/bin/python3`. "Python Dependencies Required" appears when the interpreter is missing a pinned package or has a different version, for example after an update raises a pin. Choose **Set Up Automatically** to build or rebuild Stockbar's own environment. If you point Stockbar at another interpreter, the alert also offers **Copy Command**; run the copied command in Terminal. With Homebrew Python you may need a virtual environment:
 
 ```bash
 python3.13 -m venv ~/stockbar-venv
