@@ -1,6 +1,7 @@
 import Combine
 import CoreData
 import Foundation
+import Observation
 
 extension Array {
     func chunked(into size: Int) -> [[Element]] {
@@ -173,7 +174,8 @@ struct HistoricalFetchRequestGate {
 }
 
 @MainActor
-class HistoricalDataManager: ObservableObject {
+@Observable
+class HistoricalDataManager {
     static let shared = HistoricalDataManager()
     
     private let logger = Logger.shared
@@ -189,35 +191,35 @@ class HistoricalDataManager: ObservableObject {
     private let migrationService = DataMigrationService.shared
     private let instrumentAliasStore = InstrumentAliasStore()
     
-    @Published var portfolioSnapshots: [PortfolioSnapshot] = []
-    @Published var priceSnapshots: [String: [PriceSnapshot]] = [:] {
+    var portfolioSnapshots: [PortfolioSnapshot] = []
+    var priceSnapshots: [String: [PriceSnapshot]] = [:] {
         didSet { aliasHistoryCache.removeAll() }
     }
-    @Published private(set) var priceDataRevision: Int = 0
+    private(set) var priceDataRevision: Int = 0
     /// Which series changed with each `priceDataRevision` bump: upper-cased
     /// symbol and alias keys, or nil when every series may have changed.
     let priceDataChanges = PassthroughSubject<Set<String>?, Never>()
-    @Published private(set) var portfolioHistoryRevision: Int = 0
-    @Published private(set) var folyncSupplementalConfigurationRevision: Int = 0
-    @Published private(set) var folyncSourceStatusBySeries: [String: FolyncSupplementalSourceStatus] = [:]
-    @Published private(set) var folyncCoverageBySeries: [String: String] = [:]
+    private(set) var portfolioHistoryRevision: Int = 0
+    private(set) var folyncSupplementalConfigurationRevision: Int = 0
+    private(set) var folyncSourceStatusBySeries: [String: FolyncSupplementalSourceStatus] = [:]
+    private(set) var folyncCoverageBySeries: [String: String] = [:]
     
     // MARK: - Enhanced Portfolio Storage
     
     // New persistent portfolio snapshots storage
-    @Published var historicalPortfolioSnapshots: [HistoricalPortfolioSnapshot] = []
-    private var currentPortfolioComposition: PortfolioComposition?
-    private var lastRetroactiveCalculationDate: Date = Date.distantPast
+    var historicalPortfolioSnapshots: [HistoricalPortfolioSnapshot] = []
+    @ObservationIgnored private var currentPortfolioComposition: PortfolioComposition?
+    @ObservationIgnored private var lastRetroactiveCalculationDate: Date = Date.distantPast
     
     // Cache for calculated historical portfolio values (legacy - being phased out)
-    public private(set) var cachedHistoricalPortfolioValues: [ChartDataPoint] = []
+    @ObservationIgnored public private(set) var cachedHistoricalPortfolioValues: [ChartDataPoint] = []
     
     // CRITICAL FIX: Prevent concurrent calculation overlaps
-    private var isCalculationInProgress = false
+    @ObservationIgnored private var isCalculationInProgress = false
     private let calculationLock = NSLock()
-    private var lastPortfolioCalculationDate: Date = Date.distantPast
+    @ObservationIgnored private var lastPortfolioCalculationDate: Date = Date.distantPast
     private let portfolioCalculationCacheInterval: TimeInterval = 1800 // 30 minutes cache (increased from 5 minutes)
-    private var earliestAvailableDates: [String: Date] = [:]
+    @ObservationIgnored private var earliestAvailableDates: [String: Date] = [:]
     
     // MARK: - Data Storage Configuration
     
@@ -236,8 +238,8 @@ class HistoricalDataManager: ObservableObject {
     // MARK: - Performance Caching
     
     // Cache for getOptimalStockData results to prevent repeated expensive calculations
-    private var stockDataCache: [String: [ChartDataPoint]] = [:]
-    private var stockDataCacheTimestamp: [String: Date] = [:]
+    @ObservationIgnored private var stockDataCache: [String: [ChartDataPoint]] = [:]
+    @ObservationIgnored private var stockDataCacheTimestamp: [String: Date] = [:]
     private let stockDataCacheInterval: TimeInterval = 30 // 30 seconds cache
     
     // Full history stays in Core Data; only the active working set is retained.
@@ -245,27 +247,27 @@ class HistoricalDataManager: ObservableObject {
     
     private static let snapshotIntervalDefaultsKey = "portfolioSnapshotIntervalSeconds"
     /// Seconds between recorded portfolio snapshots (default 5 minutes), kept across launches.
-    private var snapshotInterval: TimeInterval = {
+    @ObservationIgnored private var snapshotInterval: TimeInterval = {
         let stored = StockbarRuntimeStorage.userDefaults.double(forKey: HistoricalDataManager.snapshotIntervalDefaultsKey)
         return stored >= 30 ? stored : 300
     }()
-    private var lastSnapshotTime: Date = Date.distantPast
-    private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
+    @ObservationIgnored private var lastSnapshotTime: Date = Date.distantPast
+    @ObservationIgnored private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
         didSet { aliasHistoryCache.removeAll() }
     }
-    private var aliasHistoryCache = AliasPriceSnapshotCache()
-    private var livePortfolioValueSamples: [ChartDataPoint] = []
-    private var livePortfolioGainSamples: [ChartDataPoint] = []
+    @ObservationIgnored private var aliasHistoryCache = AliasPriceSnapshotCache()
+    @ObservationIgnored private var livePortfolioValueSamples: [ChartDataPoint] = []
+    @ObservationIgnored private var livePortfolioGainSamples: [ChartDataPoint] = []
     /// Currency of the live portfolio samples (the menu-bar currency), which
     /// can differ from the main currency the stored snapshots use.
-    private var livePortfolioSampleCurrency: String?
+    @ObservationIgnored private var livePortfolioSampleCurrency: String?
     private let priceHistoryScheduler = HistoricalPriceFetchScheduler()
-    private var folyncPortfolioHistoryContexts: [String: String] = [:]
-    private var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
-    private var folyncPriceOverlays: [String: [PriceSnapshot]] = [:]
-    private var folyncUnavailableSeries: Set<String> = []
-    private var folyncPortfolioValueOverlays: [String: [ChartDataPoint]] = [:]
-    private var folyncPortfolioGainOverlays: [String: [ChartDataPoint]] = [:]
+    @ObservationIgnored private var folyncPortfolioHistoryContexts: [String: String] = [:]
+    @ObservationIgnored private var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
+    @ObservationIgnored private var folyncPriceOverlays: [String: [PriceSnapshot]] = [:]
+    @ObservationIgnored private var folyncUnavailableSeries: Set<String> = []
+    @ObservationIgnored private var folyncPortfolioValueOverlays: [String: [ChartDataPoint]] = [:]
+    @ObservationIgnored private var folyncPortfolioGainOverlays: [String: [ChartDataPoint]] = [:]
     private let livePriceSampleRetention: TimeInterval = 7 * 24 * 60 * 60
     private let maxLivePriceSamplesPerSymbol = 1_000
     private let maxLivePortfolioSamples = 1_000
@@ -1451,26 +1453,28 @@ class HistoricalDataManager: ObservableObject {
     private func cleanupOldData() {
         let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
         
-        // Use progressive cleanup based on total data size
+        // Stock history is bounded by resolution below, so a large total is
+        // expected after long backfills. The total only sets how many session
+        // portfolio snapshots (the fallback chart series) are kept.
         let targetLimit: Int
         if totalSnapshots > 40000 {
-            // Aggressive cleanup for very large datasets
             targetLimit = 1500
-            Task { await logger.warning("📊 Aggressive cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else if totalSnapshots > 20000 {
-            // Moderate cleanup for large datasets
             targetLimit = 2000
-            Task { await logger.info("📊 Moderate cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else {
-            // Standard cleanup
             targetLimit = maxDataPoints
         }
-        
-        // Keep only the most recent data points
+
         if portfolioSnapshots.count > targetLimit {
+            let previousCount = portfolioSnapshots.count
             portfolioSnapshots = Array(portfolioSnapshots.suffix(targetLimit))
+            Task {
+                await logger.debug(
+                    "📊 Trimmed session portfolio snapshots from \(previousCount) to \(targetLimit) (stock history total: \(totalSnapshots))"
+                )
+            }
         }
-        
+
         // Bound stock history by resolution, not count, so long backfills survive.
         for symbol in priceSnapshots.keys {
             if let snapshots = priceSnapshots[symbol] {
@@ -3482,7 +3486,6 @@ class HistoricalDataManager: ObservableObject {
             folyncCoverageBySeries.removeValue(forKey: gainKey)
         }
         portfolioHistoryRevision &+= 1
-        objectWillChange.send()
     }
 
     private func folyncPortfolioSeriesKey(

@@ -13,31 +13,40 @@ class PortfolioCalculationTests: XCTestCase {
     // variants would add ~0.2 s of scheduling overhead to each of these tests.
     nonisolated override func setUp() {
         super.setUp()
-        MainActor.assumeIsolated {
-            currencyConverter = CurrencyConverter(
-                exchangeRates: [
-                    "USD": 1.0,
-                    "GBP": 0.79,
-                    "EUR": 0.92,
-                    "JPY": 149.50,
-                    "CAD": 1.36
-                ],
-                refreshOnInit: false,
-                loadHistoryOnInit: false
-            )
-            service = PortfolioCalculationService(currencyConverter: currencyConverter)
-            trades = []
-        }
+        // `assumeIsolated` traps unless this already runs on the main actor, so
+        // the alias never crosses isolation; it only satisfies Swift 6's
+        // region checks, which reject capturing a non-Sendable test case.
+        nonisolated(unsafe) let test = self
+        MainActor.assumeIsolated { test.setUpFixtures() }
     }
 
     nonisolated override func tearDown() {
-        MainActor.assumeIsolated {
-            trades.removeAll()
-            trades = nil
-            service = nil
-            currencyConverter = nil
-        }
+        nonisolated(unsafe) let test = self
+        MainActor.assumeIsolated { test.tearDownFixtures() }
         super.tearDown()
+    }
+
+    private func setUpFixtures() {
+        currencyConverter = CurrencyConverter(
+            exchangeRates: [
+                "USD": 1.0,
+                "GBP": 0.79,
+                "EUR": 0.92,
+                "JPY": 149.50,
+                "CAD": 1.36
+            ],
+            refreshOnInit: false,
+            loadHistoryOnInit: false
+        )
+        service = PortfolioCalculationService(currencyConverter: currencyConverter)
+        trades = []
+    }
+
+    private func tearDownFixtures() {
+        trades.removeAll()
+        trades = nil
+        service = nil
+        currencyConverter = nil
     }
 
     // MARK: - Net Gains Calculation Tests

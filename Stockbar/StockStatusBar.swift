@@ -177,7 +177,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
-        dataModel.$portfolioMenuBarDisplaySettings
+        ObservationPublisher.values(dataModel, \.portfolioMenuBarDisplaySettings)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -185,7 +185,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
-        dataModel.$showColorCoding
+        ObservationPublisher.values(dataModel, \.showColorCoding)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -193,7 +193,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
-        dataModel.$preferredCurrency
+        ObservationPublisher.values(dataModel, \.preferredCurrency)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -201,7 +201,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
-        dataModel.historicalDataManager.$priceSnapshots
+        ObservationPublisher.values(dataModel.historicalDataManager, \.priceSnapshots)
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -209,7 +209,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
-        dataModel.historicalDataManager.$historicalPortfolioSnapshots
+        ObservationPublisher.values(dataModel.historicalDataManager, \.historicalPortfolioSnapshots)
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -618,9 +618,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     }
     
     private func setupDataBinding(for realTimeTrade: RealTimeTrade) {
-        dataModel.$showColorCoding
+        ObservationPublisher.values(dataModel, \.showColorCoding)
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self, weak realTimeTrade] _ in
                 guard let self, let realTimeTrade else { return }
                 self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
@@ -628,9 +627,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
 
         // Listen to changes in trading info
-        realTimeTrade.$realTimeInfo
+        ObservationPublisher.values(realTimeTrade, \.realTimeInfo)
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self, weak realTimeTrade] trading in
                 guard let self = self, let realTimeTrade = realTimeTrade else { return }
                 self.updateDisplay(trade: realTimeTrade.trade, trading: trading)
@@ -638,9 +636,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
 
         // Listen to changes in market indicator setting
-        dataModel.$showMarketIndicators
+        ObservationPublisher.values(dataModel, \.showMarketIndicators)
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self, weak realTimeTrade] _ in
                 guard let self = self, let realTimeTrade = realTimeTrade else { return }
                 // Re-update display when setting changes
@@ -649,9 +646,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
 
         // Listen to changes in menu bar display settings
-        dataModel.$menuBarDisplaySettings
+        ObservationPublisher.values(dataModel, \.menuBarDisplaySettings)
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self, weak realTimeTrade] _ in
                 guard let self = self, let realTimeTrade = realTimeTrade else { return }
                 // Re-update display when formatting settings change
@@ -660,7 +656,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
 
         // Recalculate rolling 24-hour values as soon as chart history arrives.
-        dataModel.historicalDataManager.$priceSnapshots
+        ObservationPublisher.values(dataModel.historicalDataManager, \.priceSnapshots)
             .dropFirst()
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self, weak realTimeTrade] _ in

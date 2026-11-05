@@ -8,8 +8,8 @@
 import SwiftUI
 
 struct PriceAlertManagementView: View {
-    @ObservedObject private var alertService = PriceAlertService.shared
-    @ObservedObject var dataModel: DataModel
+    private let alertService = PriceAlertService.shared
+    let dataModel: DataModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingAddAlert = false
 
@@ -81,8 +81,8 @@ struct PriceAlertManagementView: View {
 
 struct PriceAlertRow: View {
     let alert: PriceAlert
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject private var alertService = PriceAlertService.shared
+    let dataModel: DataModel
+    private let alertService = PriceAlertService.shared
     @State private var isHovered = false
     @State private var confirmingDelete = false
 
@@ -196,9 +196,9 @@ struct PriceAlertRow: View {
 }
 
 struct AddPriceAlertView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @Binding var isPresented: Bool
-    @ObservedObject private var alertService = PriceAlertService.shared
+    private let alertService = PriceAlertService.shared
 
     @State private var selectedSymbol: String = ""
     @State private var selectedCondition: AlertCondition = .above

@@ -89,8 +89,7 @@ class MenuChartViewModel: ObservableObject {
         self.selectedTimeRange = timeRangeSelectionStore.selectedTimeRange(for: symbol)
         // Reload only when this chart's own symbol or benchmark changed, not on
         // every other symbol's update.
-        historicalDataManager.$priceSnapshots.dropFirst()
-            .receive(on: DispatchQueue.main)
+        ObservationPublisher.values(historicalDataManager, \.priceSnapshots).dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
                 let fingerprint = self.historicalDataManager.priceSeriesFingerprint(for: self.chartSymbols)

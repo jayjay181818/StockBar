@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct Trading212DataSourceSection: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
 
     @State private var settings = Trading212StoredSettings.defaults
     @State private var apiKey = ""

@@ -17,8 +17,8 @@ enum ChartVisualizationStyle: String, CaseIterable {
 }
 
 struct PerformanceChartView: View {
-    @ObservedObject private var historicalDataManager = HistoricalDataManager.shared
-    @ObservedObject private var calculationManager = BackgroundCalculationManager.shared
+    private let historicalDataManager = HistoricalDataManager.shared
+    private let calculationManager = BackgroundCalculationManager.shared
     @State private var selectedTimeRange: ChartTimeRange = .month
     @State private var selectedChartType: ChartType = .portfolioValue
     @State private var showingMetrics = true

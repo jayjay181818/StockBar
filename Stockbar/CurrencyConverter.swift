@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 
 // Structure to store historical rate data
 public struct CurrencyRateSnapshot: Codable, Sendable {
@@ -8,15 +9,16 @@ public struct CurrencyRateSnapshot: Codable, Sendable {
     let baseCurrency: String
 }
 
-public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
+@Observable
+public final class CurrencyConverter: @unchecked Sendable {
     public static let shared = CurrencyConverter()
 
-    @Published public var exchangeRates: [String: Double] = [:] {
+    public var exchangeRates: [String: Double] = [:] {
         didSet { storeRateState() }
     }
-    @Published public var lastRefreshTime: Date = Date.distantPast
-    @Published public var lastRefreshSuccess: Bool = false
-    @Published private(set) var sourceStatus: FolyncSupplementalSourceStatus = .legacy {
+    public var lastRefreshTime: Date = Date.distantPast
+    public var lastRefreshSuccess: Bool = false
+    private(set) var sourceStatus: FolyncSupplementalSourceStatus = .legacy {
         didSet { storeRateState() }
     }
 
@@ -24,9 +26,15 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     /// replaces the rates, so it reads this lock-protected copy instead of the
     /// published dictionary (a data race otherwise).
     private let rateStateLock = NSLock()
-    private var lockedRates: [String: Double] = [:]
-    private var lockedSourceStatus: FolyncSupplementalSourceStatus = .legacy
-    private var periodicRefreshTimer: Timer?
+    @ObservationIgnored private var lockedRates: [String: Double] = [:]
+    @ObservationIgnored private var lockedSourceStatus: FolyncSupplementalSourceStatus = .legacy
+    @ObservationIgnored private var periodicRefreshTimer: Timer?
+    /// One-shot retry after a failed fetch, so rates recover soon after the
+    /// network returns instead of waiting for the next hourly refresh.
+    @ObservationIgnored private var failedRefreshRetryTimer: Timer?
+    /// Just past `refreshCooldown`, so the retry is not throttled.
+    static let failedRefreshRetryDelay: TimeInterval = 305
+    var hasPendingFailedRefreshRetry: Bool { failedRefreshRetryTimer != nil }
 
     /// Rates older than this are labelled stale rather than live.
     static let staleRateAge: TimeInterval = 24 * 3_600
@@ -52,26 +60,26 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     /// True once any conversion has had to fall back to the hard-coded
     /// approximate rates below. Surfaced in the UI so a portfolio total computed
     /// from stale constants is never presented as if it were a live figure.
-    @Published public private(set) var isUsingFallbackRates: Bool = false
+    public private(set) var isUsingFallbackRates: Bool = false
     private let baseURL = "https://api.exchangerate-api.com/v4/latest/USD"
     private let refreshCooldown: TimeInterval = 300 // 5 minutes minimum between refreshes
     /// Throttle marker for refresh attempts. Kept separate from
     /// `lastRefreshTime`, which must only describe when the rates in use were
     /// actually obtained — a failed attempt must not read as "Just now".
-    private var lastRefreshAttemptTime: Date = .distantPast
+    @ObservationIgnored private var lastRefreshAttemptTime: Date = .distantPast
     private let supplementalRouter: any FolyncSupplementalFXRouting
     private let legacyRefreshObserver: (@Sendable () -> Void)?
     private let defaults: UserDefaults
     private let providerPolicy: StockbarProviderAccessPolicy
-    private var folyncOverlayBaseline: (rates: [String: Double], refreshTime: Date, success: Bool)?
+    @ObservationIgnored private var folyncOverlayBaseline: (rates: [String: Double], refreshTime: Date, success: Bool)?
     
     // Currency history tracking (keep last 30 days)
-    private var rateHistory: [CurrencyRateSnapshot] = []
+    @ObservationIgnored private var rateHistory: [CurrencyRateSnapshot] = []
     private let maxHistoryDays: Int = 30
     private let significantChangeThreshold: Double = 0.02 // 2% change threshold for alerts
     
     // Alert tracking to prevent spam
-    private var lastAlertTimestamps: [String: Date] = [:] // currency pair -> last alert time
+    @ObservationIgnored private var lastAlertTimestamps: [String: Date] = [:] // currency pair -> last alert time
     private let alertCooldown: TimeInterval = 3600 // 1 hour between alerts for same pair
 
     public init(
@@ -288,6 +296,36 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
         if exchangeRates.isEmpty {
             noteFallbackUsage("initial exchange-rate refresh failed")
         }
+        scheduleFailedRefreshRetry()
+    }
+
+    @MainActor
+    private func scheduleFailedRefreshRetry() {
+        // Only converters that refresh on their own (the app's) retry; tests
+        // and previews that never start the hourly timer stay inert.
+        guard periodicRefreshTimer != nil else { return }
+        failedRefreshRetryTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.failedRefreshRetryDelay, repeats: false) { [weak self] _ in
+            self?.failedRefreshRetryTimer = nil
+            self?.refreshRates()
+        }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        failedRefreshRetryTimer = timer
+    }
+
+    @MainActor
+    func finishSuccessfulLegacyRefresh(rates: [String: Double]) {
+        failedRefreshRetryTimer?.invalidate()
+        failedRefreshRetryTimer = nil
+        checkForSignificantChanges(newRates: rates)
+        exchangeRates = rates
+        lastRefreshTime = Date()
+        lastRefreshSuccess = true
+        sourceStatus = .legacy
+        setRateRefreshInFlight(false)
+        clearFallbackUsage()
+        addToHistory(rates: rates)
     }
 
     private func refreshLegacyRates() {
@@ -320,19 +358,8 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
             }
 
             Task { @MainActor [weak self] in
-                // Check for significant changes before updating
-                self?.checkForSignificantChanges(newRates: response.rates)
-                
-                self?.exchangeRates = response.rates
-                self?.lastRefreshTime = Date()
-                self?.lastRefreshSuccess = true
-                self?.sourceStatus = .legacy
-                self?.setRateRefreshInFlight(false)
-                self?.clearFallbackUsage()
+                self?.finishSuccessfulLegacyRefresh(rates: response.rates)
 
-                // Save to history
-                self?.addToHistory(rates: response.rates)
-                
                 Task {
                     await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
                     await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
@@ -603,11 +630,11 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     }
 
     private let fallbackNoticeLock = NSLock()
-    private var hasNotedFallback = false
-    private var rateRefreshInFlight = false
+    @ObservationIgnored private var hasNotedFallback = false
+    @ObservationIgnored private var rateRefreshInFlight = false
     /// True once any refresh attempt has finished, whether or not it obtained rates.
     /// Distinct from `lastRefreshTime`, which only moves on success.
-    private var firstRefreshAttemptCompleted = false
+    @ObservationIgnored private var firstRefreshAttemptCompleted = false
 
     private func setRateRefreshInFlight(_ inFlight: Bool) {
         fallbackNoticeLock.lock()

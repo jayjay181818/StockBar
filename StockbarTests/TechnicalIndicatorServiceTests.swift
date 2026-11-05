@@ -6,14 +6,14 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
     var service: TechnicalIndicatorService!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         service = TechnicalIndicatorService.shared
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         service = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - Simple Moving Average (SMA) Tests

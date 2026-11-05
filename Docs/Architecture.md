@@ -11,10 +11,10 @@ macOS portfolio tracker with Swift/Python integration. `LSUIElement = false`: th
 
 `main.swift` intercepts `--acceptance-preflight` / `--acceptance-bootstrap` and exits before `NSApplicationMain` — keep that block first.
 
-### Data flow (MVVM + Combine)
+### Data flow (MVVM + Observation)
 ```
-DataModel (@MainActor ObservableObject)  central state hub
-  ├── @Published realTimeTrades: [RealTimeTrade]   ← drives menu bar + all views
+DataModel (@MainActor @Observable)        central state hub
+  ├── realTimeTrades: [RealTimeTrade]             ← drives menu bar + all views
   ├── RefreshService                              ← refresh scheduling; RefreshPassScheduler serializes passes
   ├── CacheCoordinator (actor)                     ← TTL + backoff + circuit breaker
   ├── PythonNetworkService → python3 subprocess → get_stock_data.py
@@ -22,6 +22,8 @@ DataModel (@MainActor ObservableObject)  central state hub
   ├── FolyncPortfolioSource / FolyncSupplementalData     ← self-hosted portfolio source
   └── Core Data (historical prices, OHLC, snapshots) + UserDefaults
 ```
+
+Shared models (`DataModel`, `RealTimeTrade`, `HistoricalDataManager`, `CurrencyConverter` and the shared services) use `@Observable`, so SwiftUI redraws only views that read the property that changed. Internal state that views must not track is `@ObservationIgnored`. AppKit and service code subscribes through `ObservationPublisher` (`Utilities/ObservationPublisher.swift`), which replaces `$property` publishers. View-owned chart view models stay `ObservableObject` with `@StateObject`, which builds them once per view.
 
 ### Portfolio sources (mutually layered, not alternatives)
 Three sources coexist and must stay non-destructive to each other:

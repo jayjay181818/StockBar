@@ -12,6 +12,7 @@
 		04C0FFEE0000000000000012 /* CurrencyConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000013 /* CurrencyConverterTests.swift */; };
 		04C0FFEE0000000000000014 /* DataModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000015 /* DataModelTests.swift */; };
 		04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000017 /* LoggerTests.swift */; };
+		04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */; };
 		04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */; };
 		04C0FFEE000000000000001A /* PortfolioAnalyticsServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */; };
 		04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */; };
@@ -38,6 +39,7 @@
 		04C0FFEE0000000000000013 /* CurrencyConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrencyConverterTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000015 /* DataModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataModelTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000017 /* LoggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggerTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPublisherTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarFormattingServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioAnalyticsServicesTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RiskMetricsServiceTests.swift; sourceTree = "<group>"; };
@@ -132,6 +134,7 @@
 				04C0FFEE0000000000000029 /* HistoricalPortfolioCalculationServiceTests.swift */,
 				04C0FFEE0000000000000023 /* LogRedactorTests.swift */,
 				04C0FFEE0000000000000017 /* LoggerTests.swift */,
+				04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */,
 				04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */,
 				04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */,
 				04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */,
@@ -280,6 +283,7 @@
 				04C0FFEE0000000000000028 /* HistoricalPortfolioCalculationServiceTests.swift in Sources */,
 				04C0FFEE0000000000000022 /* LogRedactorTests.swift in Sources */,
 				04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */,
+				04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */,
 				04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */,
 				04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */,
 				04C0FFEE0000000000000A03 /* RefreshSchedulerTests.swift in Sources */,
@@ -440,7 +444,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
@@ -452,13 +456,13 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					REGISTER_APP_GROUPS = YES;
 					SWIFT_EMIT_LOC_STRINGS = YES;
 					SWIFT_STRICT_CONCURRENCY = complete;
-					SWIFT_VERSION = 5.0;
+					SWIFT_VERSION = 6.0;
 				};
 				name = Debug;
 		};
@@ -470,7 +474,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 300;
+				CURRENT_PROJECT_VERSION = 301;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -483,13 +487,13 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -509,7 +513,7 @@
 					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					SWIFT_STRICT_CONCURRENCY = complete;
-					SWIFT_VERSION = 5.0;
+					SWIFT_VERSION = 6.0;
 					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockbar.app/Contents/MacOS/Stockbar";
 				TEST_TARGET_NAME = Stockbar;
 			};
@@ -531,7 +535,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockbar.app/Contents/MacOS/Stockbar";
 				TEST_TARGET_NAME = Stockbar;
 			};

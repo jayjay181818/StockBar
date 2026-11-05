@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct StockbarSettingsView: View {
-    @ObservedObject var dataModel: DataModel
+    @Bindable var dataModel: DataModel
     private let onOpenSection: (StockbarMainSection) -> Void
 
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode: String = "system"

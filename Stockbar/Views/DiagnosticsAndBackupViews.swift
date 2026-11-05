@@ -255,7 +255,7 @@ struct DebugLogView: View {
 
 struct RestoreBackupView: View {
     @Binding var isPresented: Bool
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @State private var availableBackups: [BackupInfo] = []
     @State private var selectedBackup: BackupInfo?
     @State private var previewData: [PortfolioExportData] = []

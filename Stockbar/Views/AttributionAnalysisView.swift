@@ -10,7 +10,7 @@ import SwiftUI
 
 struct AttributionAnalysisView: View {
 
-    @ObservedObject private var historicalDataManager = HistoricalDataManager.shared
+    private let historicalDataManager = HistoricalDataManager.shared
     @State private var selectedTimeRange: ChartTimeRange = .month
     @State private var attributionResult: AttributionAnalysisResult?
     @State private var isLoading: Bool = false
