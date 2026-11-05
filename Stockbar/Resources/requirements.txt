@@ -5,8 +5,9 @@
 #   python3 -m pip install -r requirements.txt
 
 # Stock data fetching
-yfinance==1.2.0
-# yfinance 1.2.0 relies on pandas behaviour that pandas 4 removes.
+yfinance==1.8.0
+# yfinance 1.8.0 no longer uses the pandas behaviour that pandas 4 removes, but
+# pandas 4 has not been released to test against; lift the cap once it has.
 pandas<4
 
 # HTTP stack
