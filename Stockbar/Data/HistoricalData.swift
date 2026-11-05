@@ -1,12 +1,19 @@
+import CryptoKit
 import Foundation
 
-struct PriceSnapshot: Codable, Identifiable {
+struct PriceSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let timestamp: Date
     let price: Double
     let previousClose: Double
     let volume: Double?
     let symbol: String
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp, price, previousClose, volume, symbol
+    }
     
     init(timestamp: Date, price: Double, previousClose: Double, volume: Double? = nil, symbol: String) {
         self.timestamp = timestamp
@@ -26,13 +33,19 @@ struct PriceSnapshot: Codable, Identifiable {
     }
 }
 
-struct PortfolioSnapshot: Codable, Identifiable {
+struct PortfolioSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let timestamp: Date
     let totalValue: Double
     let totalGains: Double
     let currency: String
     let priceSnapshots: [PriceSnapshot]
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp, totalValue, totalGains, currency, priceSnapshots
+    }
     
     init(timestamp: Date, totalValue: Double, totalGains: Double, currency: String, priceSnapshots: [PriceSnapshot]) {
         self.timestamp = timestamp
@@ -43,7 +56,7 @@ struct PortfolioSnapshot: Codable, Identifiable {
     }
 }
 
-enum ChartTimeRange: String, CaseIterable {
+enum ChartTimeRange: String, CaseIterable, Sendable {
     case day = "1D"
     case week = "1W"
     case month = "1M"
@@ -101,9 +114,22 @@ enum ChartTimeRange: String, CaseIterable {
         case .month: return "1h"
         case .threeMonths: return "1d"
         case .sixMonths: return "1d"
-        case .year: return "1wk"
-        case .all: return "1wk"
+        case .year: return "1d"
+        case .all: return "1d"
         case .custom: return "1d"
+        }
+    }
+
+    var folyncRange: String {
+        switch self {
+        case .day: "1d"
+        case .week: "1w"
+        case .month: "1m"
+        case .threeMonths: "3m"
+        case .sixMonths: "6m"
+        case .year: "1y"
+        case .all: "all"
+        case .custom: "custom"
         }
     }
 
@@ -122,11 +148,17 @@ enum ChartTimeRange: String, CaseIterable {
     }
 }
 
-struct ChartDataPoint: Identifiable, Codable {
+struct ChartDataPoint: Identifiable, Codable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let date: Date
     let value: Double
     let symbol: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case date, value, symbol
+    }
     
     init(date: Date, value: Double, symbol: String? = nil) {
         self.date = date
@@ -137,7 +169,9 @@ struct ChartDataPoint: Identifiable, Codable {
 
 // MARK: - Enhanced Portfolio Snapshot Structures
 
-struct HistoricalPortfolioSnapshot: Codable, Identifiable {
+struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
+    /// Session-only identity for SwiftUI lists. Deliberately excluded from
+    /// coding: it was never restored on decode, so persisting it was noise.
     let id = UUID()
     let date: Date
     let totalValue: Double
@@ -145,6 +179,10 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable {
     let totalCost: Double // Initial investment amount
     let currency: String
     let portfolioComposition: [String: PositionSnapshot] // Track individual positions
+
+    private enum CodingKeys: String, CodingKey {
+        case date, totalValue, totalGains, totalCost, currency, portfolioComposition
+    }
     
     init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: [String: PositionSnapshot]) {
         self.date = date
@@ -156,25 +194,17 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable {
     }
 }
 
-struct PositionSnapshot: Codable {
+struct PositionSnapshot: Codable, Sendable {
     let symbol: String
     let units: Double
     let priceAtDate: Double
     let valueAtDate: Double
     let currency: String
-    
-    init(symbol: String, units: Double, priceAtDate: Double, valueAtDate: Double, currency: String) {
-        self.symbol = symbol
-        self.units = units
-        self.priceAtDate = priceAtDate
-        self.valueAtDate = valueAtDate
-        self.currency = currency
-    }
 }
 
 // MARK: - Portfolio Composition Tracking
 
-struct PortfolioComposition: Codable, Hashable {
+struct PortfolioComposition: Codable, Hashable, Sendable {
     let positions: [PortfolioPosition]
     let compositionHash: String
     
@@ -187,22 +217,17 @@ struct PortfolioComposition: Codable, Hashable {
         let combined = positions.sorted { $0.symbol < $1.symbol }
             .map { "\($0.symbol):\($0.units):\($0.avgCost)" }
             .joined(separator: "|")
-        return String(combined.hashValue)
+        // A stable digest: String.hashValue is seeded per process, so a stored
+        // hash never matched after relaunch and forced a full recalculation.
+        return SHA256.hash(data: Data(combined.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
-struct PortfolioPosition: Codable, Hashable {
+struct PortfolioPosition: Codable, Hashable, Sendable {
     let symbol: String
     let units: Double
     let avgCost: Double
     let currency: String
-    
-    init(symbol: String, units: Double, avgCost: Double, currency: String) {
-        self.symbol = symbol
-        self.units = units
-        self.avgCost = avgCost
-        self.currency = currency
-    }
 }
 
 enum ChartType {
@@ -218,190 +243,6 @@ enum ChartType {
             return "Portfolio Gains"
         case .individualStock(let symbol):
             return "\(symbol) Price"
-        }
-    }
-}
-
-// MARK: - Portfolio Analytics
-
-struct PortfolioAnalytics: Codable {
-    let timeRange: String
-    let calculatedAt: Date
-    
-    // Performance Metrics
-    let totalReturn: Double          // Absolute return amount
-    let totalReturnPercent: Double   // Return percentage
-    let annualizedReturn: Double     // Annualized return percentage
-    
-    // Risk Metrics
-    let volatility: Double           // Standard deviation of daily returns
-    let sharpeRatio: Double          // Risk-adjusted return
-    let maxDrawdown: Double          // Maximum peak-to-trough decline
-    let maxDrawdownPercent: Double   // Maximum decline percentage
-    
-    // Value Statistics
-    let minValue: Double             // Minimum portfolio value in period
-    let maxValue: Double             // Maximum portfolio value in period
-    let averageValue: Double         // Average portfolio value
-    let finalValue: Double           // Current/final portfolio value
-    let initialValue: Double         // Starting portfolio value
-    
-    // Trading Performance
-    let winningDays: Int             // Days with positive returns
-    let losingDays: Int              // Days with negative returns
-    let totalDays: Int               // Total days analyzed
-    let winRate: Double              // Percentage of winning days
-    
-    // Additional Metrics
-    let currency: String             // Portfolio currency
-    let bestDay: Double              // Best single day return
-    let worstDay: Double             // Worst single day return
-    let consecutiveWins: Int         // Longest winning streak
-    let consecutiveLosses: Int       // Longest losing streak
-    
-    init(
-        timeRange: String,
-        calculatedAt: Date = Date(),
-        totalReturn: Double,
-        totalReturnPercent: Double,
-        annualizedReturn: Double,
-        volatility: Double,
-        sharpeRatio: Double,
-        maxDrawdown: Double,
-        maxDrawdownPercent: Double,
-        minValue: Double,
-        maxValue: Double,
-        averageValue: Double,
-        finalValue: Double,
-        initialValue: Double,
-        winningDays: Int,
-        losingDays: Int,
-        totalDays: Int,
-        winRate: Double,
-        currency: String,
-        bestDay: Double,
-        worstDay: Double,
-        consecutiveWins: Int,
-        consecutiveLosses: Int
-    ) {
-        self.timeRange = timeRange
-        self.calculatedAt = calculatedAt
-        self.totalReturn = totalReturn
-        self.totalReturnPercent = totalReturnPercent
-        self.annualizedReturn = annualizedReturn
-        self.volatility = volatility
-        self.sharpeRatio = sharpeRatio
-        self.maxDrawdown = maxDrawdown
-        self.maxDrawdownPercent = maxDrawdownPercent
-        self.minValue = minValue
-        self.maxValue = maxValue
-        self.averageValue = averageValue
-        self.finalValue = finalValue
-        self.initialValue = initialValue
-        self.winningDays = winningDays
-        self.losingDays = losingDays
-        self.totalDays = totalDays
-        self.winRate = winRate
-        self.currency = currency
-        self.bestDay = bestDay
-        self.worstDay = worstDay
-        self.consecutiveWins = consecutiveWins
-        self.consecutiveLosses = consecutiveLosses
-    }
-}
-
-// MARK: - Performance Optimization Types
-
-struct PerformanceStats {
-    let compressionStats: CompressionStats
-    let memoryStats: MemoryStats
-    let chartCacheStats: ChartCacheStats
-    let totalDataPoints: Int
-    let coreDataStorageSize: Double // MB
-    
-    var overallHealthScore: Double {
-        var score = 100.0
-        
-        // Memory usage impact (0-30 points)
-        let memoryImpact = min(30, (memoryStats.usagePercentage / 100.0) * 30)
-        score -= memoryImpact
-        
-        // Cache efficiency impact (0-20 points)
-        let cacheEfficiency = chartCacheStats.cacheHitRatio * 20
-        score = score - 20 + cacheEfficiency
-        
-        // Compression benefit (0-20 points)
-        let compressionBenefit = compressionStats.compressionRatio * 20
-        score += compressionBenefit
-        
-        // Data density impact (0-30 points)
-        let dataDensity = min(30, Double(totalDataPoints) / 100000.0 * 30)
-        score -= dataDensity
-        
-        return max(0, min(100, score))
-    }
-    
-    var performanceLevel: PerformanceLevel {
-        let score = overallHealthScore
-        if score >= 80 {
-            return .excellent
-        } else if score >= 60 {
-            return .good
-        } else if score >= 40 {
-            return .fair
-        } else {
-            return .poor
-        }
-    }
-    
-    var recommendations: [String] {
-        var suggestions: [String] = []
-        
-        if memoryStats.memoryStatus != .normal {
-            suggestions.append("Consider reducing chart cache size or enabling compression")
-        }
-        
-        if chartCacheStats.cacheHitRatio < 0.5 {
-            suggestions.append("Chart cache hit ratio is low - consider prefetching common time ranges")
-        }
-        
-        if compressionStats.compressionRatio > 0.3 {
-            suggestions.append("Large amount of compressible data detected - run data compression")
-        }
-        
-        if totalDataPoints > 50000 {
-            suggestions.append("Consider archiving very old data to improve performance")
-        }
-        
-        if coreDataStorageSize > 100 {
-            suggestions.append("Database size is large - consider running optimization")
-        }
-        
-        return suggestions
-    }
-}
-
-enum PerformanceLevel {
-    case excellent
-    case good
-    case fair
-    case poor
-    
-    var description: String {
-        switch self {
-        case .excellent: return "Excellent"
-        case .good: return "Good"
-        case .fair: return "Fair"
-        case .poor: return "Poor"
-        }
-    }
-    
-    var color: String {
-        switch self {
-        case .excellent: return "green"
-        case .good: return "blue"
-        case .fair: return "orange"
-        case .poor: return "red"
         }
     }
 }

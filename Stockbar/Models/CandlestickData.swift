@@ -12,14 +12,15 @@ import SwiftUI
 // MARK: - OHLC Data Point
 
 /// Represents a single OHLC (Open, High, Low, Close) data point for candlestick charts
-struct OHLCDataPoint: Identifiable, Codable {
+struct OHLCDataPoint: Identifiable, Codable, Sendable {
     let id: UUID
     let timestamp: Date
     let open: Double
     let high: Double
     let low: Double
     let close: Double
-    let volume: Int64
+    /// Nil means the source did not provide volume; it must not be rendered as zero.
+    let volume: Int64?
 
     /// Creates an OHLC data point
     init(
@@ -29,7 +30,7 @@ struct OHLCDataPoint: Identifiable, Codable {
         high: Double,
         low: Double,
         close: Double,
-        volume: Int64
+        volume: Int64?
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -204,13 +205,13 @@ struct CandlestickChartSettings: Codable {
     /// Save settings to UserDefaults
     func save() {
         if let encoded = try? JSONEncoder().encode(self) {
-            UserDefaults.standard.set(encoded, forKey: "candlestickChartSettings")
+            StockbarRuntimeStorage.userDefaults.set(encoded, forKey: "candlestickChartSettings")
         }
     }
 
     /// Load settings from UserDefaults
     static func load() -> CandlestickChartSettings {
-        if let data = UserDefaults.standard.data(forKey: "candlestickChartSettings"),
+        if let data = StockbarRuntimeStorage.userDefaults.data(forKey: "candlestickChartSettings"),
            let decoded = try? JSONDecoder().decode(CandlestickChartSettings.self, from: data) {
             return decoded
         }

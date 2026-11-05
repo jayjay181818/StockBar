@@ -1,56 +1,192 @@
 import Combine
 import Foundation
+import Observation
 
 // Structure to store historical rate data
-public struct CurrencyRateSnapshot: Codable {
+public struct CurrencyRateSnapshot: Codable, Sendable {
     let timestamp: Date
     let rates: [String: Double]
     let baseCurrency: String
 }
 
-public class CurrencyConverter: ObservableObject {
-    @Published public var exchangeRates: [String: Double] = [:]
-    @Published public var lastRefreshTime: Date = Date.distantPast
-    @Published public var lastRefreshSuccess: Bool = false
+@Observable
+public final class CurrencyConverter: @unchecked Sendable {
+    public static let shared = CurrencyConverter()
+
+    public var exchangeRates: [String: Double] = [:] {
+        didSet { storeRateState() }
+    }
+    public var lastRefreshTime: Date = Date.distantPast
+    public var lastRefreshSuccess: Bool = false
+    private(set) var sourceStatus: FolyncSupplementalSourceStatus = .legacy {
+        didSet { storeRateState() }
+    }
+
+    /// `convert` runs on background calculation tasks while the main thread
+    /// replaces the rates, so it reads this lock-protected copy instead of the
+    /// published dictionary (a data race otherwise).
+    private let rateStateLock = NSLock()
+    @ObservationIgnored private var lockedRates: [String: Double] = [:]
+    @ObservationIgnored private var lockedSourceStatus: FolyncSupplementalSourceStatus = .legacy
+    @ObservationIgnored private var periodicRefreshTimer: Timer?
+    /// One-shot retry after a failed fetch, so rates recover soon after the
+    /// network returns instead of waiting for the next hourly refresh.
+    @ObservationIgnored private var failedRefreshRetryTimer: Timer?
+    /// Just past `refreshCooldown`, so the retry is not throttled.
+    static let failedRefreshRetryDelay: TimeInterval = 305
+    var hasPendingFailedRefreshRetry: Bool { failedRefreshRetryTimer != nil }
+
+    /// Rates older than this are labelled stale rather than live.
+    static let staleRateAge: TimeInterval = 24 * 3_600
+
+    private func storeRateState() {
+        rateStateLock.lock()
+        lockedRates = exchangeRates
+        lockedSourceStatus = sourceStatus
+        rateStateLock.unlock()
+    }
+
+    private func rateState() -> (rates: [String: Double], status: FolyncSupplementalSourceStatus) {
+        rateStateLock.lock()
+        defer { rateStateLock.unlock() }
+        return (lockedRates, lockedSourceStatus)
+    }
+
+    /// True when the last successful fetch is older than `staleRateAge`.
+    public func ratesAreStale(now: Date = Date()) -> Bool {
+        lastRefreshTime != .distantPast && now.timeIntervalSince(lastRefreshTime) > Self.staleRateAge
+    }
+
+    /// True once any conversion has had to fall back to the hard-coded
+    /// approximate rates below. Surfaced in the UI so a portfolio total computed
+    /// from stale constants is never presented as if it were a live figure.
+    public private(set) var isUsingFallbackRates: Bool = false
     private let baseURL = "https://api.exchangerate-api.com/v4/latest/USD"
     private let refreshCooldown: TimeInterval = 300 // 5 minutes minimum between refreshes
+    /// Throttle marker for refresh attempts. Kept separate from
+    /// `lastRefreshTime`, which must only describe when the rates in use were
+    /// actually obtained — a failed attempt must not read as "Just now".
+    @ObservationIgnored private var lastRefreshAttemptTime: Date = .distantPast
+    private let supplementalRouter: any FolyncSupplementalFXRouting
+    private let legacyRefreshObserver: (@Sendable () -> Void)?
+    private let defaults: UserDefaults
+    private let providerPolicy: StockbarProviderAccessPolicy
+    @ObservationIgnored private var folyncOverlayBaseline: (rates: [String: Double], refreshTime: Date, success: Bool)?
     
     // Currency history tracking (keep last 30 days)
-    private var rateHistory: [CurrencyRateSnapshot] = []
+    @ObservationIgnored private var rateHistory: [CurrencyRateSnapshot] = []
     private let maxHistoryDays: Int = 30
     private let significantChangeThreshold: Double = 0.02 // 2% change threshold for alerts
     
     // Alert tracking to prevent spam
-    private var lastAlertTimestamps: [String: Date] = [:] // currency pair -> last alert time
+    @ObservationIgnored private var lastAlertTimestamps: [String: Date] = [:] // currency pair -> last alert time
     private let alertCooldown: TimeInterval = 3600 // 1 hour between alerts for same pair
 
-    public init() {
-        loadRateHistory()
-        refreshRates()
+    public init(
+        exchangeRates: [String: Double] = [:],
+        refreshOnInit: Bool = true,
+        loadHistoryOnInit: Bool = true,
+        defaults: UserDefaults = StockbarRuntimeStorage.userDefaults
+    ) {
+        self.exchangeRates = exchangeRates
+        self.supplementalRouter = FolyncSupplementalCoordinator.shared
+        self.legacyRefreshObserver = nil
+        self.defaults = defaults
+        self.providerPolicy = .current
+        finishInitialization(
+            exchangeRates: exchangeRates,
+            refreshOnInit: refreshOnInit,
+            loadHistoryOnInit: loadHistoryOnInit
+        )
+    }
+
+    init(
+        exchangeRates: [String: Double] = [:],
+        refreshOnInit: Bool = true,
+        loadHistoryOnInit: Bool = true,
+        supplementalRouter: any FolyncSupplementalFXRouting,
+        legacyRefreshObserver: (@Sendable () -> Void)? = nil,
+        defaults: UserDefaults = StockbarRuntimeStorage.userDefaults,
+        providerPolicy: StockbarProviderAccessPolicy = .current
+    ) {
+        self.exchangeRates = exchangeRates
+        self.supplementalRouter = supplementalRouter
+        self.legacyRefreshObserver = legacyRefreshObserver
+        self.defaults = defaults
+        self.providerPolicy = providerPolicy
+        finishInitialization(
+            exchangeRates: exchangeRates,
+            refreshOnInit: refreshOnInit,
+            loadHistoryOnInit: loadHistoryOnInit
+        )
+    }
+
+    private func finishInitialization(
+        exchangeRates: [String: Double],
+        refreshOnInit: Bool,
+        loadHistoryOnInit: Bool
+    ) {
+        if !exchangeRates.isEmpty {
+            lastRefreshTime = Date()
+            lastRefreshSuccess = true
+        }
+
+        storeRateState()
+        if loadHistoryOnInit {
+            loadRateHistory()
+        }
+        if refreshOnInit {
+            refreshRates()
+            // Rates were fetched only at launch, so a long-running menu-bar
+            // session kept converting with launch-day rates.
+            let timer = Timer(timeInterval: 3_600, repeats: true) { [weak self] _ in
+                self?.refreshRates()
+            }
+            timer.tolerance = 300
+            RunLoop.main.add(timer, forMode: .common)
+            periodicRefreshTimer = timer
+        }
     }
 
     // Get exchange rate with metadata for UI display
     public func getExchangeRateInfo(from: String, to: String) -> (rate: Double, timestamp: Date, isFallback: Bool) {
-        if from == to {
+        let sourceIsPence = Self.isPenceCurrency(from)
+        let targetIsPence = Self.isPenceCurrency(to)
+        let sourceCurrency = sourceIsPence ? "GBP" : Self.normalizedCurrencyCode(from)
+        let targetCurrency = targetIsPence ? "GBP" : Self.normalizedCurrencyCode(to)
+
+        if sourceIsPence && targetIsPence {
             return (1.0, lastRefreshTime, false)
+        }
+        if sourceCurrency == targetCurrency {
+            let scale = (sourceIsPence ? 0.01 : 1) * (targetIsPence ? 100 : 1)
+            return (scale, lastRefreshTime, false)
         }
 
         // Determine if we're using fallback rates
         let usingFallback = exchangeRates.isEmpty || lastRefreshTime == Date.distantPast
 
         // Calculate rate
-        let rate: Double
-        if from == "USD" {
-            rate = exchangeRates[to] ?? getFallbackRate(to: to)
-        } else if to == "USD" {
-            let sourceRate = exchangeRates[from] ?? getFallbackRate(to: from)
-            rate = 1.0 / sourceRate
+        let normalizedRate: Double
+        if sourceCurrency == "USD" {
+            guard let resolved = exchangeRates[targetCurrency] ?? legacyFallbackRate(to: targetCurrency) else {
+                return (.nan, lastRefreshTime, false)
+            }
+            normalizedRate = resolved
+        } else if targetCurrency == "USD" {
+            guard let sourceRate = exchangeRates[sourceCurrency] ?? legacyFallbackRate(to: sourceCurrency) else {
+                return (.nan, lastRefreshTime, false)
+            }
+            normalizedRate = 1.0 / sourceRate
         } else {
-            let sourceRate = exchangeRates[from] ?? getFallbackRate(to: from)
-            let targetRate = exchangeRates[to] ?? getFallbackRate(to: to)
-            rate = targetRate / sourceRate
+            guard let sourceRate = exchangeRates[sourceCurrency] ?? legacyFallbackRate(to: sourceCurrency),
+                  let targetRate = exchangeRates[targetCurrency] ?? legacyFallbackRate(to: targetCurrency) else {
+                return (.nan, lastRefreshTime, false)
+            }
+            normalizedRate = targetRate / sourceRate
         }
 
+        let rate = normalizedRate * (sourceIsPence ? 0.01 : 1) * (targetIsPence ? 100 : 1)
         return (rate, lastRefreshTime, usingFallback)
     }
 
@@ -77,41 +213,153 @@ public class CurrencyConverter: ObservableObject {
         }
     }
 
-    public func refreshRates() {
+    public func refreshRates(force: Bool = false) {
+        Task { [weak self] in
+            await self?.refreshRatesFromConfiguredSource(force: force)
+        }
+    }
+
+    func refreshRatesFromConfiguredSource(force: Bool = false) async {
         // Throttle refresh requests to prevent excessive API calls
         let now = Date()
-        let timeSinceLastRefresh = now.timeIntervalSince(lastRefreshTime)
-        
-        guard timeSinceLastRefresh >= refreshCooldown else {
+        let timeSinceLastRefresh = now.timeIntervalSince(max(lastRefreshTime, lastRefreshAttemptTime))
+
+        guard force || timeSinceLastRefresh >= refreshCooldown else {
             Task { await Logger.shared.debug("💱 [CurrencyConverter] Skipping refresh - last refresh was \(Int(timeSinceLastRefresh))s ago") }
             return
         }
-        
-        lastRefreshTime = now
-        guard let url = URL(string: baseURL) else { return }
-        
-        Task { await Logger.shared.info("💱 [CurrencyConverter] Fetching exchange rates from API...") }
+
+        let preRouteBaseline = (
+            rates: exchangeRates,
+            refreshTime: lastRefreshTime,
+            success: lastRefreshSuccess
+        )
+        setRateRefreshInFlight(true)
+        await MainActor.run { self.lastRefreshAttemptTime = now }
+        switch await supplementalRouter.routeFX() {
+        case .folync(let rates, let asOf, let status):
+            await MainActor.run {
+                if self.folyncOverlayBaseline == nil {
+                    self.folyncOverlayBaseline = preRouteBaseline
+                } else {
+                    self.checkForSignificantChanges(newRates: rates)
+                }
+                self.exchangeRates = rates
+                self.lastRefreshTime = asOf ?? now
+                self.lastRefreshSuccess = true
+                self.sourceStatus = status
+                self.clearFallbackUsage()
+            }
+            setRateRefreshInFlight(false)
+            await Logger.shared.info("💱 [CurrencyConverter] Using Folync USD-base rates (\(status.label))")
+        case .legacy:
+            await deactivateFolyncOverlay()
+            refreshLegacyRates()
+        case .unavailable:
+            await MainActor.run {
+                if self.folyncOverlayBaseline == nil {
+                    self.folyncOverlayBaseline = preRouteBaseline
+                }
+                self.exchangeRates = [:]
+                self.lastRefreshSuccess = false
+                self.sourceStatus = .unavailable
+            }
+            setRateRefreshInFlight(false)
+            await Logger.shared.warning(
+                "💱 [CurrencyConverter] Folync FX is unavailable and legacy fallback is disabled"
+            )
+        }
+    }
+
+    @MainActor
+    func deactivateFolyncOverlay() {
+        guard let baseline = folyncOverlayBaseline else {
+            sourceStatus = .legacy
+            return
+        }
+        exchangeRates = baseline.rates
+        lastRefreshTime = baseline.refreshTime
+        lastRefreshSuccess = baseline.success
+        sourceStatus = .legacy
+        folyncOverlayBaseline = nil
+    }
+
+    /// Ends a legacy refresh attempt that produced no rates. The attempt is recorded as
+    /// completed even though it failed, so a fresh install that has never been online
+    /// (`lastRefreshTime` still `.distantPast`) can warn that values use hard-coded rates.
+    @MainActor
+    func finishFailedLegacyRefresh() {
+        _ = activateLatestHistoricalRatesIfAvailable()
+        lastRefreshSuccess = false
+        sourceStatus = .legacy
+        setRateRefreshInFlight(false)
+        if exchangeRates.isEmpty {
+            noteFallbackUsage("initial exchange-rate refresh failed")
+        }
+        scheduleFailedRefreshRetry()
+    }
+
+    @MainActor
+    private func scheduleFailedRefreshRetry() {
+        // Only converters that refresh on their own (the app's) retry; tests
+        // and previews that never start the hourly timer stay inert.
+        guard periodicRefreshTimer != nil else { return }
+        failedRefreshRetryTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.failedRefreshRetryDelay, repeats: false) { [weak self] _ in
+            self?.failedRefreshRetryTimer = nil
+            self?.refreshRates()
+        }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        failedRefreshRetryTimer = timer
+    }
+
+    @MainActor
+    func finishSuccessfulLegacyRefresh(rates: [String: Double]) {
+        failedRefreshRetryTimer?.invalidate()
+        failedRefreshRetryTimer = nil
+        checkForSignificantChanges(newRates: rates)
+        exchangeRates = rates
+        lastRefreshTime = Date()
+        lastRefreshSuccess = true
+        sourceStatus = .legacy
+        setRateRefreshInFlight(false)
+        clearFallbackUsage()
+        addToHistory(rates: rates)
+    }
+
+    private func refreshLegacyRates() {
+        do {
+            try providerPolicy.authorize(.directFX)
+        } catch {
+            Task { await Logger.shared.warning("💱 [CurrencyConverter] Direct FX request blocked: \(error.localizedDescription)") }
+            Task { @MainActor [weak self] in
+                self?.lastRefreshSuccess = false
+                self?.sourceStatus = .unavailable
+            }
+            setRateRefreshInFlight(false)
+            return
+        }
+        legacyRefreshObserver?()
+        guard let url = URL(string: baseURL) else {
+            setRateRefreshInFlight(false)
+            return
+        }
+        Task { await Logger.shared.info("💱 [CurrencyConverter] Fetching exchange rates from legacy API...") }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
             guard let data = data,
                   let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
-                DispatchQueue.main.async {
-                    self?.lastRefreshSuccess = false
+                Task { @MainActor [weak self] in
+                    self?.finishFailedLegacyRefresh()
                 }
                 return
             }
 
-            DispatchQueue.main.async {
-                // Check for significant changes before updating
-                self?.checkForSignificantChanges(newRates: response.rates)
-                
-                self?.exchangeRates = response.rates
-                self?.lastRefreshSuccess = true
-                
-                // Save to history
-                self?.addToHistory(rates: response.rates)
-                
+            Task { @MainActor [weak self] in
+                self?.finishSuccessfulLegacyRefresh(rates: response.rates)
+
                 Task {
                     await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
                     await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
@@ -136,23 +384,42 @@ public class CurrencyConverter: ObservableObject {
         rateHistory = rateHistory.filter { $0.timestamp >= cutoffDate }
         
         saveRateHistory()
-        Task { await Logger.shared.debug("💱 [CurrencyConverter] Saved rate history. Total snapshots: \(rateHistory.count)") }
+        let snapshotCount = rateHistory.count
+        Task { await Logger.shared.debug("💱 [CurrencyConverter] Saved rate history. Total snapshots: \(snapshotCount)") }
     }
     
     private func saveRateHistory() {
-        let defaults = UserDefaults.standard
         if let encoded = try? JSONEncoder().encode(rateHistory) {
             defaults.set(encoded, forKey: "currencyRateHistory")
         }
     }
     
     private func loadRateHistory() {
-        let defaults = UserDefaults.standard
         if let data = defaults.data(forKey: "currencyRateHistory"),
            let history = try? JSONDecoder().decode([CurrencyRateSnapshot].self, from: data) {
             rateHistory = history
-            Task { await Logger.shared.info("💱 [CurrencyConverter] Loaded \(history.count) historical rate snapshots") }
+            let snapshotCount = history.count
+            Task { await Logger.shared.info("💱 [CurrencyConverter] Loaded \(snapshotCount) historical rate snapshots") }
         }
+    }
+
+    @discardableResult
+    func activateLatestHistoricalRatesIfAvailable() -> Bool {
+        guard exchangeRates.isEmpty || lastRefreshTime == Date.distantPast else {
+            return false
+        }
+        guard let latest = rateHistory
+            .filter({ $0.baseCurrency.uppercased() == "USD" && !$0.rates.isEmpty })
+            .max(by: { $0.timestamp < $1.timestamp }) else {
+            return false
+        }
+
+        exchangeRates = latest.rates
+        lastRefreshTime = latest.timestamp
+        Task {
+            await Logger.shared.warning("💱 [CurrencyConverter] Using latest saved historical exchange rates after live fetch failed.")
+        }
+        return true
     }
     
     // Get historical rate for a specific currency pair
@@ -216,77 +483,223 @@ public class CurrencyConverter: ObservableObject {
         Task {
             await Logger.shared.info("💱🔔 [CurrencyConverter] Significant change detected: USD/\(currency) \(direction) by \(changePercentFormatted)")
             
-            // Send macOS notification
-            let notification = NSUserNotification()
-            notification.title = "Significant Exchange Rate Change"
-            notification.informativeText = "USD/\(currency) has \(direction) by \(changePercentFormatted) (\(String(format: "%.4f", oldRate)) → \(String(format: "%.4f", newRate)))"
-            notification.soundName = NSUserNotificationDefaultSoundName
-            
-            NSUserNotificationCenter.default.deliver(notification)
+            await StockbarNotificationPoster.post(
+                title: "Significant Exchange Rate Change",
+                body: "USD/\(currency) has \(direction) by \(changePercentFormatted) (\(String(format: "%.4f", oldRate)) → \(String(format: "%.4f", newRate)))"
+            )
         }
     }
 
     public func convert(amount: Double, from: String, to: String) -> Double {
+        // Minor units (pence GBp/GBX, South African cents ZAc, Israeli agorot ILA)
+        // convert through their major currency at 1/100.
+        let sourceMinor = Self.minorUnitMajorCurrency(from)
+        let targetMinor = Self.minorUnitMajorCurrency(to)
+        if let sourceMinor, sourceMinor == targetMinor {
+            return amount
+        }
+        if let sourceMinor {
+            return convert(amount: amount / 100, from: sourceMinor, to: to)
+        }
+        if let targetMinor {
+            return convert(amount: amount, from: from, to: targetMinor) * 100
+        }
+        let sourceCurrency = Self.normalizedCurrencyCode(from)
+        let targetCurrency = Self.normalizedCurrencyCode(to)
+        let (exchangeRates, sourceStatus) = rateState()
+
         // If same currency, return original amount
-        if from == to {
+        if sourceCurrency == targetCurrency {
             return amount
         }
         
-        Task { await Logger.shared.debug("💱 [CurrencyConverter] Converting \(amount) from \(from) to \(to)") }
+        logDebug("Converting \(amount) from \(sourceCurrency) to \(targetCurrency)")
         
         // Handle USD as base currency (API uses USD as base)
-        if from == "USD" {
-            guard let targetRate = exchangeRates[to] else {
+        if sourceCurrency == "USD" {
+            guard let targetRate = exchangeRates[targetCurrency] else {
+                guard sourceStatus == .legacy else {
+                    logDebug("Folync rate missing for \(targetCurrency); refusing hard-coded source mixing")
+                    return .nan
+                }
                 // Fallback rates if API fails
-                let fallbackRate = getFallbackRate(to: to)
+                guard let fallbackRate = getFallbackRate(to: targetCurrency) else {
+                    return unconvertedAmount(amount, detail: targetCurrency)
+                }
+                noteFallbackUsage("USD→\(targetCurrency)")
                 let result = amount * fallbackRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(to)") }
+                logDebug("Using FALLBACK rate: \(amount) USD × \(fallbackRate) = \(result) \(targetCurrency)")
                 return result
             }
             let result = amount * targetRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) USD × \(targetRate) = \(result) \(to)") }
+            logDebug("Using API rate: \(amount) USD × \(targetRate) = \(result) \(targetCurrency)")
             return result
-        } else if to == "USD" {
-            guard let sourceRate = exchangeRates[from] else {
+        } else if targetCurrency == "USD" {
+            guard let sourceRate = exchangeRates[sourceCurrency] else {
+                guard sourceStatus == .legacy else {
+                    logDebug("Folync rate missing for \(sourceCurrency); refusing hard-coded source mixing")
+                    return .nan
+                }
                 // Fallback rates if API fails
-                let fallbackRate = getFallbackRate(to: from)
+                guard let fallbackRate = getFallbackRate(to: sourceCurrency), fallbackRate != 0 else {
+                    return unconvertedAmount(amount, detail: sourceCurrency)
+                }
+                noteFallbackUsage("\(sourceCurrency)→USD")
                 let result = amount / fallbackRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rate: \(amount) \(from) ÷ \(fallbackRate) = \(result) USD") }
+                logDebug("Using FALLBACK rate: \(amount) \(sourceCurrency) ÷ \(fallbackRate) = \(result) USD")
                 return result
             }
             let result = amount / sourceRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rate: \(amount) \(from) ÷ \(sourceRate) = \(result) USD") }
+            logDebug("Using API rate: \(amount) \(sourceCurrency) ÷ \(sourceRate) = \(result) USD")
             return result
         } else {
             // Convert from source to USD, then USD to target
-            guard let sourceRate = exchangeRates[from],
-                  let targetRate = exchangeRates[to] else {
+            guard let sourceRate = exchangeRates[sourceCurrency],
+                  let targetRate = exchangeRates[targetCurrency] else {
+                guard sourceStatus == .legacy else {
+                    logDebug("Folync cross-rate is incomplete; refusing hard-coded source mixing")
+                    return .nan
+                }
                 // Fallback conversion
-                let fallbackFromRate = getFallbackRate(to: from)
-                let fallbackToRate = getFallbackRate(to: to)
+                guard let fallbackFromRate = getFallbackRate(to: sourceCurrency),
+                      let fallbackToRate = getFallbackRate(to: targetCurrency),
+                      fallbackFromRate != 0 else {
+                    return unconvertedAmount(amount, detail: "\(sourceCurrency)→\(targetCurrency)")
+                }
+                noteFallbackUsage("\(sourceCurrency)→\(targetCurrency)")
                 let usdAmount = amount / fallbackFromRate
                 let result = usdAmount * fallbackToRate
-                Task { await Logger.shared.debug("💱 [CurrencyConverter] Using FALLBACK rates: \(amount) \(from) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(to)") }
+                logDebug("Using FALLBACK rates: \(amount) \(sourceCurrency) ÷ \(fallbackFromRate) × \(fallbackToRate) = \(result) \(targetCurrency)")
                 return result
             }
             let amountInUSD = amount / sourceRate
             let result = amountInUSD * targetRate
-                            Task { await Logger.shared.debug("💱 [CurrencyConverter] Using API rates: \(amount) \(from) ÷ \(sourceRate) × \(targetRate) = \(result) \(to)") }
+            logDebug("Using API rates: \(amount) \(sourceCurrency) ÷ \(sourceRate) × \(targetRate) = \(result) \(targetCurrency)")
             return result
         }
     }
-    
-    private func getFallbackRate(to currency: String) -> Double {
-        // Fallback exchange rates (current as of June 7, 2025) - these are USD to target currency rates
-        // For example: 1 USD = 0.7387 GBP means to convert USD to GBP we multiply by 0.7387
-        switch currency {
-        case "GBP": return 0.7387  // 1 USD = 0.7387 GBP (£1 = 1.3537668 USD)
-        case "EUR": return 0.85  // 1 USD = 0.85 EUR  
-        case "JPY": return 110.0 // 1 USD = 110 JPY
-        case "CAD": return 1.25  // 1 USD = 1.25 CAD
-        case "AUD": return 1.35  // 1 USD = 1.35 AUD
-        default: return 1.0
+
+    private func logDebug(_ message: String) {
+        guard Logger.isDebugLoggingEnabled else { return }
+        Task { await Logger.shared.debug("💱 [CurrencyConverter] \(message)") }
+    }
+
+    private static func normalizedCurrencyCode(_ currency: String) -> String {
+        currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    /// The major currency for a 1/100 minor-unit code, or nil.
+    static func minorUnitMajorCurrency(_ currency: String) -> String? {
+        if isPenceCurrency(currency) { return "GBP" }
+        switch currency.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "ZAc", "ZAC": return "ZAR"
+        case "ILA": return "ILS"
+        default: return nil
         }
+    }
+
+    static func isPenceCurrency(_ currency: String) -> Bool {
+        let trimmed = currency.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "GBp" || trimmed.uppercased() == "GBX"
+    }
+    
+    /// Last-resort approximate USD-base rates, used only when a live fetch has
+    /// failed **and** no saved rate history exists (i.e. a fresh install that has
+    /// never been online). These are order-of-magnitude anchors, not accurate
+    /// quotes — any conversion that uses them sets `isUsingFallbackRates`, and
+    /// the UI must show that the figure is approximate.
+    ///
+    /// Prefer `activateLatestHistoricalRatesIfAvailable()`, which replays real
+    /// previously-fetched rates, over these constants.
+    ///
+    /// Returns nil for unrecognised currencies: converting at an invented 1:1
+    /// rate silently produces a wrong portfolio value, which is worse than
+    /// refusing to display a number at all.
+    static let fallbackRateReferenceDate = "2026-07"
+
+    private func getFallbackRate(to currency: String) -> Double? {
+        switch currency {
+        case "USD": return 1.0
+        case "GBP": return 0.74   // approx. 1 USD = 0.74 GBP
+        case "EUR": return 0.86   // approx. 1 USD = 0.86 EUR
+        case "JPY": return 148.0  // approx. 1 USD = 148 JPY
+        case "CAD": return 1.37   // approx. 1 USD = 1.37 CAD
+        case "AUD": return 1.52   // approx. 1 USD = 1.52 AUD
+        default: return nil
+        }
+    }
+
+    private let fallbackNoticeLock = NSLock()
+    @ObservationIgnored private var hasNotedFallback = false
+    @ObservationIgnored private var rateRefreshInFlight = false
+    /// True once any refresh attempt has finished, whether or not it obtained rates.
+    /// Distinct from `lastRefreshTime`, which only moves on success.
+    @ObservationIgnored private var firstRefreshAttemptCompleted = false
+
+    private func setRateRefreshInFlight(_ inFlight: Bool) {
+        fallbackNoticeLock.lock()
+        rateRefreshInFlight = inFlight
+        if !inFlight { firstRefreshAttemptCompleted = true }
+        fallbackNoticeLock.unlock()
+    }
+
+    /// Records that a conversion could not use a live rate. `convert` runs on
+    /// every render, so this latches on the first occurrence rather than
+    /// dispatching a task per call.
+    private func noteFallbackUsage(_ detail: String) {
+        // Conversions run during startup before the first rate fetch has
+        // finished. That is an unfinished state, not a degraded one, so don't
+        // flash the "rates unavailable" banner while a refresh is still in
+        // flight or has not been attempted at all.
+        //
+        // A failed first attempt leaves `lastRefreshTime` at `.distantPast`, so
+        // "no success yet" alone must not suppress the warning once an attempt
+        // has finished.
+        fallbackNoticeLock.lock()
+        let attempted = firstRefreshAttemptCompleted
+        guard lastRefreshTime != Date.distantPast || attempted else {
+            fallbackNoticeLock.unlock()
+            return
+        }
+        let inFlight = rateRefreshInFlight
+        let alreadyNoted = hasNotedFallback
+        if !inFlight { hasNotedFallback = true }
+        fallbackNoticeLock.unlock()
+        guard !inFlight, !alreadyNoted else { return }
+
+        Task { @MainActor [weak self] in
+            self?.isUsingFallbackRates = true
+            await Logger.shared.warning(
+                "💱 [CurrencyConverter] Live exchange rates unavailable (\(detail)). " +
+                "Displayed values are estimates until a refresh succeeds."
+            )
+        }
+    }
+
+    /// Handles a currency Stockbar has no rate for at all (an unrecognised or
+    /// empty code). The amount passes through unchanged — returning NaN here
+    /// would poison every downstream portfolio total for what is really a
+    /// data-quality problem — but the fallback flag is raised so the UI shows
+    /// the value is not a converted figure.
+    private func unconvertedAmount(_ amount: Double, detail: String) -> Double {
+        logDebug("No rate available for \(detail); returning the amount unconverted")
+        noteFallbackUsage("unsupported currency \(detail)")
+        return amount
+    }
+
+    /// Clears the fallback flag once real rates are in hand again.
+    private func clearFallbackUsage() {
+        fallbackNoticeLock.lock()
+        hasNotedFallback = false
+        fallbackNoticeLock.unlock()
+
+        if isUsingFallbackRates {
+            isUsingFallbackRates = false
+        }
+    }
+
+    private func legacyFallbackRate(to currency: String) -> Double? {
+        sourceStatus == .legacy ? getFallbackRate(to: currency) : nil
     }
 }
 

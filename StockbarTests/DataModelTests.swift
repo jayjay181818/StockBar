@@ -1,24 +1,47 @@
 import XCTest
 @testable import Stockbar
 
+@MainActor
 class DataModelTests: XCTestCase {
     
     var dataModel: DataModel!
+    private var originalRefreshInterval: Any?
     
-    override func setUp() {
-        super.setUp()
-        dataModel = DataModel()
+    override func setUp() async throws {
+        try await super.setUp()
+        originalRefreshInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval")
+        dataModel = DataModel(
+            currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false
+        )
     }
     
-    override func tearDown() {
+    override func tearDown() async throws {
         dataModel = nil
-        super.tearDown()
+        if let originalRefreshInterval {
+            StockbarRuntimeStorage.userDefaults.set(originalRefreshInterval, forKey: "refreshInterval")
+        } else {
+            StockbarRuntimeStorage.userDefaults.removeObject(forKey: "refreshInterval")
+        }
+        try await super.tearDown()
     }
     
     func testDataModelInitialization() {
         XCTAssertNotNil(dataModel)
         XCTAssertTrue(dataModel.refreshInterval > 0, "Refresh interval should be positive")
-        XCTAssertTrue(dataModel.cacheInterval > 0, "Cache interval should be positive")
+        XCTAssertTrue(
+            dataModel.isInitialPortfolioSourceResolved,
+            "Non-runtime models should not leave menu-bar synchronization permanently gated"
+        )
+    }
+
+    func testSymbolStatusItemSyncWaitsForInitialPortfolioSourceResolution() {
+        XCTAssertFalse(
+            SymbolStatusItemSyncPolicy.shouldSync(initialPortfolioSourceResolved: false)
+        )
+        XCTAssertTrue(
+            SymbolStatusItemSyncPolicy.shouldSync(initialPortfolioSourceResolved: true)
+        )
     }
     
     func testRefreshCadenceCalculation() {
@@ -37,33 +60,49 @@ class DataModelTests: XCTestCase {
         dataModel.refreshInterval = originalInterval
     }
     
-    func testCacheIntervalPersistence() {
-        // Test that cache interval can be set and retrieved
-        let testInterval: TimeInterval = 600 // 10 minutes
-        
-        dataModel.cacheInterval = testInterval
-        XCTAssertEqual(dataModel.cacheInterval, testInterval)
-    }
-    
     func testStockDataHandling() {
         // Test basic stock data structures
         let trades = dataModel.realTimeTrades
-        XCTAssertTrue(trades.isEmpty || trades.count >= 0)
+        XCTAssertGreaterThanOrEqual(trades.count, 0)
     }
     
     func testUserDefaultsPersistence() {
         // Test that intervals are persisted to UserDefaults
         let testRefreshInterval: TimeInterval = 420 // 7 minutes
-        let testCacheInterval: TimeInterval = 720 // 12 minutes
         
         dataModel.refreshInterval = testRefreshInterval
-        dataModel.cacheInterval = testCacheInterval
         
         // Check if values were saved to UserDefaults
-        let savedRefresh = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval
-        let savedCache = UserDefaults.standard.object(forKey: "cacheInterval") as? TimeInterval
+        let savedRefresh = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval
         
         XCTAssertEqual(savedRefresh, testRefreshInterval)
-        XCTAssertEqual(savedCache, testCacheInterval)
     }
-} 
+
+
+    private func makeRealTimeTrade(_ symbol: String, units: String = "1", showInMenuBar: Bool = true) -> RealTimeTrade {
+        var trade = Trade(name: symbol, position: Position(unitSize: units, positionAvgCost: "10"))
+        trade.showInMenuBar = showInMenuBar
+        return RealTimeTrade(trade: trade, realTimeInfo: TradingInfo())
+    }
+
+    func testDuplicateSymbolRowsAreFlaggedCaseInsensitively() {
+        let first = makeRealTimeTrade("AAPL")
+        let duplicate = makeRealTimeTrade(" aapl ")
+        let other = makeRealTimeTrade("MSFT")
+        dataModel.realTimeTrades = [first, duplicate, other]
+
+        XCTAssertTrue(dataModel.hasDuplicateSymbol(first))
+        XCTAssertTrue(dataModel.hasDuplicateSymbol(duplicate))
+        XCTAssertFalse(dataModel.hasDuplicateSymbol(other))
+    }
+
+    func testBlankAndHiddenRowsDoNotCreateMenuBarItems() {
+        let blank = makeRealTimeTrade("   ")
+        let hidden = makeRealTimeTrade("MSFT", showInMenuBar: false)
+        let visible = makeRealTimeTrade("AAPL")
+
+        let menuBarTrades = StockMenuBarController.menuBarTrades(from: [blank, hidden, visible])
+
+        XCTAssertEqual(menuBarTrades.map(\.trade.name), ["AAPL"])
+    }
+}

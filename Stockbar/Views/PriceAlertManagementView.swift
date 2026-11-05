@@ -8,61 +8,62 @@
 import SwiftUI
 
 struct PriceAlertManagementView: View {
-    @ObservedObject private var alertService = PriceAlertService.shared
-    @ObservedObject var dataModel: DataModel
+    private let alertService = PriceAlertService.shared
+    let dataModel: DataModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingAddAlert = false
-    @State private var selectedSymbol: String = ""
-    @State private var selectedCondition: AlertCondition = .above
-    @State private var thresholdValue: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Text("Price Alerts")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Spacer()
-                Button(action: { showingAddAlert = true }) {
-                    Label("Add Alert", systemImage: "plus.circle")
-                        .font(.caption)
+        VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
+            StockbarPageHeader(
+                "Alerts",
+                subtitle: "Get a notification when a price crosses a threshold or moves by a percentage."
+            ) {
+                Button { showingAddAlert = true } label: {
+                    Label("Add Alert", systemImage: "plus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(alertableSymbols.isEmpty)
+                .help(alertableSymbols.isEmpty ? "Add a holding first" : "Create a price alert")
             }
 
             if alertService.alerts.isEmpty {
-                // Empty state
-                VStack(spacing: 8) {
-                    Image(systemName: "bell.slash")
-                        .font(.title)
-                        .foregroundColor(.secondary)
-                    Text("No price alerts configured")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("Add alerts to get notified when prices reach your targets")
-                        .font(.caption2)
-                        .foregroundColor(Color(nsColor: .tertiaryLabelColor))
-                        .multilineTextAlignment(.center)
+                ContentUnavailableView {
+                    Label("No alerts yet", systemImage: "bell.badge")
+                } description: {
+                    Text(alertableSymbols.isEmpty
+                         ? "Add a holding, then create an alert for it."
+                         : "Create an alert to be notified when a price reaches your target.")
+                } actions: {
+                    if !alertableSymbols.isEmpty {
+                        Button("Add Alert") { showingAddAlert = true }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity, minHeight: 260)
+                .stockbarCard()
             } else {
-                // Alert list
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(alertService.alerts) { alert in
-                            PriceAlertRow(alert: alert, dataModel: dataModel)
+                VStack(spacing: 0) {
+                    ForEach(Array(alertService.alerts.enumerated()), id: \.element.id) { index, alert in
+                        PriceAlertRow(alert: alert, dataModel: dataModel)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        if index < alertService.alerts.count - 1 {
+                            Divider().padding(.leading, 52)
                         }
                     }
                 }
-                .frame(maxHeight: 200)
+                .stockbarCard(padding: 6)
+                .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion),
+                           value: alertService.alerts.map(\.id))
             }
 
-            Text("Alerts notify you when price thresholds are crossed. Each alert can trigger once every 15 minutes.")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Label("Alerts are delivered as macOS notifications. Each alert triggers at most once every 15 minutes.",
+                  systemImage: "info.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
+        .stockbarPage()
         .sheet(isPresented: $showingAddAlert) {
             AddPriceAlertView(
                 dataModel: dataModel,
@@ -70,12 +71,20 @@ struct PriceAlertManagementView: View {
             )
         }
     }
+
+    private var alertableSymbols: [String] {
+        dataModel.realTimeTrades
+            .map(\.trade.name)
+            .filter { !$0.isEmpty && !SymbolMetadata.isBenchmarkSymbol($0) }
+    }
 }
 
 struct PriceAlertRow: View {
     let alert: PriceAlert
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject private var alertService = PriceAlertService.shared
+    let dataModel: DataModel
+    private let alertService = PriceAlertService.shared
+    @State private var isHovered = false
+    @State private var confirmingDelete = false
 
     private var currency: String {
         if let symbol = alert.symbol {
@@ -86,146 +95,182 @@ struct PriceAlertRow: View {
         }
     }
 
-    var body: some View {
-        HStack(spacing: 8) {
-            // Status indicator
-            Image(systemName: alert.isEnabled ? "bell.fill" : "bell.slash")
-                .font(.caption)
-                .foregroundColor(alert.isEnabled ? .blue : .secondary)
-                .frame(width: 20)
+    private var currentPriceText: String? {
+        guard let symbol = alert.symbol,
+              let trade = dataModel.realTimeTrades.first(where: { $0.trade.name == symbol }) else { return nil }
+        let price = trade.realTimeInfo.getCurrentDisplayPrice()
+        guard price.isFinite, price > 0 else { return nil }
+        return "Now \(HoldingsCurrencyFormatter.amount(price, currency: currency))"
+    }
 
-            // Alert details
+    private var conditionIcon: String {
+        switch alert.condition {
+        case .above: "arrow.up.right.circle.fill"
+        case .below: "arrow.down.right.circle.fill"
+        case .percentChange: "percent"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: conditionIcon)
+                .font(.title2)
+                .foregroundStyle(alert.isEnabled ? Color.accentColor : Color.secondary)
+                .frame(width: 30)
+
             VStack(alignment: .leading, spacing: 2) {
-                Text(alert.symbol ?? "Portfolio")
-                    .font(.caption)
-                    .fontWeight(.medium)
+                HStack(spacing: 6) {
+                    Text(alert.symbol ?? "Portfolio")
+                        .fontWeight(.semibold)
+                    if !alert.isEnabled {
+                        Text("Paused")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(StockbarPalette.hoverFill, in: Capsule())
+                    }
+                }
                 Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency))")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            // Last triggered
-            if let lastTriggered = alert.lastTriggered {
-                Text(timeAgo(from: lastTriggered))
-                    .font(.caption2)
-                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+            VStack(alignment: .trailing, spacing: 2) {
+                if let currentPriceText {
+                    Text(currentPriceText)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                if let lastTriggered = alert.lastTriggered {
+                    Text("Triggered \(lastTriggered.formatted(.relative(presentation: .named)))")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
-            // Actions
             HStack(spacing: 4) {
-                Button(action: {
+                Button {
                     alertService.toggleAlert(id: alert.id)
-                }) {
+                } label: {
                     Image(systemName: alert.isEnabled ? "pause.circle" : "play.circle")
-                        .font(.caption)
+                        .font(.title3)
                 }
-                .buttonStyle(.borderless)
-                .help(alert.isEnabled ? "Disable alert" : "Enable alert")
+                .help(alert.isEnabled ? "Pause alert" : "Resume alert")
+                .accessibilityLabel(alert.isEnabled ? "Pause alert for \(alert.symbol ?? "portfolio")" : "Resume alert for \(alert.symbol ?? "portfolio")")
 
-                Button(action: {
-                    alertService.removeAlert(id: alert.id)
-                }) {
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
                     Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundColor(.red)
+                        .font(.title3)
                 }
-                .buttonStyle(.borderless)
                 .help("Delete alert")
+                .accessibilityLabel("Delete alert for \(alert.symbol ?? "portfolio")")
             }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
         }
-        .padding(8)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(6)
-    }
-
-    private func timeAgo(from date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
-        if interval < 60 {
-            return "Just now"
-        } else if interval < 3600 {
-            let minutes = Int(interval / 60)
-            return "\(minutes)m ago"
-        } else if interval < 86400 {
-            let hours = Int(interval / 3600)
-            return "\(hours)h ago"
-        } else {
-            let days = Int(interval / 86400)
-            return "\(days)d ago"
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(isHovered ? StockbarPalette.hoverFill : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onHover { hovering in
+            withAnimation(StockbarMotion.quick) { isHovered = hovering }
+        }
+        .contextMenu {
+            Button(alert.isEnabled ? "Pause Alert" : "Resume Alert") { alertService.toggleAlert(id: alert.id) }
+            Button("Delete Alert", role: .destructive) { confirmingDelete = true }
+        }
+        .confirmationDialog(
+            "Delete the alert for \(alert.symbol ?? "portfolio")?",
+            isPresented: $confirmingDelete
+        ) {
+            Button("Delete", role: .destructive) { alertService.removeAlert(id: alert.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency)). This cannot be undone.")
         }
     }
 }
 
 struct AddPriceAlertView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     @Binding var isPresented: Bool
-    @ObservedObject private var alertService = PriceAlertService.shared
+    private let alertService = PriceAlertService.shared
 
     @State private var selectedSymbol: String = ""
     @State private var selectedCondition: AlertCondition = .above
     @State private var thresholdValue: String = ""
-    @State private var showError: Bool = false
-    @State private var errorMessage: String = ""
+    @State private var errorMessage: String?
+    /// Set after warning that the condition is already met; a second Add creates it.
+    @State private var confirmedAlreadyMet = false
 
     private var availableSymbols: [String] {
-        dataModel.realTimeTrades.map { $0.trade.name }.sorted()
+        dataModel.realTimeTrades
+            .map { $0.trade.name }
+            .filter { !$0.isEmpty && !SymbolMetadata.isBenchmarkSymbol($0) }
+            .sorted()
+    }
+
+    private var currentPriceText: String? {
+        guard let trade = dataModel.realTimeTrades.first(where: { $0.trade.name == selectedSymbol }) else { return nil }
+        let price = trade.realTimeInfo.getCurrentDisplayPrice()
+        guard price.isFinite, price > 0 else { return nil }
+        return HoldingsCurrencyFormatter.amount(price, currency: trade.realTimeInfo.currency ?? "")
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Add Price Alert")
-                .font(.headline)
-                .padding(.top)
-
-            // Symbol picker
-            HStack {
-                Text("Symbol:")
-                    .frame(width: 80, alignment: .leading)
-                Picker("", selection: $selectedSymbol) {
-                    Text("Select...").tag("")
-                    ForEach(availableSymbols, id: \.self) { symbol in
-                        Text(symbol).tag(symbol)
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Picker("Symbol", selection: $selectedSymbol) {
+                        if selectedSymbol.isEmpty {
+                            Text("Select…").tag("")
+                        }
+                        ForEach(availableSymbols, id: \.self) { symbol in
+                            Text(symbol).tag(symbol)
+                        }
+                    }
+                    if let currentPriceText {
+                        LabeledContent("Current price", value: currentPriceText)
+                            .monospacedDigit()
+                    }
+                    Picker("Condition", selection: $selectedCondition) {
+                        ForEach(AlertCondition.allCases, id: \.self) { condition in
+                            Text(condition.description).tag(condition)
+                        }
+                    }
+                    LabeledContent("Threshold") {
+                        HStack(spacing: 6) {
+                            TextField("Threshold", text: $thresholdValue, prompt: Text(thresholdPlaceholder))
+                                .labelsHidden()
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 120)
+                                .onSubmit(addAlert)
+                            Text(thresholdUnit)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("New Price Alert")
+                } footer: {
+                    if let errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
                     }
                 }
-                .pickerStyle(.menu)
-                .frame(width: 150)
             }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: thresholdValue) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
+            .onChange(of: selectedCondition) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
+            .onChange(of: selectedSymbol) { _, _ in errorMessage = nil; confirmedAlreadyMet = false }
 
-            // Condition picker
-            HStack {
-                Text("Condition:")
-                    .frame(width: 80, alignment: .leading)
-                Picker("", selection: $selectedCondition) {
-                    ForEach(AlertCondition.allCases, id: \.self) { condition in
-                        Text(condition.description).tag(condition)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 150)
-            }
-
-            // Threshold input
-            HStack {
-                Text("Threshold:")
-                    .frame(width: 80, alignment: .leading)
-                TextField(thresholdPlaceholder, text: $thresholdValue)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
-                Text(thresholdUnit)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if showError {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // Buttons
             HStack(spacing: 12) {
+                Spacer()
                 Button("Cancel") {
                     isPresented = false
                 }
@@ -234,13 +279,13 @@ struct AddPriceAlertView: View {
                 Button("Add Alert") {
                     addAlert()
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedSymbol.isEmpty || thresholdValue.isEmpty)
             }
-            .padding(.bottom)
+            .padding([.horizontal, .bottom], 20)
         }
-        .padding()
-        .frame(width: 350)
+        .frame(width: 420)
         .onAppear {
             if !availableSymbols.isEmpty && selectedSymbol.isEmpty {
                 selectedSymbol = availableSymbols[0]
@@ -268,22 +313,37 @@ struct AddPriceAlertView: View {
     }
 
     private func addAlert() {
-        guard let threshold = Double(thresholdValue) else {
-            showError = true
-            errorMessage = "Please enter a valid number"
-            return
-        }
-
-        guard threshold > 0 else {
-            showError = true
-            errorMessage = "Threshold must be positive"
+        guard !selectedSymbol.isEmpty else { return }
+        // Accept the user's locale decimal separator as well as a plain ".".
+        guard let threshold = MenuPopoverFormatter.parseUnits(thresholdValue) else {
+            errorMessage = "Enter a number greater than zero."
             return
         }
 
         if selectedCondition == .percentChange && threshold > 100 {
-            showError = true
-            errorMessage = "Percentage must be between 0 and 100"
+            errorMessage = "Enter a percentage between 0 and 100."
             return
+        }
+
+        if alertService.alerts.contains(where: {
+            $0.symbol == selectedSymbol && $0.condition == selectedCondition && abs($0.threshold - threshold) < 1e-9
+        }) {
+            errorMessage = "An identical alert already exists for \(selectedSymbol)."
+            return
+        }
+
+        // Above/below alerts fire when the price crosses the threshold, so one
+        // already on the far side would stay silent until the price comes back.
+        let currentPrice = dataModel.realTimeTrades.first(where: { $0.trade.name == selectedSymbol })?
+            .realTimeInfo.getCurrentDisplayPrice()
+        if let currentPrice, currentPrice.isFinite, currentPrice > 0 {
+            if selectedCondition == .above && currentPrice >= threshold {
+                errorMessage = "The price is already above this level, so the alert only fires after it dips and rises through it again. Press Add again to create it anyway."
+                guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
+            } else if selectedCondition == .below && currentPrice <= threshold {
+                errorMessage = "The price is already below this level, so the alert only fires after it recovers and falls through it again. Press Add again to create it anyway."
+                guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
+            }
         }
 
         let alert = PriceAlert(

@@ -59,8 +59,22 @@ struct ValidationResult {
     }
 }
 
+struct SanitizedTradeInput {
+    let symbol: String
+    let units: Double
+    let cost: Double
+    let currency: String
+}
+
+struct TradeValidationInput {
+    let symbol: String
+    let units: String
+    let cost: String
+    let currency: String
+}
+
 // MARK: - Data Validation Service
-class DataValidationService {
+final class DataValidationService: Sendable {
     static let shared = DataValidationService()
 
     private let supportedCurrencies = Set(["USD", "GBP", "EUR", "JPY", "CAD", "AUD"])
@@ -109,17 +123,21 @@ class DataValidationService {
             return .failure([.invalidPrice(price)])
         }
 
-        // Check for reasonable upper bound (e.g., $1 million per share)
-        guard price <= 1_000_000 else {
-            return .failure([.outOfRange("price", min: 0, max: 1_000_000)])
+        // Only reject garbage: real quotes pass 1,000,000 in some currencies
+        // (for example won-quoted shares, or Berkshire A in pence).
+        guard price <= Self.maximumPlausiblePrice else {
+            return .failure([.outOfRange("price", min: 0, max: Self.maximumPlausiblePrice)])
         }
 
         return .success(price)
     }
 
+    /// Upper bound for a per-share price in any currency.
+    nonisolated static let maximumPlausiblePrice = 1_000_000_000.0
+
     /// Validates and sanitizes price data, returning cleaned value or nil
     func sanitizePrice(_ price: Double) -> Double? {
-        guard price.isFinite && price > 0 && price <= 1_000_000 else {
+        guard price.isFinite && price > 0 && price <= Self.maximumPlausiblePrice else {
             return nil
         }
         return price
@@ -238,11 +256,16 @@ class DataValidationService {
         }
 
         if errors.isEmpty {
-            return .success((
-                symbol: symbolResult.sanitizedValue as! String,
+            guard let sanitizedSymbol = symbolResult.sanitizedValue as? String,
+                  let sanitizedCurrency = currencyResult.sanitizedValue as? String else {
+                return .failure([.invalidFormat("trade")])
+            }
+
+            return .success(SanitizedTradeInput(
+                symbol: sanitizedSymbol,
                 units: unitsValue,
                 cost: costValue,
-                currency: currencyResult.sanitizedValue as! String
+                currency: sanitizedCurrency
             ))
         } else {
             return .failure(errors)
@@ -295,7 +318,7 @@ class DataValidationService {
     // MARK: - Batch Validation
 
     /// Validates multiple trades at once
-    func validateTrades(_ trades: [(symbol: String, units: String, cost: String, currency: String)]) -> [ValidationResult] {
+    func validateTrades(_ trades: [TradeValidationInput]) -> [ValidationResult] {
         return trades.map { trade in
             validateTrade(symbol: trade.symbol, units: trade.units, cost: trade.cost, currency: trade.currency)
         }

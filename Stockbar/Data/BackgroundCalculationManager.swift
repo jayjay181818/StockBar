@@ -1,27 +1,29 @@
-import Foundation
 import Combine
+import Foundation
+import Observation
 
 /// Manages background portfolio calculation progress and state
 @MainActor
-class BackgroundCalculationManager: ObservableObject {
+@Observable
+class BackgroundCalculationManager {
     static let shared = BackgroundCalculationManager()
     
     // MARK: - Published Properties
     
-    @Published var calculationProgress: Double = 0.0
-    @Published var isCalculating: Bool = false
-    @Published var calculationStatus: String = ""
-    @Published var estimatedTimeRemaining: TimeInterval = 0
-    @Published var lastError: String?
-    @Published var memoryUsage: String = ""
-    @Published var dataPointsCount: Int = 0
+    var calculationProgress: Double = 0.0
+    var isCalculating: Bool = false
+    var calculationStatus: String = ""
+    var estimatedTimeRemaining: TimeInterval = 0
+    var lastError: String?
+    var memoryUsage: String = ""
+    var dataPointsCount: Int = 0
     
     // MARK: - Private Properties
     
-    private var currentTask: Task<Void, Never>?
-    private var startTime: Date?
-    private var totalOperations: Int = 0
-    private var completedOperations: Int = 0
+    @ObservationIgnored private var currentTask: Task<Void, Never>?
+    @ObservationIgnored private var startTime: Date?
+    @ObservationIgnored private var totalOperations: Int = 0
+    @ObservationIgnored private var completedOperations: Int = 0
     private let logger = Logger.shared
     
     private init() {}

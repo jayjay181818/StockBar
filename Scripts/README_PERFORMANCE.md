@@ -8,7 +8,7 @@
 
 2. **Run Performance Test**
    ```bash
-   cd "/Users/josh/Downloads/Stockbar Claude/Stockbar/Scripts"
+   cd Scripts  # from the repository root
    ./measure_performance.sh
    ```
 
@@ -254,5 +254,5 @@ Before each release:
 ## Contact
 
 For performance issues or questions:
-- Check logs: `~/Library/Application Support/com.fhl43211.Stockbar/stockbar.log`
+- Check logs: `~/Library/Application Support/com.stockbar/stockbar.log`
 - Review Debug tab in preferences for real-time metrics

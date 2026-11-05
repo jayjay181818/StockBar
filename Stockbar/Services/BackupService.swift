@@ -6,8 +6,8 @@
 //  Automatic portfolio backup and restore functionality
 //
 
-import Foundation
 import Cocoa
+import Foundation
 
 /// Service for managing automatic portfolio backups
 @MainActor
@@ -18,17 +18,19 @@ class BackupService {
     private let backupDirectoryName = "Backups"
     private let backupFilePrefix = "portfolio_backup_"
     private let backupFileExtension = "json"
+    /// The newest backups are always kept, whatever their age.
+    private let minimumBackupsKept = 5
 
     /// Default retention period in days
     var retentionDays: Int {
-        get { UserDefaults.standard.integer(forKey: "backupRetentionDays") == 0 ? 30 : UserDefaults.standard.integer(forKey: "backupRetentionDays") }
-        set { UserDefaults.standard.set(newValue, forKey: "backupRetentionDays") }
+        get { StockbarRuntimeStorage.userDefaults.integer(forKey: "backupRetentionDays") == 0 ? 30 : StockbarRuntimeStorage.userDefaults.integer(forKey: "backupRetentionDays") }
+        set { StockbarRuntimeStorage.userDefaults.set(newValue, forKey: "backupRetentionDays") }
     }
 
     /// Last successful backup date
     var lastBackupDate: Date? {
-        get { UserDefaults.standard.object(forKey: "lastBackupDate") as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: "lastBackupDate") }
+        get { StockbarRuntimeStorage.userDefaults.object(forKey: "lastBackupDate") as? Date }
+        set { StockbarRuntimeStorage.userDefaults.set(newValue, forKey: "lastBackupDate") }
     }
 
     private let logger = Logger.shared
@@ -40,8 +42,7 @@ class BackupService {
 
     /// Returns the backup directory URL, creating it if needed
     func getBackupDirectory() throws -> URL {
-        let appSupport = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let stockbarDir = appSupport.appendingPathComponent("Stockbar")
+        let stockbarDir = StockbarRuntimeStorage.stockbarApplicationSupportDirectory(fileManager: fileManager)
         let backupDir = stockbarDir.appendingPathComponent(backupDirectoryName)
 
         if !fileManager.fileExists(atPath: backupDir.path) {
@@ -81,8 +82,14 @@ class BackupService {
         return await performBackup(trades: trades, automatic: false)
     }
 
+    /// Safety backup taken just before a restore. Its retention cleanup never
+    /// deletes `keeping`, the backup about to be restored.
+    func performPreRestoreBackup(trades: [RealTimeTrade], keeping restoreURL: URL) async -> Bool {
+        return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
+    }
+
     /// Core backup implementation
-    private func performBackup(trades: [RealTimeTrade], automatic: Bool) async -> Bool {
+    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
         do {
             let backupDir = try getBackupDirectory()
 
@@ -99,15 +106,29 @@ class BackupService {
             let filename = "\(backupFilePrefix)\(dateString)\(timeString).\(backupFileExtension)"
             let backupURL = backupDir.appendingPathComponent(filename)
 
-            // Convert trades to exportable format
-            let exportData = trades.map { trade in
+            let nonEmptyTrades = trades.filter { !$0.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+            // Convert user portfolio trades to exportable format. Benchmarks are internal rows.
+            let exportData = nonEmptyTrades.filter { trade in
+                !SymbolMetadata.isBenchmarkSymbol(trade.trade.name)
+            }.map { trade in
                 PortfolioExportData(from: trade.trade)
+            }
+
+            guard !exportData.isEmpty else {
+                if nonEmptyTrades.isEmpty {
+                    await logger.debug("Backup skipped because no portfolio rows were present")
+                } else {
+                    await logger.warning("Backup skipped because only internal benchmark rows were present")
+                }
+                return false
             }
 
             // Encode to JSON
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
+            encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
 
             let jsonData = try encoder.encode(exportData)
             try jsonData.write(to: backupURL)
@@ -116,11 +137,10 @@ class BackupService {
             lastBackupDate = Date()
 
             // Cleanup old backups
-            try await cleanupOldBackups()
+            try await cleanupOldBackups(keeping: keptURL)
 
             await logger.info("Backup successful: \(filename)")
             return true
-
         } catch {
             await logger.error("Backup failed: \(error.localizedDescription)")
             return false
@@ -149,7 +169,6 @@ class BackupService {
                 .sorted { $0.date > $1.date } // Most recent first
 
             return backups
-
         } catch {
             Task { await logger.error("Failed to list backups: \(error.localizedDescription)") }
             return []
@@ -163,9 +182,16 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         let exportData = try decoder.decode([PortfolioExportData].self, from: data)
-        let trades = exportData.map { $0.toTrade() }
+        let trades = exportData
+            .map { $0.toTrade() }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !trades.isEmpty || exportData.isEmpty else {
+            throw BackupRestoreError.noRestorablePortfolioTrades
+        }
 
         await logger.info("Successfully restored \(trades.count) trades from backup")
         return trades
@@ -176,38 +202,53 @@ class BackupService {
         let data = try Data(contentsOf: backupURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
 
         return try decoder.decode([PortfolioExportData].self, from: data)
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.symbol) }
     }
 
     // MARK: - Cleanup
 
     /// Removes backups older than retention period
-    private func cleanupOldBackups() async throws {
+    private func cleanupOldBackups(keeping keptURL: URL? = nil) async throws {
         let backupDir = try getBackupDirectory()
         let contents = try fileManager.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)
 
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date())!
 
-        var deletedCount = 0
-        for fileURL in contents {
-            guard fileURL.pathExtension == backupFileExtension,
-                  fileURL.lastPathComponent.starts(with: backupFilePrefix) else {
-                continue
-            }
-
+        var dated: [(url: URL, created: Date)] = []
+        for fileURL in contents where fileURL.pathExtension == backupFileExtension
+            && fileURL.lastPathComponent.starts(with: backupFilePrefix) {
             let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-            if let creationDate = attributes[.creationDate] as? Date,
-               creationDate < cutoffDate {
-                try fileManager.removeItem(at: fileURL)
-                deletedCount += 1
-                await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
-            }
+            dated.append((fileURL, attributes[.creationDate] as? Date ?? .distantPast))
+        }
+
+        var deletedCount = 0
+        for fileURL in Self.backupsToDelete(dated, cutoff: cutoffDate, minimumKept: minimumBackupsKept, keeping: keptURL) {
+            try fileManager.removeItem(at: fileURL)
+            deletedCount += 1
+            await logger.debug("Deleted old backup: \(fileURL.lastPathComponent)")
         }
 
         if deletedCount > 0 {
             await logger.info("Cleaned up \(deletedCount) old backup(s)")
         }
+    }
+
+    /// Backups older than the cutoff, except the newest `minimumKept` (so a
+    /// long gap between launches never deletes every backup) and `keptURL`.
+    nonisolated static func backupsToDelete(
+        _ backups: [(url: URL, created: Date)],
+        cutoff: Date,
+        minimumKept: Int,
+        keeping keptURL: URL?
+    ) -> [URL] {
+        backups
+            .sorted { $0.created > $1.created }
+            .dropFirst(minimumKept)
+            .filter { $0.created < cutoff && $0.url.standardizedFileURL != keptURL?.standardizedFileURL }
+            .map(\.url)
     }
 
     /// Deletes a specific backup file
@@ -223,6 +264,17 @@ class BackupService {
             try deleteBackup(backupURL: backup.url)
         }
         Task { await logger.info("Deleted all \(backups.count) backup(s)")  }
+    }
+}
+
+enum BackupRestoreError: LocalizedError {
+    case noRestorablePortfolioTrades
+
+    var errorDescription: String? {
+        switch self {
+        case .noRestorablePortfolioTrades:
+            return "This backup only contains internal benchmark rows and cannot restore a portfolio."
+        }
     }
 }
 

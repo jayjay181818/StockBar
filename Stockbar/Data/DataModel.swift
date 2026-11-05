@@ -3,6 +3,8 @@
 
 import Combine
 import Foundation
+import Observation
+import Security
 
 extension String {
     func appendToFile(url: URL) throws {
@@ -18,26 +20,10 @@ extension String {
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
-/// Simple async lock used to serialize refresh operations so mutations
-/// to `realTimeTrades` always occur on the main actor in isolation.
-actor RefreshCoordinator {
-    private var isRefreshing = false
-
-    func withLock<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-        while isRefreshing {
-            await Task.yield()
-        }
-
-        isRefreshing = true
-        defer { isRefreshing = false }
-
-        return try await operation()
-    }
-}
-
 @MainActor
-class DataModel: ObservableObject {
-    static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
+@Observable
+class DataModel {
+    nonisolated static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
     // MARK: - Properties
 
@@ -49,49 +35,144 @@ class DataModel: ObservableObject {
     internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
     private let encoder = JSONEncoder()           // Keep as is
-    private var cancellables = Set<AnyCancellable>()// Keep as is
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()// Keep as is
+    private let tradeContentDidChange = PassthroughSubject<Void, Never>()
     internal var historicalDataManager: HistoricalDataManager { HistoricalDataManager.shared }
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
-    private let refreshCoordinator = RefreshCoordinator()
+    private let aliasIdentityMigrationService = AliasIdentityMigrationService()
+    @ObservationIgnored private var pendingPersistenceTask: Task<Void, Never>?
+    private let trading212SettingsStore = Trading212SettingsStore.shared
+    private let trading212CredentialStore = Trading212CredentialStore.shared
+    private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
+    private let trading212BrokerLinkStore = BrokerLinkStore.shared
+    private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
+    private let trading212BrokerOnlyImportPlanner = Trading212BrokerOnlyImportPlanner()
+    @ObservationIgnored private var trading212BrokerSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var trading212BrokerSyncTimer: Timer?
+    @ObservationIgnored private var trading212ScheduledFailureCount = 0
+    @ObservationIgnored private var trading212NextScheduledAttempt = Date.distantPast
+    /// Identifies the current scheduled cycle, so a cancelled older cycle
+    /// cannot clear the handle of a newer one.
+    @ObservationIgnored private var trading212BrokerSyncGeneration = 0
+    @ObservationIgnored private var lastTrading212ScheduledReconciliation = Date.distantPast
+    @ObservationIgnored private var isTrading212BrokerSyncInProgress = false
+    @ObservationIgnored private var isTrading212HoldingReconciliationInProgress = false
+    private(set) var trading212BrokerValuationSnapshot: Trading212BrokerValuationSnapshot?
+    var folyncPortfolioSnapshot: FolyncPortfolioSnapshot?
+    var folyncConnectionState: FolyncConnectionState = .notConfigured
+    var folyncCapabilities: FolyncCapabilities?
+    var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
+    private(set) var isInitialPortfolioSourceResolved = false
+    /// True after the startup load failed; portfolio writes are refused until a
+    /// restore or import succeeds.
+    private(set) var portfolioLoadFailed = false
+    /// Last time a Trading 212 sync actually updated linked holdings. Market
+    /// refresh only defers to the broker while this is recent.
+    @ObservationIgnored private var lastTrading212LinkedSyncAt: Date?
+    /// A trade change is waiting out the save debounce.
+    @ObservationIgnored private var hasPendingDebouncedTradeSave = false
+    @ObservationIgnored var legacyPortfolioTrades: [RealTimeTrade]?
+    @ObservationIgnored var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
+    @ObservationIgnored var folyncRefreshTimer: Timer?
+    @ObservationIgnored var folyncRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var folyncRefreshGeneration = UUID()
+    @ObservationIgnored var folyncRefreshRequestID: UUID?
+    var folyncLastCheckedAt: Date?
+    var folyncNextCheckAt: Date?
+    @ObservationIgnored var folyncSupplementalRefreshTimer: Timer?
+    @ObservationIgnored var folyncSupplementalRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var folyncETag: String?
+    /// Set after a rejected token or rate limit; automatic polls wait until then.
+    @ObservationIgnored var folyncBackoffUntil: Date?
+
+    var isFolyncPortfolioActive: Bool { folyncPortfolioSnapshot != nil }
+
+    var folyncRefreshableSymbols: Set<String> {
+        var symbols = Set((legacyPortfolioTrades ?? realTimeTrades)
+            .filter(\.trade.isWatchlistOnly)
+            .map { $0.trade.name.uppercased() })
+        if FolyncSettingsStore.shared.load().isSupplementalRouteActive(.benchmarkMarketData) {
+            if folyncSupplementalStatuses[.benchmarkMarketData] != .legacy {
+                symbols.subtract(SymbolMetadata.benchmarkSymbols)
+            }
+        }
+        return symbols
+    }
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
-    private var refreshService: RefreshService!
-    private var portfolioCalculationService: PortfolioCalculationService!
-    private var historicalDataCoordinator: HistoricalDataCoordinator!
-    private let importExportManager = ImportExportManager()
+    @ObservationIgnored private var refreshService: RefreshService!
+    @ObservationIgnored private var portfolioCalculationService: PortfolioCalculationService!
+    @ObservationIgnored private var historicalDataCoordinator: HistoricalDataCoordinator!
     private let chartAnnotationService = ChartAnnotationService.shared
     
-    @Published var realTimeTrades: [RealTimeTrade] = [] // Keep as is
-    @Published var showColorCoding: Bool = UserDefaults.standard.bool(forKey: "showColorCoding") { // Keep as is
+    var realTimeTrades: [RealTimeTrade] = [] {
+        didSet { realTimeTradesRevision &+= 1 }
+    }
+    /// Bumped on every assignment to `realTimeTrades`, including reassigning the
+    /// same rows after editing them in place (broker sync), so views can react
+    /// to whole-portfolio updates without diffing rows.
+    private(set) var realTimeTradesRevision = 0
+    var showColorCoding: Bool = (StockbarRuntimeStorage.userDefaults.object(forKey: "showColorCoding") as? Bool) ?? true {
         didSet {
-            UserDefaults.standard.set(showColorCoding, forKey: "showColorCoding")
+            StockbarRuntimeStorage.userDefaults.set(showColorCoding, forKey: "showColorCoding")
         }
     }
-    @Published var preferredCurrency: String = UserDefaults.standard.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
+    var preferredCurrency: String = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
         didSet {
-            UserDefaults.standard.set(preferredCurrency, forKey: "preferredCurrency")
+            StockbarRuntimeStorage.userDefaults.set(preferredCurrency, forKey: "preferredCurrency")
         }
     }
-    @Published var showMarketIndicators: Bool = UserDefaults.standard.bool(forKey: "showMarketIndicators") {
+    var showMarketIndicators: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "showMarketIndicators") {
         didSet {
-            UserDefaults.standard.set(showMarketIndicators, forKey: "showMarketIndicators")
+            StockbarRuntimeStorage.userDefaults.set(showMarketIndicators, forKey: "showMarketIndicators")
         }
     }
 
     // MARK: - Menu Bar Display Settings (UI Enhancement v2.3.0)
-    @Published var menuBarDisplaySettings: MenuBarDisplaySettings = MenuBarDisplaySettings.load() {
+    var menuBarDisplaySettings: MenuBarDisplaySettings = MenuBarDisplaySettings.load() {
         didSet {
             menuBarDisplaySettings.save()
         }
     }
 
+    var portfolioMenuBarDisplaySettings: PortfolioMenuBarDisplaySettings = {
+        let defaultCurrency = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD"
+        return PortfolioMenuBarDisplaySettings.load(defaultCurrency: defaultCurrency)
+    }() {
+        didSet {
+            portfolioMenuBarDisplaySettings.save()
+        }
+    }
+
+    var hideAllMenuBarItems: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "hideAllMenuBarItems") {
+        didSet {
+            StockbarRuntimeStorage.userDefaults.set(hideAllMenuBarItems, forKey: "hideAllMenuBarItems")
+        }
+    }
+
+    var requireExternalDisplayForMenuBarStocks: Bool = MenuBarVisibilityPolicy.loadRequireExternalDisplay() {
+        didSet {
+            MenuBarVisibilityPolicy.saveRequireExternalDisplay(requireExternalDisplayForMenuBarStocks)
+        }
+    }
+
+    var isExternalDisplayConnected: Bool = false
+
+    var shouldShowStockMenuBarItems: Bool {
+        MenuBarVisibilityPolicy.shouldShowStockItems(
+            hideAllMenuBarItems: hideAllMenuBarItems,
+            requireExternalDisplay: requireExternalDisplayForMenuBarStocks,
+            isExternalDisplayConnected: isExternalDisplayConnected
+        )
+    }
+
     private let logger = Logger.shared
 
-    @Published var refreshInterval: TimeInterval = UserDefaults.standard.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
+    var refreshInterval: TimeInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
         didSet {
-            UserDefaults.standard.set(refreshInterval, forKey: "refreshInterval")
+            StockbarRuntimeStorage.userDefaults.set(refreshInterval, forKey: "refreshInterval")
             // Update RefreshService interval when changed
             Task { @MainActor in
                 refreshService?.refreshInterval = refreshInterval
@@ -100,18 +181,17 @@ class DataModel: ObservableObject {
     }
     
     // MARK: - Historical Data Backfill State
-    private var hasRunStartupBackfill = false // Prevent duplicate startup tasks
+    @ObservationIgnored private var hasRunStartupBackfill = false // Prevent duplicate startup tasks
     
     // Cache management now handled by CacheCoordinator service
     
     // MARK: - Memory Management
-    private var memoryOptimizer: MemoryOptimizedDataModel?
-    private var memoryPressureSource: DispatchSourceMemoryPressure?
-    private var lastMemoryWarning = Date.distantPast
-    private let maxTradesInMemory = 100 // Limit trades kept in memory
-    private var isMemoryOptimizationEnabled = true
+    @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
+    @ObservationIgnored private var isMemoryOptimizationEnabled = true
+    @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    @ObservationIgnored private var mayStartRuntimeSchedulers = false
 
-    @Published var userData: UserData {
+    var userData: UserData {
         didSet {
             // Save data whenever it changes
             saveUserData()
@@ -120,26 +200,30 @@ class DataModel: ObservableObject {
 
     // MARK: - Initialization
 
-    init(currencyConverter: CurrencyConverter = CurrencyConverter()) {
+    init(
+        currencyConverter: CurrencyConverter = .shared,
+        startRuntimeServices: Bool = true
+    ) {
         // Ensure network service uses the correct implementation
         // self.networkService = PythonNetworkService() // Already done in property declaration
 
         self.currencyConverter = currencyConverter
+        // Pure calculation service: create it up front so totals never fall
+        // back to a placeholder $0.00 while runtime services start.
+        self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
 
-        // Initialize userData first
-        _userData = Published(initialValue: UserData(positions: [], settings: UserSettings()))
+        // Initialize userData first without triggering persistence during construction.
+        _userData = Self.loadUserData(decoder: decoder)
 
         // Initialize realTimeTrades first - will be loaded async after init
         self.realTimeTrades = []
-        
-        // Load user data after userData is initialized
-        self.userData = loadUserData()
+        self.isInitialPortfolioSourceResolved = !startRuntimeServices
         
         // Note: All data loading now happens asynchronously via loadTradesAsync()
         // including migration of cost currency and trading info currency
-        
-        if self.realTimeTrades.isEmpty {
-            Task { await logger.warning("No saved trades found, starting with empty list.") }
+
+        guard startRuntimeServices else {
+            return
         }
 
         setupPublishers() // Keep as is
@@ -150,41 +234,53 @@ class DataModel: ObservableObject {
             self.refreshService = RefreshService(
                 networkService: networkService,
                 cacheCoordinator: cacheCoordinator,
-                refreshCoordinator: refreshCoordinator,
                 refreshInterval: refreshInterval
             )
             self.refreshService.setDataModel(self)
             
-            self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
             self.historicalDataCoordinator = HistoricalDataCoordinator(
                 networkService: networkService,
                 historicalDataManager: historicalDataManager
             )
-
-            // Once core services are available, make sure any stale symbols are refreshed.
-            Task { await self.refreshCriticalSymbols(reason: "service-ready") }
         }
 
         // Load trades asynchronously
         Task {
-            await loadTradesAsync()
+            guard await loadTradesAsync() else {
+                markInitialPortfolioSourceResolved()
+                await logger.error("Automatic refresh and provider schedulers remain stopped because startup persistence validation failed.")
+                return
+            }
+
+            // One-time repair of UK price snapshots stored on mixed pence/pound
+            // scales; analytics read these snapshots without display-time guards.
+            // Runs after the trades load so their saved quotes can be the reference.
+            await self.repairUKPriceSnapshotScaleIfNeeded()
 
             // Emergency recovery removed by user request
 
             await MainActor.run {
                 self.startStaggeredRefresh()
             }
+            await self.restartFolyncPortfolioScheduler(runImmediately: true)
+            markInitialPortfolioSourceResolved()
+            await MainActor.run {
+                if !self.isFolyncPortfolioActive {
+                    self.restartTrading212LinkedSyncScheduler()
+                }
+            }
         }
 
         // Apply normalization to loaded stock currency data to ensure consistency
         normalizeLoadedStockCurrencies()
 
-        // Clear inconsistent historical data (one-time fix for calculation method changes)
-        Task { await historicalDataManager.clearInconsistentData() }
+        // One-time rescale of UK OHLC rows stored in pence before the GBX->GBP
+        // fix landed in get_ohlc_data.py. Runs before any chart reads the store.
+        Task { await OHLCPenceMigrationService.shared.migrateIfNeeded() }
 
         // Initialize memory optimization
         setupMemoryManagement()
-
+        
         // NEW: Start enhanced portfolio calculation in background after app startup
         Task { @MainActor in
             // Prevent multiple startup tasks
@@ -196,6 +292,8 @@ class DataModel: ObservableObject {
 
             // Wait 60 seconds after app startup to avoid interfering with initial data loading
             try? await Task.sleep(nanoseconds: 60_000_000_000)
+
+            guard mayStartRuntimeSchedulers else { return }
 
             // Check if migration service indicates retroactive calculation is needed
             if migrationService.needsRetroactiveCalculation {
@@ -211,91 +309,64 @@ class DataModel: ObservableObject {
             }
 
             // AUTO-BACKFILL: Delegate to HistoricalDataCoordinator for startup backfill
-            let symbols = realTimeTrades.map { $0.trade.name }
+            let symbols = legacyHistoryBackfillSymbols(from: realTimeTrades.map { $0.trade.name })
             await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols)
         }
 
         // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
         Task { @MainActor in
+            guard await waitForInitialTradeLoad(), mayStartRuntimeSchedulers else { return }
             BackfillScheduler.shared.start(dataModel: self)
         }
     }
 
-     // Helper function for default trades if needed
-    private func defaultTrades() -> [Trade] {
-        // Return an empty array or some default sample trades
-        // Example: return [Trade(name: "AAPL", ...)]
-        Task { await logger.warning("No saved trades found, starting with empty list.") }
-        return []
-    }
-    
     // MARK: - Memory Management Methods
     
     private func setupMemoryManagement() {
         guard isMemoryOptimizationEnabled else { return }
         
         memoryOptimizer = MemoryOptimizedDataModel()
-        setupMemoryPressureMonitoring()
-        
-        Task { await logger.info("Memory optimization enabled with limit of \(maxTradesInMemory) trades") }
-    }
-    
-    private func setupMemoryPressureMonitoring() {
-        memoryPressureSource = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: DispatchQueue.global(qos: .utility)
-        )
-        
-        memoryPressureSource?.setEventHandler { [weak self] in
-            Task {
-                await self?.handleMemoryPressure()
-            }
+        Task {
+            await MemoryManagementService.shared.startMonitoring()
+            await logger.debug("Memory cache optimization and pressure monitoring enabled")
         }
-        
-        memoryPressureSource?.resume()
-    }
-    
-    private func handleMemoryPressure() async {
-        await logger.warning("⚠️ Memory pressure detected in DataModel")
-        
-        let now = Date()
-        guard now.timeIntervalSince(lastMemoryWarning) > 30 else {
-            await logger.debug("Skipping memory cleanup - too recent")
-            return
-        }
-        
-        lastMemoryWarning = now
-        
-        // Perform memory optimization
-        await performMemoryOptimization()
-    }
-    
-    private func performMemoryOptimization() async {
-        await logger.info("🧹 Performing DataModel memory optimization")
-        
-        // Limit realTimeTrades array size
-        await MainActor.run {
-            if realTimeTrades.count > maxTradesInMemory {
-                let excess = realTimeTrades.count - maxTradesInMemory
-                realTimeTrades.removeFirst(excess)
-                Task { await logger.info("Removed \(excess) old trades from memory") }
-            }
-        }
-        
-        // Clear old cache entries (delegated to CacheCoordinator)
-        await cacheCoordinator.clearOldCacheEntries()
-
-        // Notify historical data manager to clean up
-        await historicalDataManager.clearInconsistentData()
-        
-        await logger.info("Memory optimization completed")
     }
     
     deinit {
-        memoryPressureSource?.cancel()
+        trading212BrokerSyncTask?.cancel()
+        folyncRefreshTask?.cancel()
     }
     
     // MARK: - Migration Methods
+    
+    private func repairUKPriceSnapshotScaleIfNeeded() async {
+        var savedQuotes: [String: Double] = [:]
+        for trade in realTimeTrades where SymbolMetadata.isUKSymbol(trade.trade.name) {
+            let price = trade.realTimeInfo.currentPrice
+            if price.isFinite, price > 0 { savedQuotes[trade.trade.name.uppercased()] = price }
+        }
+        let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded(savedQuotes: savedQuotes)
+        guard !repairedSymbols.isEmpty else { return }
+        historicalDataManager.invalidatePriceData(for: repairedSymbols)
+        await historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
+    }
+
+    private func isBenchmarkSymbol(_ symbol: String) -> Bool {
+        SymbolMetadata.isBenchmarkSymbol(symbol)
+    }
+    
+    private func isBenchmarkTrade(_ trade: RealTimeTrade) -> Bool {
+        isBenchmarkSymbol(trade.trade.name)
+    }
+    
+    private func removePersistedBenchmarks() {
+        let beforeCount = realTimeTrades.count
+        realTimeTrades.removeAll { isBenchmarkTrade($0) }
+        let removed = beforeCount - realTimeTrades.count
+        if removed > 0 {
+            Task { await logger.info("Removed \(removed) persisted benchmark trades") }
+        }
+    }
     
     private func migrateCostCurrencyData() {
         var needsSave = false
@@ -303,7 +374,7 @@ class DataModel: ObservableObject {
         for trade in realTimeTrades {
             if trade.trade.position.costCurrency == nil {
                 // Auto-detect currency based on symbol
-                let detectedCurrency = trade.trade.name.uppercased().hasSuffix(".L") ? "GBX" : "USD"
+                let detectedCurrency = SymbolMetadata.isUKSymbol(trade.trade.name) ? "GBX" : "USD"
                 trade.trade.position.costCurrency = detectedCurrency
                 needsSave = true
                 Task { await logger.info("Migrated \(trade.trade.name) to use \(detectedCurrency) as cost currency") }
@@ -322,7 +393,7 @@ class DataModel: ObservableObject {
         for trade in realTimeTrades {
             if trade.realTimeInfo.currency == nil {
                 // Auto-detect currency based on symbol
-                let detectedCurrency = trade.trade.name.uppercased().hasSuffix(".L") ? "GBP" : "USD"
+                let detectedCurrency = SymbolMetadata.defaultCurrency(for: trade.trade.name)
                 trade.realTimeInfo.currency = detectedCurrency
                 needsSave = true
                 Task { await logger.info("Migrated real-time info for \(trade.trade.name) to use \(detectedCurrency) currency") }
@@ -336,9 +407,31 @@ class DataModel: ObservableObject {
     }
     
     // MARK: - Core Data Aware Persistence Methods
+
+    func markInitialPortfolioSourceResolved() {
+        guard !isInitialPortfolioSourceResolved else { return }
+        isInitialPortfolioSourceResolved = true
+    }
+
+    func waitForInitialTradeLoad(timeout: TimeInterval = 15) async -> Bool {
+        if hasCompletedInitialTradeLoad {
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while !hasCompletedInitialTradeLoad && Date() < deadline {
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return false
+            }
+        }
+
+        return hasCompletedInitialTradeLoad
+    }
     
     /// Load trades asynchronously from Core Data
-    private func loadTradesAsync() async {
+    private func loadTradesAsync() async -> Bool {
         await logger.info("🔄 Loading trades from Core Data...")
         
         do {
@@ -347,13 +440,24 @@ class DataModel: ObservableObject {
             
             // Load trades from Core Data
             await logger.info("📊 Loading trades from Core Data")
-            let trades = try await tradeDataService.loadAllTrades()
-            
+            _ = try await recoverLegacyUserTradesIfNeeded(
+                afterLoading: try await tradeDataService.loadAllTrades()
+            )
+            let aliasRepair = try await aliasIdentityMigrationService.migrateIfNeeded()
+            if aliasRepair.didChange {
+                await logger.info("Repaired instrument aliases without summing duplicate broker quantities: \(aliasRepair.aliases)")
+            }
+            if !aliasRepair.quarantinedProviderKeys.isEmpty {
+                await logger.warning("Left ambiguous instrument aliases unchanged for review: \(aliasRepair.quarantinedProviderKeys.sorted())")
+            }
+
             // Create RealTimeTrade objects
-            let realTimeTrades = trades.map { RealTimeTrade(trade: $0, realTimeInfo: TradingInfo()) }
-            
-            // Load trading info for each trade
-            await loadTradingInfoAsync(for: realTimeTrades)
+            let realTimeTrades = aliasRepair.repairedTrades.map { trade in
+                RealTimeTrade(
+                    trade: trade,
+                    realTimeInfo: aliasRepair.tradingInfoBySymbol[trade.name] ?? TradingInfo()
+                )
+            }
             
             // Update on main thread
             await MainActor.run {
@@ -363,22 +467,70 @@ class DataModel: ObservableObject {
                 Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(self.realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
 
                 // Apply migrations after loading
+                self.removePersistedBenchmarks()
                 self.migrateCostCurrencyData()
                 self.migrateRealTimeTradesCurrency()
+                
+                self.ensureBenchmarkTracking()
+                self.hasCompletedInitialTradeLoad = true
+                self.mayStartRuntimeSchedulers = true
             }
 
             // Kick off an immediate refresh for anything that isn't fresh yet
             await refreshCriticalSymbols(reason: "initial-load")
-            
+            return true
         } catch {
             await logger.error("❌ Failed to load trades from Core Data: \(error)")
             
             // Initialize with empty trades if Core Data fails
             await MainActor.run {
                 self.realTimeTrades = []
+                // Every save replaces the whole stored portfolio, so the unread
+                // holdings would be lost by the next edit. Block writes until a
+                // restore or import replaces the portfolio deliberately.
+                self.portfolioLoadFailed = true
+                self.hasCompletedInitialTradeLoad = true
+                self.mayStartRuntimeSchedulers = false
+                self.ensureBenchmarkTracking()
                 Task { await logger.warning("⚠️ Initialized with empty trades due to Core Data failure") }
             }
+            return false
         }
+    }
+
+    /// Set once Core Data has held a portfolio (or legacy trades were recovered
+    /// once). After that an empty store means the user emptied it on purpose.
+    static let coreDataPortfolioEstablishedKey = "coreDataPortfolioEstablished"
+
+    private func recoverLegacyUserTradesIfNeeded(afterLoading trades: [Trade]) async throws -> [Trade] {
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let portfolioTrades = trades.filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+        guard portfolioTrades.isEmpty else {
+            defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
+            return portfolioTrades
+        }
+        // Recover only before Core Data has ever held the portfolio; otherwise
+        // deleting every holding brought old legacy holdings back on relaunch.
+        guard !defaults.bool(forKey: Self.coreDataPortfolioEstablishedKey) else {
+            return portfolioTrades
+        }
+
+        guard let legacyData = StockbarRuntimeStorage.userDefaults.data(forKey: "usertrades") else {
+            return portfolioTrades
+        }
+
+        let legacyTrades = try decoder.decode([Trade].self, from: legacyData)
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !legacyTrades.isEmpty else {
+            return portfolioTrades
+        }
+
+        await logger.warning("⚠️ Core Data portfolio was empty; recovering \(legacyTrades.count) trades from legacy UserDefaults")
+        try await tradeDataService.saveAllTrades(legacyTrades)
+        defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
+        return legacyTrades
     }
     
     /// Load trading info asynchronously from Core Data
@@ -399,17 +551,18 @@ class DataModel: ObservableObject {
         }
     }
     
-    
     internal func saveTradingInfo() {
-        let tradingInfoDict = Dictionary(uniqueKeysWithValues: realTimeTrades.map { ($0.trade.name, $0.realTimeInfo) })
+        // Folync display rows must not overwrite the local price cache.
+        guard !portfolioLoadFailed, !isFolyncPortfolioActive else { return }
+        let tradingInfoDict = Dictionary(firstValuesFor: realTimeTrades
+            .filter { !isBenchmarkTrade($0) }
+            .map { ($0.trade.name, $0.realTimeInfo) })
         
-        // Move saving to background queue to prevent UI blocking
-        Task.detached(priority: .utility) { [weak self, logger] in
-            guard let self = self else { return }
-            
+        // Background save, ordered after any earlier pending save.
+        let tradeDataService = tradeDataService
+        enqueuePersistence { [logger] in
             do {
-                // Save directly to Core Data
-                try await self.tradeDataService.saveAllTradingInfo(tradingInfoDict)
+                try await tradeDataService.saveAllTradingInfo(tradingInfoDict)
                 await logger.debug("Saved trading info for \(tradingInfoDict.count) symbols to Core Data")
             } catch {
                 await logger.error("Failed to save trading info to Core Data: \(error.localizedDescription)")
@@ -419,17 +572,67 @@ class DataModel: ObservableObject {
 
     // MARK: - Public Methods
 
+    nonisolated static func filterFolyncRoutedHistoryBackfills(
+        from symbols: [String],
+        lineHistoryActive: Bool,
+        benchmarkDataActive: Bool,
+        folyncHistorySymbols: Set<String>,
+        folyncBenchmarkSymbols: Set<String>
+    ) -> [String] {
+        func normalized(_ values: Set<String>) -> Set<String> {
+            Set(values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() })
+        }
+
+        let routedHistory = normalized(folyncHistorySymbols)
+        let routedBenchmarks = normalized(folyncBenchmarkSymbols)
+        return symbols.filter { symbol in
+            let key = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            if SymbolMetadata.isBenchmarkSymbol(symbol) {
+                return !(benchmarkDataActive && routedBenchmarks.contains(key))
+            }
+            return !(lineHistoryActive && routedHistory.contains(key))
+        }
+    }
+
+    private func legacyHistoryBackfillSymbols(from symbols: [String]) -> [String] {
+        let settings = FolyncSettingsStore.shared.load()
+        var historySymbols = Set<String>()
+        var benchmarkSymbols = Set<String>()
+
+        for holding in folyncPortfolioSnapshot?.holdings ?? [] {
+            historySymbols.formUnion(holding.resolvedAliases)
+            historySymbols.insert(holding.resolvedDisplayTicker)
+        }
+        if let capabilities = folyncCapabilities {
+            for identity in capabilities.trackedAssets {
+                historySymbols.formUnion(identity.normalizedAliases)
+            }
+            historySymbols.formUnion(
+                capabilities.trackedSymbols.filter { !SymbolMetadata.isBenchmarkSymbol($0) }
+            )
+            benchmarkSymbols.formUnion(capabilities.benchmarks.map(\.symbol))
+        }
+
+        return Self.filterFolyncRoutedHistoryBackfills(
+            from: symbols,
+            lineHistoryActive: settings.isSupplementalRouteActive(.historicalLineCharts),
+            benchmarkDataActive: settings.isSupplementalRouteActive(.benchmarkMarketData),
+            folyncHistorySymbols: historySymbols,
+            folyncBenchmarkSymbols: benchmarkSymbols
+        )
+    }
+
     /// Checks for missing historical data and triggers backfill if needed (legacy 1-month check) - delegates to HistoricalDataCoordinator
     @MainActor
     public func checkAndBackfillHistoricalData() async {
-        let symbols = realTimeTrades.map { $0.trade.name }
+        let symbols = legacyHistoryBackfillSymbols(from: realTimeTrades.map { $0.trade.name })
         await historicalDataCoordinator.checkAndBackfillHistoricalData(symbols: symbols)
     }
     
     /// Comprehensive 5-year historical data coverage check and automatic backfill - delegates to HistoricalDataCoordinator
     @MainActor
     public func checkAndBackfill5YearHistoricalData() async {
-        let symbols = realTimeTrades.map { $0.trade.name }
+        let symbols = legacyHistoryBackfillSymbols(from: realTimeTrades.map { $0.trade.name })
         await historicalDataCoordinator.checkAndBackfill5YearHistoricalData(symbols: symbols)
         
         // FIX: Trigger retroactive calculation after backfill
@@ -439,13 +642,14 @@ class DataModel: ObservableObject {
     
     /// Backfills historical data for specified symbols in chunks to avoid hanging - delegates to HistoricalDataCoordinator
     public func backfillHistoricalData(for symbols: [String]) async {
-        await historicalDataCoordinator.backfillHistoricalData(for: symbols)
+        await historicalDataCoordinator.backfillHistoricalData(
+            for: legacyHistoryBackfillSymbols(from: symbols)
+        )
         
         // FIX: Trigger retroactive calculation after backfill
         await logger.info("🔄 AUTO: Triggering retroactive portfolio calculation after backfill")
         await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
-    
     
     /// Adds historical snapshots to the data manager
     @MainActor
@@ -465,7 +669,7 @@ class DataModel: ObservableObject {
     
     /// Returns the current status of automatic historical data checking - delegates to HistoricalDataCoordinator
     @MainActor
-    public func getHistoricalDataStatus() -> (isRunningComprehensive: Bool, isRunningStandard: Bool, lastComprehensiveCheck: Date, nextComprehensiveCheck: Date) {
+    public func getHistoricalDataStatus() -> HistoricalDataStatus {
         return historicalDataCoordinator.getHistoricalDataStatus()
     }
     
@@ -481,8 +685,8 @@ class DataModel: ObservableObject {
         await logger.info("🔍 STARTUP: Checking if portfolio value calculation is needed")
         
         // Check if we have sufficient historical price data but no portfolio value data
-        let totalPriceSnapshots = await historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
-        let portfolioValueCount = await historicalDataManager.cachedHistoricalPortfolioValues.count
+        let totalPriceSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
+        let portfolioValueCount = historicalDataManager.cachedHistoricalPortfolioValues.count
         
         await logger.info("🔍 STARTUP: Found \(totalPriceSnapshots) price snapshots and \(portfolioValueCount) portfolio value points")
         
@@ -567,10 +771,568 @@ class DataModel: ObservableObject {
         await performRefreshAllTrades()
     }
 
+    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true) {
+        trading212BrokerSyncTimer?.invalidate()
+        trading212BrokerSyncTimer = nil
+        trading212BrokerSyncTask?.cancel()
+        trading212BrokerSyncTask = nil
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
+
+        guard !isFolyncPortfolioActive else { return }
+
+        let settings = trading212SettingsStore.load()
+        let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
+        guard settings.isEnabled,
+              settings.autoSyncEnabled,
+              settings.accountType.isSupportedByPublicAPI,
+              credentialState.isReadyForBackgroundAccess
+        else {
+            if settings.isEnabled,
+               settings.autoSyncEnabled,
+               settings.accountType.isSupportedByPublicAPI,
+               credentialState == .legacySplitItems {
+                Task {
+                    await Logger.shared.warning(
+                        "Trading 212 auto-sync not started because credentials use older split Keychain storage. Open Settings and run Test Connection or re-save credentials to upgrade."
+                    )
+                }
+            }
+            return
+        }
+
+        let intervalSeconds = Trading212SyncPolicy.clampedIntervalSeconds(settings.syncIntervalSeconds)
+        Task {
+            await Logger.shared.info(
+                "Trading 212 auto-sync scheduler started: interval=\(intervalSeconds)s, environment=\(settings.environment.displayName)"
+            )
+        }
+        if runImmediately {
+            runTrading212ScheduledCycle(reason: "auto-start")
+        }
+
+        trading212BrokerSyncTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(intervalSeconds), repeats: true) {
+            [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.runTrading212ScheduledCycle(reason: "auto")
+            }
+        }
+        trading212BrokerSyncTimer?.tolerance = min(5.0, TimeInterval(intervalSeconds) * 0.1)
+    }
+
+    func suspendTrading212LinkedSyncScheduler() {
+        trading212BrokerSyncTimer?.invalidate()
+        trading212BrokerSyncTimer = nil
+        trading212BrokerSyncTask?.cancel()
+        trading212BrokerSyncTask = nil
+        // A restart begins a fresh schedule instead of inheriting old backoff.
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
+    }
+
+    private func runTrading212ScheduledCycle(reason: String) {
+        guard Date() >= trading212NextScheduledAttempt else { return }
+        guard trading212BrokerSyncTask == nil else { return }
+
+        trading212BrokerSyncGeneration &+= 1
+        let generation = trading212BrokerSyncGeneration
+        trading212BrokerSyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.trading212BrokerSyncGeneration == generation {
+                    self.trading212BrokerSyncTask = nil
+                }
+            }
+
+            let settings = self.trading212SettingsStore.load()
+            let reconciliationInterval = TimeInterval(max(
+                Trading212SyncPolicy.defaultHoldingReconciliationIntervalSeconds,
+                settings.holdingReconciliationIntervalSeconds
+            ))
+            let shouldReconcile = settings.autoReconcileHoldingsEnabled
+                && Date().timeIntervalSince(self.lastTrading212ScheduledReconciliation) >= reconciliationInterval
+
+            do {
+                if shouldReconcile {
+                    _ = try await self.reconcileTrading212Holdings(reason: "\(reason)-reconcile")
+                    self.lastTrading212ScheduledReconciliation = Date()
+                } else {
+                    _ = try await self.syncLinkedTrading212Holdings(reason: reason)
+                }
+                self.trading212ScheduledFailureCount = 0
+                self.trading212NextScheduledAttempt = .distantPast
+            } catch {
+                // Cancellation (suspend or restart) is not a provider failure.
+                if error is CancellationError || Task.isCancelled { return }
+                self.trading212ScheduledFailureCount += 1
+                let retryAfter: TimeInterval?
+                if case let Trading212ProviderError.rateLimited(value) = error {
+                    retryAfter = value
+                } else {
+                    retryAfter = nil
+                }
+                let policy = Trading212BackoffPolicy(
+                    configuredInterval: TimeInterval(
+                        Trading212SyncPolicy.clampedIntervalSeconds(settings.syncIntervalSeconds)
+                    )
+                )
+                let delay = policy.delay(
+                    failureCount: self.trading212ScheduledFailureCount,
+                    retryAfter: retryAfter
+                )
+                self.trading212NextScheduledAttempt = Date().addingTimeInterval(delay)
+                await Logger.shared.warning(
+                    "Trading 212 scheduled cycle \(reason) failed; retrying in \(Int(delay.rounded()))s: \(LogRedactor.redact(error.localizedDescription))"
+                )
+            }
+        }
+    }
+
+    func syncLinkedTrading212Holdings(reason: String = "manual") async throws -> Trading212BrokerSyncResult {
+        guard !isTrading212BrokerSyncInProgress else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 sync is already running."
+            )
+        }
+        isTrading212BrokerSyncInProgress = true
+        defer { isTrading212BrokerSyncInProgress = false }
+
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled, settings.accountType.isSupportedByPublicAPI else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 is not enabled."
+            )
+        }
+
+        let allowKeychainPrompt = !reason.hasPrefix("auto")
+        let credentials: Trading212AuthConfiguration
+        do {
+            credentials = try trading212CredentialStore.load(
+                environment: settings.environment,
+                allowUserInteraction: allowKeychainPrompt
+            )
+        } catch Trading212CredentialStoreError.keychainStatus(let status)
+            where !allowKeychainPrompt && status == errSecInteractionNotAllowed {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection or Sync Linked Holdings once."
+            )
+        }
+        var links = try await trading212BrokerLinkStore.loadSnapshot()
+        let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
+        guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
+            )
+        }
+
+        let preview = try await trading212PreviewCoordinator.preview(
+            settings: settings,
+            credentials: credentials,
+            existingManualHoldings: realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) },
+            existingBrokerLinks: links,
+            includeMetadata: false,
+            useCache: false
+        )
+        if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+            await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
+        }
+        let plan = trading212BrokerSyncPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            tradingInfoBySymbol: tradingInfoBySymbol(),
+            links: links,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
+            quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
+            syncedAt: Date()
+        )
+
+        trading212BrokerValuationSnapshot = plan.valuationSnapshot
+        if !plan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
+        applyTrading212BrokerSyncPlan(plan)
+        if !plan.deletedLinkIDs.isEmpty {
+            _ = try await trading212BrokerLinkStore.removePositions(ids: plan.deletedLinkIDs)
+        }
+        if plan.changedCount > 0 {
+            persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        }
+
+        let result = Trading212BrokerSyncResult(
+            updatedCount: plan.tradeUpdates.count,
+            deletedCount: plan.deletedManualSymbols.count,
+            missingCount: plan.missingLinkedSymbols.count,
+            brokerOnlyCount: plan.brokerOnlyCount,
+            skippedReason: nil
+        )
+        await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    func reconcileTrading212Holdings(reason: String = "manual-reconcile") async throws -> Trading212HoldingReconciliationResult {
+        guard !isTrading212HoldingReconciliationInProgress else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 holding reconciliation is already running."
+            )
+        }
+        guard !isTrading212BrokerSyncInProgress else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 live-value sync is already running; hourly holding reconciliation skipped this cycle."
+            )
+        }
+
+        isTrading212HoldingReconciliationInProgress = true
+        defer { isTrading212HoldingReconciliationInProgress = false }
+
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled,
+              settings.autoReconcileHoldingsEnabled,
+              settings.accountType.isSupportedByPublicAPI else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 hourly holding reconciliation is not enabled."
+            )
+        }
+
+        let allowKeychainPrompt = !reason.hasPrefix("auto")
+        let credentials: Trading212AuthConfiguration
+        do {
+            credentials = try trading212CredentialStore.load(
+                environment: settings.environment,
+                allowUserInteraction: allowKeychainPrompt
+            )
+        } catch Trading212CredentialStoreError.keychainStatus(let status)
+            where !allowKeychainPrompt && status == errSecInteractionNotAllowed {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection once."
+            )
+        }
+
+        let existingManualHoldings = realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) }
+        var links = try await trading212BrokerLinkStore.loadSnapshot()
+        var preview = try await trading212PreviewCoordinator.preview(
+            settings: settings,
+            credentials: credentials,
+            existingManualHoldings: existingManualHoldings,
+            existingBrokerLinks: links,
+            includeMetadata: true,
+            useCache: false
+        )
+        if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
+            // The preview matched rows against the old keys; rebuild it so linked
+            // holdings are not mistaken for broker-only ones and imported again.
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+            preview = try await trading212PreviewCoordinator.preview(
+                settings: settings,
+                credentials: credentials,
+                existingManualHoldings: existingManualHoldings,
+                existingBrokerLinks: links,
+                includeMetadata: true,
+                useCache: false
+            )
+            await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
+        }
+        let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
+
+        guard !preview.rows.isEmpty || linkedPositionsForAccount.isEmpty else {
+            let result = Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: linkedPositionsForAccount.count,
+                brokerOnlyCount: 0,
+                skippedReason: "Trading 212 returned no positions for an account with linked holdings. StockBar did not delete anything; run Preview Import to review."
+            )
+            await logger.warning("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
+            return result
+        }
+
+        let syncPlan = trading212BrokerSyncPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            tradingInfoBySymbol: tradingInfoBySymbol(),
+            links: links,
+            preview: preview,
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
+            quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
+            syncedAt: Date()
+        )
+        trading212BrokerValuationSnapshot = syncPlan.valuationSnapshot
+        if !syncPlan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
+        applyTrading212BrokerSyncPlan(syncPlan)
+        if !syncPlan.deletedLinkIDs.isEmpty {
+            _ = try await trading212BrokerLinkStore.removePositions(ids: syncPlan.deletedLinkIDs)
+        }
+
+        let importPlan = settings.autoImportBrokerOnlyHoldings
+            ? trading212BrokerOnlyImportPlanner.plan(
+                existingTrades: realTimeTrades.map(\.trade),
+                existingLinks: links,
+                preview: preview,
+                quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
+                importedAt: Date()
+            )
+            : Trading212BrokerOnlyImportPlan(records: [], skippedRows: [])
+        let importedAt = Date()
+        for record in importPlan.records {
+            realTimeTrades.append(RealTimeTrade(trade: record.trade, realTimeInfo: record.tradingInfo))
+            let displayPrice = record.tradingInfo.getCurrentDisplayPrice()
+            if displayPrice.isFinite, displayPrice > 0 {
+                historicalDataManager.recordLivePriceSample(
+                    symbol: record.manualSymbol,
+                    price: displayPrice,
+                    previousClose: record.tradingInfo.prevClosePrice,
+                    timestamp: importedAt
+                )
+            }
+        }
+        if !importPlan.records.isEmpty {
+            _ = try await trading212BrokerLinkStore.upsertImportedPositions(
+                account: preview.account,
+                positions: importPlan.records.map(\.linkedPosition),
+                linkedAt: importedAt
+            )
+        }
+
+        if syncPlan.changedCount > 0 || !importPlan.records.isEmpty {
+            persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        }
+
+        let result = Trading212HoldingReconciliationResult(
+            syncedCount: syncPlan.tradeUpdates.count,
+            importedCount: importPlan.records.count,
+            deletedCount: syncPlan.deletedManualSymbols.count,
+            missingCount: syncPlan.missingLinkedSymbols.count,
+            brokerOnlyCount: syncPlan.brokerOnlyCount,
+            skippedReason: nil
+        )
+        await logger.info("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    func importBrokerOnlyTrading212Holdings(from preview: Trading212ImportPreview) async throws -> Trading212BrokerOnlyImportResult {
+        let importedAt = Date()
+        let links = try await trading212BrokerLinkStore.loadSnapshot()
+        let plan = trading212BrokerOnlyImportPlanner.plan(
+            existingTrades: realTimeTrades.map(\.trade),
+            existingLinks: links,
+            preview: preview,
+            quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
+            importedAt: importedAt
+        )
+
+        guard !plan.records.isEmpty else {
+            return Trading212BrokerOnlyImportResult(
+                importedCount: 0,
+                linkedCount: 0,
+                skippedCount: plan.skippedRows.count,
+                importedSymbols: [],
+                skippedRows: plan.skippedRows
+            )
+        }
+
+        for record in plan.records {
+            realTimeTrades.append(RealTimeTrade(trade: record.trade, realTimeInfo: record.tradingInfo))
+            let displayPrice = record.tradingInfo.getCurrentDisplayPrice()
+            if displayPrice.isFinite, displayPrice > 0 {
+                historicalDataManager.recordLivePriceSample(
+                    symbol: record.manualSymbol,
+                    price: displayPrice,
+                    previousClose: record.tradingInfo.prevClosePrice,
+                    timestamp: importedAt
+                )
+            }
+        }
+
+        let linkResult = try await trading212BrokerLinkStore.upsertImportedPositions(
+            account: preview.account,
+            positions: plan.records.map(\.linkedPosition),
+            linkedAt: importedAt
+        )
+        persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        restartTrading212LinkedSyncScheduler(runImmediately: false)
+
+        let result = Trading212BrokerOnlyImportResult(
+            importedCount: plan.records.count,
+            linkedCount: linkResult.linkedCount,
+            skippedCount: plan.skippedRows.count,
+            importedSymbols: plan.records.map(\.manualSymbol),
+            skippedRows: plan.skippedRows
+        )
+        await logger.info("Trading 212 broker-only import: \(result.userMessage)")
+        return result
+    }
+
+    func trading212LinkedMarketRefreshPlan() async -> BrokerLinkedMarketRefreshPlan {
+        let settings = trading212SettingsStore.load()
+        let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
+        guard settings.isEnabled,
+              settings.autoSyncEnabled,
+              credentialState.isReadyForBackgroundAccess else {
+            return .empty
+        }
+        // Defer to the broker only while its sync is actually updating linked
+        // holdings. If sync stops matching (revoked key, outage), market prices
+        // resume instead of freezing.
+        let freshnessWindow = max(15 * 60, TimeInterval(3 * settings.syncIntervalSeconds))
+        guard let lastSync = lastTrading212LinkedSyncAt,
+              Date().timeIntervalSince(lastSync) < freshnessWindow else {
+            return .empty
+        }
+
+        do {
+            let snapshot = try await trading212BrokerLinkStore.loadSnapshot()
+            let accountKeys = Set(snapshot.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
+            let infoBySymbol = tradingInfoBySymbol()
+            let linkedPositions = snapshot.positions.filter { accountKeys.contains($0.brokerAccountKey) }
+            var skipSymbols: Set<String> = []
+            var extendedSessionSymbols: Set<String> = []
+
+            for position in linkedPositions {
+                let symbol = position.manualSymbol.uppercased()
+                let tradingInfo = infoBySymbol[symbol]
+
+                if BrokerLinkedMarketDataRefreshPolicy.shouldSkipMarketRefresh(
+                    symbol: position.manualSymbol,
+                    tradingInfo: tradingInfo
+                ) {
+                    skipSymbols.insert(symbol)
+                } else {
+                    extendedSessionSymbols.insert(symbol)
+                }
+            }
+
+            return BrokerLinkedMarketRefreshPlan(
+                skipSymbols: skipSymbols,
+                extendedSessionSymbols: extendedSessionSymbols
+            )
+        } catch {
+            await logger.warning("Failed to load Trading 212 links for market-refresh skip list: \(LogRedactor.redact(error.localizedDescription))")
+            return .empty
+        }
+    }
+
+    /// Price alerts used to be checked only by the market-quote refresh, so
+    /// holdings priced by Folync or Trading 212 never fired. Every price source
+    /// now calls this after applying prices.
+    func evaluatePriceAlerts(for trades: [RealTimeTrade]) {
+        for trade in trades where !isBenchmarkTrade(trade) {
+            let info = trade.realTimeInfo
+            let price = info.getCurrentDisplayPrice()
+            guard price.isFinite, price > 0 else { continue }
+            PriceAlertService.shared.checkAlerts(
+                symbol: trade.trade.name,
+                currentPrice: price,
+                previousPrice: info.prevClosePrice,
+                currency: info.currency ?? "USD"
+            )
+        }
+    }
+
+    private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
+        let updatesBySymbol = Dictionary(firstValuesFor: plan.tradeUpdates.map {
+            ($0.manualSymbol.uppercased(), $0)
+        })
+        let deletedSymbols = Set(plan.deletedManualSymbols.map { $0.uppercased() })
+
+        var updatedTrades: [RealTimeTrade] = []
+        for realTimeTrade in realTimeTrades {
+            let symbolKey = realTimeTrade.trade.name.uppercased()
+            if deletedSymbols.contains(symbolKey), !isBenchmarkTrade(realTimeTrade) {
+                continue
+            }
+            if let update = updatesBySymbol[symbolKey], !isBenchmarkTrade(realTimeTrade) {
+                realTimeTrade.trade = update.trade
+                realTimeTrade.realTimeInfo = update.tradingInfo
+                let sampleTimestamp = update.tradingInfo.lastUpdateTime ?? 0
+                let sampleTime = sampleTimestamp > 0
+                    ? Date(timeIntervalSince1970: TimeInterval(sampleTimestamp))
+                    : Date()
+                historicalDataManager.recordLivePriceSample(
+                    symbol: update.manualSymbol,
+                    price: update.tradingInfo.getCurrentDisplayPrice(),
+                    previousClose: update.tradingInfo.prevClosePrice,
+                    timestamp: sampleTime
+                )
+            }
+            updatedTrades.append(realTimeTrade)
+        }
+
+        realTimeTrades = updatedTrades
+        evaluatePriceAlerts(for: updatedTrades.filter { updatesBySymbol[$0.trade.name.uppercased()] != nil })
+
+        if !plan.tradeUpdates.isEmpty || !deletedSymbols.isEmpty {
+            let summary = calculateDisplayPortfolioSummary(
+                preferredCurrency: portfolioMenuBarDisplaySettings.currencyCode
+            )
+            historicalDataManager.recordLivePortfolioSample(
+                totalValue: summary.totalValue,
+                totalGains: summary.totalGain,
+                currency: summary.currency,
+                timestamp: Date()
+            )
+        }
+    }
+
+    private func tradingInfoBySymbol() -> [String: TradingInfo] {
+        var values: [String: TradingInfo] = [:]
+        for realTimeTrade in realTimeTrades {
+            values[realTimeTrade.trade.name.uppercased()] = realTimeTrade.realTimeInfo
+        }
+        return values
+    }
+
+    private func trading212ManualHoldingSnapshot(from realTimeTrade: RealTimeTrade) -> Trading212ManualHoldingSnapshot {
+        let trade = realTimeTrade.trade
+        let displayName = realTimeTrade.realTimeInfo.shortName.isEmpty ? nil : realTimeTrade.realTimeInfo.shortName
+        return Trading212ManualHoldingSnapshot(
+            symbol: trade.name,
+            displayName: displayName,
+            quantity: trade.position.unitSize,
+            averageCost: trade.position.positionAvgCost.isFinite ? trade.position.positionAvgCost : nil,
+            currency: trade.position.currency ?? trade.position.costCurrency ?? realTimeTrade.realTimeInfo.currency,
+            isWatchlistOnly: trade.isWatchlistOnly
+        )
+    }
+
     /// Triggers an immediate refresh for the provided symbols, bypassing the
     /// staggered rotation. Symbols are matched case-insensitively against the
     /// current portfolio.
-    func refreshSymbolsImmediately(_ symbols: [String], reason: String) async {
+    /// `force` (user-initiated) skips the freshness check and retry backoff.
+    func refreshSymbolsImmediately(_ symbols: [String], reason: String, force: Bool = false) async {
         let uniqueTargets = Array(Set(symbols.map { $0.uppercased() }))
         guard !uniqueTargets.isEmpty else { return }
 
@@ -590,7 +1352,7 @@ class DataModel: ObservableObject {
             return
         }
 
-        await performRefreshAllTrades(limitedTo: resolvedSymbols)
+        await performRefreshAllTrades(limitedTo: resolvedSymbols, force: force)
     }
 
     /// Convenience helper that inspects cache status and refreshes any symbol
@@ -622,13 +1384,13 @@ class DataModel: ObservableObject {
     }
 
     /// Internal method that delegates refresh work to the RefreshService once it is ready.
-    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil) async {
+    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil, force: Bool = false) async {
         guard let refreshService else {
             await Logger.shared.warning("performRefreshAllTrades called before refreshService initialized")
             return
         }
 
-        await refreshService.performRefreshAllTrades(limitedTo: symbols)
+        await refreshService.performRefreshAllTrades(limitedTo: symbols, force: force)
     }
 
     /// Memory-efficient calculation of portfolio metrics - delegates to PortfolioCalculationService
@@ -646,20 +1408,191 @@ class DataModel: ObservableObject {
 
     /// Calculates the total net gains across all trades - delegates to PortfolioCalculationService
     func calculateNetGains() -> (amount: Double, currency: String) {
+        if let snapshot = folyncPortfolioSnapshot,
+           let value = snapshot.profitLoss.unrealized.value,
+           value.isFinite {
+            return (value, snapshot.profitLoss.unrealized.currency ?? snapshot.scope.currency ?? preferredCurrency)
+        }
         guard let service = portfolioCalculationService else {
             // Fallback if service not initialized yet
             return (0.0, preferredCurrency)
         }
-        return service.calculateNetGains(trades: realTimeTrades, preferredCurrency: preferredCurrency)
+        return service.calculateNetGains(
+            trades: realTimeTrades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
+        )
     }
 
     /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
     func calculateNetValue() -> (amount: Double, currency: String) {
+        if let snapshot = folyncPortfolioSnapshot,
+           let value = snapshot.totalValue.value,
+           value.isFinite {
+            return (value, snapshot.totalValue.currency ?? snapshot.scope.currency ?? preferredCurrency)
+        }
         guard let service = portfolioCalculationService else {
             // Fallback if service not initialized yet
             return (0.0, preferredCurrency)
         }
-        return service.calculateNetValue(trades: realTimeTrades, preferredCurrency: preferredCurrency)
+        return service.calculateNetValue(
+            trades: realTimeTrades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
+        )
+    }
+
+    /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
+    func calculateDisplayPortfolioSummary(preferredCurrency overrideCurrency: String? = nil) -> DisplayPortfolioSummary {
+        if let snapshot = folyncPortfolioSnapshot,
+           let totalValue = snapshot.totalValue.value,
+           totalValue.isFinite {
+            let totalGain = snapshot.profitLoss.unrealized.value ?? .nan
+            let dayGain = snapshot.profitLoss.day.value ?? .nan
+            let totalCost = snapshot.holdings.reduce(0) { $0 + $1.costValue }
+            let previousValue = totalValue - dayGain
+            return DisplayPortfolioSummary(
+                totalValue: totalValue,
+                totalGain: totalGain,
+                totalGainPct: totalCost > 0 ? totalGain / totalCost * 100 : .nan,
+                dayGain: dayGain,
+                dayGainPct: previousValue > 0 ? dayGain / previousValue * 100 : .nan,
+                totalCost: totalCost,
+                ownedPositionCount: snapshot.displayHoldings.count,
+                currency: snapshot.scope.currency ?? preferredCurrency,
+                valuationSource: .folyncProvided
+            )
+        }
+        let summaryCurrency = overrideCurrency ?? preferredCurrency
+
+        guard let service = portfolioCalculationService else {
+            return DisplayPortfolioSummary(
+                totalValue: 0.0,
+                totalGain: 0.0,
+                totalGainPct: 0.0,
+                dayGain: 0.0,
+                dayGainPct: 0.0,
+                totalCost: 0.0,
+                ownedPositionCount: 0,
+                currency: summaryCurrency
+            )
+        }
+
+        return service.calculateDisplayPortfolioSummary(
+            trades: realTimeTrades,
+            preferredCurrency: summaryCurrency,
+            brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
+        )
+    }
+
+    /// True when another non-benchmark row uses the same symbol. Persistence
+    /// keeps only the first row per symbol (`TradeDataService`), so editors
+    /// must flag duplicates before the second row is silently dropped.
+    func hasDuplicateSymbol(_ trade: RealTimeTrade) -> Bool {
+        let key = Self.symbolKey(trade.trade.name)
+        guard !key.isEmpty, !isBenchmarkTrade(trade) else { return false }
+        return realTimeTrades.contains { other in
+            other !== trade && !isBenchmarkTrade(other) && Self.symbolKey(other.trade.name) == key
+        }
+    }
+
+    nonisolated static func symbolKey(_ symbol: String) -> String {
+        symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    /// The user's own holdings for backups. While Folync is active the displayed
+    /// rows are Folync's read-only ones and the local portfolio is set aside.
+    var localPortfolioTradesForBackup: [RealTimeTrade] {
+        (isFolyncPortfolioActive ? (legacyPortfolioTrades ?? []) : realTimeTrades)
+            .filter { $0.sourceIdentity == nil }
+    }
+
+    /// Preserve provider-owned position valuations in window tables and inspectors.
+    func positionFinancialFieldsReadOnly(for trade: RealTimeTrade) -> Bool {
+        isFolyncPortfolioActive || trade.sourceIdentity != nil
+            || freshTrading212BrokerValuationSnapshot()?.position(for: trade.trade.name) != nil
+    }
+
+    func setPositionMenuBarVisibility(_ visible: Bool, for trade: RealTimeTrade) {
+        if let snapshot = folyncPortfolioSnapshot, let identity = trade.sourceIdentity,
+           let holding = snapshot.holdings.first(where: { $0.overlayKey(scopeID: snapshot.scope.id) == identity }) {
+            setFolyncHoldingVisibleInMenuBar(visible, holding: holding)
+        } else {
+            trade.trade.showInMenuBar = visible
+            triggerTradeUpdate()
+            NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
+        }
+    }
+
+    func calculatePositionValue(for trade: RealTimeTrade) -> (amount: Double, currency: String) {
+        if let snapshot = folyncPortfolioSnapshot,
+           let identity = trade.sourceIdentity,
+           let holding = snapshot.holdings.first(where: { $0.overlayKey(scopeID: snapshot.scope.id) == identity }) {
+            return (holding.marketValue ?? .nan, holding.resolvedValueCurrency)
+        }
+        if let valuation = freshTrading212BrokerValuationSnapshot()?.position(for: trade.trade.name) {
+            return (valuation.brokerCurrentValue, valuation.currency)
+        }
+        let amount = trade.realTimeInfo.getCurrentDisplayPrice() * trade.trade.position.unitSize
+        return (amount.isFinite ? amount : .nan, trade.realTimeInfo.currency ?? "")
+    }
+
+    /// Calculates per-position P/L for Holdings rows using the shared portfolio math service.
+    func calculatePositionProfitLoss(for realTimeTrade: RealTimeTrade) -> PositionProfitLossSummary {
+        if let snapshot = folyncPortfolioSnapshot,
+           let sourceIdentity = realTimeTrade.sourceIdentity,
+           let holding = snapshot.holdings.first(where: {
+               $0.overlayKey(scopeID: snapshot.scope.id) == sourceIdentity
+           }) {
+            return PositionProfitLossSummary(
+                dayAmount: holding.dayGain ?? .nan,
+                dayPercent: holding.dayGainPct ?? .nan,
+                totalAmount: holding.totalGain ?? .nan,
+                totalPercent: holding.totalGainPct ?? .nan,
+                currency: holding.resolvedValueCurrency
+            )
+        }
+        guard let service = portfolioCalculationService else {
+            let currency = realTimeTrade.realTimeInfo.currency
+                ?? realTimeTrade.trade.position.currency
+                ?? realTimeTrade.trade.position.costCurrency
+                ?? preferredCurrency
+
+            return PositionProfitLossSummary(
+                dayAmount: .nan,
+                dayPercent: .nan,
+                totalAmount: .nan,
+                totalPercent: .nan,
+                currency: currency
+            )
+        }
+
+        let brokerValuation = freshTrading212BrokerValuationSnapshot()?.position(for: realTimeTrade.trade.name)
+        return service.calculatePositionProfitLoss(for: realTimeTrade, brokerValuation: brokerValuation)
+    }
+
+    private func freshTrading212BrokerValuationSnapshot(now: Date = Date()) -> Trading212BrokerValuationSnapshot? {
+        let settings = trading212SettingsStore.load()
+        guard settings.isEnabled,
+              settings.accountType.isSupportedByPublicAPI,
+              let snapshot = trading212BrokerValuationSnapshot else {
+            return nil
+        }
+
+        let expectedAccountPrefix = "Trading212|\(settings.environment.rawValue)|\(settings.accountType.rawValue)|"
+        guard snapshot.accountKey.hasPrefix(expectedAccountPrefix) else {
+            return nil
+        }
+
+        let maxAge = max(TimeInterval(settings.syncIntervalSeconds * 4), 120)
+        guard snapshot.isFresh(now: now, maxAge: maxAge) else {
+            Task {
+                await Logger.shared.debug("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+            }
+            return nil
+        }
+
+        return snapshot
     }
 
     func startStaggeredRefresh() {
@@ -679,78 +1612,219 @@ class DataModel: ObservableObject {
     // MARK: - Trade Update Trigger
     
     /// Manually triggers a save of all trades.
-    /// Use this when updating properties within a RealTimeTrade object (like units or cost)
-    /// which doesn't automatically trigger the @Published realTimeTrades publisher.
+    /// Use this when updating properties within a RealTimeTrade object (like units or cost),
+    /// which changes the trade's content but not the `realTimeTrades` array.
     func triggerTradeUpdate() {
-        objectWillChange.send()
-        // Force emit current value to trigger debounce pipeline
-        // This is needed because objectWillChange just notifies views, it doesn't feed the $realTimeTrades pipeline directly
-        // We need to manually trigger the save logic
-        
-        // Debounce is handled by the pipeline in setupPublishers if we re-assign or if we had a subject.
-        // Since $realTimeTrades is a Published property, we can't easily force it to emit without changing the value.
-        // Instead, let's add a manual trigger subject.
+        guard !isFolyncPortfolioActive else { return }
+        tradeContentDidChange.send()
         tradeUpdateTrigger.send()
     }
+
+    func persistPortfolioAfterUserEdit(allowEmptyPortfolio: Bool = false) {
+        guard !isFolyncPortfolioActive else { return }
+        ensureBenchmarkTracking()
+
+        let validTrades = realTimeTrades.filter { trade in
+            let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasUnits = trade.trade.position.unitSize > 0
+            let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasSymbol || hasUnits || hasPrice
+        }
+
+        let validPortfolioTrades = validTrades.filter { !isBenchmarkTrade($0) }
+        saveTrades(validTrades, allowEmptyPortfolio: allowEmptyPortfolio)
+
+        if !validPortfolioTrades.isEmpty || allowEmptyPortfolio {
+            saveUserOrder(validPortfolioTrades)
+            saveTradingInfo()
+        }
+    }
     
+    private func ensureBenchmarkTracking() {
+        var needsRefresh = false
+        
+        for symbol in SymbolMetadata.benchmarkSymbols {
+            if !realTimeTrades.contains(where: { $0.trade.name == symbol }) {
+                let benchmarkTrade = Trade(
+                    name: symbol,
+                    position: Position(unitSize: "0", positionAvgCost: "0"),
+                    isWatchlistOnly: true,
+                    showInMenuBar: false
+                )
+                let rt = RealTimeTrade(trade: benchmarkTrade, realTimeInfo: TradingInfo())
+                realTimeTrades.append(rt)
+                needsRefresh = true
+            }
+        }
+        
+        if needsRefresh {
+            Task {
+                await refreshAllTrades()
+            }
+        }
+    }
+
     private let tradeUpdateTrigger = PassthroughSubject<Void, Never>()
+    var tradeContentPublisher: AnyPublisher<Void, Never> {
+        tradeContentDidChange
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .eraseToAnyPublisher()
+    }
 
     // MARK: - Private Methods
 
-    // Keep setupPublishers and saveTrades as they are
+    /// The body of the 2-second debounced save. Also run directly on quit, so an
+    /// edit made in the last two seconds is not lost.
+    private func saveDebouncedTradeChanges() {
+        hasPendingDebouncedTradeSave = false
+        guard hasCompletedInitialTradeLoad else {
+            Task { await logger.debug("Skipping trade save until initial load completes") }
+            return
+        }
+        guard !isFolyncPortfolioActive else { return }
+
+        let trades = realTimeTrades
+
+        // Save trades with meaningful data (units > 0 OR price set OR symbol set)
+        // This allows saving partial edits where user enters units/price but hasn't set symbol yet
+        let validTrades = trades.filter { trade in
+            let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasUnits = trade.trade.position.unitSize > 0
+            let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasSymbol || hasUnits || hasPrice
+        }
+        if !validTrades.isEmpty {
+            let validPortfolioTrades = validTrades.filter { !isBenchmarkTrade($0) }
+            saveTrades(validTrades)
+
+            if !validPortfolioTrades.isEmpty {
+                saveUserOrder(validPortfolioTrades)
+                saveTradingInfo()
+            }
+        }
+    }
+
     private func setupPublishers() {
-        // Merge updates from $realTimeTrades (array changes) and manual triggers (content changes)
-        // Reduced debounce to 2.0 seconds for faster saving
+        // Save after array changes and explicit content-edit triggers.
         Publishers.Merge(
-            $realTimeTrades.map { _ in () },
+            ObservationPublisher.values(self, \.realTimeTrades).map { _ in () },
             tradeUpdateTrigger
         )
+        .handleEvents(receiveOutput: { [weak self] _ in self?.hasPendingDebouncedTradeSave = true })
         .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
         .sink { [weak self] _ in
-            guard let self = self else { return }
-            let trades = self.realTimeTrades
-            
-            // Save trades with meaningful data (units > 0 OR price set OR symbol set)
-            // This allows saving partial edits where user enters units/price but hasn't set symbol yet
-            let validTrades = trades.filter { trade in
-                let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let hasUnits = trade.trade.position.unitSize > 0
-                let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                return hasSymbol || hasUnits || hasPrice
+            self?.saveDebouncedTradeChanges()
+        }
+        .store(in: &cancellables)
+
+        // Content changes: the array, or any trade's position or quote. One
+        // observation covers every row and re-tracks when rows are replaced.
+        ObservationPublisher.values { [weak self] in
+            for trade in self?.realTimeTrades ?? [] {
+                _ = trade.trade
+                _ = trade.realTimeInfo
             }
-            if !validTrades.isEmpty {
-                self.saveTrades(validTrades)
-                self.saveUserOrder(validTrades)
-                self.saveTradingInfo()
-            }
+        }
+        .receive(on: RunLoop.main)
+        .sink { [weak self] in
+            self?.tradeContentDidChange.send()
         }
         .store(in: &cancellables)
     }
 
-    private func saveTrades(_ trades: [RealTimeTrade]) {
+    private func saveTrades(_ trades: [RealTimeTrade], allowEmptyPortfolio: Bool = false) {
+        guard !isFolyncPortfolioActive else { return }
+        guard !portfolioLoadFailed else {
+            Task { await logger.warning("Skipped Core Data save: the stored portfolio failed to load and would be overwritten") }
+            return
+        }
         Task { await logger.debug("Saving \(trades.count) trades to Core Data") }
+
+        // Filter on main actor to avoid crossing actor boundaries in detached task.
+        let tradesToSave = trades.filter { !$0.trade.name.isEmpty && !isBenchmarkTrade($0) }
+        let tradeModels = tradesToSave.map { $0.trade }
+
+        guard !tradeModels.isEmpty || allowEmptyPortfolio else {
+            Task { await logger.warning("Skipped Core Data save because only benchmark/internal rows were present") }
+            return
+        }
         
-        // Move saving to background queue to prevent UI blocking
-        Task.detached(priority: .utility) { [weak self, logger] in
-            guard let self = self else { return }
-            
+        // Background save, ordered after any earlier pending save: each save
+        // replaces the whole stored portfolio, so an older list must never
+        // finish after a newer one.
+        let tradeDataService = tradeDataService
+        let savedTradeCount = tradeModels.count
+        enqueuePersistence { [logger] in
             do {
-                // Filter out any potential placeholder/empty trades before saving
-                let tradesToSave = trades.filter { !$0.trade.name.isEmpty }
-                let tradeModels = tradesToSave.map { $0.trade }
-                
                 // Save directly to Core Data
-                try await self.tradeDataService.saveAllTrades(tradeModels)
-                await logger.debug("Successfully saved \(tradesToSave.count) trades to Core Data")
+                try await tradeDataService.saveAllTrades(tradeModels)
+                await logger.debug("Successfully saved \(savedTradeCount) trades to Core Data")
             } catch {
                 await logger.error("Failed to save trades to Core Data: \(error.localizedDescription)")
             }
         }
     }
 
-    private func loadUserData() -> UserData {
-        if let data = UserDefaults.standard.data(forKey: "userData") {
-            if let decodedUserData = try? JSONDecoder().decode(UserData.self, from: data) {
+    /// Chains persistence work so saves complete in submission order.
+    private func enqueuePersistence(_ operation: @escaping @Sendable () async -> Void) {
+        let previous = pendingPersistenceTask
+        pendingPersistenceTask = Task.detached(priority: .utility) {
+            await previous?.value
+            await operation()
+        }
+    }
+
+    /// Waits for queued background saves, e.g. before the app terminates.
+    func flushPendingPersistence() async {
+        if hasPendingDebouncedTradeSave {
+            saveDebouncedTradeChanges()
+        }
+        while let task = pendingPersistenceTask {
+            await task.value
+            if pendingPersistenceTask == task {
+                pendingPersistenceTask = nil
+            }
+        }
+    }
+
+    func replacePortfolioTrades(_ trades: [Trade], source: String, allowEmptyPortfolio: Bool = false) async throws {
+        // While Folync is active the displayed rows are Folync's and the local
+        // portfolio is set aside; a restore here would be undone on deactivation.
+        guard !isFolyncPortfolioActive else { throw PortfolioRestoreError.folyncPortfolioActive }
+        let portfolioTrades = trades
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+
+        guard !portfolioTrades.isEmpty || allowEmptyPortfolio || trades.isEmpty else {
+            throw PortfolioRestoreError.noRestorablePortfolioTrades
+        }
+
+        try await tradeDataService.saveAllTrades(portfolioTrades)
+        portfolioLoadFailed = false
+
+        var existingInfo: [String: TradingInfo] = [:]
+        for trade in realTimeTrades {
+            existingInfo[trade.trade.name.uppercased()] = trade.realTimeInfo
+        }
+        let restoredTrades = portfolioTrades.map { trade in
+            RealTimeTrade(
+                trade: trade,
+                realTimeInfo: existingInfo[trade.name.uppercased()] ?? TradingInfo()
+            )
+        }
+
+        self.realTimeTrades = applyUserOrderToTrades(restoredTrades)
+        saveUserOrder(self.realTimeTrades)
+        saveTradingInfo()
+        ensureBenchmarkTracking()
+
+        await logger.info("Replaced portfolio with \(portfolioTrades.count) trades from \(source)")
+        await refreshCriticalSymbols(reason: source)
+    }
+
+    private static func loadUserData(decoder: JSONDecoder) -> UserData {
+        if let data = StockbarRuntimeStorage.userDefaults.data(forKey: "userData") {
+            if let decodedUserData = try? decoder.decode(UserData.self, from: data) {
                 // Apply any necessary data migrations after decoding
                 var migratedUserData = decodedUserData
                 // This migration was for Position.costCurrency
@@ -771,7 +1845,7 @@ class DataModel: ObservableObject {
     private func saveUserData() {
         do {
             let data = try encoder.encode(userData)
-            UserDefaults.standard.set(data, forKey: "userData")
+            StockbarRuntimeStorage.userDefaults.set(data, forKey: "userData")
             Task { await logger.debug("Successfully saved user data") }
         } catch {
             Task { await logger.error("Failed to save user data: \(error.localizedDescription)") }
@@ -782,14 +1856,14 @@ class DataModel: ObservableObject {
     
     /// Saves the current order of stocks for menu bar display
     private func saveUserOrder(_ trades: [RealTimeTrade]) {
-        let symbolOrder = trades.map { $0.trade.name }
-        UserDefaults.standard.set(symbolOrder, forKey: "stockDisplayOrder")
+        let symbolOrder = trades.filter { !isBenchmarkTrade($0) }.map { $0.trade.name }
+        StockbarRuntimeStorage.userDefaults.set(symbolOrder, forKey: "stockDisplayOrder")
         Task { await logger.debug("💾 Saved stock display order: \(symbolOrder)") }
     }
     
     /// Loads the saved order of stocks
     private func loadUserOrder() -> [String] {
-        return UserDefaults.standard.stringArray(forKey: "stockDisplayOrder") ?? []
+        return StockbarRuntimeStorage.userDefaults.stringArray(forKey: "stockDisplayOrder") ?? []
     }
     
     /// Applies the saved user order to a list of trades
@@ -826,46 +1900,30 @@ class DataModel: ObservableObject {
             var stock = userData.stocks[i]
             if stock.currency == nil {
                 // Set default currency if not specified (only for loaded data that might be old)
-                if stock.symbol.uppercased().hasSuffix(".L") {
-                    stock.currency = "GBP" // UK stocks (since Python script converted pence to pounds)
-                } else {
-                    stock.currency = "USD" // Default to USD for other stocks
-                }
+                stock.currency = SymbolMetadata.defaultCurrency(for: stock.symbol)
                 userData.stocks[i] = stock // Update the stock in the array
-                Task { await logger.debug("Normalized currency for \(stock.symbol) to \(stock.currency ?? "nil") upon loading.") }
+                let symbol = stock.symbol
+                let currency = stock.currency ?? "nil"
+                Task { await logger.debug("Normalized currency for \(symbol) to \(currency) upon loading.") }
             }
         }
     }
     
     // MARK: - Emergency Recovery Functions Removed
     // Emergency recovery functions removed by user request
+}
 
-    // MARK: - Portfolio Export/Import
-    
-    /// Exports current portfolio to JSON format
-    func exportPortfolio() async -> String? {
-        return await importExportManager.exportPortfolio(trades: realTimeTrades)
-    }
-    
-    /// Imports portfolio from JSON string, optionally replacing current portfolio
-    func importPortfolio(from jsonString: String, replaceExisting: Bool = false) async -> ImportResult {
-        // Delegate to ImportExportManager
-        let (result, newTrades) = await importExportManager.importPortfolio(
-            from: jsonString,
-            currentTrades: realTimeTrades,
-            replaceExisting: replaceExisting
-        )
-        
-        if let trades = newTrades {
-            await MainActor.run {
-                self.realTimeTrades = trades
-            }
-            
-            // Trigger refresh for the new trades
-            await refreshAllTrades()
+enum PortfolioRestoreError: LocalizedError {
+    case noRestorablePortfolioTrades
+    case folyncPortfolioActive
+
+    var errorDescription: String? {
+        switch self {
+        case .noRestorablePortfolioTrades:
+            return "The selected backup does not contain any portfolio stocks. It only contains internal benchmark rows."
+        case .folyncPortfolioActive:
+            return "Folync is providing the portfolio. Switch to the local portfolio in Settings → Connections before restoring a backup."
         }
-        
-        return result
     }
 }
 
@@ -874,64 +1932,35 @@ class DataModel: ObservableObject {
 extension RealTimeTrade {
     /// Infers market state based on current time and symbol timezone
     private func inferMarketState(for symbol: String) -> String? {
-        let now = Date()
-        let calendar = Calendar.current
+        BrokerLinkedMarketDataRefreshPolicy.inferredMarketState(for: symbol)
+    }
 
-        // Determine timezone based on symbol
-        let timeZone: TimeZone
-        if symbol.uppercased().hasSuffix(".L") {
-            // London Stock Exchange
-            timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone.current
-        } else {
-            // US markets (assume NYSE/NASDAQ)
-            timeZone = TimeZone(identifier: "America/New_York") ?? TimeZone.current
+    @MainActor
+    private func resolvePreviousCloseFromSnapshots(symbol: String, referenceDate: Date, cutoff: Double, epsilon: Double) -> Double? {
+        let timeZone = TimeZone(identifier: SymbolMetadata.defaultTimezone(for: symbol)) ?? TimeZone.current
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+
+        let todayStart = calendar.startOfDay(for: referenceDate)
+        guard let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: todayStart) else {
+            return nil
         }
 
-        let components = calendar.dateComponents(in: timeZone, from: now)
-        let hour = components.hour ?? 12
-        let minute = components.minute ?? 0
-        let weekday = components.weekday ?? 1 // 1 = Sunday, 7 = Saturday
-
-        // Check if weekend
-        if weekday == 1 || weekday == 7 {
-            return "CLOSED"
+        let snapshots = HistoricalDataManager.shared.getPriceSnapshots(for: symbol, from: yesterdayStart, to: todayStart)
+        guard let lastSnapshot = snapshots.last(where: { $0.timestamp < todayStart && $0.price.isFinite && $0.price > 0 }) else {
+            return nil
         }
 
-        if symbol.uppercased().hasSuffix(".L") {
-            // LSE hours (London time)
-            // Pre-market: 7:00-8:00
-            // Regular: 8:00-16:30
-            // Post-market: 16:30-17:30
-            // Closed: 17:30-7:00
-            if hour >= 7 && hour < 8 {
-                return "PRE"
-            } else if hour >= 8 && (hour < 16 || (hour == 16 && minute < 30)) {
-                return "REGULAR"
-            } else if (hour == 16 && minute >= 30) || (hour == 17 && minute < 30) {
-                return "POST"
-            } else {
-                return "CLOSED"
-            }
-        } else {
-            // US market hours (Eastern time)
-            // Pre-market: 4:00-9:30
-            // Regular: 9:30-16:00
-            // Post-market: 16:00-20:00
-            // Closed: 20:00-4:00
-            if hour >= 4 && (hour < 9 || (hour == 9 && minute < 30)) {
-                return "PRE"
-            } else if (hour == 9 && minute >= 30) || (hour >= 10 && hour < 16) {
-                return "REGULAR"
-            } else if hour >= 16 && hour < 20 {
-                return "POST"
-            } else {
-                return "CLOSED"
-            }
+        if abs(lastSnapshot.price - cutoff) <= epsilon {
+            return nil
         }
+
+        return lastSnapshot.price
     }
 
     /// Updates the trade with new data from the network service
     /// Returns true if the update was successful (non-NaN data), false if it failed and old data was retained
+    @MainActor
     func updateWithResult(_ result: StockFetchResult, retainOnFailure: Bool = true) -> Bool {
         let validator = DataValidationService.shared
 
@@ -948,6 +1977,7 @@ extension RealTimeTrade {
 
         // Check if this is a failed fetch (NaN values or invalid prices)
         let isFetchFailure = sanitizedRegularPrice == nil || sanitizedPrevClose == nil
+        var updatedInfo = self.realTimeInfo
         
         if isFetchFailure {
             Task { await Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)") }
@@ -958,27 +1988,28 @@ extension RealTimeTrade {
                 Task { await Logger.shared.info("Retaining last successful data for \(result.symbol)") }
 
                 // CRITICAL: Update timestamp and metadata even on failure so UI shows fresh "last updated" time
-                self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-                self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-                self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? self.realTimeInfo.exchangeTimezoneName
-                self.realTimeInfo.shortName = result.shortName ?? self.realTimeInfo.shortName
+                updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+                updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+                updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? updatedInfo.exchangeTimezoneName
+                updatedInfo.shortName = result.shortName ?? updatedInfo.shortName
 
                 // Market state handling: if result provides a state, use it; otherwise infer from current time
                 if let newMarketState = result.marketState?.rawValue {
-                    self.realTimeInfo.marketState = newMarketState
+                    updatedInfo.marketState = newMarketState
                 } else {
                     // When FMP fallback is used (no market state), infer based on current time
-                    self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
+                    updatedInfo.marketState = inferMarketState(for: self.trade.name)
                 }
 
                 // Also update pre/post market times if available
                 if let preTime = result.preMarketTime {
-                    self.realTimeInfo.preMarketTime = preTime
+                    updatedInfo.preMarketTime = preTime
                 }
                 if let postTime = result.postMarketTime {
-                    self.realTimeInfo.postMarketTime = postTime
+                    updatedInfo.postMarketTime = postTime
                 }
 
+                self.realTimeInfo = updatedInfo
                 return false // Indicate failure
             } else {
                 // Old behavior - update with NaN values
@@ -986,69 +2017,75 @@ extension RealTimeTrade {
             }
         }
 
-        var currency = result.currency
         let symbol = result.symbol
+        let currency = SymbolMetadata.normalizeCurrency(result.currency) ?? SymbolMetadata.defaultCurrency(for: symbol)
         
         // IMPORTANT: Our Python script already converts pence to pounds for .L stocks
         // So we should NOT do any additional conversion here
         // Use sanitized values if validation passed, otherwise use originals
         let finalRegularPrice = sanitizedRegularPrice ?? regularPrice
-        let _ = displayPrice  // Display price not currently sanitized
+        _ = displayPrice  // Display price not currently sanitized
         let finalPrevClose = sanitizedPrevClose ?? prevClose
-        
-        // Set default currency if not specified
-        if currency == nil {
-            if symbol.uppercased().hasSuffix(".L") {
-                currency = "GBP" // UK stocks (since Python script converted pence to pounds)
-            } else {
-                currency = "USD" // Default to USD for other stocks
-            }
-        }
 
         // Only update price data if fetch was successful or retainOnFailure is false
         if !isFetchFailure || !retainOnFailure {
-            self.realTimeInfo.currentPrice = finalRegularPrice  // Use regular market price for day calculations
-            self.realTimeInfo.previousClose = finalPrevClose // Use the (potentially adjusted) finalPrevClose
-            self.realTimeInfo.prevClosePrice = finalPrevClose // Also set the field that StockStatusBar reads
-            self.realTimeInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
+            updatedInfo.currentPrice = finalRegularPrice  // Use regular market price for day calculations
+            var resolvedPrevClose = finalPrevClose
+
+            // UK symbols sometimes return previousClose == currentPrice; fall back to prior-day snapshot if available.
+            if SymbolMetadata.isUKSymbol(symbol),
+               finalRegularPrice.isFinite,
+               finalRegularPrice > 0,
+               resolvedPrevClose.isFinite,
+               resolvedPrevClose > 0 {
+                let epsilon = max(0.0001, finalRegularPrice * 0.0001)
+                if abs(resolvedPrevClose - finalRegularPrice) <= epsilon {
+                    if let fallbackPrev = resolvePreviousCloseFromSnapshots(symbol: symbol, referenceDate: Date(), cutoff: finalRegularPrice, epsilon: epsilon) {
+                        resolvedPrevClose = fallbackPrev
+                        Task { await Logger.shared.info("Resolved prev close from snapshots for \(symbol): \(fallbackPrev)") }
+                    }
+                }
+            }
+
+            updatedInfo.previousClose = resolvedPrevClose // Use the (potentially adjusted) prev close
+            updatedInfo.prevClosePrice = resolvedPrevClose // Also set the field that StockStatusBar reads
+            updatedInfo.currency = currency // Now always GBP for GBX/GBp or .L stocks that were converted
             
             // Update pre/post market data
-            self.realTimeInfo.preMarketPrice = result.preMarketPrice
-            self.realTimeInfo.preMarketChange = result.preMarketChange
-            self.realTimeInfo.preMarketChangePercent = result.preMarketChangePercent
-            self.realTimeInfo.preMarketTime = result.preMarketTime
-            self.realTimeInfo.postMarketPrice = result.postMarketPrice
-            self.realTimeInfo.postMarketChange = result.postMarketChange
-            self.realTimeInfo.postMarketChangePercent = result.postMarketChangePercent
-            self.realTimeInfo.postMarketTime = result.postMarketTime
+            updatedInfo.preMarketPrice = result.preMarketPrice
+            updatedInfo.preMarketChange = result.preMarketChange
+            updatedInfo.preMarketChangePercent = result.preMarketChangePercent
+            updatedInfo.preMarketTime = result.preMarketTime
+            updatedInfo.postMarketPrice = result.postMarketPrice
+            updatedInfo.postMarketChange = result.postMarketChange
+            updatedInfo.postMarketChangePercent = result.postMarketChangePercent
+            updatedInfo.postMarketTime = result.postMarketTime
         }
         
         // ALWAYS update timestamp, metadata, and market state - even if we retained old price data
         // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
-        self.realTimeInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-        self.realTimeInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-        self.realTimeInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
-        self.realTimeInfo.shortName = result.shortName ?? self.trade.name
+        updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+        updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
+        updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
+        updatedInfo.shortName = result.shortName ?? self.trade.name
 
         // Market state handling: if result provides a state, use it; otherwise infer from current time
         if let newMarketState = result.marketState?.rawValue {
-            self.realTimeInfo.marketState = newMarketState
+            updatedInfo.marketState = newMarketState
         } else {
             // When FMP fallback is used (no market state), infer based on current time
-            self.realTimeInfo.marketState = inferMarketState(for: self.trade.name)
+            updatedInfo.marketState = inferMarketState(for: self.trade.name)
         }
 
         let logger = Logger.shared // Already defined in DataModel, but ok for local scope too
 
-        if isFetchFailure && retainOnFailure {
-            Task { await logger.info("Retained old data for \(self.trade.name): Price \(self.realTimeInfo.currentPrice) Currency: \(self.realTimeInfo.currency ?? "N/A") (fetch failed)") }
-        } else {
-            Task { await logger.info("Updated trade \(self.trade.name): Price \(self.realTimeInfo.currentPrice) PrevClose: \(String(describing: self.realTimeInfo.previousClose)) prevClosePrice: \(self.realTimeInfo.prevClosePrice) Currency: \(self.realTimeInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
-        }
+        self.realTimeInfo = updatedInfo
 
-        // CRITICAL: Manually trigger objectWillChange since we modified struct properties
-        // @Published doesn't detect changes to properties WITHIN a struct, only replacement of the entire struct
-        objectWillChange.send()
+        if isFetchFailure && retainOnFailure {
+            Task { await logger.info("Retained old data for \(self.trade.name): Price \(updatedInfo.currentPrice) Currency: \(updatedInfo.currency ?? "N/A") (fetch failed)") }
+        } else {
+            Task { await logger.info("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
+        }
 
         return !isFetchFailure // Return true if successful, false if failed
     }

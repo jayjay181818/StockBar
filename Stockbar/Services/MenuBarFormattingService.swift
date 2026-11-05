@@ -6,8 +6,10 @@
 //  UI/UX Enhancement - Menu Bar Formatting Service
 //
 
-import Foundation
 import AppKit
+import Foundation
+
+extension NSAttributedString: @unchecked @retroactive Sendable {}
 
 /// Thread-safe service for formatting stock data for menu bar display
 actor MenuBarFormattingService {
@@ -20,6 +22,8 @@ actor MenuBarFormattingService {
         let change: Double
         let changePct: Double
         let dayPL: Double
+        let currency: String
+        let useColorCoding: Bool
         let settingsHash: Int
     }
 
@@ -27,6 +31,9 @@ actor MenuBarFormattingService {
         let formatted: NSAttributedString
         let timestamp: Date
     }
+
+    /// Shown instead of a number that is unknown (never "0.00" or "N/A").
+    static let missingValue = "—"
 
     private var cache: [CacheKey: CacheEntry] = [:]
     private let cacheTTL: TimeInterval = 5.0  // 5 seconds
@@ -64,12 +71,16 @@ actor MenuBarFormattingService {
         useColorCoding: Bool
     ) -> NSAttributedString {
         // Check cache first
+        // NaN != NaN, so unknown values share one sentinel to keep cache lookups stable.
+        func keyed(_ value: Double) -> Double { value.isNaN ? -.infinity : value }
         let cacheKey = CacheKey(
             symbol: symbol,
-            price: price,
-            change: change,
-            changePct: changePct,
-            dayPL: dayPL,
+            price: keyed(price),
+            change: keyed(change),
+            changePct: keyed(changePct),
+            dayPL: keyed(dayPL),
+            currency: currency,
+            useColorCoding: useColorCoding,
             settingsHash: settings.hashValue
         )
 
@@ -119,6 +130,7 @@ actor MenuBarFormattingService {
         settings: MenuBarDisplaySettings,
         useColorCoding: Bool
     ) -> NSAttributedString {
+        // Zero (and unknown) change is neutral: no arrow, no green.
         let isPositive = change > 0
         let isNegative = change < 0
 
@@ -171,8 +183,9 @@ actor MenuBarFormattingService {
     }
 
     private func formatPrice(_ price: Double, currency: String, settings: MenuBarDisplaySettings) -> String {
-        guard !price.isNaN && price.isFinite else {
-            return "N/A"
+        // A missing price is not a price of zero.
+        guard price.isFinite, price > 0 else {
+            return Self.missingValue
         }
 
         let formatted = String(format: "%.\(settings.decimalPlaces)f", price)
@@ -190,15 +203,17 @@ actor MenuBarFormattingService {
     }
 
     private func formatChange(_ change: Double, currency: String, settings: MenuBarDisplaySettings) -> String {
-        guard !change.isNaN && change.isFinite else {
-            return "N/A"
+        guard change.isFinite else {
+            return Self.missingValue
         }
 
-        let formatted = String(format: "%+.\(settings.decimalPlaces)f", change)
+        // A change that rounds to zero carries no sign.
+        let formatted = String(format: change == 0 ? "%.\(settings.decimalPlaces)f" : "%+.\(settings.decimalPlaces)f", change)
 
         if settings.showCurrency {
             if let symbol = currencySymbol(for: currency) {
-                return "\(formatted.hasPrefix("+") ? "+" : "")\(symbol)\(abs(change).formatted(decimalPlaces: settings.decimalPlaces))"
+                let sign = change < 0 ? "-" : (change > 0 ? "+" : "")
+                return "\(sign)\(symbol)\(abs(change).formatted(decimalPlaces: settings.decimalPlaces))"
             } else {
                 return "\(currency) \(formatted)"
             }
@@ -208,11 +223,11 @@ actor MenuBarFormattingService {
     }
 
     private func formatChangePercent(_ percent: Double, settings: MenuBarDisplaySettings) -> String {
-        guard !percent.isNaN && percent.isFinite else {
-            return "N/A"
+        guard percent.isFinite else {
+            return Self.missingValue
         }
 
-        return String(format: "%+.\(settings.decimalPlaces)f%%", percent)
+        return String(format: percent == 0 ? "%.\(settings.decimalPlaces)f%%" : "%+.\(settings.decimalPlaces)f%%", percent)
     }
 
     private func currencySymbol(for currencyCode: String) -> String? {
@@ -242,7 +257,7 @@ actor MenuBarFormattingService {
         // Use system font
         attributed.addAttribute(.font, value: NSFont.menuBarFont(ofSize: 0), range: range)
 
-        return attributed
+        return attributed.copy() as? NSAttributedString ?? NSAttributedString(attributedString: attributed)
     }
 
     private func cleanupCache() {

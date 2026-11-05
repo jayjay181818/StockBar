@@ -1186,7 +1186,7 @@ A: Initial OHLC data collection may impact performance briefly. Should normalize
 
 - **Debug Tools**: Preferences → Debug → Export Debug Report
 - **Performance**: Run `Scripts/measure_performance.sh` to validate
-- **Logs**: Check `~/Library/Application Support/com.fhl43211.Stockbar/stockbar.log`
+- **Logs**: Check `~/Library/Application Support/com.stockbar/stockbar.log`
 
 ---
 

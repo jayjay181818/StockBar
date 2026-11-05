@@ -15,17 +15,23 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
     /// Display mode for menu bar items
     enum DisplayMode: String, Codable, CaseIterable {
-        case compact    // Symbol + % change only (e.g., "AAPL +2.45%")
-        case expanded   // Symbol + Price + % change (e.g., "AAPL $175.23 +2.45%")
+        case priceAndPercentage  // Symbol + Price + % change (e.g., "AAPL $175.23 +2.45%")
+        case priceAndShareChange // Symbol + Price + per-share change (e.g., "AAPL $175.23 +$4.29")
+        case compact    // Symbol + selected change only (e.g., "AAPL +2.45%")
+        case expanded   // Symbol + Price + selected change (advanced)
         case minimal    // Symbol + Indicator only (e.g., "AAPL ▲")
         case custom     // User-defined template
 
         var description: String {
             switch self {
+            case .priceAndPercentage:
+                return "Current price + % change"
+            case .priceAndShareChange:
+                return "Current price + per-share change"
             case .compact:
-                return "Compact (Symbol + %)"
+                return "Symbol + selected change"
             case .expanded:
-                return "Expanded (Symbol + Price + %)"
+                return "Price + selected change (Advanced)"
             case .minimal:
                 return "Minimal (Symbol + ↑/↓)"
             case .custom:
@@ -35,6 +41,10 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
         var example: String {
             switch self {
+            case .priceAndPercentage:
+                return "AAPL $175.23 +2.45%"
+            case .priceAndShareChange:
+                return "AAPL $175.23 +$4.29"
             case .compact:
                 return "AAPL +2.45%"
             case .expanded:
@@ -44,6 +54,10 @@ struct MenuBarDisplaySettings: Codable, Equatable {
             case .custom:
                 return "{symbol}: {changePct}"
             }
+        }
+
+        var usesConfigurableChangeFormat: Bool {
+            self == .compact || self == .expanded
         }
     }
 
@@ -142,7 +156,7 @@ struct MenuBarDisplaySettings: Codable, Equatable {
     // MARK: - Initialization
 
     init(
-        displayMode: DisplayMode = .expanded,
+        displayMode: DisplayMode = .priceAndPercentage,
         changeFormat: ChangeFormat = .percentage,
         customTemplate: String? = nil,
         showCurrency: Bool = true,
@@ -228,6 +242,10 @@ struct MenuBarDisplaySettings: Codable, Equatable {
         }
 
         switch displayMode {
+        case .priceAndPercentage:
+            return "{symbol} {price} {changePct}"
+        case .priceAndShareChange:
+            return "{symbol} {price} {change}"
         case .compact:
             return "{symbol} \(changePlaceholder)"
         case .expanded:
@@ -255,14 +273,14 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
     /// Loads settings from UserDefaults
     static func load() -> MenuBarDisplaySettings {
-        let defaults = UserDefaults.standard
+        let defaults = StockbarRuntimeStorage.userDefaults
 
-        let displayModeRaw = defaults.string(forKey: UserDefaultsKey.displayMode) ?? DisplayMode.expanded.rawValue
+        let displayModeRaw = defaults.string(forKey: UserDefaultsKey.displayMode) ?? DisplayMode.priceAndPercentage.rawValue
         let changeFormatRaw = defaults.string(forKey: UserDefaultsKey.changeFormat) ?? ChangeFormat.percentage.rawValue
         let arrowStyleRaw = defaults.string(forKey: UserDefaultsKey.arrowStyle) ?? ArrowStyle.none.rawValue
 
         return MenuBarDisplaySettings(
-            displayMode: DisplayMode(rawValue: displayModeRaw) ?? .expanded,
+            displayMode: DisplayMode(rawValue: displayModeRaw) ?? .priceAndPercentage,
             changeFormat: ChangeFormat(rawValue: changeFormatRaw) ?? .percentage,
             customTemplate: defaults.string(forKey: UserDefaultsKey.customTemplate),
             showCurrency: defaults.object(forKey: UserDefaultsKey.showCurrency) as? Bool ?? true,
@@ -274,7 +292,7 @@ struct MenuBarDisplaySettings: Codable, Equatable {
 
     /// Saves settings to UserDefaults
     func save() {
-        let defaults = UserDefaults.standard
+        let defaults = StockbarRuntimeStorage.userDefaults
 
         defaults.set(displayMode.rawValue, forKey: UserDefaultsKey.displayMode)
         defaults.set(changeFormat.rawValue, forKey: UserDefaultsKey.changeFormat)
@@ -311,7 +329,6 @@ extension MenuBarDisplaySettings {
         let sampleUnits = 100.0
         let sampleDayPL = sampleChange * sampleUnits  // 429.00
         let sampleCurrency = "USD"
-        let isPositive = sampleChange > 0
 
         var result = effectiveTemplate
 
@@ -322,7 +339,7 @@ extension MenuBarDisplaySettings {
         result = result.replacingOccurrences(of: "{changePct}", with: formatChangePercent(sampleChangePct))
         result = result.replacingOccurrences(of: "{dayPL}", with: formatChange(sampleDayPL, currency: sampleCurrency))
         result = result.replacingOccurrences(of: "{currency}", with: sampleCurrency)
-        result = result.replacingOccurrences(of: "{arrow}", with: isPositive ? arrowStyle.upArrow() : arrowStyle.downArrow())
+        result = result.replacingOccurrences(of: "{arrow}", with: arrowStyle.upArrow()) // sample change is positive
 
         return result
     }
@@ -339,5 +356,27 @@ extension MenuBarDisplaySettings {
 
     private func formatChangePercent(_ percent: Double) -> String {
         return String(format: "%+.\(decimalPlaces)f%%", percent)
+    }
+}
+
+enum MenuBarVisibilityPolicy {
+    static let requireExternalDisplayKey = "menuBarRequireExternalDisplayForStocks"
+
+    static func shouldShowStockItems(
+        hideAllMenuBarItems: Bool,
+        requireExternalDisplay: Bool,
+        isExternalDisplayConnected: Bool
+    ) -> Bool {
+        guard !hideAllMenuBarItems else { return false }
+        guard requireExternalDisplay else { return true }
+        return isExternalDisplayConnected
+    }
+
+    static func loadRequireExternalDisplay(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) -> Bool {
+        defaults.object(forKey: requireExternalDisplayKey) as? Bool ?? false
+    }
+
+    static func saveRequireExternalDisplay(_ value: Bool, defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        defaults.set(value, forKey: requireExternalDisplayKey)
     }
 }
