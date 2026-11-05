@@ -10,7 +10,7 @@ A macOS portfolio tracker that lives in the menu bar and the Dock. It shows live
 
 ### What do I need?
 
-macOS 15.4 or later, Python 3.9 or later with the packages pinned in `requirements.txt`, and an internet connection for new prices. Stockbar's own environment (**Settings → Advanced → Python → Set Up**) is recommended. Apple's `/usr/bin/python3` 3.9 still works, but it gets older HTTP packages without current security fixes.
+macOS 15.4 or later and an internet connection for new prices. Stockbar sets up its own Python (**Settings → Advanced → Python → Set Up**) without anything installed first. If you point it at another interpreter, it must be Python 3.10 or later; Apple's `/usr/bin/python3` 3.9 is no longer supported.
 
 ### Does it work offline?
 
@@ -32,12 +32,12 @@ Everything is local:
 
 ## Setup
 
-### Why do I see a "Python Dependencies Required" alert?
+### Why do I see a "Set Up Stockbar's Python" or "Python Dependencies Required" alert?
 
-Stockbar fetches market data through a bundled Python script. The alert appears when the configured interpreter is missing a pinned package or has a different version, for example after an update raises a pin. Choose **Set Up Automatically** to build or rebuild Stockbar's own environment. To use another interpreter instead, click **Copy Command** and run it in Terminal. With Homebrew Python you may need a virtual environment:
+Stockbar fetches market data through a bundled Python script. "Set Up Stockbar's Python" appears when its own environment does not exist yet, for example on a new Mac or after updating from a version that used `/usr/bin/python3`. "Python Dependencies Required" appears when the interpreter is missing a pinned package or has a different version, for example after an update raises a pin. Choose **Set Up Automatically** to build or rebuild Stockbar's own environment. To use another interpreter instead, click **Copy Command** and run it in Terminal. With Homebrew Python you may need a virtual environment:
 
 ```bash
-python3 -m venv ~/stockbar-venv
+python3.13 -m venv ~/stockbar-venv
 ~/stockbar-venv/bin/python3 -m pip install -r /Applications/Stockbar.app/Contents/Resources/requirements.txt
 defaults write com.stockbar pythonInterpreterPath "$HOME/stockbar-venv/bin/python3"
 ```

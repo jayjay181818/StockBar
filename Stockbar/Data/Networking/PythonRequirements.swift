@@ -3,9 +3,8 @@ import Foundation
 /// The pinned `name==version` requirements shipped in the app bundle.
 ///
 /// `requirements.txt` is the single source of truth for the launch-time
-/// dependency check. A pin may carry a `python_version` environment marker so
-/// Stockbar's own environment can use newer packages while Apple's
-/// `/usr/bin/python3` 3.9 fallback keeps versions it can run, for example:
+/// dependency check. A pin may carry a `python_version` environment marker
+/// when different Pythons need different versions, for example:
 ///
 ///     urllib3==2.8.0; python_version >= "3.10"
 ///     urllib3==1.26.20; python_version < "3.10"
