@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var automaticBackupTimer: Timer?
 
     private static let dependencyCheckInterpreterKey = "pythonDependencyCheck.interpreterPath"
+    private static let dependencyCheckRequirementsKey = "pythonDependencyCheck.requirements"
     private static let dependencyCheckTimeoutSeconds: TimeInterval = 20
     /// Long-running menu-bar sessions re-check the once-a-day backup on this cadence.
     private static let automaticBackupCheckInterval: TimeInterval = 6 * 60 * 60
@@ -259,12 +260,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Checks if required Python dependencies are installed on first launch
     @MainActor
     private func checkPythonDependencies() async {
-        // Re-check whenever the configured interpreter changes.
+        // Re-check whenever the configured interpreter or the shipped pins
+        // change, so an update that raises a pin (for example a security fix)
+        // offers to rebuild an environment that still has the old version.
         let interpreterPath = PythonConfiguration.load().interpreterPath
-        let checkedInterpreter = StockbarRuntimeStorage.userDefaults.string(forKey: Self.dependencyCheckInterpreterKey)
+        let requirementsFingerprint = bundledPythonRequirements()?.fingerprint ?? ""
+        let defaults = StockbarRuntimeStorage.userDefaults
         let providerPolicy = StockbarProviderAccessPolicy.current
         guard Self.shouldCheckPythonDependencies(
-            hasChecked: checkedInterpreter == interpreterPath,
+            hasChecked: defaults.string(forKey: Self.dependencyCheckInterpreterKey) == interpreterPath
+                && defaults.string(forKey: Self.dependencyCheckRequirementsKey) == requirementsFingerprint,
             providerPolicy: providerPolicy
         ) else {
             if !providerPolicy.liveRequestsAllowed {
@@ -279,7 +284,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Mark as checked *before* presenting, so the prompt cannot re-appear on
         // every launch if the user leaves it unanswered.
-        StockbarRuntimeStorage.userDefaults.set(interpreterPath, forKey: Self.dependencyCheckInterpreterKey)
+        defaults.set(interpreterPath, forKey: Self.dependencyCheckInterpreterKey)
+        defaults.set(requirementsFingerprint, forKey: Self.dependencyCheckRequirementsKey)
 
         if !dependenciesAreCompatible {
             await Logger.shared.warning("Python packages are missing or do not match the supported versions")
@@ -296,33 +302,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         !hasChecked && providerPolicy.liveRequestsAllowed
     }
 
-    /// Parses the pinned `name==version` requirements shipped in the bundle.
-    ///
-    /// The expected versions used to be hardcoded here as well as in
-    /// requirements.txt, so bumping one without the other produced a false
-    /// "dependencies required" alert on every launch with no hint why. The
-    /// shipped file is now the single source of truth.
-    nonisolated static func parsePinnedRequirements(_ contents: String) -> [String: String] {
-        var pins: [String: String] = [:]
-        for rawLine in contents.split(separator: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
-            let parts = line.components(separatedBy: "==")
-            guard parts.count == 2 else { continue }
-            let name = parts[0].trimmingCharacters(in: .whitespaces)
-            let version = parts[1].trimmingCharacters(in: .whitespaces)
-            guard !name.isEmpty, !version.isEmpty else { continue }
-            pins[name] = version
-        }
-        return pins
-    }
-
-    private func expectedPythonPackageVersions() -> [String: String] {
+    /// The pinned requirements shipped in the bundle; see `PythonRequirements`.
+    private func bundledPythonRequirements() -> PythonRequirements? {
         guard let url = Bundle.main.url(forResource: "requirements", withExtension: "txt"),
               let contents = try? String(contentsOf: url, encoding: .utf8) else {
-            return [:]
+            return nil
         }
-        return Self.parsePinnedRequirements(contents)
+        return PythonRequirements(contents: contents)
     }
 
     private func checkPythonPackageVersions() async -> Bool {
@@ -333,13 +319,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let expected = expectedPythonPackageVersions()
-        guard !expected.isEmpty else {
+        guard let requirements = bundledPythonRequirements(), !requirements.pins.isEmpty else {
             await Logger.shared.error("Could not read pinned requirements from the bundle; skipping version check")
             return true
         }
 
-        let names = expected.keys.sorted()
+        let names = requirements.packageNames
         let nameList = names.map { "\"\($0)\"" }.joined(separator: ", ")
         // Embedded Python. Writes to stdout via sys.stdout.write so the
         // Swift-side logging ban in Scripts/validate_invariants.sh does not
@@ -354,7 +339,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     out[name] = metadata.version(name)
                 except Exception:
                     out[name] = None
-            sys.stdout.write(json.dumps(out))
+            python = "%d.%d" % sys.version_info[:2]
+            sys.stdout.write(json.dumps({"python": python, "packages": out}))
             """
 
         // Run through the shared runner: off the main actor, with pipe
@@ -372,11 +358,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         guard result.exitCode == 0,
-              let installed = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
+              let report = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any],
+              let pythonText = report["python"] as? String,
+              let pythonVersion = PythonVersion(pythonText),
+              let installed = report["packages"] as? [String: Any] else {
             return false
         }
 
-        for (name, requiredVersion) in expected {
+        let expected = requirements.expectedVersions(pythonVersion: pythonVersion)
+        for (name, requiredVersion) in expected.sorted(by: { $0.key < $1.key }) {
             guard let installedVersion = installed[name] as? String else {
                 await Logger.shared.warning("Python package '\(name)' is not installed")
                 return false
