@@ -40,7 +40,7 @@ final class Trading212CredentialStore: @unchecked Sendable {
     private let cacheLock = NSLock()
     private var sessionCredentials: [String: Trading212AuthConfiguration] = [:]
 
-    init(service: String = "com.stockbar.trading212") {
+    init(service: String = StockbarRuntimeStorage.acceptance.trading212KeychainService) {
         self.service = service
     }
 
