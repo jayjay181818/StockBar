@@ -1,14 +1,22 @@
 # Python Dependencies for Stockbar
 # Install with: pip3 install -r requirements.txt
 
-# Stock data fetching and the /usr/bin/python3 3.9/LibreSSL-compatible HTTP stack
+# Stock data fetching
 yfinance==1.2.0
-requests==2.32.5
-urllib3==1.26.20
 # yfinance 1.2.0 relies on pandas behaviour that pandas 4 removes.
 pandas<4
 
-# Minimum Python version: 3.8+
+# HTTP stack. Stockbar's own environment (Python 3.10+ with OpenSSL) gets the
+# patched releases, which need Python 3.10+. Apple's /usr/bin/python3 3.9 is
+# built on LibreSSL, which urllib3 2.x does not support, so the fallback keeps
+# the last versions it can run.
+# The launch-time check reads these pins and understands only plain
+# python_version markers; see PythonRequirements.swift.
+requests==2.34.2; python_version >= "3.10"
+requests==2.32.5; python_version < "3.10"
+urllib3==2.8.0; python_version >= "3.10"
+urllib3==1.26.20; python_version < "3.10"
+
 # Recommended: Stockbar's own environment (Settings > Advanced > Python),
 # a current Python with OpenSSL. Apple's /usr/bin/python3 3.9 with LibreSSL
 # remains the fallback and must keep working.
