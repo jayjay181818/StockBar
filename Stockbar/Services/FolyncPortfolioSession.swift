@@ -2,6 +2,7 @@ import Foundation
 
 enum FolyncConnectionState: Equatable {
     case notConfigured
+    case waitingForKeychain
     case connecting
     case current(asOf: String?)
     case stale(asOf: String?, reasons: [String])
@@ -15,6 +16,8 @@ enum FolyncConnectionState: Equatable {
     var message: String {
         switch self {
         case .notConfigured: return "Folync is not configured."
+        case .waitingForKeychain:
+            return "Waiting for Keychain access. If macOS asks to let Stockbar use its saved credentials, choose Always Allow."
         case .connecting: return "Connecting to Folync…"
         case .current(let asOf): return asOf.map { "Current as of \($0)." } ?? "Current."
         case .stale(let asOf, let reasons):
@@ -42,6 +45,9 @@ struct FolyncSessionDependencies {
     var loadToken: @Sendable () async -> String?
     var saveToken: @Sendable (String) throws -> Void
     var hasToken: @Sendable () async -> Bool
+    /// How long the first token read may take before the status says Stockbar
+    /// is waiting for Keychain access.
+    var keychainWaitNoticeDelay: TimeInterval = 2
 
     static let live = FolyncSessionDependencies(
         settingsStore: .shared,
@@ -223,6 +229,12 @@ extension DataModel {
         // A restart follows a new URL, token or scope, so earlier backoff no longer applies.
         folyncBackoffUntil = nil
         let deps = folyncSessionDependencies
+        // Before touching the supplemental coordinator: its Keychain read is
+        // synchronous, so while macOS shows the access prompt the actor (and
+        // clearBackoff below) waits too.
+        if isFolyncSessionCurrent(generation: generation, settings: deps.settingsStore.load()) {
+            await waitForStoredFolyncCredentials(generation: generation)
+        }
         await deps.supplementalCoordinator.clearBackoff()
         let settings = deps.settingsStore.load()
         guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
@@ -237,6 +249,28 @@ extension DataModel {
         }
         guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
         await restartFolyncSupplementalScheduler(runImmediately: runImmediately)
+    }
+
+    /// Reads the stored token before the session starts. macOS blocks that read
+    /// while it shows its Keychain access prompt (for example after a rebuild
+    /// changes the app's signature), and every Folync request waits behind it.
+    /// A slow read is reported as waiting for Keychain access rather than
+    /// leaving the status at "not configured".
+    func waitForStoredFolyncCredentials(generation: UUID) async {
+        let deps = folyncSessionDependencies
+        let delayNanoseconds = UInt64(max(0, deps.keychainWaitNoticeDelay) * 1_000_000_000)
+        let notice = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled, let self,
+                  generation == self.folyncRefreshGeneration,
+                  self.folyncConnectionState == .notConfigured else { return }
+            self.folyncConnectionState = .waitingForKeychain
+        }
+        _ = await deps.loadToken()
+        notice.cancel()
+        if generation == folyncRefreshGeneration, folyncConnectionState == .waitingForKeychain {
+            folyncConnectionState = .connecting
+        }
     }
 
     private func scheduleFolyncCheck(at date: Date, isCatchUp: Bool) {
