@@ -17,6 +17,7 @@ struct StockbarSettingsView: View {
     /// Backup availability is read from disk once (and after a backup or restore), not on every render.
     @State private var hasBackups = false
     @State private var lastBackupDate: Date?
+    private let pythonSetup = PythonEnvironmentSetup.shared
 
     init(dataModel: DataModel, onOpenSection: @escaping (StockbarMainSection) -> Void = { _ in }) {
         self.dataModel = dataModel
@@ -327,6 +328,8 @@ struct StockbarSettingsView: View {
             Text("Stockbar backs up your holdings once a day. Keychain credentials are not included.")
         }
 
+        pythonSection
+
         Section("Diagnostics") {
             LabeledContent {
                 Button("Open Diagnostics") { onOpenSection(.diagnostics) }
@@ -340,6 +343,63 @@ struct StockbarSettingsView: View {
                 Text("Data health")
                 Text("Price, exchange-rate and portfolio-source freshness.")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var pythonSection: some View {
+        Section {
+            LabeledContent {
+                Text(pythonSetup.interpreterVersion ?? "Checking…")
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } label: {
+                Text("Interpreter")
+                Text(pythonInterpreterDescription)
+            }
+            LabeledContent {
+                if pythonSetup.isRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(pythonSetup.interpreterSource == .stockbar ? "Rebuild" : "Set Up") {
+                        Task { await pythonSetup.setUp() }
+                    }
+                }
+            } label: {
+                Text("Stockbar's Python environment")
+                pythonSetupStatus
+            }
+        } header: {
+            Text("Python")
+        } footer: {
+            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv if it is installed, otherwise Python 3.10 or later from Homebrew or python.org. Needs an internet connection and usually takes under a minute.")
+        }
+        .task { await pythonSetup.refreshInterpreterInfo() }
+    }
+
+    private var pythonInterpreterDescription: String {
+        switch pythonSetup.interpreterSource {
+        case .configured: "Set by the pythonInterpreterPath setting: \(pythonSetup.interpreterPath)"
+        case .stockbar: "Stockbar's own environment"
+        case .system: "System Python (\(pythonSetup.interpreterPath))"
+        }
+    }
+
+    @ViewBuilder
+    private var pythonSetupStatus: some View {
+        switch pythonSetup.state {
+        case .idle:
+            Text(pythonSetup.interpreterSource == .stockbar
+                 ? "In use. Rebuild to reinstall the pinned packages."
+                 : "Faster and more reliable than the system Python.")
+        case .running(let progress):
+            Text(progress)
+        case .succeeded:
+            Text("Ready. Prices use it from the next refresh.")
+                .foregroundStyle(.green)
+        case .failed(let message):
+            Text(message)
+                .foregroundStyle(.orange)
         }
     }
 

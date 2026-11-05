@@ -410,27 +410,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
         Stockbar needs its pinned Python packages for the configured interpreter.
 
-        To install them, open Terminal and run:
-        \(installCommand)
+        Recommended: choose Set Up Automatically. Stockbar installs a current Python and its packages in its own environment (Application Support/Stockbar/python-env) and uses it from the next refresh. You can also do this later in Settings > Advanced > Python.
 
-        Recommended instead: give Stockbar its own environment with a current Python. From the source checkout run `bash script/setup_python_env.sh`, then relaunch. Stockbar uses ~/Library/Application Support/Stockbar/python-env automatically.
+        Or install the packages for the current interpreter from Terminal:
+        \(installCommand)
 
         To use another virtual environment, point Stockbar at it and relaunch:
         defaults write com.stockbar pythonInterpreterPath /path/to/venv/bin/python3
         """
         alert.alertStyle = .informational
+        alert.addButton(withTitle: "Set Up Automatically")
         alert.addButton(withTitle: "Copy Command")
         alert.addButton(withTitle: "Open Terminal")
         alert.addButton(withTitle: "Dismiss")
 
-        presentAlert(alert) { response in
+        presentAlert(alert) { [weak self] response in
             switch response {
             case .alertFirstButtonReturn:
+                Task { @MainActor in await self?.setUpPythonEnvironment() }
+            case .alertSecondButtonReturn:
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(installCommand, forType: .string)
                 Task { await Logger.shared.info("Python install command copied to clipboard") }
-            case .alertSecondButtonReturn:
+            case .alertThirdButtonReturn:
                 if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
                     NSWorkspace.shared.open(terminal)
                 }
@@ -438,6 +441,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 break
             }
         }
+    }
+
+    /// Runs the in-app environment setup and reports the outcome.
+    @MainActor
+    private func setUpPythonEnvironment() async {
+        let setup = PythonEnvironmentSetup.shared
+        await setup.setUp()
+        let alert = NSAlert()
+        if case .failed(let message) = setup.state {
+            alert.messageText = "Python Setup Failed"
+            alert.informativeText = "\(message)\n\nYou can retry from Settings > Advanced > Python."
+            alert.alertStyle = .warning
+        } else {
+            alert.messageText = "Python Is Ready"
+            alert.informativeText = "Stockbar's own Python environment is set up. Prices use it from the next refresh."
+        }
+        alert.addButton(withTitle: "OK")
+        presentAlert(alert) { _ in }
     }
 
     /// Shell command using absolute, quoted paths so it works from any
