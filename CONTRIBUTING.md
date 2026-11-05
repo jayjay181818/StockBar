@@ -48,7 +48,7 @@ Before contributing, ensure you have:
 
 - **macOS 15.4+** for development
 - **A current Xcode** (the project builds in Swift 6 language mode; see the build settings)
-- **Python**: `bash script/setup_python_env.sh` (recommended; a current Python in Stockbar's own environment), or Python 3.9+ with `python3 -m pip install -r Stockbar/Resources/requirements.txt`
+- **Python**: `bash script/setup_python_env.sh` (recommended; a current Python in Stockbar's own environment), or Python 3.9+ with `python3 -m pip install -r Stockbar/Resources/requirements.txt` (3.9 gets the older urllib3/requests pins)
 - **Git** for version control
 - Basic familiarity with Swift and SwiftUI
 
