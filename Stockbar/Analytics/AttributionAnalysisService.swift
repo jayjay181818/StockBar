@@ -23,7 +23,10 @@ actor AttributionAnalysisService {
         startDate: Date,
         endDate: Date,
         historicalSnapshots: [HistoricalPortfolioSnapshot],
-        cashFlows: [CashFlowEvent] = []
+        cashFlows: [CashFlowEvent] = [],
+        convert: @escaping @Sendable (_ amount: Double, _ from: String, _ to: String) -> Double = {
+            CurrencyConverter.shared.convert(amount: $0, from: $1, to: $2)
+        }
     ) async -> AttributionAnalysisResult? {
 
         await Logger.shared.debug("📊 Calculating attribution from historical snapshots: \(startDate) to \(endDate)")
@@ -40,27 +43,20 @@ actor AttributionAnalysisService {
 
         guard let startSnapshot = filteredData.first,
               let endSnapshot = filteredData.last,
-              startSnapshot.totalValue > 0 else {
-            await Logger.shared.error("📊 Unable to determine start/end snapshots or start value is zero")
+              startSnapshot.totalValue.isFinite, startSnapshot.totalValue > 0,
+              endSnapshot.totalValue.isFinite else {
+            await Logger.shared.error("📊 Unable to determine start/end snapshots or start/end value is zero or not finite")
             return nil
         }
 
         let startValue = startSnapshot.totalValue
         let endValue = endSnapshot.totalValue
-        let portfolioReturn = ((endValue - startValue) / startValue) * 100
+        // Position values are in each position's own currency (GBX = pence) while
+        // totalValue is in the snapshot currency, so convert before mixing them.
+        let baseCurrency = startSnapshot.currency
 
-        await Logger.shared.debug("📊 Attribution Debug:")
-        await Logger.shared.debug("   Start Date: \(startSnapshot.date)")
-        await Logger.shared.debug("   End Date: \(endSnapshot.date)")
-        await Logger.shared.debug("   Start Value: £\(String(format: "%.2f", startValue))")
-        await Logger.shared.debug("   End Value: £\(String(format: "%.2f", endValue))")
-        await Logger.shared.debug("   Return: \(String(format: "%.2f", portfolioReturn))%")
-        await Logger.shared.debug("   Snapshot Count: \(filteredData.count)")
-
-        // Calculate stock contributions using actual position data
         var stockContributions: [StockContribution] = []
 
-        // Get all symbols across the period
         var allSymbols = Set<String>()
         for snapshot in filteredData {
             allSymbols.formUnion(snapshot.portfolioComposition.keys.filter { !SymbolMetadata.isBenchmarkSymbol($0) })
@@ -69,61 +65,67 @@ actor AttributionAnalysisService {
         for symbol in allSymbols {
             guard let startPosition = startSnapshot.portfolioComposition[symbol],
                   let endPosition = endSnapshot.portfolioComposition[symbol],
-                  startPosition.priceAtDate > 0 else {
+                  startPosition.priceAtDate.isFinite, startPosition.priceAtDate > 0,
+                  endPosition.priceAtDate.isFinite,
+                  startPosition.units.isFinite, startPosition.valueAtDate.isFinite,
+                  endPosition.valueAtDate.isFinite else {
                 continue
             }
 
-            // Calculate stock return
             let stockReturn = ((endPosition.priceAtDate - startPosition.priceAtDate) / startPosition.priceAtDate) * 100
 
-            // Calculate weight as percentage of portfolio
-            let startWeight = (startPosition.valueAtDate / startValue) * 100
-            let endWeight = (endPosition.valueAtDate / endValue) * 100
+            let startPositionValue = convert(startPosition.valueAtDate, startPosition.currency, baseCurrency)
+            let endPositionValue = convert(endPosition.valueAtDate, endPosition.currency, baseCurrency)
+            let startWeight = (startPositionValue / startValue) * 100
+            let endWeight = endValue > 0 ? (endPositionValue / endValue) * 100 : 0
             let avgWeight = (startWeight + endWeight) / 2.0
 
-            // Calculate contribution (weight × return)
-            let contribution = (avgWeight / 100) * stockReturn
+            // Price effect on the units held at the start. Units bought or sold during
+            // the period are new money / withdrawals, not performance.
+            let nativeGain = startPosition.units * (endPosition.priceAtDate - startPosition.priceAtDate)
+            let dollarContribution = convert(nativeGain, startPosition.currency, baseCurrency)
+            let contribution = (dollarContribution / startValue) * 100
 
-            // Calculate dollar contribution
-            let dollarChange = endPosition.valueAtDate - startPosition.valueAtDate
-            let dollarContribution = dollarChange
+            // A missing FX rate or bad data point must not poison totals and percentages.
+            guard stockReturn.isFinite, startPositionValue.isFinite, endPositionValue.isFinite,
+                  avgWeight.isFinite, dollarContribution.isFinite, contribution.isFinite else {
+                continue
+            }
 
-            // Get sector
-            let sector = getSectorForSymbol(symbol)
-
-            let stockContribution = StockContribution(
+            stockContributions.append(StockContribution(
                 symbol: symbol,
                 weight: avgWeight,
                 stockReturn: stockReturn,
                 contribution: contribution,
                 dollarContribution: dollarContribution,
-                sector: sector
-            )
-
-            stockContributions.append(stockContribution)
+                sector: getSectorForSymbol(symbol)
+            ))
         }
 
         stockContributions.sort { $0.dollarContribution > $1.dollarContribution }
 
-        // Calculate sector contributions
+        // Return on the starting holdings, excluding money added or withdrawn.
+        let priceEffect = stockContributions.reduce(0) { $0 + $1.dollarContribution }
+        let portfolioReturn = (priceEffect / startValue) * 100
+
+        await Logger.shared.debug("📊 Attribution: \(startSnapshot.date) to \(endSnapshot.date), start \(String(format: "%.2f", startValue)) \(baseCurrency), end \(String(format: "%.2f", endValue)), price-effect return \(String(format: "%.2f", portfolioReturn))%, snapshots \(filteredData.count)")
+
         let sectorContributions = calculateSectorContributions(from: stockContributions)
 
-        // Calculate TWR and MWR
-        let twrMwrComparison = calculateTWRMWR(
-            startValue: startValue,
-            endValue: endValue,
-            cashFlows: cashFlows
-        )
+        // TWR/MWR and net cash flow need real cash-flow data. Without it they would
+        // simply restate the raw value change (new money counted as performance).
+        let hasCashFlows = !cashFlows.isEmpty
+        let twrMwrComparison = hasCashFlows
+            ? calculateTWRMWR(startValue: startValue, endValue: endValue, cashFlows: cashFlows)
+            : nil
 
-        // Generate waterfall data
         let waterfallData = generateWaterfallData(
             stockContributions: stockContributions,
             startValue: startValue,
             endValue: endValue
         )
 
-        // Calculate net cash flow
-        let netCashFlow = cashFlows.reduce(0) { $0 + $1.amount }
+        let netCashFlow: Double? = hasCashFlows ? cashFlows.reduce(0) { $0 + $1.amount } : nil
 
         let result = AttributionAnalysisResult(
             startDate: startDate,
@@ -184,11 +186,9 @@ actor AttributionAnalysisService {
         let sectorContributions = calculateSectorContributions(from: stockContributions)
 
         // Calculate TWR and MWR
-        let twrMwrComparison = calculateTWRMWR(
-            startValue: startValue,
-            endValue: endValue,
-            cashFlows: cashFlows
-        )
+        let twrMwrComparison = cashFlows.isEmpty
+            ? nil
+            : calculateTWRMWR(startValue: startValue, endValue: endValue, cashFlows: cashFlows)
 
         // Generate waterfall data
         let waterfallData = generateWaterfallData(
@@ -197,8 +197,7 @@ actor AttributionAnalysisService {
             endValue: endValue
         )
 
-        // Calculate net cash flow
-        let netCashFlow = cashFlows.reduce(0) { $0 + $1.amount }
+        let netCashFlow: Double? = cashFlows.isEmpty ? nil : cashFlows.reduce(0) { $0 + $1.amount }
 
         let result = AttributionAnalysisResult(
             startDate: startDate,
@@ -461,6 +460,18 @@ actor AttributionAnalysisService {
             ))
         }
 
+        // Reconcile to the ending value: deposits/withdrawals, FX moves, other holdings
+        // and contributors beyond the top 10 all land here.
+        let residual = endValue - cumulative
+        if abs(residual) > 0.005 {
+            cumulative += residual
+            waterfallData.append(WaterfallDataPoint(
+                label: "Trades & Other",
+                value: residual,
+                cumulativeValue: cumulative
+            ))
+        }
+
         // Ending value
         waterfallData.append(WaterfallDataPoint(
             label: "Ending Value",
@@ -475,24 +486,7 @@ actor AttributionAnalysisService {
     // MARK: - Helper Methods
 
     private func getSectorForSymbol(_ symbol: String) -> String {
-        // Basic sector mapping - should be expanded
-        let sectorMap: [String: String] = [
-            "AAPL": "Technology",
-            "MSFT": "Technology",
-            "GOOGL": "Technology",
-            "GOOG": "Technology",
-            "AMZN": "Consumer Cyclical",
-            "TSLA": "Consumer Cyclical",
-            "META": "Technology",
-            "NVDA": "Technology",
-            "JPM": "Financials",
-            "V": "Financials",
-            "JNJ": "Healthcare",
-            "PFE": "Healthcare",
-            "XOM": "Energy",
-            "CVX": "Energy"
-        ]
-
-        return sectorMap[symbol] ?? "Unknown"
+        // One sector table for the whole app (see SectorAnalysisService.Sector).
+        SectorAnalysisService.Sector.forSymbol(symbol).rawValue
     }
 }

@@ -13,6 +13,8 @@ struct RiskAnalyticsView: View {
     /// Missing history is an expected state, not a failure.
     @State private var insufficientDataMessage: String?
     @State private var selectedTimeRange: TimeRange = .oneYear
+    /// Set when snapshots recorded in another currency were converted or left out.
+    @State private var currencyNotice: String?
 
     enum TimeRange: String, CaseIterable {
         case oneMonth = "1M"
@@ -61,6 +63,10 @@ struct RiskAnalyticsView: View {
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
+                    if let currencyNotice {
+                        StockbarNotice(message: currencyNotice)
+                    }
+
                     // Risk metrics cards
                     metricsGridView(metrics: metrics)
 
@@ -142,7 +148,7 @@ struct RiskAnalyticsView: View {
             // Sharpe Ratio
             metricCard(
                 title: "Sharpe Ratio",
-                value: String(format: "%.3f", metrics.sharpeRatio),
+                value: formatRatio(metrics.sharpeRatio),
                 subtitle: sharpeInterpretation(metrics.sharpeRatio),
                 color: sharpeColor(metrics.sharpeRatio),
                 icon: "chart.line.uptrend.xyaxis"
@@ -151,8 +157,8 @@ struct RiskAnalyticsView: View {
             // Sortino Ratio
             metricCard(
                 title: "Sortino Ratio",
-                value: String(format: "%.3f", metrics.sortinoRatio),
-                subtitle: "Downside risk-adjusted",
+                value: formatRatio(metrics.sortinoRatio),
+                subtitle: metrics.sortinoRatio == nil ? "No negative periods" : "Downside risk-adjusted",
                 color: sortinoColor(metrics.sortinoRatio),
                 icon: "arrow.down.right.circle.fill"
             )
@@ -188,9 +194,9 @@ struct RiskAnalyticsView: View {
 
             // Downside Deviation
             metricCard(
-                title: "Downside Deviation",
+                title: "Downside Deviation (Annual)",
                 value: String(format: "%.2f%%", metrics.downsideDeviation * 100),
-                subtitle: "Negative returns only",
+                subtitle: "Negative returns only, annualized",
                 color: .orange,
                 icon: "arrow.down.square.fill"
             )
@@ -300,7 +306,7 @@ struct RiskAnalyticsView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Text(String(format: "%.3f", metrics.sharpeRatio))
+                    Text(formatRatio(metrics.sharpeRatio))
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(sharpeColor(metrics.sharpeRatio))
@@ -320,7 +326,7 @@ struct RiskAnalyticsView: View {
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Text(String(format: "%.3f", metrics.sortinoRatio))
+                    Text(formatRatio(metrics.sortinoRatio))
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(sortinoColor(metrics.sortinoRatio))
@@ -558,25 +564,53 @@ struct RiskAnalyticsView: View {
                 return
             }
 
-            // Extract portfolio values and dates
-            let portfolioValues = snapshots.map { $0.totalValue }
-            let dates = snapshots.map { $0.date }
+            // One close per calendar day, with buys/sells excluded from returns
+            // (previous day's holdings revalued at the new prices).
+            let preferredCurrency = dataModel.preferredCurrency
+            let converter = dataModel.currencyConverter
+
+            // Each snapshot was recorded in the currency that was preferred at the time. Convert
+            // them to today's currency, or leave out those that cannot be converted.
+            let normalized = RiskMetricsService.normalizingSnapshotCurrencies(
+                snapshots, to: preferredCurrency,
+                convert: { converter.convert(amount: $0, from: $1, to: $2) }
+            )
+            var notices: [String] = []
+            if normalized.convertedCount > 0 {
+                notices.append("\(normalized.convertedCount) recorded snapshot(s) were in another currency and were converted to \(preferredCurrency) at today's exchange rate.")
+            }
+            if normalized.droppedCount > 0 {
+                notices.append("\(normalized.droppedCount) snapshot(s) in another currency were left out because no exchange rate is available.")
+            }
+            let notice = notices.isEmpty ? nil : notices.joined(separator: " ")
+
+            guard let series = RiskMetricsService.flowAdjustedDailySeries(
+                snapshots: normalized.snapshots,
+                convert: { converter.convert(amount: $0, from: $1, to: preferredCurrency) }
+            ) else {
+                await MainActor.run {
+                    insufficientDataMessage = "Risk metrics need portfolio values from at least two different days."
+                    isCalculating = false
+                }
+                return
+            }
 
             // Calculate comprehensive risk metrics
             if let metrics = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(
-                portfolioValues: portfolioValues,
+                series: series,
                 riskFreeRate: 0.04
             ) {
                 // Find significant drawdown periods
                 let periods = await RiskMetricsService.shared.findDrawdownPeriods(
-                    portfolioValues: portfolioValues,
-                    dates: dates,
+                    portfolioValues: series.values,
+                    dates: series.dates,
                     threshold: 0.05
                 )
 
                 await MainActor.run {
                     self.riskMetrics = metrics
                     self.drawdownPeriods = periods
+                    self.currencyNotice = notice
                     self.isCalculating = false
                 }
             } else {
@@ -630,15 +664,23 @@ struct RiskAnalyticsView: View {
 
     // MARK: - Interpretation Functions
 
-    private func sharpeInterpretation(_ sharpe: Double) -> String {
+    private func formatRatio(_ ratio: Double?) -> String {
+        guard let ratio else { return "—" }
+        return String(format: "%.3f", ratio)
+    }
+
+    private func sharpeInterpretation(_ sharpe: Double?) -> String {
+        guard let sharpe else { return "" }
         if sharpe > 3.0 { return "Exceptional" } else if sharpe > 2.0 { return "Very good" } else if sharpe > 1.0 { return "Good" } else if sharpe > 0.5 { return "Adequate" } else if sharpe > 0 { return "Below average" } else { return "Poor" }
     }
 
-    private func sharpeColor(_ sharpe: Double) -> Color {
+    private func sharpeColor(_ sharpe: Double?) -> Color {
+        guard let sharpe else { return .secondary }
         if sharpe > 2.0 { return .green } else if sharpe > 1.0 { return .blue } else if sharpe > 0.5 { return .orange } else { return .red }
     }
 
-    private func sortinoColor(_ sortino: Double) -> Color {
+    private func sortinoColor(_ sortino: Double?) -> Color {
+        guard let sortino else { return .secondary }
         if sortino > 2.0 { return .green } else if sortino > 1.0 { return .blue } else if sortino > 0.5 { return .orange } else { return .red }
     }
 

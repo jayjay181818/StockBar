@@ -67,6 +67,32 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.portfolioComposition.keys.sorted(), ["GOOD"])
     }
 
+    func testGainsUseOnlyValuedPositionsWithAReadableCost() async throws {
+        let date = Date(timeIntervalSince1970: 1_777_777_777)
+        let composition = PortfolioComposition(positions: [
+            PortfolioPosition(symbol: "GOOD", units: 5, avgCost: 40, currency: "USD"),
+            PortfolioPosition(symbol: "NOPRICE", units: 5, avgCost: 1_000, currency: "USD"),
+            PortfolioPosition(symbol: "NOCOST", units: 2, avgCost: .nan, currency: "USD")
+        ])
+        let input = HistoricalPortfolioCalculationInput(
+            startDate: date.addingTimeInterval(-60),
+            endDate: date.addingTimeInterval(60),
+            priceSnapshots: [
+                "GOOD": [PriceSnapshot(timestamp: date, price: 50, previousClose: 45, symbol: "GOOD")],
+                "NOCOST": [PriceSnapshot(timestamp: date, price: 30, previousClose: 30, symbol: "NOCOST")]
+            ],
+            composition: composition,
+            preferredCurrency: "USD"
+        )
+
+        let snapshots = await HistoricalPortfolioCalculationService().calculateSnapshots(input)
+        let snapshot = try XCTUnwrap(snapshots.first)
+
+        XCTAssertEqual(snapshot.totalValue, 310, accuracy: 0.01)
+        XCTAssertEqual(snapshot.totalCost, 200, accuracy: 0.01)
+        XCTAssertEqual(snapshot.totalGains, 50, accuracy: 0.01)
+    }
+
     // MARK: - History retention and merging
 
     func testThinnedPriceHistoryKeepsRecentPointsAndOneCloseFromEachOlderDay() {
@@ -118,6 +144,28 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(HistoricalDataManager.mergePortfolioHistory(existing: recorded, recalculated: []).count, recorded.count)
     }
 
+    func testOldPortfolioHistoryKeepsOneSnapshotPerDayInMemory() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = calendar.startOfDay(for: now)
+        func snapshot(daysAgo: Double, value: Double) -> HistoricalPortfolioSnapshot {
+            HistoricalPortfolioSnapshot(
+                date: today.addingTimeInterval(-daysAgo * 86_400), totalValue: value, totalGains: 0,
+                totalCost: value, currency: "GBP", portfolioComposition: [:]
+            )
+        }
+        // Three intraday samples on an old day and on a recent day.
+        let old = [snapshot(daysAgo: 99.8, value: 1), snapshot(daysAgo: 99.5, value: 2), snapshot(daysAgo: 99.2, value: 3)]
+        let recent = [snapshot(daysAgo: 4.8, value: 4), snapshot(daysAgo: 4.5, value: 5), snapshot(daysAgo: 4.2, value: 6)]
+
+        let thinned = HistoricalDataManager.thinnedPortfolioHistory(
+            (recent + old).shuffled(), fullResolutionDays: 90, now: now, calendar: calendar
+        )
+
+        XCTAssertEqual(thinned.map(\.totalValue), [3, 4, 5, 6], "Old days keep their last snapshot; recent days keep every sample")
+    }
+
     func testPortfolioCompositionHashIsStableAcrossLaunches() {
         let positions = [
             PortfolioPosition(symbol: "SSE.L", units: 10, avgCost: 15, currency: "GBP"),
@@ -127,5 +175,101 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(hash, PortfolioComposition(positions: positions.reversed()).compositionHash)
         XCTAssertEqual(hash.count, 64, "A SHA-256 hex digest, not the per-process hashValue")
         XCTAssertNotEqual(hash, PortfolioComposition(positions: Array(positions.prefix(1))).compositionHash)
+    }
+}
+
+@MainActor
+final class DataIntegrityGuardTests: XCTestCase {
+    func testBackupCleanupAlwaysKeepsTheNewestBackups() {
+        let now = Date()
+        let backups = (0..<8).map { index in
+            (url: URL(fileURLWithPath: "/tmp/portfolio_backup_\(index).json"),
+             created: now.addingTimeInterval(-Double(index) * 40 * 86_400))
+        }
+        let cutoff = now.addingTimeInterval(-30 * 86_400)
+
+        let deleted = BackupService.backupsToDelete(backups, cutoff: cutoff, minimumKept: 5, keeping: backups[6].url)
+
+        // All but the newest are past the cutoff; the newest five and the kept file survive.
+        XCTAssertEqual(deleted.map(\.lastPathComponent), ["portfolio_backup_5.json", "portfolio_backup_7.json"])
+        XCTAssertTrue(BackupService.backupsToDelete(Array(backups.suffix(3)), cutoff: cutoff, minimumKept: 5, keeping: nil).isEmpty)
+    }
+
+    func testAnnotationDecodingKeepsReadableEntries() throws {
+        let good = ChartAnnotation(type: .note, date: Date(timeIntervalSince1970: 1_700_000_000), price: 10, text: "Kept", symbol: "TEST")
+        let goodJSON = String(decoding: try JSONEncoder().encode(good), as: UTF8.self)
+        let data = Data("[\(goodJSON), {\"unexpected\": true}]".utf8)
+
+        let decoded = try ChartAnnotationService.decodeAnnotations(from: data)
+
+        XCTAssertEqual(decoded.annotations.map(\.text), ["Kept"])
+        XCTAssertEqual(decoded.droppedCount, 1)
+    }
+
+    func testAnnotationsSurviveAReloadFromDisk() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarTests-Annotations-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("chart_annotations.json")
+
+        let first = ChartAnnotationService(storageURL: url)
+        let kept = ChartAnnotation(type: .buyMarker, date: Date(timeIntervalSince1970: 1_700_000_000), price: 12.5, text: "Bought", symbol: "AAA")
+        let removed = ChartAnnotation(type: .note, date: Date(timeIntervalSince1970: 1_700_100_000), price: 13, text: "Gone", symbol: "AAA")
+        let other = ChartAnnotation(type: .text, date: Date(timeIntervalSince1970: 1_700_200_000), price: 1, text: "Other", symbol: "BBB")
+        first.addAnnotation(kept)
+        first.addAnnotation(removed)
+        first.addAnnotation(other)
+        first.removeAnnotation(id: removed.id)
+        first.clearAnnotations(for: "BBB")
+
+        let reloaded = ChartAnnotationService(storageURL: url)
+        XCTAssertEqual(reloaded.annotations, [kept])
+    }
+
+    func testBackupFileRestoresThePortfolioAndSkipsBenchmarks() async throws {
+        let backups = try BackupService.shared.getBackupDirectory()
+        let realRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Stockbar", isDirectory: true).standardizedFileURL.path
+        guard !backups.standardizedFileURL.path.hasPrefix(realRoot) else {
+            return XCTFail("Backups must go to the isolated test root, not \(realRoot)")
+        }
+        let before = Set(BackupService.shared.listAvailableBackups().map(\.url))
+
+        let holding = RealTimeTrade(
+            trade: Trade(name: "VOD.L", position: Position(unitSize: "12.345678", positionAvgCost: "71.25", currency: "GBP", costCurrency: "GBX")),
+            realTimeInfo: TradingInfo()
+        )
+        let benchmark = RealTimeTrade(
+            trade: Trade(name: "^GSPC", position: Position(unitSize: "0", positionAvgCost: "", currency: "USD", costCurrency: "USD")),
+            realTimeInfo: TradingInfo()
+        )
+        let saved = await BackupService.shared.performManualBackup(trades: [holding, benchmark])
+        XCTAssertTrue(saved)
+
+        let created = BackupService.shared.listAvailableBackups().map(\.url).filter { !before.contains($0) }
+        defer { created.forEach { try? FileManager.default.removeItem(at: $0) } }
+        let backupURL = try XCTUnwrap(created.first)
+
+        let restored = try await BackupService.shared.restoreFromBackup(backupURL: backupURL)
+        XCTAssertEqual(restored.map(\.name), ["VOD.L"], "Benchmarks are internal rows and are not backed up")
+        let position = try XCTUnwrap(restored.first?.position)
+        XCTAssertEqual(position.unitSize, 12.345678, accuracy: 1e-9)
+        XCTAssertEqual(position.costCurrency, "GBX")
+        XCTAssertEqual(position.currency, "GBP")
+    }
+
+    func testPriceSanitiserAcceptsLargeRealQuotes() {
+        let service = DataValidationService.shared
+        XCTAssertEqual(service.sanitizePrice(1_520_000), 1_520_000)
+        XCTAssertNil(service.sanitizePrice(.infinity))
+        XCTAssertNil(service.sanitizePrice(DataValidationService.maximumPlausiblePrice * 10))
+    }
+
+    func testLeakScanSeesRawSecretsThatRedactionWouldHide() {
+        let raw = "ERROR 403 url=https://financialmodelingprep.com/api/v3/quote/MU?apikey=raw-secret"
+        let rawSnapshot = RuntimeIssueMonitor.scan(logs: [raw])
+        let redactedSnapshot = RuntimeIssueMonitor.scan(logs: [LogRedactor.redact(raw)])
+        XCTAssertEqual(rawSnapshot.secretLeakCount, 1)
+        XCTAssertEqual(redactedSnapshot.secretLeakCount, 0)
     }
 }

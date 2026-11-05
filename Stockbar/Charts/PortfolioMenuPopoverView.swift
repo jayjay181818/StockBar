@@ -363,6 +363,7 @@ struct PortfolioMenuPopoverView: View {
     @ObservedObject private var dataModel: DataModel
     @StateObject private var viewModel: PortfolioMenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
+    @State private var summaryCache = DisplaySummaryCache()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let actions: PortfolioMenuActions
@@ -384,10 +385,13 @@ struct PortfolioMenuPopoverView: View {
         )
     }
 
+    /// Computed once per render pass (see `DisplaySummaryCache`).
     private var summary: DisplayPortfolioSummary {
-        dataModel.calculateDisplayPortfolioSummary(
-            preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
-        )
+        summaryCache.summary {
+            dataModel.calculateDisplayPortfolioSummary(
+                preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
+            )
+        }
     }
 
     private var currentDisplayValue: String {
@@ -419,6 +423,7 @@ struct PortfolioMenuPopoverView: View {
     }
 
     var body: some View {
+        let _ = summaryCache.beginPass()
         VStack(alignment: .leading, spacing: 12) {
             headerView
 
@@ -476,30 +481,26 @@ struct PortfolioMenuPopoverView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onAppear {
             viewModel.activate()
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
         .onDisappear { viewModel.deactivate() }
         .onReceive(dataModel.tradeContentPublisher) { _ in
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
         .onReceive(dataModel.$portfolioMenuBarDisplaySettings.dropFirst()) { _ in
-            viewModel.update(
-                currentValue: summary.totalValue,
-                currentTrades: dataModel.realTimeTrades,
-                preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
-            )
+            refreshChartModel()
         }
+    }
+
+    /// Event handlers run between renders, so they must not reuse the last render's summary.
+    private func refreshChartModel() {
+        summaryCache.beginPass()
+        viewModel.update(
+            currentValue: summary.totalValue,
+            currentTrades: dataModel.realTimeTrades,
+            preferredCurrency: summary.currency,
+            valuationSource: summary.valuationSource
+        )
     }
 
     private var headerView: some View {
@@ -552,7 +553,7 @@ struct PortfolioMenuPopoverView: View {
             GridRow {
                 let change = displayedChange
                 MenuPopoverStatBox(
-                    label: "\(selectedRangeLabel) P&L",
+                    label: changeLabel,
                     value: MenuPopoverFormatter.currencyExact(change?.value, currency: summary.currency, includeSign: true),
                     subValue: MenuPopoverFormatter.percent(change?.percent),
                     valueColor: StockbarPalette.signed(change?.value, neutral: .primary)
@@ -569,8 +570,10 @@ struct PortfolioMenuPopoverView: View {
         summary.ownedPositionCount == 1 ? "1 position" : "\(summary.ownedPositionCount) positions"
     }
 
-    private var selectedRangeLabel: String {
-        viewModel.selectedTimeRange == .day ? "Today's" : viewModel.selectedTimeRange.description
+    /// Longer ranges show the change in market value, which includes money
+    /// added or taken out, so they are not labelled as profit.
+    private var changeLabel: String {
+        viewModel.selectedTimeRange == .day ? "Today's P&L" : "\(viewModel.selectedTimeRange.description) Value Change"
     }
 }
 

@@ -1644,6 +1644,67 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertTrue(decoded[0].showInMenuBar)
     }
 
+    func testLivePortfolioSamplesOnlyJoinASeriesInTheirCurrency() {
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        manager.recordLivePortfolioSample(totalValue: 4_321.5, totalGains: 21.5, currency: "GBP", timestamp: now.addingTimeInterval(-60))
+
+        let gbpValues = manager.getStoredPortfolioValues(for: .day, currency: "GBP").map(\.value)
+        let usdValues = manager.getStoredPortfolioValues(for: .day, currency: "USD").map(\.value)
+
+        XCTAssertTrue(gbpValues.contains { abs($0 - 4_321.5) < 0.0001 })
+        XCTAssertFalse(usdValues.contains { abs($0 - 4_321.5) < 0.0001 })
+    }
+
+    func testPerformanceMetricsUseDailyClosesAndOnlyAnnualiseLongSpans() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!
+        func point(_ hours: Double, _ value: Double) -> ChartDataPoint {
+            ChartDataPoint(date: start.addingTimeInterval(hours * 3_600), value: value)
+        }
+        // Three intraday samples on day one, then one close each on days two and three.
+        let shortSeries = [point(0, 100), point(1, 90), point(2, 100), point(24, 110), point(48, 99)]
+
+        let short = try XCTUnwrap(HistoricalDataManager.performanceMetrics(
+            points: shortSeries, previousPoint: nil, currency: "GBP", calendar: calendar
+        ))
+        XCTAssertEqual(short.totalReturn, -1, accuracy: 0.0001)
+        XCTAssertEqual(short.winRate ?? -1, 50, accuracy: 0.0001, "Two daily returns: +10%, then -10%")
+        XCTAssertNil(short.annualizedReturn, "Two days must not be annualised")
+        XCTAssertEqual(short.currency, "GBP")
+
+        let longSeries = [point(0, 100), point(24 * 365.25, 110)]
+        let long = try XCTUnwrap(HistoricalDataManager.performanceMetrics(
+            points: longSeries, previousPoint: nil, currency: "GBP", calendar: calendar
+        ))
+        XCTAssertEqual(long.annualizedReturn ?? .nan, 10, accuracy: 0.01)
+    }
+
+    func testCustomPortfolioRangeUsesTheChosenDates() {
+        let manager = HistoricalDataManager.shared
+        let now = Date()
+        let from = now.addingTimeInterval(-200 * 86_400)
+        let to = now.addingTimeInterval(-150 * 86_400)
+
+        let bounds = manager.portfolioRangeBounds(for: .custom, customFrom: from, customTo: to, now: now)
+        XCTAssertEqual(bounds.start, from)
+        XCTAssertEqual(bounds.end, to)
+        XCTAssertEqual(manager.portfolioRangeBounds(for: .month, customFrom: from, customTo: to, now: now).end, now)
+    }
+
+    func testPriceHistoryCoverageNeedsPointsNearTheRangeStart() {
+        let end = Date()
+        let start = end.addingTimeInterval(-30 * 86_400)
+        let recent = (0..<20).map {
+            PriceSnapshot(timestamp: end.addingTimeInterval(-Double($0) * 3_600), price: 10, previousClose: 10, symbol: "X")
+        }.reversed()
+        let early = [PriceSnapshot(timestamp: start.addingTimeInterval(86_400), price: 10, previousClose: 10, symbol: "X")]
+
+        XCTAssertFalse(HistoricalDataManager.snapshotsReachRangeStart(Array(recent), from: start, to: end))
+        XCTAssertTrue(HistoricalDataManager.snapshotsReachRangeStart(early + recent, from: start, to: end))
+    }
+
     private func makeRealTimeTrade(
         symbol: String,
         units: String,
@@ -2033,6 +2094,29 @@ class PortfolioCalculationTests: XCTestCase {
             [404]
         )
     }
+
+    @MainActor
+    func testPriceChangeSignalOnlyAffectsTheSymbolsThatChanged() {
+        let manager = HistoricalDataManager.shared
+        let shown = "SHOWN-\(UUID().uuidString)"
+        let other = "OTHER-\(UUID().uuidString)"
+        defer {
+            manager.priceSnapshots.removeValue(forKey: shown)
+            manager.priceSnapshots.removeValue(forKey: other)
+        }
+
+        XCTAssertTrue(manager.priceDataChange(nil, affects: [shown]), "an unspecified change affects every chart")
+        XCTAssertTrue(manager.priceDataChange([shown.uppercased()], affects: [shown.lowercased()]))
+        XCTAssertFalse(manager.priceDataChange([other.uppercased()], affects: [shown]))
+
+        let before = manager.priceSeriesFingerprint(for: [shown])
+        manager.priceSnapshots[other] = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 1_000), price: 1, symbol: other)]
+        XCTAssertEqual(manager.priceSeriesFingerprint(for: [shown]), before, "another symbol's update must not reload this chart")
+
+        manager.priceSnapshots[shown] = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 2_000), price: 2, symbol: shown)]
+        XCTAssertNotEqual(manager.priceSeriesFingerprint(for: [shown]), before)
+    }
+
     @MainActor
     func testSymbolChartLoadsOnceOnPresentationAndCoalescesRangeAndPriceChanges() async {
         let suite = "StockbarTests.ChartLoads.\(UUID().uuidString)"
@@ -2149,4 +2233,92 @@ class PortfolioCalculationTests: XCTestCase {
         withExtendedLifetime((firstSubscription, secondSubscription)) {}
     }
 
+}
+
+final class PortfolioBackupFormatTests: XCTestCase {
+    func testParseAmountReadsGroupingAndLocaleDecimalsAndRejectsJunk() {
+        let uk = Locale(identifier: "en_GB")
+        let german = Locale(identifier: "de_DE")
+        XCTAssertEqual(Position.parseAmount("1,000", locale: uk), 1_000)
+        XCTAssertEqual(Position.parseAmount(" 10.25 ", locale: german), 10.25, "A plain '.' decimal works in any locale")
+        XCTAssertEqual(Position.parseAmount("12,50", locale: german), 12.5)
+        XCTAssertEqual(Position.parseAmount("0", locale: uk), 0, "Watchlist rows can hold zero units")
+        XCTAssertNil(Position.parseAmount("abc", locale: uk))
+        XCTAssertNil(Position.parseAmount("-5", locale: uk))
+        XCTAssertNil(Position.parseAmount("", locale: uk))
+        XCTAssertTrue(Position.isReadableAmount("  "))
+        XCTAssertFalse(Position.isReadableAmount("12x"))
+    }
+
+    func testBackupRoundTripKeepsWatchlistMenuBarAndCurrencyAndSurvivesBlankCost() throws {
+        let watched = Trade(
+            name: "VOD.L",
+            position: Position(unitSize: "0", positionAvgCost: "", currency: "GBP", costCurrency: "GBX"),
+            isWatchlistOnly: true,
+            showInMenuBar: false
+        )
+        let encoder = JSONEncoder()
+        encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = PortfolioExportData.nonFiniteDecoding
+
+        let data = try encoder.encode([PortfolioExportData(from: watched)])
+        let restored = try XCTUnwrap(try decoder.decode([PortfolioExportData].self, from: data).first).toTrade()
+
+        XCTAssertTrue(restored.isWatchlistOnly)
+        XCTAssertFalse(restored.showInMenuBar)
+        XCTAssertEqual(restored.position.currency, "GBP")
+        XCTAssertEqual(restored.position.costCurrency, "GBX")
+        XCTAssertEqual(restored.position.positionAvgCostString, "", "A blank cost stays blank rather than failing the backup")
+    }
+
+    func testBackupsWrittenBeforeTheNewFieldsStillDecode() throws {
+        let old = #"[{"symbol":"AAPL","units":5,"avgPositionCost":150.5,"costCurrency":"USD"}]"#
+        let trade = try XCTUnwrap(try JSONDecoder().decode([PortfolioExportData].self, from: Data(old.utf8)).first).toTrade()
+        XCTAssertEqual(trade.name, "AAPL")
+        XCTAssertFalse(trade.isWatchlistOnly)
+        XCTAssertTrue(trade.showInMenuBar)
+        XCTAssertEqual(trade.position.currency, "USD")
+        XCTAssertEqual(trade.position.positionAvgCost, 150.5)
+    }
+}
+
+final class PriceAlertConditionTests: XCTestCase {
+    func testPercentChangeIsMeasuredFromPreviousCloseAndFiresOnce() {
+        let alert = PriceAlert(symbol: "AV.L", condition: .percentChange, threshold: 5)
+        // A slow 1%-per-refresh climb from a 100 close.
+        let prices: [Double] = [101, 102, 103, 104, 105.2, 106, 107]
+        var last = 100.0
+        var fired: [Double] = []
+        for price in prices {
+            if alert.conditionMet(currentPrice: price, previousPrice: last, previousClose: 100) { fired.append(price) }
+            last = price
+        }
+        XCTAssertEqual(fired, [105.2], "Fires when the day's move first reaches 5%, then not again")
+        XCTAssertTrue(alert.conditionMet(currentPrice: 94, previousPrice: 99, previousClose: 100), "Falls count too")
+        XCTAssertFalse(alert.conditionMet(currentPrice: 110, previousPrice: 104, previousClose: .nan), "No close, no % alert")
+    }
+
+    func testAboveAndBelowStillFireOnCrossing() {
+        let above = PriceAlert(symbol: "AAPL", condition: .above, threshold: 150)
+        XCTAssertTrue(above.conditionMet(currentPrice: 151, previousPrice: 149))
+        XCTAssertFalse(above.conditionMet(currentPrice: 152, previousPrice: 151))
+        let below = PriceAlert(symbol: "AAPL", condition: .below, threshold: 150)
+        XCTAssertTrue(below.conditionMet(currentPrice: 149, previousPrice: 150))
+    }
+
+    func testStoredIdentityAndCooldownSurviveRebuilding() {
+        let id = UUID()
+        let created = Date(timeIntervalSince1970: 1_000)
+        let triggered = Date(timeIntervalSince1970: 2_000)
+        var alert = PriceAlert(
+            id: id, symbol: "AAPL", condition: .above, threshold: 150,
+            isEnabled: true, createdAt: created, lastTriggered: triggered
+        )
+        alert.isEnabled = false
+        XCTAssertEqual(alert.id, id)
+        XCTAssertEqual(alert.createdAt, created)
+        XCTAssertEqual(alert.lastTriggered, triggered)
+        XCTAssertFalse(alert.conditionMet(currentPrice: 151, previousPrice: 149), "Paused alerts never fire")
+    }
 }

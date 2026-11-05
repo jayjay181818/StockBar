@@ -14,6 +14,9 @@ struct StockbarSettingsView: View {
     @State private var showingBackupAlert = false
     @State private var backupAlertMessage = ""
     @State private var retentionDays = BackupService.shared.retentionDays
+    /// Backup availability is read from disk once (and after a backup or restore), not on every render.
+    @State private var hasBackups = false
+    @State private var lastBackupDate: Date?
 
     init(dataModel: DataModel, onOpenSection: @escaping (StockbarMainSection) -> Void = { _ in }) {
         self.dataModel = dataModel
@@ -54,7 +57,8 @@ struct StockbarSettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showingRestoreSheet) {
+        .task { refreshBackupState() }
+        .sheet(isPresented: $showingRestoreSheet, onDismiss: refreshBackupState) {
             RestoreBackupView(isPresented: $showingRestoreSheet, dataModel: dataModel)
         }
         .alert("Backup", isPresented: $showingBackupAlert) {
@@ -283,7 +287,7 @@ struct StockbarSettingsView: View {
     private var advancedPane: some View {
         Section {
             LabeledContent("Last Backup") {
-                if let lastBackup = BackupService.shared.lastBackupDate {
+                if let lastBackup = lastBackupDate {
                     Label(lastBackup.formatted(date: .abbreviated, time: .shortened), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 } else {
@@ -310,7 +314,7 @@ struct StockbarSettingsView: View {
                 } label: {
                     Label("Restore from Backup…", systemImage: "arrow.counterclockwise")
                 }
-                .disabled(BackupService.shared.listAvailableBackups().isEmpty)
+                .disabled(!hasBackups)
                 Button {
                     BackupService.shared.openBackupDirectory()
                 } label: {
@@ -347,7 +351,7 @@ struct StockbarSettingsView: View {
                     Text(dataModel.currencyConverter.getTimeSinceRefresh())
                         .foregroundStyle(dataModel.currencyConverter.lastRefreshSuccess ? Color.secondary : Color.orange)
                     Button {
-                        dataModel.currencyConverter.refreshRates()
+                        dataModel.currencyConverter.refreshRates(force: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -420,9 +424,15 @@ struct StockbarSettingsView: View {
         snapshotInterval = HistoricalDataManager.shared.getSnapshotInterval()
     }
 
+    private func refreshBackupState() {
+        hasBackups = !BackupService.shared.listAvailableBackups().isEmpty
+        lastBackupDate = BackupService.shared.lastBackupDate
+    }
+
     private func performManualBackup() {
         Task {
-            let success = await BackupService.shared.performManualBackup(trades: dataModel.realTimeTrades)
+            let success = await BackupService.shared.performManualBackup(trades: dataModel.localPortfolioTradesForBackup)
+            refreshBackupState()
             backupAlertMessage = success ? "Backup completed." : "Backup failed. See Diagnostics for details."
             showingBackupAlert = true
         }

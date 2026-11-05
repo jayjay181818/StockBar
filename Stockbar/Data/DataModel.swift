@@ -19,26 +19,9 @@ extension String {
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
-/// Simple async lock used to serialize refresh operations so mutations
-/// to `realTimeTrades` always occur on the main actor in isolation.
-actor RefreshCoordinator {
-    private var isRefreshing = false
-
-    func withLock<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-        while isRefreshing {
-            await Task.yield()
-        }
-
-        isRefreshing = true
-        defer { isRefreshing = false }
-
-        return try await operation()
-    }
-}
-
 @MainActor
 class DataModel: ObservableObject {
-    static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
+    nonisolated static let supportedCurrencies = ["USD", "GBP", "EUR", "JPY", "CAD", "AUD"] // Keep as is
 
     // MARK: - Properties
 
@@ -57,7 +40,6 @@ class DataModel: ObservableObject {
     private let tradeDataService = TradeDataService()
     private let migrationService = DataMigrationService.shared
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
-    private let refreshCoordinator = RefreshCoordinator()
     private var pendingPersistenceTask: Task<Void, Never>?
     private let trading212SettingsStore = Trading212SettingsStore.shared
     private let trading212CredentialStore = Trading212CredentialStore.shared
@@ -69,6 +51,9 @@ class DataModel: ObservableObject {
     private var trading212BrokerSyncTimer: Timer?
     private var trading212ScheduledFailureCount = 0
     private var trading212NextScheduledAttempt = Date.distantPast
+    /// Identifies the current scheduled cycle, so a cancelled older cycle
+    /// cannot clear the handle of a newer one.
+    private var trading212BrokerSyncGeneration = 0
     private var lastTrading212ScheduledReconciliation = Date.distantPast
     private var isTrading212BrokerSyncInProgress = false
     private var isTrading212HoldingReconciliationInProgress = false
@@ -84,6 +69,8 @@ class DataModel: ObservableObject {
     /// Last time a Trading 212 sync actually updated linked holdings. Market
     /// refresh only defers to the broker while this is recent.
     private var lastTrading212LinkedSyncAt: Date?
+    /// A trade change is waiting out the save debounce.
+    private var hasPendingDebouncedTradeSave = false
     var legacyPortfolioTrades: [RealTimeTrade]?
     var folyncBenchmarkBaselines: [String: TradingInfo] = [:]
     var folyncRefreshTimer: Timer?
@@ -240,7 +227,6 @@ class DataModel: ObservableObject {
             self.refreshService = RefreshService(
                 networkService: networkService,
                 cacheCoordinator: cacheCoordinator,
-                refreshCoordinator: refreshCoordinator,
                 refreshInterval: refreshInterval
             )
             self.refreshService.setDataModel(self)
@@ -258,6 +244,11 @@ class DataModel: ObservableObject {
                 await logger.error("Automatic refresh and provider schedulers remain stopped because startup persistence validation failed.")
                 return
             }
+
+            // One-time repair of UK price snapshots stored on mixed pence/pound
+            // scales; analytics read these snapshots without display-time guards.
+            // Runs after the trades load so their saved quotes can be the reference.
+            await self.repairUKPriceSnapshotScaleIfNeeded()
 
             // Emergency recovery removed by user request
 
@@ -279,15 +270,6 @@ class DataModel: ObservableObject {
         // One-time rescale of UK OHLC rows stored in pence before the GBX->GBP
         // fix landed in get_ohlc_data.py. Runs before any chart reads the store.
         Task { await OHLCPenceMigrationService.shared.migrateIfNeeded() }
-
-        // One-time repair of UK price snapshots stored on mixed pence/pound
-        // scales; analytics read these snapshots without display-time guards.
-        Task { @MainActor [weak self] in
-            let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded()
-            guard let self, !repairedSymbols.isEmpty else { return }
-            self.historicalDataManager.invalidatePriceData(for: repairedSymbols)
-            await self.historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
-        }
 
         // Initialize memory optimization
         setupMemoryManagement()
@@ -350,6 +332,18 @@ class DataModel: ObservableObject {
     
     // MARK: - Migration Methods
     
+    private func repairUKPriceSnapshotScaleIfNeeded() async {
+        var savedQuotes: [String: Double] = [:]
+        for trade in realTimeTrades where SymbolMetadata.isUKSymbol(trade.trade.name) {
+            let price = trade.realTimeInfo.currentPrice
+            if price.isFinite, price > 0 { savedQuotes[trade.trade.name.uppercased()] = price }
+        }
+        let repairedSymbols = await UKPriceSnapshotScaleMigrationService.shared.migrateIfNeeded(savedQuotes: savedQuotes)
+        guard !repairedSymbols.isEmpty else { return }
+        historicalDataManager.invalidatePriceData(for: repairedSymbols)
+        await historicalDataManager.reloadStoredPriceHistory(for: repairedSymbols)
+    }
+
     private func isBenchmarkSymbol(_ symbol: String) -> Bool {
         SymbolMetadata.isBenchmarkSymbol(symbol)
     }
@@ -497,9 +491,20 @@ class DataModel: ObservableObject {
         }
     }
 
+    /// Set once Core Data has held a portfolio (or legacy trades were recovered
+    /// once). After that an empty store means the user emptied it on purpose.
+    static let coreDataPortfolioEstablishedKey = "coreDataPortfolioEstablished"
+
     private func recoverLegacyUserTradesIfNeeded(afterLoading trades: [Trade]) async throws -> [Trade] {
+        let defaults = StockbarRuntimeStorage.userDefaults
         let portfolioTrades = trades.filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
         guard portfolioTrades.isEmpty else {
+            defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
+            return portfolioTrades
+        }
+        // Recover only before Core Data has ever held the portfolio; otherwise
+        // deleting every holding brought old legacy holdings back on relaunch.
+        guard !defaults.bool(forKey: Self.coreDataPortfolioEstablishedKey) else {
             return portfolioTrades
         }
 
@@ -517,6 +522,7 @@ class DataModel: ObservableObject {
 
         await logger.warning("⚠️ Core Data portfolio was empty; recovering \(legacyTrades.count) trades from legacy UserDefaults")
         try await tradeDataService.saveAllTrades(legacyTrades)
+        defaults.set(true, forKey: Self.coreDataPortfolioEstablishedKey)
         return legacyTrades
     }
     
@@ -539,7 +545,8 @@ class DataModel: ObservableObject {
     }
     
     internal func saveTradingInfo() {
-        guard !portfolioLoadFailed else { return }
+        // Folync display rows must not overwrite the local price cache.
+        guard !portfolioLoadFailed, !isFolyncPortfolioActive else { return }
         let tradingInfoDict = Dictionary(firstValuesFor: realTimeTrades
             .filter { !isBenchmarkTrade($0) }
             .map { ($0.trade.name, $0.realTimeInfo) })
@@ -762,6 +769,8 @@ class DataModel: ObservableObject {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
 
         guard !isFolyncPortfolioActive else { return }
 
@@ -809,15 +818,24 @@ class DataModel: ObservableObject {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
+        // A restart begins a fresh schedule instead of inheriting old backoff.
+        trading212NextScheduledAttempt = .distantPast
+        trading212ScheduledFailureCount = 0
     }
 
     private func runTrading212ScheduledCycle(reason: String) {
         guard Date() >= trading212NextScheduledAttempt else { return }
         guard trading212BrokerSyncTask == nil else { return }
 
+        trading212BrokerSyncGeneration &+= 1
+        let generation = trading212BrokerSyncGeneration
         trading212BrokerSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.trading212BrokerSyncTask = nil }
+            defer {
+                if self.trading212BrokerSyncGeneration == generation {
+                    self.trading212BrokerSyncTask = nil
+                }
+            }
 
             let settings = self.trading212SettingsStore.load()
             let reconciliationInterval = TimeInterval(max(
@@ -837,6 +855,8 @@ class DataModel: ObservableObject {
                 self.trading212ScheduledFailureCount = 0
                 self.trading212NextScheduledAttempt = .distantPast
             } catch {
+                // Cancellation (suspend or restart) is not a provider failure.
+                if error is CancellationError || Task.isCancelled { return }
                 self.trading212ScheduledFailureCount += 1
                 let retryAfter: TimeInterval?
                 if case let Trading212ProviderError.rateLimited(value) = error {
@@ -1218,6 +1238,23 @@ class DataModel: ObservableObject {
         }
     }
 
+    /// Price alerts used to be checked only by the market-quote refresh, so
+    /// holdings priced by Folync or Trading 212 never fired. Every price source
+    /// now calls this after applying prices.
+    func evaluatePriceAlerts(for trades: [RealTimeTrade]) {
+        for trade in trades where !isBenchmarkTrade(trade) {
+            let info = trade.realTimeInfo
+            let price = info.getCurrentDisplayPrice()
+            guard price.isFinite, price > 0 else { continue }
+            PriceAlertService.shared.checkAlerts(
+                symbol: trade.trade.name,
+                currentPrice: price,
+                previousPrice: info.prevClosePrice,
+                currency: info.currency ?? "USD"
+            )
+        }
+    }
+
     private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
         let updatesBySymbol = Dictionary(firstValuesFor: plan.tradeUpdates.map {
             ($0.manualSymbol.uppercased(), $0)
@@ -1248,6 +1285,7 @@ class DataModel: ObservableObject {
         }
 
         realTimeTrades = updatedTrades
+        evaluatePriceAlerts(for: updatedTrades.filter { updatesBySymbol[$0.trade.name.uppercased()] != nil })
 
         if !plan.tradeUpdates.isEmpty || !deletedSymbols.isEmpty {
             let summary = calculateDisplayPortfolioSummary(
@@ -1256,6 +1294,7 @@ class DataModel: ObservableObject {
             historicalDataManager.recordLivePortfolioSample(
                 totalValue: summary.totalValue,
                 totalGains: summary.totalGain,
+                currency: summary.currency,
                 timestamp: Date()
             )
         }
@@ -1285,7 +1324,8 @@ class DataModel: ObservableObject {
     /// Triggers an immediate refresh for the provided symbols, bypassing the
     /// staggered rotation. Symbols are matched case-insensitively against the
     /// current portfolio.
-    func refreshSymbolsImmediately(_ symbols: [String], reason: String) async {
+    /// `force` (user-initiated) skips the freshness check and retry backoff.
+    func refreshSymbolsImmediately(_ symbols: [String], reason: String, force: Bool = false) async {
         let uniqueTargets = Array(Set(symbols.map { $0.uppercased() }))
         guard !uniqueTargets.isEmpty else { return }
 
@@ -1305,7 +1345,7 @@ class DataModel: ObservableObject {
             return
         }
 
-        await performRefreshAllTrades(limitedTo: resolvedSymbols)
+        await performRefreshAllTrades(limitedTo: resolvedSymbols, force: force)
     }
 
     /// Convenience helper that inspects cache status and refreshes any symbol
@@ -1337,13 +1377,13 @@ class DataModel: ObservableObject {
     }
 
     /// Internal method that delegates refresh work to the RefreshService once it is ready.
-    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil) async {
+    private func performRefreshAllTrades(limitedTo symbols: [String]? = nil, force: Bool = false) async {
         guard let refreshService else {
             await Logger.shared.warning("performRefreshAllTrades called before refreshService initialized")
             return
         }
 
-        await refreshService.performRefreshAllTrades(limitedTo: symbols)
+        await refreshService.performRefreshAllTrades(limitedTo: symbols, force: force)
     }
 
     /// Memory-efficient calculation of portfolio metrics - delegates to PortfolioCalculationService
@@ -1451,6 +1491,13 @@ class DataModel: ObservableObject {
 
     nonisolated static func symbolKey(_ symbol: String) -> String {
         symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    /// The user's own holdings for backups. While Folync is active the displayed
+    /// rows are Folync's read-only ones and the local portfolio is set aside.
+    var localPortfolioTradesForBackup: [RealTimeTrade] {
+        (isFolyncPortfolioActive ? (legacyPortfolioTrades ?? []) : realTimeTrades)
+            .filter { $0.sourceIdentity == nil }
     }
 
     /// Preserve provider-owned position valuations in window tables and inspectors.
@@ -1620,6 +1667,39 @@ class DataModel: ObservableObject {
 
     // MARK: - Private Methods
 
+    /// The body of the 2-second debounced save. Also run directly on quit, so an
+    /// edit made in the last two seconds is not lost.
+    private func saveDebouncedTradeChanges() {
+        hasPendingDebouncedTradeSave = false
+        guard hasCompletedInitialTradeLoad else {
+            Task { await logger.debug("Skipping trade save until initial load completes") }
+            return
+        }
+        guard !isFolyncPortfolioActive else { return }
+
+        let trades = realTimeTrades
+
+        // Save trades with meaningful data (units > 0 OR price set OR symbol set)
+        // This allows saving partial edits where user enters units/price but hasn't set symbol yet
+        let validTrades = trades.filter { trade in
+            let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasUnits = trade.trade.position.unitSize > 0
+            let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasSymbol || hasUnits || hasPrice
+        }
+        if !validTrades.isEmpty {
+            let validPortfolioTrades = validTrades.filter { !isBenchmarkTrade($0) }
+            saveTrades(validTrades)
+
+            if !validPortfolioTrades.isEmpty {
+                saveUserOrder(validPortfolioTrades)
+                saveTradingInfo()
+            }
+
+            objectWillChange.send()
+        }
+    }
+
     // Keep setupPublishers and saveTrades as they are
     private func setupPublishers() {
         // Merge updates from $realTimeTrades (array changes) and manual triggers (content changes)
@@ -1628,36 +1708,10 @@ class DataModel: ObservableObject {
             $realTimeTrades.map { _ in () },
             tradeUpdateTrigger
         )
+        .handleEvents(receiveOutput: { [weak self] _ in self?.hasPendingDebouncedTradeSave = true })
         .debounce(for: .seconds(2.0), scheduler: RunLoop.main)
         .sink { [weak self] _ in
-            guard let self = self else { return }
-            guard self.hasCompletedInitialTradeLoad else {
-                Task { await self.logger.debug("Skipping trade save until initial load completes") }
-                return
-            }
-            guard !self.isFolyncPortfolioActive else { return }
-
-            let trades = self.realTimeTrades
-            
-            // Save trades with meaningful data (units > 0 OR price set OR symbol set)
-            // This allows saving partial edits where user enters units/price but hasn't set symbol yet
-            let validTrades = trades.filter { trade in
-                let hasSymbol = !trade.trade.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let hasUnits = trade.trade.position.unitSize > 0
-                let hasPrice = !trade.trade.position.positionAvgCostString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                return hasSymbol || hasUnits || hasPrice
-            }
-            if !validTrades.isEmpty {
-                let validPortfolioTrades = validTrades.filter { !self.isBenchmarkTrade($0) }
-                self.saveTrades(validTrades)
-
-                if !validPortfolioTrades.isEmpty {
-                    self.saveUserOrder(validPortfolioTrades)
-                    self.saveTradingInfo()
-                }
-
-                self.objectWillChange.send()
-            }
+            self?.saveDebouncedTradeChanges()
         }
         .store(in: &cancellables)
 
@@ -1726,6 +1780,9 @@ class DataModel: ObservableObject {
 
     /// Waits for queued background saves, e.g. before the app terminates.
     func flushPendingPersistence() async {
+        if hasPendingDebouncedTradeSave {
+            saveDebouncedTradeChanges()
+        }
         while let task = pendingPersistenceTask {
             await task.value
             if pendingPersistenceTask == task {
@@ -1735,6 +1792,9 @@ class DataModel: ObservableObject {
     }
 
     func replacePortfolioTrades(_ trades: [Trade], source: String, allowEmptyPortfolio: Bool = false) async throws {
+        // While Folync is active the displayed rows are Folync's and the local
+        // portfolio is set aside; a restore here would be undone on deactivation.
+        guard !isFolyncPortfolioActive else { throw PortfolioRestoreError.folyncPortfolioActive }
         let portfolioTrades = trades
             .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
@@ -1859,11 +1919,14 @@ class DataModel: ObservableObject {
 
 enum PortfolioRestoreError: LocalizedError {
     case noRestorablePortfolioTrades
+    case folyncPortfolioActive
 
     var errorDescription: String? {
         switch self {
         case .noRestorablePortfolioTrades:
             return "The selected backup does not contain any portfolio stocks. It only contains internal benchmark rows."
+        case .folyncPortfolioActive:
+            return "Folync is providing the portfolio. Switch to the local portfolio in Settings → Connections before restoring a backup."
         }
     }
 }

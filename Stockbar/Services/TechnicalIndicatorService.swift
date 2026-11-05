@@ -78,22 +78,24 @@ class TechnicalIndicatorService {
         var avgGain = gains[0..<period].reduce(0, +) / Double(period)
         var avgLoss = losses[0..<period].reduce(0, +) / Double(period)
 
-        // Calculate RSI for initial period
-        let rs = avgGain / (avgLoss == 0 ? 1 : avgLoss)
-        let rsi = 100 - (100 / (1 + rs))
-        result.append((data[period].timestamp, rsi))
+        result.append((data[period].timestamp, Self.rsi(avgGain: avgGain, avgLoss: avgLoss)))
 
         // Calculate RSI for remaining periods using smoothed averages
         for i in period..<gains.count {
             avgGain = (avgGain * Double(period - 1) + gains[i]) / Double(period)
             avgLoss = (avgLoss * Double(period - 1) + losses[i]) / Double(period)
 
-            let rs = avgGain / (avgLoss == 0 ? 1 : avgLoss)
-            let rsi = 100 - (100 / (1 + rs))
-            result.append((data[i + 1].timestamp, rsi))
+            result.append((data[i + 1].timestamp, Self.rsi(avgGain: avgGain, avgLoss: avgLoss)))
         }
 
         return result
+    }
+
+    /// RSI from smoothed averages. With no losses RSI is 100 (or a neutral 50
+    /// when the price did not move), whatever the price scale.
+    private static func rsi(avgGain: Double, avgLoss: Double) -> Double {
+        guard avgLoss > 0 else { return avgGain > 0 ? 100 : 50 }
+        return 100 - (100 / (1 + avgGain / avgLoss))
     }
 
     // MARK: - MACD (Moving Average Convergence Divergence)
@@ -121,10 +123,10 @@ class TechnicalIndicatorService {
 
         // Calculate MACD line (fast EMA - slow EMA)
         var macdLine: [(Date, Double)] = []
-        _ = slowPeriod - 1 // Fix unused warning
-
+        // Both EMAs start at their own period's bar, so the fast series is
+        // (slow - fast) bars ahead of the slow one at the same index.
         for i in 0..<slowEMA.count {
-            let fastIndex = i + (fastPeriod - 1)
+            let fastIndex = i + (slowPeriod - fastPeriod)
             if fastIndex < fastEMA.count {
                 let macd = fastEMA[fastIndex].1 - slowEMA[i].1
                 macdLine.append((slowEMA[i].0, macd))

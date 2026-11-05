@@ -109,16 +109,19 @@ actor PythonNetworkService: NetworkService {
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     private let scriptName = "get_stock_data.py"
     private let scriptPathOverride: String?
-    private let config: PythonConfiguration
+    /// Pinned configuration (tests); nil means settings are reloaded when needed so
+    /// interpreter changes made after launch are honoured.
+    private let pinnedConfig: PythonConfiguration?
+    private var config: PythonConfiguration { pinnedConfig ?? .load() }
     private let processRunner: any PythonProcessRunning
     private var didLogNotOpenSSLWarning = false
 
     init(
-        config: PythonConfiguration = .load(),
+        config: PythonConfiguration? = nil,
         processRunner: (any PythonProcessRunning)? = nil,
         scriptPath: String? = nil
     ) {
-        self.config = config
+        self.pinnedConfig = config
         self.processRunner = processRunner ?? PythonProcessRunner(config: config)
         self.scriptPathOverride = scriptPath
     }
@@ -385,6 +388,18 @@ actor PythonNetworkService: NetworkService {
         )
     }
     
+    /// `YYYY-MM-DD` for the Python `--start-date`/`--end-date` arguments. Pinned to the
+    /// POSIX locale and Gregorian calendar so the user's calendar (Buddhist, Japanese,
+    /// Hijri...) or locale numerals can never change what the script receives.
+    static func scriptDateString(from date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] {
         await logger.debug("Python historical fetch starting for \(symbol)")
         
@@ -409,10 +424,8 @@ actor PythonNetworkService: NetworkService {
         }
 
         // Format dates for Python script (YYYY-MM-DD)
-        let scriptDateFormatter = DateFormatter()
-        scriptDateFormatter.dateFormat = "yyyy-MM-dd"
-        let startDateString = scriptDateFormatter.string(from: startDate)
-        let endDateString = scriptDateFormatter.string(from: endDate)
+        let startDateString = Self.scriptDateString(from: startDate)
+        let endDateString = Self.scriptDateString(from: endDate)
         
         await logger.debug("Python historical dates: \(startDateString) to \(endDateString)")
         

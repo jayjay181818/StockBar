@@ -17,7 +17,12 @@ struct CandlestickChartView: View {
     let settings: CandlestickChartSettings
     let symbol: String?
 
+    /// Candle held by a click or drag.
     @State private var selectedCandle: OHLCDataPoint?
+    /// Candle under the pointer, shown as the crosshair when it is enabled.
+    @State private var hoveredCandle: OHLCDataPoint?
+    /// Last candle the pointer was over; the context menu uses it, since the menu has no pointer position.
+    @State private var lastPointerCandle: OHLCDataPoint?
     @State private var showVolume: Bool = true
     @State private var showSMA20: Bool = false
     @State private var showSMA50: Bool = false
@@ -28,12 +33,14 @@ struct CandlestickChartView: View {
     @State private var showGridLines: Bool
     @State private var showCrosshair: Bool
 
-    // Interaction features (v2.3.1)
-    @StateObject private var interactionManager = ChartInteractionManager()
     @ObservedObject private var annotationService = ChartAnnotationService.shared
     
     @State private var showAnnotationEditor = false
     @State private var selectedAnnotation: ChartAnnotation?
+    /// Annotation being edited. A new one is only stored when the editor saves it.
+    @State private var draftAnnotation: ChartAnnotation?
+    @State private var draftIsNew = false
+    @State private var showClearAnnotationsConfirmation = false
 
     private let indicatorService = TechnicalIndicatorService.shared
 
@@ -120,7 +127,15 @@ struct CandlestickChartView: View {
     // MARK: - Price Chart
 
     private var priceChartView: some View {
-        Chart {
+        // The x axis spans the candles only; annotations outside them must not stretch it.
+        let xDomain = ChartSeriesProcessing.paddedDateDomain(data.map(\.timestamp))
+        let visibleAnnotations: [ChartAnnotation] = symbol.map { currentSymbol in
+            annotationService.getAnnotations(for: currentSymbol).filter { annotation in
+                xDomain?.contains(annotation.date) ?? false
+            }
+        } ?? []
+
+        return Chart {
             ForEach(data) { candle in
                 // Candlestick body
                 RectangleMark(
@@ -130,7 +145,7 @@ struct CandlestickChartView: View {
                     width: .ratio(0.6)
                 )
                 .foregroundStyle(candle.isBullish ? settings.bullishSwiftUIColor : settings.bearishSwiftUIColor)
-                .opacity(candle.id == selectedCandle?.id ? 0.7 : 1.0)
+                .opacity(candle.id == displayedCandle?.id ? 0.7 : 1.0)
 
                 // Upper wick
                 RuleMark(
@@ -151,7 +166,7 @@ struct CandlestickChartView: View {
                 .lineStyle(StrokeStyle(lineWidth: 1))
 
                 // Selection indicator
-                if let selected = selectedCandle, selected.id == candle.id {
+                if let selected = displayedCandle, selected.id == candle.id {
                     RuleMark(x: .value("Time", candle.timestamp))
                         .foregroundStyle(.secondary.opacity(0.5))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
@@ -159,23 +174,21 @@ struct CandlestickChartView: View {
             }
             
             // Annotations
-            if let currentSymbol = symbol {
-                ForEach(annotationService.getAnnotations(for: currentSymbol)) { annotation in
-                    PointMark(
-                        x: .value("Time", annotation.date),
-                        y: .value("Price", annotation.price)
-                    )
-                    .symbol {
-                        AnnotationMarkView(annotation: annotation)
-                    }
-                    .annotation(position: .top) {
-                        Text(annotation.text)
-                            .font(.caption2)
-                            .foregroundColor(annotation.color)
-                            .padding(2)
-                            .background(Color(.windowBackgroundColor).opacity(0.7))
-                            .cornerRadius(4)
-                    }
+            ForEach(visibleAnnotations) { annotation in
+                PointMark(
+                    x: .value("Time", annotation.date),
+                    y: .value("Price", annotation.price)
+                )
+                .symbol {
+                    AnnotationMarkView(annotation: annotation)
+                }
+                .annotation(position: .top) {
+                    Text(annotation.text)
+                        .font(.caption2)
+                        .foregroundColor(annotation.color)
+                        .padding(2)
+                        .background(Color(.windowBackgroundColor).opacity(0.7))
+                        .cornerRadius(4)
                 }
             }
 
@@ -282,77 +295,103 @@ struct CandlestickChartView: View {
             }
         }
         .chartYScale(domain: yAxisRange)
+        .chartXScale(domain: xDomain ?? Date.now...Date.now.addingTimeInterval(1))
         .chartOverlay { proxy in
             GeometryReader { geometry in
                 Rectangle()
                     .fill(.clear)
                     .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            let candle = candleNearPointer(at: location, proxy: proxy, geometry: geometry)
+                            if candle?.id != hoveredCandle?.id { hoveredCandle = candle }
+                            if let candle, candle.id != lastPointerCandle?.id { lastPointerCandle = candle }
+                        case .ended:
+                            // lastPointerCandle is kept: the context menu opens after the pointer leaves tracking.
+                            if hoveredCandle != nil { hoveredCandle = nil }
+                        }
+                    }
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                updateSelection(at: value.location, proxy: proxy, geometry: geometry)
+                                let candle = candleNearPointer(at: value.location, proxy: proxy, geometry: geometry)
+                                if candle?.id != selectedCandle?.id { selectedCandle = candle }
+                                if let candle { lastPointerCandle = candle }
                             }
                             .onEnded { _ in
                                 selectedCandle = nil
                             }
                     )
-                    .onAppear {
-                        interactionManager.updateChartBounds(geometry.frame(in: .local))
-                    }
             }
         }
         .overlay(alignment: .topLeading) {
-            if let selected = selectedCandle {
+            if let selected = displayedCandle {
                 candleInfoOverlay(selected)
                     .padding(8)
             }
         }
-        .overlay {
-            // Crosshair overlay (v2.3.1)
-            if showCrosshair, let position = interactionManager.crosshairPosition {
-                CrosshairOverlay(position: position, chartBounds: .zero)
-            }
-        }
-        .chartGestures(interactionManager: interactionManager)
+        .accessibilityLabel("\(symbol ?? "Price") candlestick chart")
+        .accessibilityValue(candlestickAccessibilitySummary)
         .contextMenu {
             Button("Add Annotation") {
                 guard let currentSymbol = symbol,
-                      let candle = selectedCandle ?? data.last else { return }
+                      let candle = lastPointerCandle ?? data.last else { return }
 
-                let annotation = ChartAnnotation(
+                // Nothing is stored until the editor's Save; Cancel leaves no annotation behind.
+                draftAnnotation = ChartAnnotation(
                     type: .text,
                     date: candle.timestamp,
                     price: candle.close,
                     text: "New Note",
                     symbol: currentSymbol
                 )
-                annotationService.addAnnotation(annotation)
-                selectedAnnotation = annotation
+                draftIsNew = true
                 showAnnotationEditor = true
             }
             .disabled(symbol == nil || data.isEmpty)
 
-            if selectedAnnotation != nil {
+            if let selectedAnnotation {
                 Button("Edit Selected Annotation") {
+                    draftAnnotation = selectedAnnotation
+                    draftIsNew = false
                     showAnnotationEditor = true
                 }
             }
-            Button("Clear Annotations") {
+            Button("Clear Annotations…", role: .destructive) {
+                showClearAnnotationsConfirmation = true
+            }
+            .disabled(symbol.map { annotationService.getAnnotations(for: $0).isEmpty } ?? true)
+        }
+        .confirmationDialog(
+            "Clear all annotations for \(symbol ?? "this symbol")?",
+            isPresented: $showClearAnnotationsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Annotations", role: .destructive) {
                 if let currentSymbol = symbol {
                     annotationService.clearAnnotations(for: currentSymbol)
+                    selectedAnnotation = nil
                 }
             }
-            Button("Reset Zoom") {
-                interactionManager.resetZoom()
-            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The notes and markers you added to this chart will be deleted. This can't be undone.")
         }
-        .sheet(isPresented: $showAnnotationEditor) {
-            if let selected = selectedAnnotation {
+        .sheet(isPresented: $showAnnotationEditor, onDismiss: { draftAnnotation = nil }) {
+            if let draft = draftAnnotation {
                 AnnotationEditorView(
                     annotation: Binding(
-                        get: { selected },
+                        get: { draftAnnotation ?? draft },
                         set: { updated in
-                            annotationService.updateAnnotation(updated)
+                            // Only Save writes to this binding.
+                            if draftIsNew {
+                                annotationService.addAnnotation(updated)
+                                draftIsNew = false
+                            } else {
+                                annotationService.updateAnnotation(updated)
+                            }
+                            draftAnnotation = updated
                             selectedAnnotation = updated
                         }
                     ),
@@ -558,19 +597,27 @@ struct CandlestickChartView: View {
 
     // MARK: - Helper Methods
 
-    private func updateSelection(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) {
-        guard let plotFrame = proxy.plotFrame else { return }
-
+    /// The candle nearest in time to the pointer, found from the chart's own x scale
+    /// so uneven spacing (weekends, gaps) and the plot area's inset are respected.
+    private func candleNearPointer(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> OHLCDataPoint? {
+        guard let plotFrame = proxy.plotFrame else { return nil }
         let frame = geometry[plotFrame]
-        let xPosition = location.x - frame.origin.x
-        let relativeX = xPosition / frame.width
+        let x = location.x - frame.origin.x
+        guard x >= 0, x <= frame.width,
+              let date: Date = proxy.value(atX: x),
+              let index = ChartSeriesProcessing.nearestIndex(in: data.map(\.timestamp), to: date) else { return nil }
+        return data[index]
+    }
 
-        if relativeX >= 0 && relativeX <= 1 {
-            let index = Int(relativeX * Double(data.count))
-            if index >= 0 && index < data.count {
-                selectedCandle = data[index]
-            }
-        }
+    private var displayedCandle: OHLCDataPoint? {
+        selectedCandle ?? (showCrosshair ? hoveredCandle : nil)
+    }
+
+    private var candlestickAccessibilitySummary: String {
+        guard let first = data.first, let last = data.last else { return "No data" }
+        let low = data.map(\.low).min() ?? first.low
+        let high = data.map(\.high).max() ?? last.high
+        return "\(data.count) candles. Latest close \(formatPrice(last.close)). Low \(formatPrice(low)), high \(formatPrice(high))."
     }
 
     private var yAxisRange: ClosedRange<Double> {

@@ -1462,6 +1462,62 @@ final class Trading212BrokerSyncTests: XCTestCase {
         )
     }
 
+    func testActionCredentialsUseTypedValuesWithoutTouchingStorage() throws {
+        var loadCalls = 0
+        let resolved = try Trading212ActionCredentials.resolve(apiKey: " key ", apiSecret: "secret") {
+            loadCalls += 1
+            return Trading212AuthConfiguration(apiKey: "stored", apiSecret: "stored")
+        }
+
+        XCTAssertEqual(loadCalls, 0, "typed credentials must be used from memory")
+        XCTAssertTrue(resolved.isUnsaved)
+        XCTAssertEqual(resolved.credentials, Trading212AuthConfiguration(apiKey: "key", apiSecret: "secret"))
+    }
+
+    func testActionCredentialsFallBackToStoredAndRejectIncompleteTypedValues() throws {
+        let stored = Trading212AuthConfiguration(apiKey: "stored-key", apiSecret: "stored-secret")
+        let fromStore = try Trading212ActionCredentials.resolve(apiKey: "  ", apiSecret: "") { stored }
+        XCTAssertFalse(fromStore.isUnsaved)
+        XCTAssertEqual(fromStore.credentials, stored)
+
+        var loadCalls = 0
+        XCTAssertThrowsError(try Trading212ActionCredentials.resolve(apiKey: "only-a-key", apiSecret: "") {
+            loadCalls += 1
+            return stored
+        })
+        XCTAssertEqual(loadCalls, 0, "a half-typed pair is an error, not a silent fallback to stored credentials")
+    }
+
+    func testLinkSelectionSeparatesExactMatchesFromQuantityMismatches() throws {
+        let exactPreview = makePreview(
+            instrumentId: "AV_EQ", providerTicker: "AVl_EQ", manualSymbol: "AV.L",
+            quantity: 10, averagePrice: 400, brokerPrice: 450, currentValue: 4500)
+        let exactRow = try XCTUnwrap(exactPreview.rows.first)
+        let mismatchRow = Trading212ImportPreviewRow(
+            id: exactRow.id + "-mismatch", account: exactRow.account, providerTicker: "BP_EQ",
+            instrumentId: "BP_EQ", displaySymbol: "BP", displayName: "BP", quantity: 12,
+            averagePrice: exactRow.averagePrice, brokerProvidedPrice: exactRow.brokerProvidedPrice,
+            currentValue: exactRow.currentValue, totalCost: exactRow.totalCost,
+            unrealizedProfitLoss: exactRow.unrealizedProfitLoss, fxImpact: nil,
+            mappingConfidence: .high,
+            manualMatch: Trading212ManualHoldingMatch(
+                symbol: "BP.L", instrumentId: "BP_EQ", displayName: "BP", quantity: 10, averageCost: 400,
+                currency: "GBX", isWatchlistOnly: false, resolutionConfidence: .high),
+            additionalManualMatchCount: 0, conflictStatus: .manualQuantityMismatch,
+            valueSource: .brokerProvidedLivePositionData, warnings: [])
+        let preview = Trading212ImportPreview(
+            account: exactPreview.account, accountSummary: nil, rows: [exactRow, mismatchRow],
+            metadataAvailable: true, generatedAt: exactPreview.generatedAt, warnings: [])
+
+        let selection = Trading212LinkSelection(preview: preview)
+
+        XCTAssertEqual(selection.exactMatches.map(\.id), [exactRow.id])
+        XCTAssertEqual(selection.mismatches.map(\.id), [mismatchRow.id])
+        XCTAssertEqual(selection.exactMatchesOnlyPreview.rows.map(\.id), [exactRow.id],
+                       "the default link action must not include differing quantities")
+        XCTAssertEqual(selection.exactMatchesOnlyPreview.account, preview.account)
+    }
+
     private func makeAccount() -> BrokerAccountIdentity {
         BrokerAccountIdentity(
             broker: "Trading212",
@@ -2040,10 +2096,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
             $0.value(forHTTPHeaderField: "Authorization") == "Bearer test-token"
         })
 
-        let unusableBenchmarks = Self.benchmarksJSON.replacingOccurrences(
-            of: "\"last\":6300",
-            with: "\"last\":null"
-        )
+        let unusableBenchmarks = Self.benchmarksJSON
+            .replacingOccurrences(of: "\"last\":6300", with: "\"last\":null")
+            .replacingOccurrences(of: "\"last\":9200", with: "\"last\":null")
         let incompleteFX = Self.fxJSON.replacingOccurrences(
             of: "{\"quote\":\"AUD\",\"rate\":1.52,\"asOf\":\"2026-07-13\",\"quality\":\"complete\",\"reasonCodes\":[]}",
             with: "{\"quote\":\"AUD\",\"rate\":null,\"asOf\":null,\"quality\":\"unavailable\",\"reasonCodes\":[\"missing_fx\"]}"
@@ -2259,6 +2314,590 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(legacy.map(\.trade.name), ["AAPL", "MSFT"])
         XCTAssertTrue(projected.last?.trade.isWatchlistOnly == true)
     }
+
+    @MainActor
+    func testCorruptFolyncSnapshotCacheIsRemovedAndDoesNotBlockPolling() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+
+        let endpoint = "https://folync.example.invalid"
+        let scopeID = "all"
+        let validSnapshot = try FolyncPortfolioDecoder().decodeSnapshot(Data(versionTwoSnapshotJSON.utf8))
+        try await env.snapshotCache.save(FolyncCachedSnapshot(
+            endpoint: endpoint,
+            scopeID: scopeID,
+            etag: "\"old\"",
+            snapshot: validSnapshot
+        ))
+        let cacheFiles = try FileManager.default.contentsOfDirectory(at: env.cacheDirectory, includingPropertiesForKeys: nil)
+        let cacheFile = try XCTUnwrap(cacheFiles.first)
+        try Data("not-valid-json".utf8).write(to: cacheFile, options: .atomic)
+
+        await XCTAssertThrowsErrorAsync(
+            try await env.snapshotCache.load(endpoint: endpoint, scopeID: scopeID)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheFile.path))
+
+        // Write corrupt bytes again so refreshFolyncPortfolio also hits the corrupt preload path.
+        try Data("still-corrupt-json".utf8).write(to: cacheFile, options: .atomic)
+
+        let snapshotBody = versionTwoSnapshotJSON
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/scopes/all/snapshot" {
+                return Self.httpResponse(request, status: 200, body: snapshotBody, etag: "\"fresh\"")
+            }
+            return Self.httpResponse(request, status: 404, body: "{}")
+        }
+
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: endpoint,
+            scopeID: scopeID,
+            pollingIntervalSeconds: 60
+        ))
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+
+        await dataModel.refreshFolyncPortfolio()
+
+        XCTAssertEqual(dataModel.folyncPortfolioSnapshot?.scope.id, "all")
+        XCTAssertEqual(dataModel.folyncETag, "\"fresh\"")
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+        let reloaded = try await env.snapshotCache.load(endpoint: endpoint, scopeID: scopeID)
+        XCTAssertEqual(reloaded?.etag, "\"fresh\"")
+    }
+
+    func testSupplementalRoutesShareAndEnforceBackoffOn401And429() async throws {
+        let suiteName = "FolyncBackoffSupplemental-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60,
+            supplemental: FolyncSupplementalSettings(
+                historicalLineCharts: true,
+                candlestickCharts: true,
+                benchmarkMarketData: true,
+                exchangeRates: true,
+                allowLegacyFallback: false
+            )
+        ))
+        let backoff = FolyncBackoffCoordinator()
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/capabilities" {
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            }
+            if request.url?.path == "/api/client/v2/market/fx" {
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 429,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json", "Retry-After": "180"]
+                )!
+                return (response, Data("{}".utf8))
+            }
+            return Self.httpResponse(request, status: 200, body: "{}")
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore,
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            backoff: backoff,
+            tokenProvider: { "test-token" }
+        )
+
+        _ = await coordinator.capabilitiesForCurrentSettings()
+        let fxResult = await coordinator.routeFX()
+        guard case .unavailable = fxResult else {
+            return XCTFail("Expected 429 FX response to return unavailable when no cache exists")
+        }
+        let isBackingOff = await coordinator.isBackingOff()
+        XCTAssertTrue(isBackingOff, "429 from FX route must record shared Folync backoff")
+        let requestCountAfter429 = stub.requests.count
+
+        // All on-demand and supplemental routes must skip network calls while backing off.
+        _ = await coordinator.routePortfolioHistory(range: "1w")
+        _ = try await coordinator.routeOHLC(symbol: "DFTX", period: "1mo", interval: "1d")
+        _ = await coordinator.routeLineHistory(symbol: "DFTX", range: "1m")
+        _ = await coordinator.routeBenchmarks()
+        _ = await coordinator.routeFX()
+        XCTAssertEqual(stub.requests.count, requestCountAfter429, "No supplemental route may make network requests during backoff")
+
+        // Clearing backoff and receiving 401 on portfolio history must also trigger backoff.
+        await coordinator.clearBackoff()
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/scopes/all/history" {
+                return Self.httpResponse(request, status: 401, body: "{}")
+            }
+            return Self.httpResponse(request, status: 200, body: Self.fxJSON)
+        }
+        _ = await coordinator.routePortfolioHistory(range: "1w")
+        let backingOffAfter401 = await coordinator.isBackingOff()
+        XCTAssertTrue(backingOffAfter401, "401 from portfolio history route must record shared Folync backoff")
+        let countAfter401 = stub.requests.count
+        _ = await coordinator.routeFX()
+        XCTAssertEqual(stub.requests.count, countAfter401, "FX route must skip network while 401 backoff is active")
+    }
+
+    @MainActor
+    func testTestConnectionAndPreviewDoNotMutateActiveSessionStateAndRestoreOnFailure() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+
+        let activeSnapshot = try FolyncPortfolioDecoder().decodeSnapshot(Data(versionTwoSnapshotJSON.utf8))
+        let activeCaps = FolyncCapabilities.fixture(lineHistory: true, candlesticks: true, benchmarks: false, exchangeRates: false)
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+        dataModel.applyFolyncSnapshot(activeSnapshot)
+        dataModel.folyncCapabilities = activeCaps
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+
+        let previewSnapshotBody = snapshotJSON
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            switch request.url?.path {
+            case "/api/client/v2/portfolios":
+                return Self.httpResponse(
+                    request,
+                    status: 200,
+                    body: #"{"schemaVersion":2,"portfolios":[{"id":"pf_isa","name":"ISA","kind":"portfolio","currency":"GBP"}]}"#
+                )
+            case "/api/client/v2/scopes/pf_isa/snapshot":
+                return Self.httpResponse(request, status: 200, body: previewSnapshotBody)
+            default:
+                return Self.httpResponse(request, status: 404, body: "{}")
+            }
+        }
+
+        let portfolios = try await dataModel.testFolyncConnection(
+            baseURL: URL(string: "https://folync.example.invalid")!,
+            token: "test-token"
+        )
+        XCTAssertEqual(portfolios.map(\.id), ["pf_isa"])
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+        XCTAssertEqual(dataModel.folyncCapabilities, activeCaps)
+
+        let preview = try await dataModel.previewFolyncPortfolio(
+            baseURL: URL(string: "https://folync.example.invalid")!,
+            token: "test-token",
+            scopeID: "pf_isa"
+        )
+        XCTAssertEqual(preview.scope.id, "pf_isa")
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+        XCTAssertEqual(dataModel.folyncPortfolioSnapshot?.scope.id, "all")
+
+        // Now force failures on test, preview, and activate and verify active state is preserved.
+        stub.handler = { request in
+            Self.httpResponse(request, status: 401, body: "{}")
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await dataModel.testFolyncConnection(baseURL: URL(string: "https://folync.example.invalid")!, token: "bad-token")
+        )
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+        XCTAssertEqual(dataModel.folyncCapabilities, activeCaps)
+
+        await XCTAssertThrowsErrorAsync(
+            try await dataModel.previewFolyncPortfolio(
+                baseURL: URL(string: "https://folync.example.invalid")!,
+                token: "bad-token",
+                scopeID: "pf_isa"
+            )
+        )
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+
+        await XCTAssertThrowsErrorAsync(
+            try await dataModel.activateFolyncPortfolio(
+                baseURL: URL(string: "https://folync.example.invalid")!,
+                token: "bad-token",
+                scopeID: "pf_isa"
+            )
+        )
+        XCTAssertEqual(dataModel.folyncConnectionState, .current(asOf: "2026-07-11"))
+    }
+
+    @MainActor
+    func testOverlappingSupplementalRestartsAndInFlightDeactivationDoNotLeakOrResurrectState() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60
+        ))
+        let snapshotBody = versionTwoSnapshotJSON
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/capabilities" {
+                Thread.sleep(forTimeInterval: 0.05)
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            }
+            if request.url?.path == "/api/client/v2/scopes/all/snapshot" {
+                Thread.sleep(forTimeInterval: 0.05)
+                return Self.httpResponse(request, status: 200, body: snapshotBody, etag: "\"e1\"")
+            }
+            return Self.httpResponse(request, status: 404, body: "{}")
+        }
+
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+
+        // F68: Overlapping supplemental scheduler restarts must only keep the latest timer.
+        async let firstRestart: Void = dataModel.restartFolyncSupplementalScheduler(runImmediately: true)
+        async let secondRestart: Void = dataModel.restartFolyncSupplementalScheduler(runImmediately: true)
+        _ = await (firstRestart, secondRestart)
+        let activeTimer = try XCTUnwrap(dataModel.folyncSupplementalRefreshTimer)
+        XCTAssertTrue(activeTimer.isValid)
+
+        // F69: Deactivating while a portfolio refresh is in-flight must not apply results after deactivation.
+        let refreshTask = Task { @MainActor in
+            await dataModel.refreshFolyncPortfolio()
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        dataModel.deactivateFolyncPortfolio()
+        await refreshTask.value
+
+        XCTAssertNil(dataModel.folyncPortfolioSnapshot)
+        XCTAssertFalse(dataModel.isFolyncPortfolioActive)
+        XCTAssertFalse(dataModel.isFolyncEnabled)
+        XCTAssertEqual(dataModel.folyncConnectionState, .notConfigured)
+        XCTAssertNil(dataModel.folyncRefreshTimer)
+        XCTAssertNil(dataModel.folyncSupplementalRefreshTimer)
+        XCTAssertFalse(activeTimer.isValid)
+    }
+
+    func testExtraAdvertisedFXQuotesAreRequestedAndAccepted() async throws {
+        let suiteName = "FolyncExtraFXQuotes-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60,
+            supplemental: FolyncSupplementalSettings(
+                historicalLineCharts: false,
+                candlestickCharts: false,
+                benchmarkMarketData: false,
+                exchangeRates: true,
+                allowLegacyFallback: false
+            )
+        ))
+        let extraCaps = Self.readyMarketCapabilitiesJSON.replacingOccurrences(
+            of: "\"quotes\":[\"GBP\",\"EUR\",\"JPY\",\"CAD\",\"AUD\"]",
+            with: "\"quotes\":[\"GBP\",\"EUR\",\"JPY\",\"CAD\",\"AUD\",\"CHF\"]"
+        )
+        let extraFX = Self.fxJSON.replacingOccurrences(
+            of: "{\"quote\":\"AUD\",\"rate\":1.52,\"asOf\":\"2026-07-13\",\"quality\":\"complete\",\"reasonCodes\":[]}",
+            with: """
+            {"quote":"AUD","rate":1.52,"asOf":"2026-07-13","quality":"complete","reasonCodes":[]},
+            {"quote":"CHF","rate":0.88,"asOf":"2026-07-13","quality":"complete","reasonCodes":[]}
+            """
+        )
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            switch request.url?.path {
+            case "/api/client/v2/capabilities":
+                return Self.httpResponse(request, status: 200, body: extraCaps)
+            case "/api/client/v2/market/fx":
+                let quotesQuery = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "quotes" })?.value
+                XCTAssertEqual(quotesQuery, "GBP,EUR,JPY,CAD,AUD,CHF")
+                return Self.httpResponse(request, status: 200, body: extraFX, etag: "\"fx-extra\"")
+            default:
+                return Self.httpResponse(request, status: 404, body: "{}")
+            }
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore,
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            tokenProvider: { "test-token" }
+        )
+
+        guard case .folync(let rates, _, let status) = await coordinator.routeFX() else {
+            return XCTFail("Expected FX route to succeed when extra quotes are advertised by capabilities")
+        }
+        XCTAssertEqual(status, .current)
+        XCTAssertEqual(rates["CHF"], 0.88)
+        XCTAssertEqual(rates["GBP"], 0.79)
+    }
+
+    @MainActor
+    func testEnabledButInactiveSessionMapsRateLimitAndServerErrorsAndCanBeDisabled() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60
+        ))
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+
+        XCTAssertFalse(dataModel.isFolyncPortfolioActive)
+        XCTAssertTrue(dataModel.isFolyncEnabled)
+
+        dataModel.markFolyncRefreshFailure(FolyncPortfolioSourceError.rateLimited(retryAfter: 60))
+        XCTAssertEqual(dataModel.folyncConnectionState, .rateLimited(retryAfter: 60))
+        XCTAssertTrue(dataModel.folyncConnectionState.message.contains("Retrying after 60 seconds"))
+
+        dataModel.markFolyncRefreshFailure(FolyncPortfolioSourceError.unavailable(503))
+        XCTAssertEqual(dataModel.folyncConnectionState, .unavailable(message: "Folync request failed with HTTP 503."))
+
+        dataModel.markFolyncRefreshFailure(FolyncPortfolioSourceError.unauthorized)
+        XCTAssertEqual(dataModel.folyncConnectionState, .unauthorized)
+
+        dataModel.deactivateFolyncPortfolio()
+        XCTAssertFalse(dataModel.isFolyncEnabled)
+        XCTAssertEqual(dataModel.folyncConnectionState, .notConfigured)
+    }
+
+    @MainActor
+    func testSetupMistakesSurfaceSpecificErrorsAndTokenFallbackAndUnwritableCacheStillPolls() async throws {
+        XCTAssertThrowsError(try FolyncEndpointPolicy.validate(URL(string: "folync.example.invalid")!)) { error in
+            XCTAssertEqual(error as? FolyncPortfolioSourceError, .invalidEndpoint)
+        }
+        XCTAssertThrowsError(
+            try FolyncPortfolioSource(
+                baseURL: URL(string: "https://folync.example.invalid")!,
+                token: "   ",
+                session: Self.stubSession(),
+                providerPolicy: Self.testProviderPolicy
+            )
+        ) { error in
+            XCTAssertEqual(error as? FolyncPortfolioSourceError, .missingToken)
+        }
+        XCTAssertThrowsError(try FolyncPortfolioSource.validateScopeComponent("../bad")) { error in
+            XCTAssertEqual(
+                error as? FolyncPortfolioSourceError,
+                .invalidScope("Scope identifier is not a valid path component")
+            )
+        }
+
+        let env = try makeIsolatedSessionEnvironment(storedToken: "keychain-fallback-token")
+        defer { env.cleanup() }
+        // Make a file at the snapshot cache directory path so snapshotCache.save fails, testing F75.
+        let blockingCachePath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-blocking-file-\(UUID().uuidString)")
+        try Data("file".utf8).write(to: blockingCachePath)
+        defer { try? FileManager.default.removeItem(at: blockingCachePath) }
+
+        var deps = env.dependencies
+        deps.snapshotCache = FolyncSnapshotCache(directory: blockingCachePath)
+        let dataModel = makeTestDataModel(dependencies: deps)
+        defer { dataModel.deactivateFolyncPortfolio() }
+
+        let snapshotBody = versionTwoSnapshotJSON
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer keychain-fallback-token")
+            switch request.url?.path {
+            case "/api/client/v2/portfolios":
+                return Self.httpResponse(
+                    request,
+                    status: 200,
+                    body: #"{"schemaVersion":2,"portfolios":[{"id":"all","name":"All portfolios","kind":"aggregate","currency":"GBP"}]}"#
+                )
+            case "/api/client/v2/scopes/all/snapshot":
+                return Self.httpResponse(request, status: 200, body: snapshotBody, etag: "\"e-act\"")
+            case "/api/client/v2/capabilities":
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            default:
+                return Self.httpResponse(request, status: 404, body: "{}")
+            }
+        }
+
+        // Empty token falls back to stored token for testConnection, preview, and activate.
+        let portfolios = try await dataModel.testFolyncConnection(
+            baseURL: URL(string: "https://folync.example.invalid")!,
+            token: ""
+        )
+        XCTAssertEqual(portfolios.map(\.id), ["all"])
+
+        let preview = try await dataModel.previewFolyncPortfolio(
+            baseURL: URL(string: "https://folync.example.invalid")!,
+            token: "",
+            scopeID: "all"
+        )
+        XCTAssertEqual(preview.scope.id, "all")
+
+        // F75: Even when snapshotCache.save throws, activateFolyncPortfolio commits and starts polling.
+        try await dataModel.activateFolyncPortfolio(
+            baseURL: URL(string: "https://folync.example.invalid")!,
+            token: "",
+            scopeID: "all"
+        )
+        XCTAssertTrue(dataModel.isFolyncPortfolioActive)
+        XCTAssertNotNil(dataModel.folyncNextCheckAt)
+        XCTAssertEqual(dataModel.folyncRefreshTimer?.isValid, true)
+    }
+
+    @MainActor
+    func testPartialBenchmarkResponseAppliesUsableBenchmarksAndMarksUnavailablePerSymbol() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60,
+            supplemental: FolyncSupplementalSettings(
+                historicalLineCharts: false,
+                candlestickCharts: false,
+                benchmarkMarketData: true,
+                exchangeRates: false,
+                allowLegacyFallback: false
+            )
+        ))
+        let partialBenchmarks = Self.benchmarksJSON
+            .replacingOccurrences(
+                of: """
+                      "id":"sp500","symbol":"^GSPC","name":"S&P 500","currency":"USD","provider":"yahoo-cache",
+                      "current":{"last":6300,"previousClose":6240,"change":60,"changePct":0.961538,"asOf":"2026-07-13T10:00:00.000Z"},
+                      "quality":"complete","stale":false,"reasonCodes":[],
+                """,
+                with: """
+                      "id":"sp500","symbol":"^GSPC","name":"S&P 500","currency":"USD","provider":"yahoo-cache",
+                      "current":{"last":null,"previousClose":6240,"change":null,"changePct":null,"asOf":"2026-07-13T10:00:00.000Z"},
+                      "quality":"unavailable","stale":false,"reasonCodes":["provider_timeout"],
+                """
+            )
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            switch request.url?.path {
+            case "/api/client/v2/capabilities":
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            case "/api/client/v2/market/benchmarks":
+                return Self.httpResponse(request, status: 200, body: partialBenchmarks, etag: "\"b-partial\"")
+            default:
+                return Self.httpResponse(request, status: 404, body: "{}")
+            }
+        }
+
+        guard case .folync(let benchmarks, let status) = await env.supplementalCoordinator.routeBenchmarks() else {
+            return XCTFail("Expected partial benchmark response to be accepted when at least one benchmark is usable")
+        }
+        XCTAssertEqual(status, .partial)
+
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        let gspc = RealTimeTrade(
+            trade: Trade(name: "^GSPC", position: Position(unitSize: "0", positionAvgCost: "0"), isWatchlistOnly: true),
+            realTimeInfo: TradingInfo()
+        )
+        let ftse = RealTimeTrade(
+            trade: Trade(name: "^FTSE", position: Position(unitSize: "0", positionAvgCost: "0"), isWatchlistOnly: true),
+            realTimeInfo: TradingInfo()
+        )
+        dataModel.realTimeTrades = [gspc, ftse]
+        dataModel.applyFolyncBenchmarkOverlays(benchmarks)
+
+        XCTAssertTrue(gspc.realTimeInfo.currentPrice.isNaN)
+        XCTAssertEqual(gspc.realTimeInfo.errorMessage, "Folync benchmark unavailable: provider_timeout")
+        XCTAssertEqual(ftse.realTimeInfo.currentPrice, 9_200)
+        XCTAssertNil(ftse.realTimeInfo.errorMessage)
+    }
+
+    @MainActor
+    private func makeTestDataModel(dependencies: FolyncSessionDependencies) -> DataModel {
+        let model = DataModel(
+            currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false
+        )
+        model.folyncSessionDependencies = dependencies
+        return model
+    }
+
+    private struct IsolatedSessionEnvironment {
+        let settingsStore: FolyncSettingsStore
+        let snapshotCache: FolyncSnapshotCache
+        let overlayStore: FolyncOverlayStore
+        let supplementalCoordinator: FolyncSupplementalCoordinator
+        let cacheDirectory: URL
+        let dependencies: FolyncSessionDependencies
+        let cleanup: () -> Void
+    }
+
+    private func makeIsolatedSessionEnvironment(storedToken: String = "test-token") throws -> IsolatedSessionEnvironment {
+        let suiteName = "FolyncSessionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        let supplementalCacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(suiteName)-supp", isDirectory: true)
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        let snapshotCache = FolyncSnapshotCache(directory: cacheDirectory)
+        let overlayStore = FolyncOverlayStore(defaults: defaults)
+        let backoff = FolyncBackoffCoordinator()
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore,
+            cache: FolyncSupplementalCache(directory: supplementalCacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            backoff: backoff,
+            tokenProvider: { storedToken }
+        )
+        let dependencies = FolyncSessionDependencies(
+            settingsStore: settingsStore,
+            snapshotCache: snapshotCache,
+            overlayStore: overlayStore,
+            supplementalCoordinator: coordinator,
+            urlSession: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            loadToken: { storedToken },
+            saveToken: { _ in },
+            hasToken: { !storedToken.isEmpty }
+        )
+        return IsolatedSessionEnvironment(
+            settingsStore: settingsStore,
+            snapshotCache: snapshotCache,
+            overlayStore: overlayStore,
+            supplementalCoordinator: coordinator,
+            cacheDirectory: cacheDirectory,
+            dependencies: dependencies,
+            cleanup: {
+                defaults.removePersistentDomain(forName: suiteName)
+                try? FileManager.default.removeItem(at: cacheDirectory)
+                try? FileManager.default.removeItem(at: supplementalCacheDirectory)
+            }
+        )
+    }
+
+    private func XCTAssertThrowsErrorAsync<T>(
+        _ expression: @autoclosure () async throws -> T,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await expression()
+            XCTFail("Expected expression to throw an error", file: file, line: line)
+        } catch {}
+    }
+
 
     private var snapshotJSON: String {
         """

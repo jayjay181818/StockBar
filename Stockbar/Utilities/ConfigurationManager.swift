@@ -46,6 +46,35 @@ public final class ConfigurationManager: @unchecked Sendable {
         }
     }
 
+    /// Reads, changes and saves the config under one lock. A file that exists
+    /// but cannot be parsed is copied aside first, so saving one key never
+    /// silently discards the others.
+    private func updateConfig(_ change: (inout [String: Any]) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let configFileURL = getConfigFileURL(),
+           fileManager.fileExists(atPath: configFileURL.path),
+           !configFileIsReadable(configFileURL) {
+            let backupURL = configFileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+            do {
+                try fileManager.copyItem(at: configFileURL, to: backupURL)
+                restrictPermissions(of: backupURL)
+                Task { await Logger.shared.error("Configuration file could not be read; kept a copy at \(backupURL.lastPathComponent)") }
+            } catch {
+                Task { await Logger.shared.error("Configuration file could not be read or backed up; not saving: \(error.localizedDescription)") }
+                return
+            }
+        }
+        var config = getConfig()
+        change(&config)
+        saveConfig(config)
+    }
+
+    private func configFileIsReadable(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return (try? JSONSerialization.jsonObject(with: data, options: [])) is [String: Any]
+    }
+
     private func saveConfig(_ config: [String: Any]) {
         lock.lock()
         defer { lock.unlock() }
@@ -116,16 +145,16 @@ public final class ConfigurationManager: @unchecked Sendable {
 
     /// Sets the FMP API key in configuration file
     public func setFMPAPIKey(_ apiKey: String) {
-        var config = getConfig()
-        config["FMP_API_KEY"] = apiKey
-        saveConfig(config)
+        updateConfig { config in
+            config["FMP_API_KEY"] = apiKey
+        }
     }
 
     /// Removes the FMP API key from configuration file
     public func removeFMPAPIKey() {
-        var config = getConfig()
-        config.removeValue(forKey: "FMP_API_KEY")
-        saveConfig(config)
+        updateConfig { config in
+            config.removeValue(forKey: "FMP_API_KEY")
+        }
     }
     
     // MARK: - Twelve Data API Key
@@ -137,16 +166,16 @@ public final class ConfigurationManager: @unchecked Sendable {
 
     /// Sets the Twelve Data API key in configuration file
     public func setTwelveDataAPIKey(_ apiKey: String) {
-        var config = getConfig()
-        config["TWELVE_DATA_API_KEY"] = apiKey
-        saveConfig(config)
+        updateConfig { config in
+            config["TWELVE_DATA_API_KEY"] = apiKey
+        }
     }
     
     /// Removes the Twelve Data API key from configuration file
     public func removeTwelveDataAPIKey() {
-        var config = getConfig()
-        config.removeValue(forKey: "TWELVE_DATA_API_KEY")
-        saveConfig(config)
+        updateConfig { config in
+            config.removeValue(forKey: "TWELVE_DATA_API_KEY")
+        }
     }
     
     // MARK: - Data Source Priority
@@ -158,9 +187,9 @@ public final class ConfigurationManager: @unchecked Sendable {
     
     /// Sets the data source priority list
     public func setDataSourcePriority(_ priority: [String]) {
-        var config = getConfig()
-        config["DATA_SOURCE_PRIORITY"] = priority
-        saveConfig(config)
+        updateConfig { config in
+            config["DATA_SOURCE_PRIORITY"] = priority
+        }
     }
 
     // MARK: - File Management

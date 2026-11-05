@@ -35,7 +35,7 @@ enum AlertCondition: String, Codable, CaseIterable {
         switch self {
         case .above: return "Price rises above"
         case .below: return "Price falls below"
-        case .percentChange: return "Price changes by"
+        case .percentChange: return "Price moves from previous close by"
         }
     }
 }
@@ -47,22 +47,37 @@ struct PriceAlert: Codable, Identifiable {
     let alertType: AlertType
     let condition: AlertCondition
     let threshold: Double  // Price for above/below, percentage for percentChange
-    let isEnabled: Bool
+    var isEnabled: Bool
     let createdAt: Date
     var lastTriggered: Date?
 
-    init(symbol: String?, alertType: AlertType = .price, condition: AlertCondition, threshold: Double, isEnabled: Bool = true) {
-        self.id = UUID()
+    /// Keeps the stored identity. Rebuilding alerts with a fresh UUID made
+    /// deletes, pauses and cooldowns miss their stored rows.
+    init(
+        id: UUID = UUID(),
+        symbol: String?,
+        alertType: AlertType = .price,
+        condition: AlertCondition,
+        threshold: Double,
+        isEnabled: Bool = true,
+        createdAt: Date = Date(),
+        lastTriggered: Date? = nil
+    ) {
+        self.id = id
         self.symbol = symbol
         self.alertType = alertType
         self.condition = condition
         self.threshold = threshold
         self.isEnabled = isEnabled
-        self.createdAt = Date()
-        self.lastTriggered = nil
+        self.createdAt = createdAt
+        self.lastTriggered = lastTriggered
     }
 
-    func conditionMet(currentPrice: Double, previousPrice: Double) -> Bool {
+    /// `previousPrice` is the last price seen for the symbol; above/below fire
+    /// when the price crosses the threshold between two readings. A % change is
+    /// measured from `previousClose`, firing when the day's move first reaches
+    /// the threshold, so a slow move of many small steps still counts.
+    func conditionMet(currentPrice: Double, previousPrice: Double, previousClose: Double? = nil) -> Bool {
         guard isEnabled else { return false }
 
         switch condition {
@@ -71,8 +86,11 @@ struct PriceAlert: Codable, Identifiable {
         case .below:
             return currentPrice < threshold && previousPrice >= threshold
         case .percentChange:
-            let change = abs((currentPrice - previousPrice) / previousPrice * 100)
-            return change >= abs(threshold)
+            let reference = previousClose ?? previousPrice
+            guard reference.isFinite, reference > 0 else { return false }
+            let now = abs((currentPrice - reference) / reference * 100)
+            let before = abs((previousPrice - reference) / reference * 100)
+            return now >= abs(threshold) && before < abs(threshold)
         }
     }
     
@@ -210,14 +228,10 @@ class PriceAlertService: ObservableObject {
             alertEntity.isEnabled = newEnabledState
         }
 
-        // Update in-memory alerts array
-        alerts[index] = PriceAlert(
-            symbol: alert.symbol,
-            alertType: alert.alertType,
-            condition: alert.condition,
-            threshold: alert.threshold,
-            isEnabled: newEnabledState
-        )
+        // Update in-memory alerts array, keeping the stored identity.
+        var updated = alert
+        updated.isEnabled = newEnabledState
+        alerts[index] = updated
 
         if newEnabledState {
             ensureNotificationAuthorizationIfNeeded()
@@ -243,18 +257,18 @@ class PriceAlertService: ObservableObject {
 
         // Get last known price or use previous close
         let lastPrice = lastKnownPrices[symbol] ?? previousPrice
+        let previousClose = previousPrice.isFinite && previousPrice > 0 ? previousPrice : nil
 
-        for alert in symbolAlerts {
-            if alert.conditionMet(currentPrice: currentPrice, previousPrice: lastPrice) {
-                // Check cooldown period (15 minutes) to avoid spam
-                if let lastTriggered = alert.lastTriggered,
-                   Date().timeIntervalSince(lastTriggered) < 900 {
-                    continue
-                }
-
-                sendNotification(for: alert, currentPrice: currentPrice, currency: currency)
-                updateLastTriggered(alertId: alert.id)
+        for alert in symbolAlerts
+        where alert.conditionMet(currentPrice: currentPrice, previousPrice: lastPrice, previousClose: previousClose) {
+            // Check cooldown period (15 minutes) to avoid spam
+            if let lastTriggered = alert.lastTriggered,
+               Date().timeIntervalSince(lastTriggered) < 900 {
+                continue
             }
+
+            sendNotification(for: alert, currentPrice: currentPrice, currency: currency)
+            updateLastTriggered(alertId: alert.id)
         }
 
         // Update last known price
@@ -341,26 +355,25 @@ class PriceAlertService: ObservableObject {
         do {
             let alertEntities = try viewContext.fetch(fetchRequest)
             alerts = alertEntities.compactMap { entity -> PriceAlert? in
-                guard let _ = entity.id,
+                guard let id = entity.id,
                       let conditionString = entity.condition,
                       let condition = AlertCondition(rawValue: conditionString),
                       let alertTypeString = entity.alertType,
                       let alertType = AlertType(rawValue: alertTypeString),
-                      let _ = entity.createdAt else {
+                      let createdAt = entity.createdAt else {
                     return nil
                 }
-                
-                let alert = PriceAlert(
+
+                return PriceAlert(
+                    id: id,
                     symbol: entity.symbol,
                     alertType: alertType,
                     condition: condition,
                     threshold: entity.threshold,
-                    isEnabled: entity.isEnabled
+                    isEnabled: entity.isEnabled,
+                    createdAt: createdAt,
+                    lastTriggered: entity.lastTriggered
                 )
-                // Use reflection to update immutable properties
-                var mutableAlert = alert
-                mutableAlert.lastTriggered = entity.lastTriggered
-                return mutableAlert
             }
             
             Task {
@@ -437,16 +450,7 @@ class PriceAlertService: ObservableObject {
 
         // Update in-memory alerts array
         guard let index = alerts.firstIndex(where: { $0.id == alertId }) else { return }
-        let alert = alerts[index]
-        var mutableAlert = PriceAlert(
-            symbol: alert.symbol,
-            alertType: alert.alertType,
-            condition: alert.condition,
-            threshold: alert.threshold,
-            isEnabled: alert.isEnabled
-        )
-        mutableAlert.lastTriggered = triggeredAt
-        alerts[index] = mutableAlert
+        alerts[index].lastTriggered = triggeredAt
     }
     
     // MARK: - Portfolio Milestone Checking

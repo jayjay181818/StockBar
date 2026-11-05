@@ -64,11 +64,13 @@ class MenuChartViewModel: ObservableObject {
     
     private let symbol: String
     private var currentPrice: Double
-    private let benchmarkSymbol: String?
+    /// Nil while the benchmark comparison is switched off, so nothing is fetched for it.
+    private var benchmarkSymbol: String?
     private let timeRangeSelectionStore: MenuChartTimeRangeSelectionStore
     private let historicalDataManager = HistoricalDataManager.shared
     private let logger = Logger.shared
     private var cancellables = Set<AnyCancellable>()
+    private var lastSeriesFingerprint: [String] = []
     private let reloadCoalescer = ChartReloadCoalescer()
     private var historyTask: Task<Void, Never>?
     private var isActive = false
@@ -85,15 +87,31 @@ class MenuChartViewModel: ObservableObject {
         self.benchmarkSymbol = benchmarkSymbol
         self.timeRangeSelectionStore = timeRangeSelectionStore
         self.selectedTimeRange = timeRangeSelectionStore.selectedTimeRange(for: symbol)
-        Publishers.Merge(
-            historicalDataManager.$priceSnapshots.dropFirst().map { _ in () },
-            historicalDataManager.$priceDataRevision.dropFirst().map { _ in () }
-        )
+        // Reload only when this chart's own symbol or benchmark changed, not on
+        // every other symbol's update.
+        historicalDataManager.$priceSnapshots.dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.loadChartData()
+                guard let self else { return }
+                let fingerprint = self.historicalDataManager.priceSeriesFingerprint(for: self.chartSymbols)
+                guard fingerprint != self.lastSeriesFingerprint else { return }
+                self.lastSeriesFingerprint = fingerprint
+                self.loadChartData()
             }
             .store(in: &cancellables)
+        historicalDataManager.priceDataChanges
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] changed in
+                guard let self,
+                      self.historicalDataManager.priceDataChange(changed, affects: self.chartSymbols) else { return }
+                self.loadChartData()
+            }
+            .store(in: &cancellables)
+        lastSeriesFingerprint = historicalDataManager.priceSeriesFingerprint(for: chartSymbols)
+    }
+
+    private var chartSymbols: [String] {
+        [symbol] + (benchmarkSymbol.map { [$0] } ?? [])
     }
 
     func activate() {
@@ -113,6 +131,13 @@ class MenuChartViewModel: ObservableObject {
         guard range != selectedTimeRange else { return }
         selectedTimeRange = range
         timeRangeSelectionStore.save(range, for: symbol)
+        loadChartData()
+    }
+
+    func setBenchmarkSymbol(_ symbol: String?) {
+        guard symbol != benchmarkSymbol else { return }
+        benchmarkSymbol = symbol
+        if symbol == nil { benchmarkData = [] }
         loadChartData()
     }
 
@@ -144,10 +169,13 @@ class MenuChartViewModel: ObservableObject {
                 let startDate = range.startDate(from: endDate)
                 
                 // Get price snapshots for the symbol within the time range
-                let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
+                let snapshots = historicalDataManager.getPriceSnapshots(
+                    for: symbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                )
                 historicalDataManager.requestPriceHistoryIfNeeded(
                     for: symbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
-                    availablePointCount: snapshots.count
+                    availablePointCount: snapshots.count,
+                    coversRange: HistoricalDataManager.snapshotsReachRangeStart(snapshots, from: startDate, to: endDate)
                 )
                 let validSnapshots = snapshots.filter { $0.price.isFinite && $0.price > 0 }
                 
@@ -184,10 +212,13 @@ class MenuChartViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 var benchmarkPoints: [MenuChartDataPoint] = []
                 if let benchmarkSymbol {
-                    let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(for: benchmarkSymbol, from: startDate, to: endDate)
+                    let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(
+                        for: benchmarkSymbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                    )
                     historicalDataManager.requestPriceHistoryIfNeeded(
                         for: benchmarkSymbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
-                        availablePointCount: benchmarkSnapshots.count
+                        availablePointCount: benchmarkSnapshots.count,
+                        coversRange: HistoricalDataManager.snapshotsReachRangeStart(benchmarkSnapshots, from: startDate, to: endDate)
                     )
                     let validBenchmarkSnapshots = benchmarkSnapshots.filter { $0.price.isFinite && $0.price > 0 }
                     benchmarkPoints = validBenchmarkSnapshots.map { snapshot in
@@ -197,22 +228,9 @@ class MenuChartViewModel: ObservableObject {
                             symbol: snapshot.symbol
                         )
                     }.sorted { $0.date < $1.date }
-
-                    if let first = benchmarkPoints.first {
-                        if first.date > startDate {
-                            benchmarkPoints.insert(
-                                MenuChartDataPoint(date: startDate, price: first.price, symbol: first.symbol),
-                                at: 0
-                            )
-                        }
-                        if let last = benchmarkPoints.last, last.date < endDate {
-                            benchmarkPoints.append(MenuChartDataPoint(date: endDate, price: last.price, symbol: last.symbol))
-                        } else if benchmarkPoints.count == 1 {
-                            benchmarkPoints.append(MenuChartDataPoint(date: endDate, price: first.price, symbol: first.symbol))
-                        }
-                    }
+                    // The line chart clips the benchmark to the primary window and rebases it there.
                 }
-                
+
                 await MainActor.run {
                     guard !Task.isCancelled, self.isActive, generation == self.loadGeneration else { return }
                     self.chartData = dataPoints
@@ -313,6 +331,16 @@ struct MenuPriceChartView: View {
         return (change, percent)
     }
 
+    /// Names the span the range P&L really covers: the selected range only
+    /// when history reaches back that far, otherwise the first point's date.
+    private var rangePnLLabel: String {
+        guard rangePriceChange != nil, let first = viewModel.chartData.first else { return "Today's P&L" }
+        if PortfolioMenuChartDataBuilder.coversRange(viewModel.chartData, range: viewModel.selectedTimeRange) {
+            return "\(viewModel.selectedTimeRange.description) P&L"
+        }
+        return "P&L since \(first.date.formatted(.dateTime.day().month(.abbreviated)))"
+    }
+
     private var rangePnL: (value: Double?, percent: Double?) {
         guard let rangePriceChange, metrics.units.isFinite else {
             return (metrics.dayPnL, metrics.dayPnLPercent)
@@ -342,7 +370,9 @@ struct MenuPriceChartView: View {
         self.metrics = metrics
         self.onUnitsSave = onUnitsSave
         self.onRetry = onRetry
-        let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol)
+        // Don't fetch a benchmark the user has switched off.
+        let benchmarkEnabled = StockbarRuntimeStorage.userDefaults.object(forKey: "menu.benchmarkComparisonEnabled") as? Bool ?? true
+        let benchmark = benchmarkEnabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil
         self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice, benchmarkSymbol: benchmark))
         self._unitsInput = State(initialValue: MenuPopoverFormatter.editableUnits(metrics.units))
     }
@@ -368,7 +398,7 @@ struct MenuPriceChartView: View {
                 )
                 .frame(height: chartHeight)
                 .accessibilityLabel("\(symbol) price, \(viewModel.selectedTimeRange.description)")
-                .accessibilityValue(rangePriceChange.map { String(format: "%+.2f percent", $0.percent) } ?? "No history")
+                .accessibilityValue(rangePriceChange.map { "\(MenuPopoverFormatter.percent($0.percent)) change" } ?? "No history")
 
                 if let benchmarkName, !chartPoints.isEmpty, !viewModel.benchmarkData.isEmpty {
                     MenuPopoverChartLegend(
@@ -400,6 +430,9 @@ struct MenuPriceChartView: View {
         .onDisappear { viewModel.deactivate() }
         .onChange(of: currentPrice) { _, newValue in
             viewModel.updateCurrentPrice(newValue)
+        }
+        .onChange(of: benchmarkEnabled) { _, enabled in
+            viewModel.setBenchmarkSymbol(enabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil)
         }
     }
 
@@ -447,7 +480,7 @@ struct MenuPriceChartView: View {
                                    valueColor: Self.signColor(metrics.totalPnL))
             }
             GridRow {
-                let rangeLabel = rangePriceChange == nil ? "Today's P&L" : "\(viewModel.selectedTimeRange.description) P&L"
+                let rangeLabel = rangePnLLabel
                 MenuPopoverStatBox(
                     label: rangeLabel,
                     value: MenuPopoverFormatter.currencyExact(rangePnL.value, currency: metrics.currency, includeSign: true),

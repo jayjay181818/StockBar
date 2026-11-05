@@ -188,3 +188,24 @@ enum HoldingsSummaryAmountFormatter {
         return dataModel.currencyConverter.convert(amount: amount.amount, from: currency, to: "USD")
     }
 }
+
+/// Pure helpers for the holdings editor.
+enum HoldingsEditing {
+    /// The row to swap with when moving `index` up (`offset < 0`) or down (`offset > 0`), among
+    /// the rows currently visible. Hidden rows are skipped; nil when there is no visible neighbour.
+    static func moveDestination(from index: Int, by offset: Int, visibleIndices: [Int]) -> Int? {
+        guard offset != 0, let position = visibleIndices.firstIndex(of: index) else { return nil }
+        let target = position + (offset > 0 ? 1 : -1)
+        guard visibleIndices.indices.contains(target) else { return nil }
+        return visibleIndices[target]
+    }
+
+    /// Pence plus every supported currency, keeping an unrecognised stored code selectable.
+    static func currencyOptions(current: String?) -> [String] {
+        var options = ["GBX"] + DataModel.supportedCurrencies
+        if let current, !current.isEmpty, !options.contains(current) {
+            options.append(current)
+        }
+        return options
+    }
+}

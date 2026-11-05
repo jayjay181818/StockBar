@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -130,6 +131,50 @@ class OHLCCurrencyTests(unittest.TestCase):
         # Guards against double-conversion if the provider switches units.
         result = self._fetch("VOD.L", "GBP")
         self.assertAlmostEqual(result["data"][0]["close"], 250.0)
+
+
+class OHLCNonFiniteTests(unittest.TestCase):
+    """NaN is not valid JSON; the app must never receive it."""
+
+    def setUp(self):
+        self.module = load_module()
+
+    def _fetch(self, rows, symbol="AAPL", currency="USD"):
+        self.module.yf = type("_FakeYF", (), {
+            "Ticker": staticmethod(lambda s: _FakeTicker(rows, currency))
+        })
+        self.module.YFINANCE_AVAILABLE = True
+        return self.module.fetch_ohlc_data(symbol)
+
+    def test_rows_with_non_finite_prices_are_skipped(self):
+        nan = float("nan")
+        rows = [
+            (_FakeIndex("2026-07-23T00:00:00+00:00"), _Row(Open=nan, High=nan, Low=nan, Close=nan, Volume=0)),
+            (_FakeIndex("2026-07-24T00:00:00+00:00"), _Row(Open=1.0, High=2.0, Low=0.5, Close=float("inf"), Volume=5)),
+            (_FakeIndex("2026-07-25T00:00:00+00:00"), _Row(Open=1.0, High=2.0, Low=0.5, Close=1.5, Volume=7)),
+        ]
+        result = self._fetch(rows)
+        self.assertTrue(result["success"])
+        self.assertEqual([p["timestamp"] for p in result["data"]], ["2026-07-25T00:00:00+00:00"])
+        json.dumps(result, allow_nan=False)
+
+    def test_nan_volume_becomes_zero(self):
+        rows = [(
+            _FakeIndex("2026-07-24T00:00:00+00:00"),
+            _Row(Open=1.0, High=2.0, Low=0.5, Close=1.5, Volume=float("nan")),
+        )]
+        result = self._fetch(rows)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"][0]["volume"], 0)
+        json.dumps(result, allow_nan=False)
+
+    def test_all_rows_non_finite_is_a_clean_failure(self):
+        nan = float("nan")
+        rows = [(_FakeIndex("2026-07-24T00:00:00+00:00"), _Row(Open=nan, High=nan, Low=nan, Close=nan, Volume=nan))]
+        result = self._fetch(rows)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data"], [])
+        json.dumps(result, allow_nan=False)
 
 
 if __name__ == "__main__":

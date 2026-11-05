@@ -25,21 +25,42 @@ struct PortfolioExportData: Codable {
     let units: Double
     let avgPositionCost: Double
     let costCurrency: String?
-    
+    // Optional so backups written before these fields existed still decode.
+    let currency: String?
+    let isWatchlistOnly: Bool?
+    let showInMenuBar: Bool?
+
     init(from trade: Trade) {
         self.symbol = trade.name
         self.units = trade.position.unitSize
         self.avgPositionCost = trade.position.positionAvgCost
         self.costCurrency = trade.position.costCurrency
+        self.currency = trade.position.currency
+        self.isWatchlistOnly = trade.isWatchlistOnly
+        self.showInMenuBar = trade.showInMenuBar
     }
-    
+
     func toTrade() -> Trade {
-        let position = Position(unitSize: String(units), 
-                               positionAvgCost: String(avgPositionCost),
-                               currency: costCurrency,
+        let position = Position(unitSize: String(units),
+                               positionAvgCost: avgPositionCost.isFinite ? String(avgPositionCost) : "",
+                               currency: currency ?? costCurrency,
                                costCurrency: costCurrency)
-        return Trade(name: symbol, position: position)
+        return Trade(
+            name: symbol,
+            position: position,
+            isWatchlistOnly: isWatchlistOnly ?? false,
+            showInMenuBar: showInMenuBar ?? true
+        )
     }
+
+    /// A blank or unparseable cost is NaN, which the default JSON encoder
+    /// refuses; one such row used to make every backup fail.
+    static let nonFiniteEncoding = JSONEncoder.NonConformingFloatEncodingStrategy.convertToString(
+        positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN"
+    )
+    static let nonFiniteDecoding = JSONDecoder.NonConformingFloatDecodingStrategy.convertFromString(
+        positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN"
+    )
 }
 
 // MARK: - CSV Document for Export/Import

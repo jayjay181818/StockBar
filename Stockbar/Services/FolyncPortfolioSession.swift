@@ -8,6 +8,8 @@ enum FolyncConnectionState: Equatable {
     case rebuilding(asOf: String?, reasons: [String])
     case offlineCached(message: String)
     case unauthorized
+    case rateLimited(retryAfter: TimeInterval?)
+    case unavailable(message: String)
     case incompatible
 
     var message: String {
@@ -20,43 +22,151 @@ enum FolyncConnectionState: Equatable {
         case .rebuilding(_, let reasons): return "Folync is rebuilding: \(reasons.joined(separator: ", "))"
         case .offlineCached(let message): return "Offline — showing last Folync data. \(message)"
         case .unauthorized: return "Folync access token was rejected."
+        case .rateLimited(let retryAfter):
+            return FolyncPortfolioSourceError.rateLimited(retryAfter: retryAfter).errorDescription
+                ?? "Folync is rate limiting requests."
+        case .unavailable(let message):
+            return message.isEmpty ? "Folync is unavailable." : message
         case .incompatible: return "Folync API version is incompatible."
         }
     }
 }
 
+struct FolyncSessionDependencies {
+    var settingsStore: FolyncSettingsStore
+    var snapshotCache: FolyncSnapshotCache
+    var overlayStore: FolyncOverlayStore
+    var supplementalCoordinator: FolyncSupplementalCoordinator
+    var urlSession: URLSession
+    var providerPolicy: StockbarProviderAccessPolicy
+    var loadToken: @Sendable () async -> String?
+    var saveToken: @Sendable (String) throws -> Void
+    var hasToken: @Sendable () async -> Bool
+
+    static let live = FolyncSessionDependencies(
+        settingsStore: .shared,
+        snapshotCache: .shared,
+        overlayStore: .shared,
+        supplementalCoordinator: .shared,
+        urlSession: .shared,
+        providerPolicy: .current,
+        loadToken: {
+            await Task.detached(priority: .userInitiated) {
+                try? FolyncCredentialStore.shared.load()
+            }.value
+        },
+        saveToken: { token in
+            try FolyncCredentialStore.shared.save(token: token)
+        },
+        hasToken: {
+            await Task.detached(priority: .userInitiated) {
+                FolyncCredentialStore.shared.hasToken()
+            }.value
+        }
+    )
+}
+
+@MainActor private var folyncSessionDependenciesByModel: [ObjectIdentifier: FolyncSessionDependencies] = [:]
+@MainActor private var folyncSupplementalGenerationsByModel: [ObjectIdentifier: UUID] = [:]
+
 extension DataModel {
+    var folyncSessionDependencies: FolyncSessionDependencies {
+        get { folyncSessionDependenciesByModel[ObjectIdentifier(self)] ?? .live }
+        set { folyncSessionDependenciesByModel[ObjectIdentifier(self)] = newValue }
+    }
+
+    var folyncSupplementalGeneration: UUID {
+        get { folyncSupplementalGenerationsByModel[ObjectIdentifier(self)] ?? folyncRefreshGeneration }
+        set { folyncSupplementalGenerationsByModel[ObjectIdentifier(self)] = newValue }
+    }
+
+    var isFolyncEnabled: Bool {
+        isFolyncPortfolioActive || folyncSessionDependencies.settingsStore.load().isEnabled
+    }
+
+    func hasStoredFolyncToken() async -> Bool {
+        await folyncSessionDependencies.hasToken()
+    }
+
+    private func resolveFolyncToken(_ candidate: String) async throws -> (token: String, isNewToken: Bool) {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return (trimmed, true)
+        }
+        if let stored = await folyncSessionDependencies.loadToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stored.isEmpty {
+            return (stored, false)
+        }
+        throw FolyncPortfolioSourceError.missingToken
+    }
+
     func testFolyncConnection(baseURL: URL, token: String) async throws -> [FolyncPortfolio] {
-        folyncConnectionState = .connecting
-        let source = try FolyncPortfolioSource(baseURL: baseURL, token: token)
-        let portfolios = try await source.listPortfolios()
-        folyncCapabilities = try? await source.fetchCapabilities()
-        folyncConnectionState = .notConfigured
-        return portfolios
+        let previousState = folyncConnectionState
+        let previousCapabilities = folyncCapabilities
+        defer {
+            folyncConnectionState = previousState
+            folyncCapabilities = previousCapabilities
+        }
+        let resolved = try await resolveFolyncToken(token)
+        let deps = folyncSessionDependencies
+        let source = try FolyncPortfolioSource(
+            baseURL: baseURL,
+            token: resolved.token,
+            session: deps.urlSession,
+            providerPolicy: deps.providerPolicy
+        )
+        return try await source.listPortfolios()
     }
 
     func previewFolyncPortfolio(baseURL: URL, token: String, scopeID: String) async throws -> FolyncPortfolioSnapshot {
-        folyncConnectionState = .connecting
-        let source = try FolyncPortfolioSource(baseURL: baseURL, token: token)
+        let previousState = folyncConnectionState
+        let previousCapabilities = folyncCapabilities
+        defer {
+            folyncConnectionState = previousState
+            folyncCapabilities = previousCapabilities
+        }
+        let resolved = try await resolveFolyncToken(token)
+        let deps = folyncSessionDependencies
+        let source = try FolyncPortfolioSource(
+            baseURL: baseURL,
+            token: resolved.token,
+            session: deps.urlSession,
+            providerPolicy: deps.providerPolicy
+        )
         let result = try await source.fetchSnapshot(scopeID: scopeID, etag: nil)
         guard case .changed(let snapshot, _) = result else { throw FolyncPortfolioSourceError.invalidResponse }
-        folyncConnectionState = connectionState(for: snapshot)
         return snapshot
     }
 
     func activateFolyncPortfolio(baseURL: URL, token: String, scopeID: String) async throws {
+        let previousState = folyncConnectionState
+        var didCommit = false
         folyncConnectionState = .connecting
-        let source = try FolyncPortfolioSource(baseURL: baseURL, token: token)
+        defer {
+            if !didCommit {
+                folyncConnectionState = previousState
+            }
+        }
+        let resolved = try await resolveFolyncToken(token)
+        let deps = folyncSessionDependencies
+        let source = try FolyncPortfolioSource(
+            baseURL: baseURL,
+            token: resolved.token,
+            session: deps.urlSession,
+            providerPolicy: deps.providerPolicy
+        )
         let portfolios = try await source.listPortfolios()
         guard portfolios.contains(where: { $0.id == scopeID }) else {
-            throw FolyncPortfolioSourceError.invalidPayload("Selected portfolio scope is unavailable")
+            throw FolyncPortfolioSourceError.invalidScope("Selected portfolio scope is unavailable")
         }
         let result = try await source.fetchSnapshot(scopeID: scopeID, etag: nil)
         guard case .changed(let snapshot, let etag) = result else {
             throw FolyncPortfolioSourceError.invalidResponse
         }
         let capabilities = try? await source.fetchCapabilities()
-        try FolyncCredentialStore.shared.save(token: token)
+        if resolved.isNewToken {
+            try deps.saveToken(resolved.token)
+        }
         // A successful hot reconfiguration establishes a new cache/overlay
         // identity. Remove only in-memory overlays from the previous endpoint
         // or scope; local history and the separate Folync disk caches remain.
@@ -64,8 +174,8 @@ extension DataModel {
         currencyConverter.deactivateFolyncOverlay()
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         folyncSupplementalStatuses = [:]
-        await FolyncSupplementalCoordinator.shared.clearInMemoryState()
-        FolyncSettingsStore.shared.save(FolyncStoredSettings(
+        await deps.supplementalCoordinator.clearInMemoryState()
+        deps.settingsStore.save(FolyncStoredSettings(
             isEnabled: true,
             baseURL: baseURL.absoluteString,
             scopeID: scopeID,
@@ -76,29 +186,33 @@ extension DataModel {
         folyncCapabilities = capabilities
         folyncETag = etag
         applyFolyncSnapshot(snapshot)
-        try await FolyncSnapshotCache.shared.save(FolyncCachedSnapshot(
-            endpoint: baseURL.absoluteString,
-            scopeID: scopeID,
-            etag: etag,
-            snapshot: snapshot
-        ))
+        didCommit = true
+        do {
+            try await deps.snapshotCache.save(FolyncCachedSnapshot(
+                endpoint: baseURL.absoluteString,
+                scopeID: scopeID,
+                etag: etag,
+                snapshot: snapshot
+            ))
+        } catch {
+            await Logger.shared.warning("Failed to save Folync snapshot cache during activation: \(LogRedactor.redact(error.localizedDescription))")
+        }
         await restartFolyncPortfolioScheduler(runImmediately: false)
     }
 
-    /// Reads the Folync token off the main actor.
-    ///
-    /// These call sites run during `DataModel.init` and from timer callbacks. A
-    /// Keychain read can block on internal locks or a locked keychain, and on
-    /// the main thread that stalls the entire app — trade loading, the first
-    /// refresh pass and every UI update sit behind it.
-    private static func loadFolyncTokenOffMainActor() async -> String? {
-        await Task.detached(priority: .userInitiated) {
-            try? FolyncCredentialStore.shared.load()
-        }.value
+    private func isFolyncSessionCurrent(generation: UUID, settings: FolyncStoredSettings? = nil) -> Bool {
+        guard !Task.isCancelled, generation == folyncRefreshGeneration else { return false }
+        let current = folyncSessionDependencies.settingsStore.load()
+        guard current.isEnabled else { return false }
+        if let settings {
+            return current.baseURL == settings.baseURL && current.scopeID == settings.scopeID
+        }
+        return true
     }
 
     func restartFolyncPortfolioScheduler(runImmediately: Bool) async {
         folyncRefreshGeneration = UUID()
+        folyncSupplementalGeneration = UUID()
         let generation = folyncRefreshGeneration
         folyncRefreshTimer?.invalidate()
         folyncRefreshTimer = nil
@@ -108,23 +222,26 @@ extension DataModel {
         folyncRefreshRequestID = nil
         // A restart follows a new URL, token or scope, so earlier backoff no longer applies.
         folyncBackoffUntil = nil
-        let settings = FolyncSettingsStore.shared.load()
-        guard settings.isEnabled else { return }
+        let deps = folyncSessionDependencies
+        await deps.supplementalCoordinator.clearBackoff()
+        let settings = deps.settingsStore.load()
+        guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
 
-        folyncCapabilities = await FolyncSupplementalCoordinator.shared.capabilitiesForCurrentSettings(refresh: true)
-        guard generation == folyncRefreshGeneration, !Task.isCancelled else { return }
+        let capabilities = await deps.supplementalCoordinator.capabilitiesForCurrentSettings(refresh: true)
+        guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
+        folyncCapabilities = capabilities
         if runImmediately {
-            await refreshFolyncPortfolio()
+            await refreshFolyncPortfolio(allowCatchUp: false)
         } else {
             scheduleFolyncCheck(at: FolyncRefreshSchedule.nextRegularCheck(after: Date()), isCatchUp: false)
         }
-        guard generation == folyncRefreshGeneration, !Task.isCancelled else { return }
+        guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
         await restartFolyncSupplementalScheduler(runImmediately: runImmediately)
     }
 
     private func scheduleFolyncCheck(at date: Date, isCatchUp: Bool) {
         folyncRefreshTimer?.invalidate()
-        guard FolyncSettingsStore.shared.load().isEnabled else {
+        guard folyncSessionDependencies.settingsStore.load().isEnabled else {
             folyncNextCheckAt = nil
             return
         }
@@ -132,7 +249,14 @@ extension DataModel {
         let generation = folyncRefreshGeneration
         let timer = Timer(fire: date, interval: 0, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, generation == self.folyncRefreshGeneration else { return }
+                guard let self, self.isFolyncSessionCurrent(generation: generation) else { return }
+                if let backoff = await self.folyncSessionDependencies.supplementalCoordinator.backoffUntil(),
+                   backoff > Date() {
+                    guard self.isFolyncSessionCurrent(generation: generation) else { return }
+                    self.folyncBackoffUntil = backoff
+                    self.scheduleFolyncCheck(at: backoff, isCatchUp: false)
+                    return
+                }
                 await self.refreshFolyncPortfolio(allowCatchUp: !isCatchUp)
             }
         }
@@ -142,6 +266,8 @@ extension DataModel {
     }
 
     func refreshFolyncPortfolio() async {
+        folyncBackoffUntil = nil
+        await folyncSessionDependencies.supplementalCoordinator.clearBackoff()
         await refreshFolyncPortfolio(allowCatchUp: false)
     }
 
@@ -156,7 +282,8 @@ extension DataModel {
             await task.value
             return
         }
-        let settings = FolyncSettingsStore.shared.load()
+        let deps = folyncSessionDependencies
+        let settings = deps.settingsStore.load()
         guard settings.isEnabled, let baseURL = URL(string: settings.baseURL) else { return }
         let generation = folyncRefreshGeneration
         let requestID = UUID()
@@ -170,14 +297,22 @@ extension DataModel {
                 }
             }
             let startedAt = Date()
-            let token = await Self.loadFolyncTokenOffMainActor()
-            guard !Task.isCancelled, generation == folyncRefreshGeneration else { return }
+            let token = await deps.loadToken()
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             await Logger.shared.info("Folync poll started at \(startedAt.ISO8601Format())")
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             var succeeded = false
-            if let token {
-                succeeded = await refreshFolyncPortfolio(baseURL: baseURL, token: token, settings: settings)
+            if let token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                succeeded = await refreshFolyncPortfolio(
+                    baseURL: baseURL,
+                    token: token,
+                    settings: settings,
+                    generation: generation
+                )
+            } else {
+                markFolyncRefreshFailure(FolyncPortfolioSourceError.missingToken)
             }
-            guard !Task.isCancelled, generation == folyncRefreshGeneration else { return }
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             let completedAt = Date()
             if succeeded { folyncLastCheckedAt = completedAt }
             let providerSyncAt = folyncPortfolioSnapshot?.freshness.sources.provider.lastSuccessfulSyncAt
@@ -195,19 +330,32 @@ extension DataModel {
         await task.value
     }
 
-    private func refreshFolyncPortfolio(baseURL: URL, token: String, settings: FolyncStoredSettings) async -> Bool {
+    private func refreshFolyncPortfolio(
+        baseURL: URL,
+        token: String,
+        settings: FolyncStoredSettings,
+        generation: UUID
+    ) async -> Bool {
+        let deps = folyncSessionDependencies
         folyncConnectionState = .connecting
-        do {
-            if folyncETag == nil,
-               let cached = try await FolyncSnapshotCache.shared.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
+        if folyncETag == nil {
+            if let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
+                guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
                 applyFolyncSnapshot(cached.snapshot)
+            } else {
+                guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
-            let source = try FolyncPortfolioSource(baseURL: baseURL, token: token)
+        }
+        do {
+            let source = try FolyncPortfolioSource(
+                baseURL: baseURL,
+                token: token,
+                session: deps.urlSession,
+                providerPolicy: deps.providerPolicy
+            )
             let result = try await source.fetchSnapshot(scopeID: settings.scopeID, etag: folyncETag)
-            guard !Task.isCancelled, FolyncSettingsStore.shared.load().isEnabled,
-                  FolyncSettingsStore.shared.load().baseURL == settings.baseURL,
-                  FolyncSettingsStore.shared.load().scopeID == settings.scopeID else { return false }
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             switch result {
             case .unchanged:
                 if let snapshot = folyncPortfolioSnapshot {
@@ -216,24 +364,38 @@ extension DataModel {
             case .changed(let snapshot, let etag):
                 folyncETag = etag
                 applyFolyncSnapshot(snapshot)
-                try await FolyncSnapshotCache.shared.save(FolyncCachedSnapshot(
-                    endpoint: settings.baseURL,
-                    scopeID: settings.scopeID,
-                    etag: etag,
-                    snapshot: snapshot
-                ))
+                do {
+                    try await deps.snapshotCache.save(FolyncCachedSnapshot(
+                        endpoint: settings.baseURL,
+                        scopeID: settings.scopeID,
+                        etag: etag,
+                        snapshot: snapshot
+                    ))
+                } catch {
+                    await Logger.shared.warning("Failed to save Folync snapshot cache: \(LogRedactor.redact(error.localizedDescription))")
+                }
+                guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
             folyncBackoffUntil = nil
+            await deps.supplementalCoordinator.clearBackoff()
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             return true
         } catch {
-            guard !Task.isCancelled else { return false }
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             if folyncPortfolioSnapshot == nil,
-               let cached = try? await FolyncSnapshotCache.shared.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
+               let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
+                guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
                 applyFolyncSnapshot(cached.snapshot)
+            } else {
+                guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
             markFolyncRefreshFailure(error)
-            folyncBackoffUntil = FolyncRefreshSchedule.backoff(after: error, at: Date())
+            let now = Date()
+            let backoff = await deps.supplementalCoordinator.recordBackoff(after: error, at: now)
+                ?? FolyncRefreshSchedule.backoff(after: error, at: now)
+            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
+            folyncBackoffUntil = backoff
             return false
         }
     }
@@ -253,13 +415,16 @@ extension DataModel {
         realTimeTrades = makeFolyncPortfolioTrades(
             snapshot: snapshot,
             preserving: legacyPortfolioTrades ?? [],
-            overlays: FolyncOverlayStore.shared.load()
+            overlays: folyncSessionDependencies.overlayStore.load()
         )
+        evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
     }
 
     func updateFolyncSupplementalSettings(_ supplemental: FolyncSupplementalSettings) async {
-        let previous = FolyncSettingsStore.shared.load().supplemental
-        FolyncSettingsStore.shared.setSupplemental(supplemental)
+        let settingsStore = folyncSessionDependencies.settingsStore
+        let previous = settingsStore.load().supplemental
+        guard previous != supplemental else { return }
+        settingsStore.setSupplemental(supplemental)
         if previous.historicalLineCharts && !supplemental.historicalLineCharts {
             HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         } else if previous.historicalLineCharts != supplemental.historicalLineCharts ||
@@ -278,25 +443,40 @@ extension DataModel {
     }
 
     func restartFolyncSupplementalScheduler(runImmediately: Bool) async {
+        let refreshGeneration = folyncRefreshGeneration
+        let supplementalGeneration = UUID()
+        folyncSupplementalGeneration = supplementalGeneration
         folyncSupplementalRefreshTimer?.invalidate()
         folyncSupplementalRefreshTimer = nil
         folyncSupplementalRefreshTask?.cancel()
         folyncSupplementalRefreshTask = nil
-        let settings = FolyncSettingsStore.shared.load()
-        guard settings.isEnabled else { return }
+        let deps = folyncSessionDependencies
+        let settings = deps.settingsStore.load()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
 
         // Capabilities readiness can change after bounded Folync backfills even
         // when only on-demand chart routes are enabled. Keep this conditional
         // ETag poll active for every configured Folync connection.
-        if runImmediately, !isFolyncBackingOff {
+        let coordinatorBackingOff = await deps.supplementalCoordinator.isBackingOff()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
+        if runImmediately, !isFolyncBackingOff, !coordinatorBackingOff {
             await refreshFolyncSupplementalMarketData()
+            guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+                  supplementalGeneration == folyncSupplementalGeneration else { return }
         }
+        folyncSupplementalRefreshTimer?.invalidate()
         let timer = Timer(fire: FolyncRefreshSchedule.nextRegularCheck(after: Date()),
                           interval: FolyncRefreshSchedule.interval, repeats: true) {
             [weak self] _ in
             Task { @MainActor [weak self] in
                 // Supplemental routes use the same token, so they wait out the same backoff.
-                guard let self, self.folyncSupplementalRefreshTask == nil, !self.isFolyncBackingOff else { return }
+                guard let self,
+                      self.isFolyncSessionCurrent(generation: refreshGeneration),
+                      supplementalGeneration == self.folyncSupplementalGeneration,
+                      self.folyncSupplementalRefreshTask == nil,
+                      !self.isFolyncBackingOff else { return }
                 self.folyncSupplementalRefreshTask = Task { @MainActor [weak self] in
                     guard let self else { return }
                     defer { self.folyncSupplementalRefreshTask = nil }
@@ -310,13 +490,34 @@ extension DataModel {
     }
 
     func refreshFolyncSupplementalMarketData() async {
-        let settings = FolyncSettingsStore.shared.load()
-        guard settings.isEnabled else { return }
+        let refreshGeneration = folyncRefreshGeneration
+        let supplementalGeneration = folyncSupplementalGeneration
+        let deps = folyncSessionDependencies
+        let settings = deps.settingsStore.load()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
 
-        folyncCapabilities = await FolyncSupplementalCoordinator.shared.capabilitiesForCurrentSettings(refresh: true)
+        if let backoff = await deps.supplementalCoordinator.backoffUntil(), backoff > Date() {
+            guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+                  supplementalGeneration == folyncSupplementalGeneration else { return }
+            folyncBackoffUntil = backoff
+            return
+        }
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration,
+              !isFolyncBackingOff else { return }
 
-        if settings.isSupplementalRouteActive(.benchmarkMarketData) {
-            switch await FolyncSupplementalCoordinator.shared.routeBenchmarks() {
+        let capabilities = await deps.supplementalCoordinator.capabilitiesForCurrentSettings(refresh: true)
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
+        folyncCapabilities = capabilities
+
+        if deps.settingsStore.load().isSupplementalRouteActive(.benchmarkMarketData) {
+            let benchmarkResult = await deps.supplementalCoordinator.routeBenchmarks()
+            guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+                  supplementalGeneration == folyncSupplementalGeneration,
+                  deps.settingsStore.load().isSupplementalRouteActive(.benchmarkMarketData) else { return }
+            switch benchmarkResult {
             case .folync(let benchmarks, let status):
                 applyFolyncBenchmarkOverlays(benchmarks)
                 folyncSupplementalStatuses[.benchmarkMarketData] = status
@@ -329,15 +530,23 @@ extension DataModel {
             }
         }
 
-        if settings.isSupplementalRouteActive(.exchangeRates) {
+        if deps.settingsStore.load().isSupplementalRouteActive(.exchangeRates) {
             await currencyConverter.refreshRatesFromConfiguredSource(force: true)
+            guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+                  supplementalGeneration == folyncSupplementalGeneration,
+                  deps.settingsStore.load().isSupplementalRouteActive(.exchangeRates) else { return }
             folyncSupplementalStatuses[.exchangeRates] = currencyConverter.sourceStatus
+        }
+
+        if let backoff = await deps.supplementalCoordinator.backoffUntil(), backoff > Date() {
+            guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+                  supplementalGeneration == folyncSupplementalGeneration else { return }
+            folyncBackoffUntil = backoff
         }
     }
 
-    private func applyFolyncBenchmarkOverlays(_ benchmarks: [FolyncBenchmark]) {
+    func applyFolyncBenchmarkOverlays(_ benchmarks: [FolyncBenchmark]) {
         for benchmark in benchmarks {
-            guard let last = benchmark.current.last, last.isFinite else { continue }
             guard let trade = realTimeTrades.first(where: {
                 $0.trade.name.uppercased() == benchmark.symbol.uppercased()
             }) else { continue }
@@ -346,17 +555,27 @@ extension DataModel {
                 folyncBenchmarkBaselines[key] = trade.realTimeInfo
             }
             var info = trade.realTimeInfo
-            info.currentPrice = last
-            info.previousClose = benchmark.current.previousClose
-            info.prevClosePrice = benchmark.current.previousClose ?? .nan
             info.currency = benchmark.currency
             info.shortName = benchmark.name
             info.lastUpdateTime = benchmark.current.asOf
                 .flatMap(FolyncSupplementalDateParser.instant)
                 .map { Int($0.timeIntervalSince1970) }
-            info.errorMessage = benchmark.quality == .unavailable
-                ? "Folync benchmark unavailable: \(benchmark.reasonCodes.joined(separator: ", "))"
-                : nil
+            if benchmark.quality != .unavailable,
+               let last = benchmark.current.last,
+               last.isFinite {
+                info.currentPrice = last
+                info.previousClose = benchmark.current.previousClose
+                info.prevClosePrice = benchmark.current.previousClose ?? .nan
+                info.errorMessage = nil
+            } else {
+                info.currentPrice = .nan
+                info.previousClose = nil
+                info.prevClosePrice = .nan
+                let reasons = benchmark.reasonCodes.joined(separator: ", ")
+                info.errorMessage = reasons.isEmpty
+                    ? "Folync benchmark data is unavailable."
+                    : "Folync benchmark unavailable: \(reasons)"
+            }
             trade.realTimeInfo = info
         }
     }
@@ -386,17 +605,28 @@ extension DataModel {
     func markFolyncRefreshFailure(_ error: Error) {
         if folyncPortfolioSnapshot != nil {
             folyncConnectionState = .offlineCached(message: LogRedactor.redact(error.localizedDescription))
-        } else if error is FolyncPortfolioSourceError {
-            switch error as? FolyncPortfolioSourceError {
-            case .unauthorized: folyncConnectionState = .unauthorized
-            case .unsupportedSchema: folyncConnectionState = .incompatible
-            default: folyncConnectionState = .notConfigured
+            return
+        }
+        if let sourceError = error as? FolyncPortfolioSourceError {
+            switch sourceError {
+            case .unauthorized:
+                folyncConnectionState = .unauthorized
+            case .rateLimited(let retryAfter):
+                folyncConnectionState = .rateLimited(retryAfter: retryAfter)
+            case .unsupportedSchema:
+                folyncConnectionState = .incompatible
+            case .unavailable, .invalidPayload, .invalidResponse, .insecureTransport, .invalidEndpoint, .missingToken, .invalidScope:
+                folyncConnectionState = .unavailable(message: LogRedactor.redact(sourceError.localizedDescription))
             }
+        } else {
+            folyncConnectionState = .unavailable(message: LogRedactor.redact(error.localizedDescription))
         }
     }
 
     func deactivateFolyncPortfolio(persistSetting: Bool = true) {
+        let deps = folyncSessionDependencies
         folyncRefreshGeneration = UUID()
+        folyncSupplementalGeneration = UUID()
         folyncRefreshRequestID = nil
         folyncLastCheckedAt = nil
         folyncNextCheckAt = nil
@@ -421,10 +651,10 @@ extension DataModel {
         }
         legacyPortfolioTrades = nil
         if persistSetting {
-            FolyncSettingsStore.shared.setEnabled(false)
+            deps.settingsStore.setEnabled(false)
         }
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
-        Task { await FolyncSupplementalCoordinator.shared.clearInMemoryState() }
+        Task { await deps.supplementalCoordinator.clearInMemoryState() }
         if persistSetting {
             restartTrading212LinkedSyncScheduler()
         }
@@ -432,14 +662,15 @@ extension DataModel {
 
     func setFolyncHoldingVisibleInMenuBar(_ visible: Bool, holding: FolyncHolding) {
         guard let snapshot = folyncPortfolioSnapshot else { return }
-        FolyncOverlayStore.shared.set(
+        let overlayStore = folyncSessionDependencies.overlayStore
+        overlayStore.set(
             FolyncHoldingOverlay(showInMenuBar: visible),
             for: holding.overlayKey(scopeID: snapshot.scope.id)
         )
         realTimeTrades = makeFolyncPortfolioTrades(
             snapshot: snapshot,
             preserving: legacyPortfolioTrades ?? [],
-            overlays: FolyncOverlayStore.shared.load()
+            overlays: overlayStore.load()
         )
     }
 

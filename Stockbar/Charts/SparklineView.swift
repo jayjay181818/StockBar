@@ -50,6 +50,8 @@ struct SparklineView: View {
             .chartLegend(.hidden)
             .chartYScale(domain: .automatic(includesZero: false))
             .frame(height: 24)
+            // Decorative: the surrounding row already states the price and change.
+            .accessibilityHidden(true)
         }
     }
 }

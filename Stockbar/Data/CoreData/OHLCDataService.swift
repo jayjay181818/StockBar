@@ -21,9 +21,6 @@ actor OHLCDataService {
     /// Maximum number of OHLC snapshots to keep per symbol
     private let maxSnapshotsPerSymbol = 10000
 
-    /// Minimum interval between OHLC snapshots (to prevent duplicates)
-    private let minimumSnapshotInterval: TimeInterval = 60 // 1 minute
-
     // MARK: - Initialization
 
     init(coreDataStack: CoreDataStack = .shared) {
@@ -32,7 +29,8 @@ actor OHLCDataService {
 
     // MARK: - Public Methods
 
-    /// Save a single OHLC snapshot
+    /// Save a single OHLC snapshot, updating the stored candle when one already
+    /// exists for the same symbol, interval and timestamp.
     func saveSnapshot(
         symbol: String,
         timestamp: Date,
@@ -40,65 +38,71 @@ actor OHLCDataService {
         high: Double,
         low: Double,
         close: Double,
-        volume: Int64
+        volume: Int64,
+        interval: String? = nil
     ) async throws {
-        let context = coreDataStack.newBackgroundContext()
-
-        try await context.perform {
-            // Check for duplicate within minimum interval
-            if try self.hasDuplicateSnapshot(
+        try await saveSnapshots([
+            OHLCSnapshot(
                 symbol: symbol,
                 timestamp: timestamp,
-                context: context
-            ) {
-                return // Skip duplicate
-            }
-
-            // Create new snapshot
-            let snapshot = OHLCSnapshotEntity(context: context)
-            snapshot.id = UUID()
-            snapshot.symbol = symbol
-            snapshot.timestamp = timestamp
-            snapshot.openPrice = open
-            snapshot.highPrice = high
-            snapshot.lowPrice = low
-            snapshot.closePrice = close
-            snapshot.volume = volume
-
-            try context.save()
-
-            // Cleanup old snapshots
-            try self.cleanupOldSnapshots(symbol: symbol, context: context)
-        }
+                open: open,
+                high: high,
+                low: low,
+                close: close,
+                volume: volume,
+                interval: interval
+            )
+        ])
     }
 
-    /// Save multiple OHLC snapshots (batch operation)
+    /// Upsert multiple OHLC snapshots (batch operation).
+    ///
+    /// A candle is identified by symbol + interval + timestamp. Existing rows are
+    /// updated in place so a still-forming candle picks up its final OHLC/volume.
     func saveSnapshots(_ snapshots: [OHLCSnapshot]) async throws {
+        guard !snapshots.isEmpty else { return }
         let context = coreDataStack.newBackgroundContext()
 
         try await context.perform {
-            for snapshot in snapshots {
-                // Check for duplicate
-                if try self.hasDuplicateSnapshot(
-                    symbol: snapshot.symbol,
-                    timestamp: snapshot.timestamp,
+            let groups = Dictionary(grouping: snapshots) { SnapshotGroupKey(symbol: $0.symbol, interval: $0.interval) }
+            for (key, group) in groups {
+                let existing = try self.existingEntities(
+                    symbol: key.symbol,
+                    interval: key.interval,
+                    timestamps: group.map(\.timestamp),
                     context: context
-                ) {
-                    continue // Skip duplicate
+                )
+                var byTimestamp: [Date: OHLCSnapshotEntity] = [:]
+                for entity in existing {
+                    guard let timestamp = entity.timestamp else { continue }
+                    if byTimestamp[timestamp] == nil {
+                        byTimestamp[timestamp] = entity
+                    } else {
+                        // Collapse duplicates left over from earlier versions.
+                        context.delete(entity)
+                    }
                 }
 
-                // Create entity
-                let entity = OHLCSnapshotEntity(context: context)
-                entity.id = UUID()
-                entity.symbol = snapshot.symbol
-                entity.timestamp = snapshot.timestamp
-                entity.openPrice = snapshot.open
-                entity.highPrice = snapshot.high
-                entity.lowPrice = snapshot.low
-                entity.closePrice = snapshot.close
-                // Folync overlays are never passed to this persistence path. Keep
-                // the legacy Core Data model non-optional for local-provider rows.
-                entity.volume = snapshot.volume ?? 0
+                for snapshot in group {
+                    let entity: OHLCSnapshotEntity
+                    if let found = byTimestamp[snapshot.timestamp] {
+                        entity = found
+                    } else {
+                        entity = OHLCSnapshotEntity(context: context)
+                        entity.id = UUID()
+                        entity.symbol = snapshot.symbol
+                        entity.timestamp = snapshot.timestamp
+                        byTimestamp[snapshot.timestamp] = entity
+                    }
+                    entity.interval = snapshot.interval
+                    entity.openPrice = snapshot.open
+                    entity.highPrice = snapshot.high
+                    entity.lowPrice = snapshot.low
+                    entity.closePrice = snapshot.close
+                    // Folync overlays are never passed to this persistence path. Keep
+                    // the legacy Core Data model non-optional for local-provider rows.
+                    entity.volume = snapshot.volume ?? 0
+                }
             }
 
             try context.save()
@@ -108,6 +112,31 @@ actor OHLCDataService {
             for symbol in symbols {
                 try self.cleanupOldSnapshots(symbol: symbol, context: context)
             }
+        }
+    }
+
+    /// Fetch cached candles for one symbol at one interval (nil matches only
+    /// rows stored before intervals were recorded).
+    func fetchSnapshots(
+        symbol: String,
+        interval: String?,
+        startDate: Date?,
+        endDate: Date?
+    ) async throws -> [OHLCSnapshot] {
+        let context = coreDataStack.viewContext
+
+        return try await context.perform {
+            let request = OHLCSnapshotEntity.fetchRequest()
+            var predicates = [Self.symbolIntervalPredicate(symbol: symbol, interval: interval)]
+            if let startDate {
+                predicates.append(NSPredicate(format: "timestamp >= %@", startDate as NSDate))
+            }
+            if let endDate {
+                predicates.append(NSPredicate(format: "timestamp <= %@", endDate as NSDate))
+            }
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+            request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+            return try context.fetch(request).map(Self.snapshot(from:))
         }
     }
 
@@ -274,26 +303,45 @@ actor OHLCDataService {
 
     // MARK: - Private Methods
 
-    /// Check if a snapshot already exists within the minimum interval
-    private nonisolated func hasDuplicateSnapshot(
-        symbol: String,
-        timestamp: Date,
-        context: NSManagedObjectContext
-    ) throws -> Bool {
-        let startRange = timestamp.addingTimeInterval(-minimumSnapshotInterval)
-        let endRange = timestamp.addingTimeInterval(minimumSnapshotInterval)
+    private struct SnapshotGroupKey: Hashable {
+        let symbol: String
+        let interval: String?
+    }
 
-        let request = OHLCSnapshotEntity.fetchRequest()
-        request.predicate = NSPredicate(
-            format: "symbol == %@ AND timestamp >= %@ AND timestamp <= %@",
-            symbol,
-            startRange as NSDate,
-            endRange as NSDate
+    private nonisolated static func symbolIntervalPredicate(symbol: String, interval: String?) -> NSPredicate {
+        if let interval {
+            return NSPredicate(format: "symbol == %@ AND interval == %@", symbol, interval)
+        }
+        return NSPredicate(format: "symbol == %@ AND interval == nil", symbol)
+    }
+
+    private nonisolated static func snapshot(from entity: OHLCSnapshotEntity) -> OHLCSnapshot {
+        OHLCSnapshot(
+            symbol: entity.symbol ?? "",
+            timestamp: entity.timestamp ?? Date(),
+            open: entity.openPrice,
+            high: entity.highPrice,
+            low: entity.lowPrice,
+            close: entity.closePrice,
+            volume: entity.volume,
+            interval: entity.interval
         )
-        request.fetchLimit = 1
+    }
 
-        let count = try context.count(for: request)
-        return count > 0
+    /// Stored rows for the same symbol + interval within the timestamp span of a batch.
+    private nonisolated func existingEntities(
+        symbol: String,
+        interval: String?,
+        timestamps: [Date],
+        context: NSManagedObjectContext
+    ) throws -> [OHLCSnapshotEntity] {
+        guard let first = timestamps.min(), let last = timestamps.max() else { return [] }
+        let request = OHLCSnapshotEntity.fetchRequest()
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            Self.symbolIntervalPredicate(symbol: symbol, interval: interval),
+            NSPredicate(format: "timestamp >= %@ AND timestamp <= %@", first as NSDate, last as NSDate)
+        ])
+        return try context.fetch(request)
     }
 
     /// Clean up old snapshots to maintain the maximum limit per symbol
@@ -333,6 +381,9 @@ struct OHLCSnapshot: Codable, Identifiable, Sendable {
     let close: Double
     /// Nil for a non-persisted provider overlay when volume is unavailable.
     let volume: Int64?
+    /// yfinance interval the candle was fetched at (for example "5m" or "1d").
+    /// Nil for rows stored before intervals were recorded.
+    let interval: String?
 
     init(
         id: UUID = UUID(),
@@ -342,7 +393,8 @@ struct OHLCSnapshot: Codable, Identifiable, Sendable {
         high: Double,
         low: Double,
         close: Double,
-        volume: Int64?
+        volume: Int64?,
+        interval: String? = nil
     ) {
         self.id = id
         self.symbol = symbol
@@ -352,6 +404,7 @@ struct OHLCSnapshot: Codable, Identifiable, Sendable {
         self.low = low
         self.close = close
         self.volume = volume
+        self.interval = interval
     }
 
     /// Calculate the change from open to close

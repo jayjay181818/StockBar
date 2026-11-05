@@ -123,17 +123,21 @@ final class DataValidationService: Sendable {
             return .failure([.invalidPrice(price)])
         }
 
-        // Check for reasonable upper bound (e.g., $1 million per share)
-        guard price <= 1_000_000 else {
-            return .failure([.outOfRange("price", min: 0, max: 1_000_000)])
+        // Only reject garbage: real quotes pass 1,000,000 in some currencies
+        // (for example won-quoted shares, or Berkshire A in pence).
+        guard price <= Self.maximumPlausiblePrice else {
+            return .failure([.outOfRange("price", min: 0, max: Self.maximumPlausiblePrice)])
         }
 
         return .success(price)
     }
 
+    /// Upper bound for a per-share price in any currency.
+    nonisolated static let maximumPlausiblePrice = 1_000_000_000.0
+
     /// Validates and sanitizes price data, returning cleaned value or nil
     func sanitizePrice(_ price: Double) -> Double? {
-        guard price.isFinite && price > 0 && price <= 1_000_000 else {
+        guard price.isFinite && price > 0 && price <= Self.maximumPlausiblePrice else {
             return nil
         }
         return price
