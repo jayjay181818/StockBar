@@ -1451,26 +1451,28 @@ class HistoricalDataManager: ObservableObject {
     private func cleanupOldData() {
         let totalSnapshots = priceSnapshots.values.map { $0.count }.reduce(0, +)
         
-        // Use progressive cleanup based on total data size
+        // Stock history is bounded by resolution below, so a large total is
+        // expected after long backfills. The total only sets how many session
+        // portfolio snapshots (the fallback chart series) are kept.
         let targetLimit: Int
         if totalSnapshots > 40000 {
-            // Aggressive cleanup for very large datasets
             targetLimit = 1500
-            Task { await logger.warning("📊 Aggressive cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else if totalSnapshots > 20000 {
-            // Moderate cleanup for large datasets
             targetLimit = 2000
-            Task { await logger.info("📊 Moderate cleanup: reducing to \(targetLimit) snapshots per symbol (total: \(totalSnapshots))") }
         } else {
-            // Standard cleanup
             targetLimit = maxDataPoints
         }
-        
-        // Keep only the most recent data points
+
         if portfolioSnapshots.count > targetLimit {
+            let previousCount = portfolioSnapshots.count
             portfolioSnapshots = Array(portfolioSnapshots.suffix(targetLimit))
+            Task {
+                await logger.debug(
+                    "📊 Trimmed session portfolio snapshots from \(previousCount) to \(targetLimit) (stock history total: \(totalSnapshots))"
+                )
+            }
         }
-        
+
         // Bound stock history by resolution, not count, so long backfills survive.
         for symbol in priceSnapshots.keys {
             if let snapshots = priceSnapshots[symbol] {

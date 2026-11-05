@@ -27,6 +27,12 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
     private var lockedRates: [String: Double] = [:]
     private var lockedSourceStatus: FolyncSupplementalSourceStatus = .legacy
     private var periodicRefreshTimer: Timer?
+    /// One-shot retry after a failed fetch, so rates recover soon after the
+    /// network returns instead of waiting for the next hourly refresh.
+    private var failedRefreshRetryTimer: Timer?
+    /// Just past `refreshCooldown`, so the retry is not throttled.
+    static let failedRefreshRetryDelay: TimeInterval = 305
+    var hasPendingFailedRefreshRetry: Bool { failedRefreshRetryTimer != nil }
 
     /// Rates older than this are labelled stale rather than live.
     static let staleRateAge: TimeInterval = 24 * 3_600
@@ -288,6 +294,36 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
         if exchangeRates.isEmpty {
             noteFallbackUsage("initial exchange-rate refresh failed")
         }
+        scheduleFailedRefreshRetry()
+    }
+
+    @MainActor
+    private func scheduleFailedRefreshRetry() {
+        // Only converters that refresh on their own (the app's) retry; tests
+        // and previews that never start the hourly timer stay inert.
+        guard periodicRefreshTimer != nil else { return }
+        failedRefreshRetryTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.failedRefreshRetryDelay, repeats: false) { [weak self] _ in
+            self?.failedRefreshRetryTimer = nil
+            self?.refreshRates()
+        }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        failedRefreshRetryTimer = timer
+    }
+
+    @MainActor
+    func finishSuccessfulLegacyRefresh(rates: [String: Double]) {
+        failedRefreshRetryTimer?.invalidate()
+        failedRefreshRetryTimer = nil
+        checkForSignificantChanges(newRates: rates)
+        exchangeRates = rates
+        lastRefreshTime = Date()
+        lastRefreshSuccess = true
+        sourceStatus = .legacy
+        setRateRefreshInFlight(false)
+        clearFallbackUsage()
+        addToHistory(rates: rates)
     }
 
     private func refreshLegacyRates() {
@@ -320,19 +356,8 @@ public final class CurrencyConverter: ObservableObject, @unchecked Sendable {
             }
 
             Task { @MainActor [weak self] in
-                // Check for significant changes before updating
-                self?.checkForSignificantChanges(newRates: response.rates)
-                
-                self?.exchangeRates = response.rates
-                self?.lastRefreshTime = Date()
-                self?.lastRefreshSuccess = true
-                self?.sourceStatus = .legacy
-                self?.setRateRefreshInFlight(false)
-                self?.clearFallbackUsage()
+                self?.finishSuccessfulLegacyRefresh(rates: response.rates)
 
-                // Save to history
-                self?.addToHistory(rates: response.rates)
-                
                 Task {
                     await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
                     await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
