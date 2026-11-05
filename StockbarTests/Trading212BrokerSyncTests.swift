@@ -2975,6 +2975,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
 
     private func XCTAssertThrowsErrorAsync<T>(
         _ expression: @autoclosure () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {

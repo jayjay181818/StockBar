@@ -458,7 +458,7 @@
 					REGISTER_APP_GROUPS = YES;
 					SWIFT_EMIT_LOC_STRINGS = YES;
 					SWIFT_STRICT_CONCURRENCY = complete;
-					SWIFT_VERSION = 5.0;
+					SWIFT_VERSION = 6.0;
 				};
 				name = Debug;
 		};
@@ -489,7 +489,7 @@
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -509,7 +509,7 @@
 					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					SWIFT_STRICT_CONCURRENCY = complete;
-					SWIFT_VERSION = 5.0;
+					SWIFT_VERSION = 6.0;
 					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockbar.app/Contents/MacOS/Stockbar";
 				TEST_TARGET_NAME = Stockbar;
 			};
@@ -531,7 +531,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockbar.app/Contents/MacOS/Stockbar";
 				TEST_TARGET_NAME = Stockbar;
 			};

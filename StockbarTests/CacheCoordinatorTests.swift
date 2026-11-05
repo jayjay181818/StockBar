@@ -5,7 +5,6 @@ class CacheCoordinatorTests: XCTestCase {
 
     var cacheCoordinator: CacheCoordinator!
     private var suiteName: String!
-    private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
@@ -13,16 +12,21 @@ class CacheCoordinatorTests: XCTestCase {
         // own defaults suite or state would leak between tests and from the
         // developer's real app data.
         suiteName = "CacheCoordinatorTests-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-        cacheCoordinator = CacheCoordinator(defaults: defaults)
+        cacheCoordinator = CacheCoordinator(defaults: Self.makeDefaults(suiteName: suiteName))
     }
 
     override func tearDown() {
         cacheCoordinator = nil
-        defaults = nil
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
         suiteName = nil
         super.tearDown()
+    }
+
+    /// A fresh `UserDefaults` over the test suite. Each coordinator gets its own
+    /// instance because the actor takes ownership of what it is given (Swift 6
+    /// region isolation); instances for one suite share the same stored values.
+    private static func makeDefaults(suiteName: String) -> UserDefaults {
+        UserDefaults(suiteName: suiteName)!
     }
 
     // MARK: - Cache Status Tests
@@ -427,7 +431,7 @@ class CacheCoordinatorTests: XCTestCase {
         }
 
         // When a new coordinator is built over the same defaults (app relaunch)
-        let reloaded = CacheCoordinator(defaults: defaults)
+        let reloaded = CacheCoordinator(defaults: Self.makeDefaults(suiteName: suiteName))
 
         // Then the cache and backoff state are restored rather than reset
         let appleStatus = await reloaded.getCacheStatus(for: "AAPL", at: now.addingTimeInterval(60))
@@ -445,7 +449,7 @@ class CacheCoordinatorTests: XCTestCase {
         }
 
         // When the app restarts
-        let reloaded = CacheCoordinator(defaults: defaults)
+        let reloaded = CacheCoordinator(defaults: Self.makeDefaults(suiteName: suiteName))
 
         // Then the symbol is still suspended, so a relaunch cannot be used to
         // bypass provider rate limiting.
