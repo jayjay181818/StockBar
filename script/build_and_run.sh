@@ -30,13 +30,35 @@ ensure_app_stopped() {
   fi
 }
 
+# Signs with a stable identity when one is available, so macOS keeps the
+# Keychain "Always Allow" decision across rebuilds. An ad-hoc signature
+# changes with every build and triggers a new Keychain prompt each time.
+# STOCKBAR_SIGNING_IDENTITY: a certificate name or SHA-1, or "adhoc" to opt out.
+# Unset: the first valid "Apple Development" identity, otherwise ad hoc.
+signing_args=()
+resolve_signing() {
+  local identity="${STOCKBAR_SIGNING_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    identity="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+      | /usr/bin/awk '/"Apple Development: /{print $2; exit}')" || identity=""
+  fi
+  if [[ -n "$identity" && "$identity" != "adhoc" ]]; then
+    signing_args=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$identity" DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
+    echo "Signing with a stable development identity."
+  else
+    echo "Signing ad hoc; macOS may ask for Keychain access again after this build."
+  fi
+}
+
 build_app() {
+  resolve_signing
   xcodebuild build \
     -project "$ROOT_DIR/$PROJECT_NAME" \
     -scheme "$SCHEME_NAME" \
     -configuration "$CONFIGURATION" \
     -destination "platform=macOS" \
-    -derivedDataPath "$DERIVED_DATA_DIR"
+    -derivedDataPath "$DERIVED_DATA_DIR" \
+    ${signing_args[@]+"${signing_args[@]}"}
 
   if [[ ! -d "$APP_BUNDLE" ]]; then
     echo "Expected app bundle was not produced: $APP_BUNDLE" >&2

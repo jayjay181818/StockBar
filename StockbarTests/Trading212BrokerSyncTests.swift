@@ -2316,6 +2316,51 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     @MainActor
+    func testSlowKeychainReadIsReportedAsWaitingForKeychainAccess() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        // The token read blocks, as it does while macOS shows its Keychain prompt.
+        let (prompt, answer) = AsyncStream<Void>.makeStream()
+        var dependencies = env.dependencies
+        dependencies.keychainWaitNoticeDelay = 0.01
+        dependencies.loadToken = {
+            for await _ in prompt { break }
+            return "test-token"
+        }
+        let dataModel = makeTestDataModel(dependencies: dependencies)
+        XCTAssertEqual(dataModel.folyncConnectionState, .notConfigured)
+
+        let generation = dataModel.folyncRefreshGeneration
+        let reading = Task { @MainActor in
+            await dataModel.waitForStoredFolyncCredentials(generation: generation)
+        }
+        for _ in 0..<200 where dataModel.folyncConnectionState != .waitingForKeychain {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(dataModel.folyncConnectionState, .waitingForKeychain)
+        XCTAssertTrue(dataModel.folyncConnectionState.message.contains("Always Allow"))
+
+        answer.yield()
+        answer.finish()
+        await reading.value
+        XCTAssertEqual(dataModel.folyncConnectionState, .connecting)
+    }
+
+    @MainActor
+    func testFastKeychainReadDoesNotShowTheWaitingNotice() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        var dependencies = env.dependencies
+        dependencies.keychainWaitNoticeDelay = 5
+        let dataModel = makeTestDataModel(dependencies: dependencies)
+
+        await dataModel.waitForStoredFolyncCredentials(generation: dataModel.folyncRefreshGeneration)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(dataModel.folyncConnectionState, .notConfigured)
+    }
+
+    @MainActor
     func testCorruptFolyncSnapshotCacheIsRemovedAndDoesNotBlockPolling() async throws {
         let env = try makeIsolatedSessionEnvironment()
         defer { env.cleanup() }

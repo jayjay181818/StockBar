@@ -6,6 +6,7 @@ struct FolyncDataSourceSection: View {
     @State private var endpoint = ""
     @State private var token = ""
     @State private var hasStoredToken = false
+    @State private var isCheckingStoredToken = false
     @State private var didLoadStoredSettings = false
     @State private var portfolios: [FolyncPortfolio] = []
     @State private var selectedScope = "all"
@@ -38,7 +39,7 @@ struct FolyncDataSourceSection: View {
                 }
                 GridRow {
                     Text("Client token:")
-                    SecureField(hasStoredToken ? "Stored in Keychain" : "Required", text: $token)
+                    SecureField(tokenPlaceholder, text: $token)
                         .textFieldStyle(.roundedBorder)
                 }
                 if !portfolios.isEmpty {
@@ -225,9 +226,18 @@ struct FolyncDataSourceSection: View {
         endpoint = settings.baseURL
         selectedScope = settings.scopeID
         supplemental = settings.supplemental
+        isCheckingStoredToken = true
         Task {
             hasStoredToken = await dataModel.hasStoredFolyncToken()
+            isCheckingStoredToken = false
         }
+    }
+
+    /// The Keychain check can wait on a macOS access prompt; don't claim the
+    /// token is missing until it has answered.
+    private var tokenPlaceholder: String {
+        if hasStoredToken { return "Stored in Keychain" }
+        return isCheckingStoredToken ? "Checking Keychain…" : "Required"
     }
 
     func testConnection() {
