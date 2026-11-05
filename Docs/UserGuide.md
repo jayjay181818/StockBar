@@ -22,7 +22,9 @@ Stockbar tracks a stock portfolio from the macOS menu bar, with a main window fo
 
 **Requirements:** macOS 15.4 or later, Python 3.9 or later with the pinned packages in `requirements.txt`, and an internet connection for market data.
 
-On first launch Stockbar checks the configured Python interpreter (`/usr/bin/python3` by default). If packages are missing or the wrong version, an alert offers **Copy Command**, which copies a ready-to-run command such as:
+Stockbar uses the interpreter in the `pythonInterpreterPath` setting if there is one; otherwise its own environment at `~/Library/Application Support/Stockbar/python-env` when present (created with `bash script/setup_python_env.sh` from the source checkout, with a current Python); otherwise `/usr/bin/python3`.
+
+On first launch Stockbar checks that interpreter. If packages are missing or the wrong version, an alert offers **Copy Command**, which copies a ready-to-run command such as:
 
 ```bash
 '/usr/bin/python3' -m pip install -r '/Applications/Stockbar.app/Contents/Resources/requirements.txt'

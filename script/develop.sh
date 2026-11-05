@@ -47,7 +47,7 @@ run_action() {
         xcodebuild test "${xcode_args[@]}"
       fi ;;
     python-tests)
-      PYTHONPYCACHEPREFIX="$ROOT_DIR/build/python-cache" "$python_bin" -m py_compile Stockbar/Resources/get_stock_data.py Stockbar/Resources/get_ohlc_data.py
+      PYTHONPYCACHEPREFIX="$ROOT_DIR/build/python-cache" "$python_bin" -m py_compile Stockbar/Resources/get_stock_data.py Stockbar/Resources/get_ohlc_data.py Stockbar/Resources/stockbar_worker.py
       PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m unittest discover -s PythonTests -p 'test_*.py' ;;
     checks)
       mkdir -p "$ROOT_DIR/build/swiftlint-cache"

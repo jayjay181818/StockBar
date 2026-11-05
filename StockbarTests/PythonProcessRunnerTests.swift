@@ -138,4 +138,21 @@ final class PythonProcessRunnerTests: XCTestCase {
         buddhist.dateFormat = "yyyy-MM-dd"
         XCTAssertNotEqual(buddhist.string(from: date), argument)
     }
+
+    func testInterpreterPrefersTheSettingThenStockbarsOwnEnvironment() {
+        let managed = "/Stockbar/python-env/bin/python3"
+
+        XCTAssertEqual(
+            PythonConfiguration.resolveInterpreterPath(configured: "/opt/custom/python3", managedInterpreter: managed) { _ in true },
+            "/opt/custom/python3"
+        )
+        XCTAssertEqual(
+            PythonConfiguration.resolveInterpreterPath(configured: nil, managedInterpreter: managed) { $0 == managed },
+            managed
+        )
+        XCTAssertEqual(
+            PythonConfiguration.resolveInterpreterPath(configured: "", managedInterpreter: managed) { _ in false },
+            PythonConfiguration.defaultInterpreterPath
+        )
+    }
 }
