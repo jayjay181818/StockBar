@@ -2,8 +2,8 @@
 # Install with: pip3 install -r requirements.txt
 
 # Stock data fetching and the /usr/bin/python3 3.9/LibreSSL-compatible HTTP stack
-yfinance==1.2.0
-requests==2.32.5
+yfinance==1.7.0
+requests==2.34.2
 urllib3==1.26.20
 # yfinance 1.2.0 relies on pandas behaviour that pandas 4 removes.
 pandas<4
