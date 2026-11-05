@@ -372,7 +372,7 @@ struct StockbarSettingsView: View {
         } header: {
             Text("Python")
         } footer: {
-            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv if it is installed, otherwise Python 3.10 or later from Homebrew or python.org. Needs an internet connection and usually takes under a minute.")
+            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv or Python 3.10 or later if installed; otherwise downloads uv for Stockbar's own use, so nothing needs installing first. Needs an internet connection and usually takes under a minute.")
         }
         .task { await pythonSetup.refreshInterpreterInfo() }
     }
@@ -381,7 +381,7 @@ struct StockbarSettingsView: View {
         switch pythonSetup.interpreterSource {
         case .configured: "Set by the pythonInterpreterPath setting: \(pythonSetup.interpreterPath)"
         case .stockbar: "Stockbar's own environment"
-        case .system: "System Python (\(pythonSetup.interpreterPath))"
+        case .notSetUp: "Not set up. Prices need Stockbar's own environment."
         }
     }
 
@@ -391,7 +391,7 @@ struct StockbarSettingsView: View {
         case .idle:
             Text(pythonSetup.interpreterSource == .stockbar
                  ? "In use. Rebuild to reinstall the pinned packages."
-                 : "Faster and more reliable than the system Python.")
+                 : "Choose Set Up to install it.")
         case .running(let progress):
             Text(progress)
         case .succeeded:
