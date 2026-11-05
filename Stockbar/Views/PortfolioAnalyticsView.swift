@@ -10,7 +10,7 @@ import SwiftUI
 import Charts
 
 struct PortfolioAnalyticsView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
 
     @State private var selectedTimeRange: TimeRange = .threeMonths
     @State private var isLoading = false
@@ -121,10 +121,10 @@ struct PortfolioAnalyticsView: View {
             }
             await calculateAnalytics()
         }
-        .onReceive(dataModel.$realTimeTrades.dropFirst()) { _ in
+        .onChange(of: dataModel.realTimeTradesRevision) { _, _ in
             portfolioUpdateTick += 1
         }
-        .onReceive(dataModel.$folyncPortfolioSnapshot.dropFirst()) { _ in
+        .onChange(of: dataModel.folyncPortfolioSnapshot) { _, _ in
             portfolioUpdateTick += 1
         }
     }

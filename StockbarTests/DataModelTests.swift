@@ -7,8 +7,8 @@ class DataModelTests: XCTestCase {
     var dataModel: DataModel!
     private var originalRefreshInterval: Any?
     
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         originalRefreshInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval")
         dataModel = DataModel(
             currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
@@ -16,14 +16,14 @@ class DataModelTests: XCTestCase {
         )
     }
     
-    override func tearDown() {
+    override func tearDown() async throws {
         dataModel = nil
         if let originalRefreshInterval {
             StockbarRuntimeStorage.userDefaults.set(originalRefreshInterval, forKey: "refreshInterval")
         } else {
             StockbarRuntimeStorage.userDefaults.removeObject(forKey: "refreshInterval")
         }
-        super.tearDown()
+        try await super.tearDown()
     }
     
     func testDataModelInitialization() {

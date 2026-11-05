@@ -53,10 +53,11 @@ struct ChartAnnotation: Identifiable, Equatable, Codable {
 
 // MARK: - Service
 @MainActor
-class ChartAnnotationService: ObservableObject {
+@Observable
+class ChartAnnotationService {
     static let shared = ChartAnnotationService()
     
-    @Published private(set) var annotations: [ChartAnnotation] = []
+    private(set) var annotations: [ChartAnnotation] = []
     
     private let logger = Logger.shared
     private let storageURL: URL

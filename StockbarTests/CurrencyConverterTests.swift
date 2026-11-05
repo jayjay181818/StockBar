@@ -267,6 +267,37 @@ class CurrencyConverterTests: XCTestCase {
         XCTAssertEqual(converter.convert(amount: 100, from: "USD", to: "GBP"), 74, accuracy: 0.001)
     }
 
+    @MainActor
+    func testFailedLegacyRefreshRetriesSoonAndSuccessCancelsTheRetry() async throws {
+        let suiteName = "CurrencyRetry-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // refreshOnInit starts the hourly timer; the router keeps it offline.
+        let converter = CurrencyConverter(
+            exchangeRates: [:], refreshOnInit: true, loadHistoryOnInit: false,
+            supplementalRouter: FixedFolyncFXRouter(result: .unavailable), defaults: defaults)
+
+        converter.finishFailedLegacyRefresh()
+        XCTAssertTrue(converter.hasPendingFailedRefreshRetry, "a failed fetch must retry before the next hourly refresh")
+        XCTAssertLessThan(CurrencyConverter.failedRefreshRetryDelay, 3_600)
+
+        converter.finishSuccessfulLegacyRefresh(rates: ["USD": 1, "GBP": 0.75])
+        XCTAssertFalse(converter.hasPendingFailedRefreshRetry)
+        XCTAssertTrue(converter.lastRefreshSuccess)
+        XCTAssertEqual(converter.exchangeRates["GBP"], 0.75)
+    }
+
+    @MainActor
+    func testConverterWithoutScheduledRefreshesDoesNotRetry() {
+        let converter = CurrencyConverter(
+            exchangeRates: [:], refreshOnInit: false, loadHistoryOnInit: false,
+            supplementalRouter: FixedFolyncFXRouter(result: .legacy))
+
+        converter.finishFailedLegacyRefresh()
+
+        XCTAssertFalse(converter.hasPendingFailedRefreshRetry)
+    }
+
     func testIncompleteFolyncCrossRateNeverSplicesHardCodedLegacyValues() async {
         let legacyRequests = LockedRequestCounter()
         let router = FixedFolyncFXRouter(result: .folync(

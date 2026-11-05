@@ -40,12 +40,13 @@ struct StockInfo: Codable {
 
 // MARK: - Existing Code
 
-class RealTimeTrade: ObservableObject, Identifiable {
+@Observable
+class RealTimeTrade: Identifiable {
     let id = UUID()
     let sourceIdentity: String?
     let displayLabel: String?
-    @Published var trade: Trade
-    @Published var realTimeInfo: TradingInfo
+    var trade: Trade
+    var realTimeInfo: TradingInfo
 
     init(
         trade: Trade,

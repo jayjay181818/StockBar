@@ -8,14 +8,16 @@
 
 import Combine
 import Foundation
+import Observation
 import Network
 
 @MainActor
-class ConnectivityMonitor: ObservableObject {
+@Observable
+class ConnectivityMonitor {
     static let shared = ConnectivityMonitor()
     
-    @Published var isConnected: Bool = true
-    @Published var isLowDataMode: Bool = false
+    var isConnected: Bool = true
+    var isLowDataMode: Bool = false
     
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "com.stockbar.connectivity", qos: .utility)

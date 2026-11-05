@@ -4,8 +4,8 @@ import SwiftUI
 /// The window's quick-check surface shares its data and period semantics with the menu bar.
 @MainActor
 struct StockbarOverviewView: View {
-    @ObservedObject var dataModel: DataModel
-    @ObservedObject var navigationState: StockbarMainNavigationState
+    let dataModel: DataModel
+    let navigationState: StockbarMainNavigationState
     @StateObject private var chartModel: PortfolioMenuChartViewModel
     @State private var selectedSymbol = ""
     /// The point under the pointer. Only written when it changes, so moving along one point does not re-render.

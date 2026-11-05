@@ -60,10 +60,9 @@ class RefreshService {
     }
     
     private func setupConnectivityMonitoring() {
-        ConnectivityMonitor.shared.$isConnected
+        ObservationPublisher.values(ConnectivityMonitor.shared, \.isConnected)
             .removeDuplicates()
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] isConnected in
                 guard let self = self else { return }
                 if isConnected {

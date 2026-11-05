@@ -1,6 +1,6 @@
 # StockBar
 
-**Version 3.0.0** | **macOS 15.4+** | **Swift 5 mode, complete strict-concurrency checking**
+**Version 3.0.1** | **macOS 15.4+** | **Swift 6 language mode**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
@@ -267,7 +267,14 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## Release History
 
-### Version 3.0.0 (Current) - Reliability And Data-Safety Release
+### Version 3.0.1 (Current) - Keychain And Exchange-Rate Fixes
+- **Keychain**: Folync says when it is waiting for Keychain access, and a pending Keychain prompt no longer stalls Folync supplemental data.
+- **Exchange Rates**: A failed rate fetch is retried after five minutes instead of an hour.
+- **Logs**: Routine history trimming no longer logs a warning.
+- **Development**: Local builds sign with a stable development identity when one is available, so Keychain access survives rebuilds.
+- See [Changelogs/release_notes_v3.0.1.md](./Changelogs/release_notes_v3.0.1.md).
+
+### Version 3.0.0 - Reliability And Data-Safety Release
 - **Data Safety**: Stored price history is loaded and kept; recalculations never replace recorded snapshots; saves are atomic and ordered; a failed startup load can no longer lead to the stored portfolio being overwritten.
 - **Crash And Broker Fixes**: Duplicate symbols no longer crash the app; an empty Trading 212 response no longer deletes linked holdings; account-label or key changes keep broker links.
 - **Backups**: Safer restores, Folync-aware backups, more fields preserved, newest five always kept.
@@ -339,4 +346,4 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-Last updated: November 5, 2026 - Version 3.0.0
+Last updated: November 5, 2026 - Version 3.0.1

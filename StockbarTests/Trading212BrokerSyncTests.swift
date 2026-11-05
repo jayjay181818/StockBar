@@ -2346,6 +2346,47 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(dataModel.folyncConnectionState, .connecting)
     }
 
+    func testBlockedKeychainReadDoesNotBlockTheSupplementalCoordinator() async throws {
+        let suiteName = "FolyncKeychainActor-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: .disabled
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in Self.httpResponse(request, status: 404, body: "{}") }
+        // The token read blocks, as it does while macOS shows its Keychain prompt.
+        let readStarted = expectation(description: "Token read started")
+        let answer = DispatchSemaphore(value: 0)
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore, cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(), providerPolicy: Self.testProviderPolicy,
+            tokenProvider: {
+                readStarted.fulfill()
+                answer.wait()
+                return "test-token"
+            }
+        )
+
+        let reading = Task { await coordinator.capabilitiesForCurrentSettings() }
+        await fulfillment(of: [readStarted], timeout: 2)
+
+        let cleared = expectation(description: "Backoff cleared while the token read waits")
+        Task {
+            await coordinator.clearBackoff()
+            cleared.fulfill()
+        }
+        await fulfillment(of: [cleared], timeout: 2)
+
+        answer.signal()
+        _ = await reading.value
+    }
+
     @MainActor
     func testFastKeychainReadDoesNotShowTheWaitingNotice() async throws {
         let env = try makeIsolatedSessionEnvironment()
@@ -2934,6 +2975,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
 
     private func XCTAssertThrowsErrorAsync<T>(
         _ expression: @autoclosure () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {

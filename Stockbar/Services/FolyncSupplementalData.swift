@@ -560,7 +560,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     }
 
     func capabilitiesForCurrentSettings(refresh: Bool = false) async -> FolyncCapabilities? {
-        guard let configuration = currentConfiguration() else { return nil }
+        guard let configuration = await currentConfiguration() else { return nil }
         if !refresh, let capabilities = memoryCapabilities[configuration.endpoint] { return capabilities }
         do {
             return try await fetchCapabilities(baseURL: configuration.baseURL, token: configuration.token)
@@ -679,7 +679,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     ) async -> FolyncRoutedPortfolioResult {
         // Portfolio valuations are part of the authoritative portfolio source.
         // The optional line-history capability describes individual market prices.
-        guard let configuration = currentConfiguration() else { return .legacy }
+        guard let configuration = await currentConfiguration() else { return .legacy }
         let identity = configuration.settings.scopeID
         let resource = "portfolio-history"
         let query = marketQuery(range: range, from: from, to: to)
@@ -728,7 +728,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     }
 
     func routeBenchmarks() async -> FolyncRoutedBenchmarkResult {
-        guard let configuration = currentConfiguration(),
+        guard let configuration = await currentConfiguration(),
               configuration.settings.isSupplementalRouteActive(.benchmarkMarketData) else { return .legacy }
         let resource = "benchmarks"
         let cached: (payload: FolyncBenchmarksResponse, etag: String?, receiptTime: Date)? = try? await cache.load(
@@ -782,7 +782,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     }
 
     func routeFX() async -> FolyncRoutedFXResult {
-        guard let configuration = currentConfiguration(),
+        guard let configuration = await currentConfiguration(),
               configuration.settings.isSupplementalRouteActive(.exchangeRates) else { return .legacy }
         let capabilities = await capabilitiesForCurrentSettings()
         let requiredQuotes = Set(Self.requiredFXQuotes).union(
@@ -903,16 +903,22 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         case unavailable
     }
 
-    private func currentConfiguration() -> Configuration? {
+    private func currentConfiguration() async -> Configuration? {
         let settings = settingsStore.load()
         guard settings.isEnabled,
-              let baseURL = URL(string: settings.baseURL),
-              let token = try? tokenProvider() else { return nil }
+              let baseURL = URL(string: settings.baseURL) else { return nil }
+        // A Keychain read can wait on a macOS access prompt. Reading off the
+        // actor keeps clearBackoff() and other coordinator calls responsive
+        // while the prompt is open.
+        let tokenProvider = self.tokenProvider
+        guard let token = try? await Task.detached(priority: .utility, operation: {
+            try tokenProvider()
+        }).value else { return nil }
         return Configuration(settings: settings, endpoint: settings.baseURL, baseURL: baseURL, token: token)
     }
 
     private func routingContext(route: FolyncSupplementalRoute, symbol: String) async -> RoutingContext? {
-        guard let configuration = currentConfiguration(),
+        guard let configuration = await currentConfiguration(),
               configuration.settings.isSupplementalRouteActive(route) else { return nil }
         guard let capabilities = await capabilitiesForCurrentSettings() else {
             // Older v2 servers have no capabilities route. Keep the requested identity
