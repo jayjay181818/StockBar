@@ -263,7 +263,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 ### Test Coverage
-- 509 XCTest tests plus offline Python tests run in CI.
+- 542 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
 - Trading 212 tests cover auth and redaction, ticker resolution (including London-listed USD ETFs), linking, empty-response safety and account re-keying.
