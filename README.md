@@ -108,7 +108,7 @@ Broker data and market data are intentionally separate. Trading 212 is the sourc
    bash script/setup_python_env.sh
    ```
 
-   Stockbar picks it up automatically. Alternatively, install the pins into Python 3.9+ (`/usr/bin/python3` is the fallback):
+   Stockbar picks it up automatically. Alternatively, install the pins into Python 3.9+ (`/usr/bin/python3` is the fallback; on 3.9 it gets older urllib3 and requests releases without current security fixes):
 
    ```bash
    python3 -m pip install -r Stockbar/Resources/requirements.txt
