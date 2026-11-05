@@ -116,9 +116,9 @@ Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, 
 
 It is usually there but hidden: a full menu bar, the notch or a menu-bar manager can push it out of sight. Open the manager's hidden section, or quit a few other menu-bar apps. Settings → Menu Bar → **Show portfolio total in the menu bar** must also be on.
 
-### After an update, Folync says "not configured" and Allocation is empty.
+### After an update, Folync says it is waiting for Keychain access.
 
-macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync stays off, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. Locally built ad-hoc-signed copies ask after every rebuild.
+macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
 
 ### Colours aren't showing.
 
