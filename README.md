@@ -108,7 +108,7 @@ Broker data and market data are intentionally separate. Trading 212 is the sourc
    bash script/setup_python_env.sh
    ```
 
-   Stockbar picks it up automatically. Alternatively, install the pins into Python 3.9+ (`/usr/bin/python3` is the fallback; on 3.9 it gets older urllib3 and requests releases without current security fixes):
+   Stockbar picks it up automatically, and the app offers the same setup on first launch. Alternatively, install the pins into another Python 3.10+ and set `pythonInterpreterPath` to it (Apple's `/usr/bin/python3` 3.9 is not supported):
 
    ```bash
    python3 -m pip install -r Stockbar/Resources/requirements.txt
@@ -222,7 +222,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 ### Market Data
 - Missing manual/watchlist quotes usually indicate provider fallback, yfinance, or network issues.
 - FMP `403` messages usually indicate key/plan limits; keys are redacted in logs.
-- Python `urllib3`/LibreSSL warnings can appear from the local Python environment and are separate from Trading 212 broker sync.
+- If no market data arrives, check **Settings → Advanced → Python**; "Not set up" means Stockbar's own Python needs **Set Up**.
 
 ### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
 - macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
