@@ -1,8 +1,8 @@
-import SwiftUI
 import Combine
+import SwiftUI
 
 struct DataSourcesSettingsView: View {
-    @ObservedObject var dataModel: DataModel
+    let dataModel: DataModel
     
     @State private var fmpApiKey: String = ""
     @State private var twelveDataApiKey: String = ""
@@ -24,6 +24,11 @@ struct DataSourcesSettingsView: View {
     @State private var fmpStatus: VerificationStatus = .none
     @State private var twelveDataStatus: VerificationStatus = .none
     
+    // A stored key can be removed; removal is confirmed first.
+    @State private var hasStoredFmpKey = false
+    @State private var hasStoredTwelveDataKey = false
+    @State private var pendingKeyRemoval: String?
+
     @State private var showingAlert: Bool = false
     @State private var alertTitle: String = ""
     @State private var alertMessage: String = ""
@@ -36,10 +41,6 @@ struct DataSourcesSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Data Sources & Fallbacks")
-                    .font(.title2)
-                    .padding(.bottom, 10)
-                
                 // MARK: - API Keys Section
                 VStack(alignment: .leading, spacing: 12) {
                     Text("API Keys")
@@ -59,12 +60,14 @@ struct DataSourcesSettingsView: View {
                                 }
                             }
                             .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .accessibilityLabel("Financial Modeling Prep API key")
                             
                             Button(action: { showFmpKey.toggle() }) {
                                 Image(systemName: showFmpKey ? "eye.slash" : "eye")
                             }
                             .buttonStyle(.borderless)
                             .help(showFmpKey ? "Hide API Key" : "Show API Key")
+                            .accessibilityLabel(showFmpKey ? "Hide Financial Modeling Prep API key" : "Show Financial Modeling Prep API key")
                             
                             // Status Indicator and Button
                             HStack(spacing: 4) {
@@ -82,6 +85,13 @@ struct DataSourcesSettingsView: View {
                                     }
                                 }
                                 .disabled(fmpApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fmpStatus == .verifying)
+
+                                if hasStoredFmpKey {
+                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "fmp" }
+                                        .disabled(fmpStatus == .verifying)
+                                        .help("Remove the stored Financial Modeling Prep API key")
+                                        .accessibilityLabel("Remove Financial Modeling Prep API key")
+                                }
                             }
                         }
                         Text("Used for US stocks fallback. Free plan allows US historical data.")
@@ -104,12 +114,14 @@ struct DataSourcesSettingsView: View {
                                 }
                             }
                             .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .accessibilityLabel("Twelve Data API key")
                             
                             Button(action: { showTwelveDataKey.toggle() }) {
                                 Image(systemName: showTwelveDataKey ? "eye.slash" : "eye")
                             }
                             .buttonStyle(.borderless)
                             .help(showTwelveDataKey ? "Hide API Key" : "Show API Key")
+                            .accessibilityLabel(showTwelveDataKey ? "Hide Twelve Data API key" : "Show Twelve Data API key")
                             
                             // Status Indicator and Button
                             HStack(spacing: 4) {
@@ -127,6 +139,13 @@ struct DataSourcesSettingsView: View {
                                     }
                                 }
                                 .disabled(twelveDataApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || twelveDataStatus == .verifying)
+
+                                if hasStoredTwelveDataKey {
+                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "twelvedata" }
+                                        .disabled(twelveDataStatus == .verifying)
+                                        .help("Remove the stored Twelve Data API key")
+                                        .accessibilityLabel("Remove Twelve Data API key")
+                                }
                             }
                         }
                         HStack {
@@ -139,9 +158,20 @@ struct DataSourcesSettingsView: View {
                         .padding(.leading, 164)
                     }
                 }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                .cornerRadius(8)
+                .stockbarCard()
+
+                FolyncDataSourceSection(dataModel: dataModel)
+
+                Trading212DataSourceSection(dataModel: dataModel)
+                    .disabled(dataModel.isFolyncPortfolioActive)
+                    .overlay(alignment: .topTrailing) {
+                        if dataModel.isFolyncPortfolioActive {
+                            Text("Inactive while Folync is authoritative")
+                                .font(.caption)
+                                .padding(6)
+                                .background(.thinMaterial, in: Capsule())
+                        }
+                    }
                 
                 // MARK: - Priority Section
                 VStack(alignment: .leading, spacing: 12) {
@@ -164,6 +194,7 @@ struct DataSourcesSettingsView: View {
                                 HStack {
                                     Image(systemName: "line.3.horizontal")
                                         .foregroundColor(.secondary)
+                                        .accessibilityHidden(true)
                                     sourceLabel(for: source)
                                     Spacer()
                                 }
@@ -184,19 +215,19 @@ struct DataSourcesSettingsView: View {
                                     sourceLabel(for: source)
                                 }
                                 .padding(8)
-                                .background(Color(NSColor.controlBackgroundColor))
-                                .cornerRadius(4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(StockbarPalette.hoverFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                             }
                         }
                     }
                 }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                .cornerRadius(8)
+                .stockbarCard()
                 
                 Spacer()
             }
-            .padding()
+            .padding(.horizontal, StockbarLayout.pagePadding)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 900, alignment: .leading)
         }
         .onAppear {
             loadSettings()
@@ -204,6 +235,37 @@ struct DataSourcesSettingsView: View {
         .alert(isPresented: $showingAlert) {
             Alert(title: Text(alertTitle), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
+        .confirmationDialog(
+            "Remove the \(pendingKeyRemoval.map(sourceName(for:)) ?? "API") key?",
+            isPresented: Binding(get: { pendingKeyRemoval != nil }, set: { if !$0 { pendingKeyRemoval = nil } }),
+            presenting: pendingKeyRemoval
+        ) { service in
+            Button("Remove Key", role: .destructive) { removeKey(service: service) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Stockbar stops using this source until you enter a key again.")
+        }
+    }
+
+    private func removeKey(service: String) {
+        switch service {
+        case "fmp":
+            configManager.removeFMPAPIKey()
+            fmpApiKey = ""
+            fmpStatus = .none
+        case "twelvedata":
+            configManager.removeTwelveDataAPIKey()
+            twelveDataApiKey = ""
+            twelveDataStatus = .none
+        default:
+            return
+        }
+        refreshStoredKeyFlags()
+    }
+
+    private func refreshStoredKeyFlags() {
+        hasStoredFmpKey = !(configManager.getFMPAPIKey() ?? "").isEmpty
+        hasStoredTwelveDataKey = !(configManager.getTwelveDataAPIKey() ?? "").isEmpty
     }
     
     private func statusIndicator(for status: VerificationStatus) -> some View {
@@ -228,8 +290,21 @@ struct DataSourcesSettingsView: View {
             }
         }
         .frame(width: 16, height: 16)
+        .help(Self.statusDescription(status))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("API key status")
+        .accessibilityValue(Self.statusDescription(status))
     }
     
+    static func statusDescription(_ status: VerificationStatus) -> String {
+        switch status {
+        case .none: return "Not verified"
+        case .verifying: return "Verifying"
+        case .success: return "Verified"
+        case .failure: return "Verification failed"
+        }
+    }
+
     private func sourceLabel(for source: String) -> some View {
         HStack {
             Text(sourceName(for: source))
@@ -260,6 +335,7 @@ struct DataSourcesSettingsView: View {
     private func loadSettings() {
         fmpApiKey = configManager.getFMPAPIKey() ?? ""
         twelveDataApiKey = configManager.getTwelveDataAPIKey() ?? ""
+        refreshStoredKeyFlags()
         
         let savedPriority = configManager.getDataSourcePriority()
         if let saved = savedPriority, !saved.isEmpty {
@@ -294,6 +370,8 @@ struct DataSourcesSettingsView: View {
             twelveDataStatus = .verifying
         }
         
+        refreshStoredKeyFlags()
+
         // Test
         Task {
             do {

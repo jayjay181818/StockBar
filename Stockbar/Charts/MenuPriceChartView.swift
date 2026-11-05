@@ -1,498 +1,657 @@
-import SwiftUI
-import Charts
+import AppKit
 import Combine
+import Foundation
+import SwiftUI
 
-enum MenuChartTimeRange: String, CaseIterable {
-    case day = "1D"
-    case week = "1W"
-    case month = "1M"
-    
-    var description: String {
-        switch self {
-        case .day: return "1 Day"
-        case .week: return "1 Week"
-        case .month: return "1 Month"
-        }
-    }
-    
-    var timeInterval: TimeInterval {
-        switch self {
-        case .day: return 24 * 60 * 60
-        case .week: return 7 * 24 * 60 * 60
-        case .month: return 30 * 24 * 60 * 60
-        }
-    }
-    
-    func startDate(from endDate: Date = Date()) -> Date {
-        return endDate.addingTimeInterval(-timeInterval)
-    }
+struct MenuPopoverMetrics {
+    let exchangeName: String
+    let marketValue: Double?
+    let totalPnL: Double?
+    let totalPnLPercent: Double?
+    let dayPnL: Double?
+    let dayPnLPercent: Double?
+    let priceChange: Double?
+    let priceChangePercent: Double?
+    let units: Double
+    let avgCost: Double
+    let currency: String
+    let updatedText: String
+    let canEditUnits: Bool
+    /// Set while the circuit breaker is suspending automatic updates.
+    var suspensionNotice: String? = nil
 }
 
-struct MenuChartDataPoint: Identifiable {
-    let id = UUID()
-    let date: Date
-    let price: Double
-    let symbol: String
+@MainActor
+final class MenuChartTimeRangeSelectionStore {
+    static let shared = MenuChartTimeRangeSelectionStore()
+
+    private let defaults: UserDefaults
+    private let keyPrefix = "menuChartTimeRange."
+
+    init(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        self.defaults = defaults
+    }
+
+    func selectedTimeRange(for symbol: String) -> MenuChartTimeRange {
+        guard let rawValue = defaults.string(forKey: key(for: symbol)),
+              let range = MenuChartTimeRange(rawValue: rawValue) else {
+            return .day
+        }
+        return range
+    }
+
+    func save(_ range: MenuChartTimeRange, for symbol: String) {
+        defaults.set(range.rawValue, forKey: key(for: symbol))
+    }
+
+    private func key(for symbol: String) -> String {
+        "\(keyPrefix)\(symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())"
+    }
 }
 
 @MainActor
 class MenuChartViewModel: ObservableObject {
     @Published var chartData: [MenuChartDataPoint] = []
-    @Published var selectedTimeRange: MenuChartTimeRange = .day
+    @Published var benchmarkData: [MenuChartDataPoint] = []
+    @Published private(set) var selectedTimeRange: MenuChartTimeRange = .day
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    /// False when the chart is only the current price drawn flat across the
+    /// range; period changes from such a chart are meaningless (always 0).
+    @Published private(set) var hasStoredHistory = false
+    /// The period whose data is currently shown; drives the draw-in animation.
+    @Published private(set) var loadedRange: MenuChartTimeRange?
     
     private let symbol: String
-    private let currentPrice: Double
+    private var currentPrice: Double
+    /// Nil while the benchmark comparison is switched off, so nothing is fetched for it.
+    private var benchmarkSymbol: String?
+    private let timeRangeSelectionStore: MenuChartTimeRangeSelectionStore
     private let historicalDataManager = HistoricalDataManager.shared
     private let logger = Logger.shared
     private var cancellables = Set<AnyCancellable>()
-    
-    init(symbol: String, currentPrice: Double) {
+    private var lastSeriesFingerprint: [String] = []
+    private let reloadCoalescer = ChartReloadCoalescer()
+    private var historyTask: Task<Void, Never>?
+    private var isActive = false
+    private(set) var loadGeneration = 0
+
+    init(
+        symbol: String,
+        currentPrice: Double,
+        benchmarkSymbol: String?,
+        timeRangeSelectionStore: MenuChartTimeRangeSelectionStore = .shared
+    ) {
         self.symbol = symbol
         self.currentPrice = currentPrice
+        self.benchmarkSymbol = benchmarkSymbol
+        self.timeRangeSelectionStore = timeRangeSelectionStore
+        self.selectedTimeRange = timeRangeSelectionStore.selectedTimeRange(for: symbol)
+        // Reload only when this chart's own symbol or benchmark changed, not on
+        // every other symbol's update.
+        ObservationPublisher.values(historicalDataManager, \.priceSnapshots).dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let fingerprint = self.historicalDataManager.priceSeriesFingerprint(for: self.chartSymbols)
+                guard fingerprint != self.lastSeriesFingerprint else { return }
+                self.lastSeriesFingerprint = fingerprint
+                self.loadChartData()
+            }
+            .store(in: &cancellables)
+        historicalDataManager.priceDataChanges
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] changed in
+                guard let self,
+                      self.historicalDataManager.priceDataChange(changed, affects: self.chartSymbols) else { return }
+                self.loadChartData()
+            }
+            .store(in: &cancellables)
+        lastSeriesFingerprint = historicalDataManager.priceSeriesFingerprint(for: chartSymbols)
+    }
+
+    private var chartSymbols: [String] {
+        [symbol] + (benchmarkSymbol.map { [$0] } ?? [])
+    }
+
+    func activate() {
+        guard !isActive else { return }
+        isActive = true
         loadChartData()
     }
-    
+
+    func deactivate() {
+        isActive = false
+        reloadCoalescer.cancel()
+        historyTask?.cancel()
+        isLoading = false
+    }
+
     func setTimeRange(_ range: MenuChartTimeRange) {
+        guard range != selectedTimeRange else { return }
         selectedTimeRange = range
+        timeRangeSelectionStore.save(range, for: symbol)
+        loadChartData()
+    }
+
+    func setBenchmarkSymbol(_ symbol: String?) {
+        guard symbol != benchmarkSymbol else { return }
+        benchmarkSymbol = symbol
+        if symbol == nil { benchmarkData = [] }
+        loadChartData()
+    }
+
+    func updateCurrentPrice(_ price: Double) {
+        guard price.bitPattern != currentPrice.bitPattern else { return }
+        currentPrice = price
         loadChartData()
     }
     
     func loadChartData() {
+        guard isActive else { return }
+        if !isLoading { isLoading = true }
+        historyTask?.cancel()
+        reloadCoalescer.schedule { [weak self] in self?.performChartLoad() }
+    }
+
+    private func performChartLoad() {
+        guard isActive else { return }
+        loadGeneration &+= 1
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
+        let range = selectedTimeRange
+        let latestPrice = currentPrice
         
-        Task {
-            do {
+        historyTask = Task { [weak self] in
+                guard let self, !Task.isCancelled else { return }
                 let endDate = Date()
-                let startDate = selectedTimeRange.startDate(from: endDate)
+                let startDate = range.startDate(from: endDate)
                 
                 // Get price snapshots for the symbol within the time range
-                let snapshots = historicalDataManager.getPriceSnapshots(for: symbol, from: startDate, to: endDate)
+                let snapshots = historicalDataManager.getPriceSnapshots(
+                    for: symbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                )
+                historicalDataManager.requestPriceHistoryIfNeeded(
+                    for: symbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
+                    availablePointCount: snapshots.count,
+                    coversRange: HistoricalDataManager.snapshotsReachRangeStart(snapshots, from: startDate, to: endDate)
+                )
+                let validSnapshots = snapshots.filter { $0.price.isFinite && $0.price > 0 }
                 
-                var dataPoints = snapshots.map { snapshot in
+                var dataPoints = validSnapshots.map { snapshot in
                     MenuChartDataPoint(
                         date: snapshot.timestamp,
                         price: snapshot.price,
                         symbol: snapshot.symbol
                     )
                 }.sorted { $0.date < $1.date }
-                
-                // If we have very little historical data, add a simple line to current price
-                if dataPoints.count < 2 && currentPrice.isFinite && currentPrice > 0 {
-                    // If we have no data, create a simple two-point line
-                    if dataPoints.isEmpty {
-                        dataPoints = [
-                            MenuChartDataPoint(date: startDate, price: currentPrice, symbol: symbol),
-                            MenuChartDataPoint(date: endDate, price: currentPrice, symbol: symbol)
-                        ]
-                    } else {
-                        // If we have some data, add current price as endpoint
-                        dataPoints.append(MenuChartDataPoint(date: endDate, price: currentPrice, symbol: symbol))
-                    }
-                    
-                    await logger.debug("📊 Added current price endpoint for \(symbol) - using \(dataPoints.count) data points")
-                } else if !currentPrice.isFinite || currentPrice <= 0 {
-                    await logger.debug("📊 Invalid current price for \(symbol): \(currentPrice) - chart may not display properly")
+
+                if let normalizedPoints = self.normalizeChartDataIfNeeded(dataPoints, currentPrice: latestPrice),
+                   normalizedPoints.count == dataPoints.count {
+                    dataPoints = normalizedPoints
                 }
-                
+
+                dataPoints = MenuChartDataBuilder.preparePricePoints(
+                    storedPoints: dataPoints,
+                    currentPrice: latestPrice,
+                    symbol: symbol,
+                    range: range,
+                    now: endDate
+                )
+
+                if !latestPrice.isFinite || latestPrice <= 0 {
+                    await logger.debug("📊 Invalid current price for \(symbol): \(latestPrice) - chart may not display properly")
+                }
+
+                if dataPoints.count < 2 {
+                    dataPoints = []
+                    await logger.debug("📊 Insufficient valid points for \(symbol); skipping chart render")
+                }
+
+                guard !Task.isCancelled else { return }
+                var benchmarkPoints: [MenuChartDataPoint] = []
+                if let benchmarkSymbol {
+                    let benchmarkSnapshots = historicalDataManager.getPriceSnapshots(
+                        for: benchmarkSymbol, from: startDate, to: endDate, timeRange: range.chartTimeRange
+                    )
+                    historicalDataManager.requestPriceHistoryIfNeeded(
+                        for: benchmarkSymbol, timeRange: range.chartTimeRange, from: startDate, to: endDate,
+                        availablePointCount: benchmarkSnapshots.count,
+                        coversRange: HistoricalDataManager.snapshotsReachRangeStart(benchmarkSnapshots, from: startDate, to: endDate)
+                    )
+                    let validBenchmarkSnapshots = benchmarkSnapshots.filter { $0.price.isFinite && $0.price > 0 }
+                    benchmarkPoints = validBenchmarkSnapshots.map { snapshot in
+                        MenuChartDataPoint(
+                            date: snapshot.timestamp,
+                            price: snapshot.price,
+                            symbol: snapshot.symbol
+                        )
+                    }.sorted { $0.date < $1.date }
+                    // The line chart clips the benchmark to the primary window and rebases it there.
+                }
+
                 await MainActor.run {
+                    guard !Task.isCancelled, self.isActive, generation == self.loadGeneration else { return }
                     self.chartData = dataPoints
+                    self.benchmarkData = benchmarkPoints
+                    self.hasStoredHistory = !validSnapshots.isEmpty && !dataPoints.isEmpty
+                    self.loadedRange = range
                     self.isLoading = false
                     
-                    if snapshots.isEmpty {
-                        Task { await logger.debug("📊 Using interpolated data for \(symbol) (current price: \(currentPrice)) - no historical snapshots available yet") }
-                    } else {
-                        Task { await logger.debug("📊 Using \(snapshots.count) real price snapshots for \(symbol)") }
-                    }
-                    
-                    Task { 
-                        let minPrice = self.chartData.map { $0.price }.min() ?? 0
-                        let maxPrice = self.chartData.map { $0.price }.max() ?? 0
-                        await logger.debug("📊 Chart data for \(symbol): range \(String(format: "%.2f", minPrice)) - \(String(format: "%.2f", maxPrice)) (\(self.chartData.count) points)") 
+                    let logger = self.logger
+                    let symbol = self.symbol
+                    let snapshotCount = snapshots.count
+                    let renderedCount = dataPoints.count
+                    Task {
+                        if snapshotCount == 0 {
+                            await logger.debug("📊 Using interpolated data for \(symbol) (current price: \(latestPrice)) - no historical snapshots available yet")
+                        } else {
+                            await logger.debug("📊 Using \(snapshotCount) real price snapshots for \(symbol), rendering \(renderedCount) menu chart points")
+                        }
                     }
                 }
-                
-            } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Failed to load chart data: \(error.localizedDescription)"
-                }
-                await logger.error("❌ Failed to load chart data for \(symbol): \(error)")
-            }
         }
     }
-    
+}
+
+private extension MenuChartViewModel {
+    func normalizeChartDataIfNeeded(_ points: [MenuChartDataPoint], currentPrice: Double) -> [MenuChartDataPoint]? {
+        guard !points.isEmpty,
+              SymbolMetadata.isUKSymbol(symbol),
+              currentPrice.isFinite,
+              currentPrice > 0 else {
+            return nil
+        }
+
+        var adjusted = false
+        let normalizedPoints = points.map { point in
+            let price = UKPriceScale.normalized(point.price, reference: currentPrice, symbol: symbol)
+            if price.bitPattern != point.price.bitPattern {
+                adjusted = true
+            }
+            return MenuChartDataPoint(date: point.date, price: price, symbol: point.symbol)
+        }
+
+        guard adjusted else { return nil }
+
+        Task {
+            await logger.warning("📊 Chart scale normalization for \(symbol): adjusted UK snapshot scale to match current price (stored data should already be repaired)")
+        }
+        return normalizedPoints
+    }
 }
 
 struct MenuPriceChartView: View {
     @StateObject private var viewModel: MenuChartViewModel
     @State private var hoveredPoint: MenuChartDataPoint?
-    
+    @State private var isEditingUnits = false
+    @State private var unitsInput = ""
+    @State private var unitsInputError: String?
+    @AppStorage("menu.benchmarkComparisonEnabled", store: StockbarRuntimeStorage.userDefaults) private var benchmarkEnabled: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let symbol: String
     let currentPrice: Double
     let currency: String
-    
-    init(symbol: String, currentPrice: Double, currency: String) {
+    let metrics: MenuPopoverMetrics
+    let onUnitsSave: ((Double) -> Void)?
+    let onRetry: (() -> Void)?
+
+    private let chartHeight: CGFloat = 140
+
+    private var marketValue: String {
+        let val = currentPrice * metrics.units
+        if val.isNaN || val.isInfinite { return "—" }
+        return MenuPopoverFormatter.currencyExact(val, currency: metrics.currency)
+    }
+    private var totalPnL: String { MenuPopoverFormatter.currencyExact(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
+    private var totalPnLPercent: String { MenuPopoverFormatter.percent(metrics.totalPnLPercent) }
+    private var priceChangePercent: Double? { metrics.priceChangePercent }
+    private var units: String { MenuPopoverFormatter.units(metrics.units) }
+    private var avgCost: String { MenuPopoverFormatter.currencyExact(metrics.avgCost, currency: metrics.currency) }
+
+    /// Only real stored history is drawn; a flat line at today's price would
+    /// look like a chart without being one.
+    private var chartPoints: [MenuChartDataPoint] {
+        viewModel.hasStoredHistory ? viewModel.chartData : []
+    }
+
+    private var rangePriceChange: (value: Double, percent: Double)? {
+        guard viewModel.hasStoredHistory,
+              let first = viewModel.chartData.first,
+              let last = viewModel.chartData.last,
+              first.price.isFinite,
+              last.price.isFinite,
+              first.price != 0 else {
+            return nil
+        }
+        let change = last.price - first.price
+        let percent = (change / first.price) * 100
+        return (change, percent)
+    }
+
+    /// Names the span the range P&L really covers: the selected range only
+    /// when history reaches back that far, otherwise the first point's date.
+    private var rangePnLLabel: String {
+        guard rangePriceChange != nil, let first = viewModel.chartData.first else { return "Today's P&L" }
+        if PortfolioMenuChartDataBuilder.coversRange(viewModel.chartData, range: viewModel.selectedTimeRange) {
+            return "\(viewModel.selectedTimeRange.description) P&L"
+        }
+        return "P&L since \(first.date.formatted(.dateTime.day().month(.abbreviated)))"
+    }
+
+    private var rangePnL: (value: Double?, percent: Double?) {
+        guard let rangePriceChange, metrics.units.isFinite else {
+            return (metrics.dayPnL, metrics.dayPnLPercent)
+        }
+        return (rangePriceChange.value * metrics.units, rangePriceChange.percent)
+    }
+
+    private var benchmarkName: String? {
+        guard benchmarkEnabled,
+              let benchmark = MenuPriceChartView.benchmarkSymbol(for: symbol) else {
+            return nil
+        }
+        return MenuPriceChartView.benchmarkDisplayName(for: benchmark)
+    }
+
+    init(
+        symbol: String,
+        currentPrice: Double,
+        currency: String,
+        metrics: MenuPopoverMetrics,
+        onUnitsSave: ((Double) -> Void)? = nil,
+        onRetry: (() -> Void)? = nil
+    ) {
         self.symbol = symbol
         self.currentPrice = currentPrice
         self.currency = currency
-        self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice))
+        self.metrics = metrics
+        self.onUnitsSave = onUnitsSave
+        self.onRetry = onRetry
+        // Don't fetch a benchmark the user has switched off.
+        let benchmarkEnabled = StockbarRuntimeStorage.userDefaults.object(forKey: "menu.benchmarkComparisonEnabled") as? Bool ?? true
+        let benchmark = benchmarkEnabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil
+        self._viewModel = StateObject(wrappedValue: MenuChartViewModel(symbol: symbol, currentPrice: currentPrice, benchmarkSymbol: benchmark))
+        self._unitsInput = State(initialValue: MenuPopoverFormatter.editableUnits(metrics.units))
     }
-    
+
     var body: some View {
-        VStack(spacing: 8) {
-            // Header with symbol and current price
+        VStack(alignment: .leading, spacing: 12) {
             headerView
-                .padding(.horizontal, 16)
 
-            // Time range picker
-            timeRangePickerView
-                .padding(.horizontal, 16)
+            MenuPopoverTimeRangePicker(
+                selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) })
+            ) { _ in
+                hoveredPoint = nil
+            }
 
-            // Chart content - full width, no horizontal padding
-            chartContentView
-        }
-        .padding(.vertical, 16)
-        .frame(width: 312, height: 232) // Full menu width
-        .onAppear {
-            // Ensure proper initialization when view appears
-            viewModel.loadChartData()
-        }
-    }
-    
-    private var headerView: some View {
-        HStack {
-            if let point = hoveredPoint {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 2) {
-                        Text(currency)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text(String(format: "%.2f", point.price))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-                    }
-                    
-                    Text(formatDate(point.date))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Spacer()
-            
-            VStack(spacing: 2) {
-                Text(symbol)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                
-                HStack(spacing: 4) {
-                    Text(currency)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(String(format: "%.2f", currentPrice))
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.primary)
-                }
-            }
-            
-            Spacer()
-        }
-    }
-    
-    private var timeRangePickerView: some View {
-        HStack(spacing: 6) {
-            ForEach(MenuChartTimeRange.allCases, id: \.self) { range in
-                Button(action: {
-                    viewModel.setTimeRange(range)
-                }) {
-                    Text(range.rawValue)
-                        .font(.caption)
-                        .fontWeight(viewModel.selectedTimeRange == range ? .semibold : .medium)
-                        .foregroundColor(viewModel.selectedTimeRange == range ? .white : .secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(viewModel.selectedTimeRange == range ? 
-                                    Color.accentColor : 
-                                    Color(.quaternaryLabelColor))
-                        )
-                }
-                .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.2), value: viewModel.selectedTimeRange)
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal, 2)
-    }
-    
-    private var chartContentView: some View {
-        Group {
-            if viewModel.isLoading {
-                loadingView
-            } else if let errorMessage = viewModel.errorMessage {
-                errorView(errorMessage)
-            } else if viewModel.chartData.isEmpty {
-                emptyDataView
-            } else {
-                chartView
-            }
-        }
-        .frame(height: 120)
-    }
-    
-    private var chartView: some View {
-        Chart(viewModel.chartData) { dataPoint in
-            LineMark(
-                x: .value("Time", dataPoint.date),
-                y: .value("Price", dataPoint.price)
-            )
-            .foregroundStyle(chartColor)
-            .lineStyle(StrokeStyle(lineWidth: 2.0))
-
-            if let hoveredPoint = hoveredPoint, hoveredPoint.id == dataPoint.id {
-                PointMark(
-                    x: .value("Time", dataPoint.date),
-                    y: .value("Price", dataPoint.price)
+            VStack(alignment: .leading, spacing: 6) {
+                MenuPopoverLineChart(
+                    points: chartPoints,
+                    comparisonPoints: benchmarkName != nil && !chartPoints.isEmpty ? viewModel.benchmarkData : [],
+                    isLoading: viewModel.isLoading,
+                    revealTrigger: viewModel.loadedRange?.rawValue ?? "",
+                    emptyMessage: "Stockbar stores \(symbol)'s price as it runs; the chart fills in over time.",
+                    hoveredPoint: $hoveredPoint
                 )
-                .foregroundStyle(chartColor)
-                .symbol(.circle)
-                .symbolSize(40)
+                .frame(height: chartHeight)
+                .accessibilityLabel("\(symbol) price, \(viewModel.selectedTimeRange.description)")
+                .accessibilityValue(rangePriceChange.map { "\(MenuPopoverFormatter.percent($0.percent)) change" } ?? "No history")
+
+                if let benchmarkName, !chartPoints.isEmpty, !viewModel.benchmarkData.isEmpty {
+                    MenuPopoverChartLegend(
+                        primaryLabel: symbol,
+                        primaryColor: MenuPopoverLineChart.color(for: chartPoints),
+                        comparisonLabel: benchmarkName
+                    )
+                }
+            }
+
+            statsGrid
+
+            if let notice = metrics.suspensionNotice {
+                suspensionBanner(notice)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            Divider()
+
+            footerView
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
+        .frame(width: 330)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: metrics.suspensionNotice)
+        .onAppear { viewModel.activate() }
+        .onDisappear { viewModel.deactivate() }
+        .onChange(of: currentPrice) { _, newValue in
+            viewModel.updateCurrentPrice(newValue)
+        }
+        .onChange(of: benchmarkEnabled) { _, enabled in
+            viewModel.setBenchmarkSymbol(enabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil)
+        }
+    }
+
+    private var headerView: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(symbol)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(metrics.exchangeName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(MenuPopoverFormatter.currencyExact(hoveredPoint?.price ?? currentPrice, currency: currency))
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .contentTransition(.numericText())
+                    .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: currentPrice)
+
+                if let point = hoveredPoint {
+                    Text(MenuPopoverFormatter.date(point.date, range: viewModel.selectedTimeRange))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                } else {
+                    StockbarChangeBadge(percent: rangePriceChange?.percent ?? priceChangePercent)
+                }
             }
         }
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary.opacity(0.3))
-                AxisTick()
-                AxisValueLabel {
-                    if let date = value.as(Date.self) {
-                        Text(formatXAxisDate(date))
-                            .font(.caption2)
+    }
+
+    private var statsGrid: some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
+                MenuPopoverStatBox(label: "Market Value", value: marketValue)
+                MenuPopoverStatBox(label: "Total P&L", value: totalPnL, subValue: totalPnLPercent,
+                                   valueColor: Self.signColor(metrics.totalPnL))
+            }
+            GridRow {
+                let rangeLabel = rangePnLLabel
+                MenuPopoverStatBox(
+                    label: rangeLabel,
+                    value: MenuPopoverFormatter.currencyExact(rangePnL.value, currency: metrics.currency, includeSign: true),
+                    subValue: MenuPopoverFormatter.percent(rangePnL.percent),
+                    valueColor: Self.signColor(rangePnL.value)
+                )
+                unitsBox
+            }
+        }
+    }
+
+    private var unitsBox: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("Units")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if metrics.canEditUnits {
+                    Button {
+                        isEditingUnits.toggle()
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18)
+                            .background(StockbarPalette.hoverFill, in: Circle())
                     }
-                }
-            }
-        }
-        .chartYScale(domain: chartYAxisRange)
-        .chartYAxis {
-            AxisMarks(position: .trailing, values: .stride(by: chartYAxisStride)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    .foregroundStyle(.secondary.opacity(0.3))
-                AxisTick()
-                AxisValueLabel {
-                    if let price = value.as(Double.self) {
-                        Text(String(format: "%.2f", price))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    .buttonStyle(.plain)
+                    .help("Edit units")
+                    .accessibilityLabel("Edit units")
+                    .popover(isPresented: $isEditingUnits, arrowEdge: .top) {
+                        unitsEditor
                     }
+                } else {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .help("Units come from the linked source and are read-only")
+                        .accessibilityLabel("Units are read-only")
                 }
             }
-        }
-        .chartPlotStyle { plotArea in
-            plotArea
-                .background(.clear)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .onTapGesture { location in
-            // Simple tap gesture for point selection
-            let chartWidth: CGFloat = 280 // Full width minus padding (312 - 32)
-            let relativeProgress = location.x / chartWidth
 
-            if relativeProgress >= 0 && relativeProgress <= 1 {
-                let dataIndex = Int(relativeProgress * Double(viewModel.chartData.count - 1))
-                if dataIndex >= 0 && dataIndex < viewModel.chartData.count {
-                    hoveredPoint = viewModel.chartData[dataIndex]
+            Text(units)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+
+            Text("at \(avgCost)")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .menuPopoverTile()
+    }
+
+    private var unitsEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Edit Units")
+                .font(.headline)
+            Text(symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Units", text: $unitsInput)
+                .textFieldStyle(.roundedBorder)
+                .monospacedDigit()
+                .frame(width: 180)
+                .onSubmit(saveUnits)
+                .onChange(of: unitsInput) { _, _ in unitsInputError = nil }
+
+            if let unitsInputError {
+                Label(unitsInputError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(width: 180, alignment: .leading)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") {
+                    unitsInput = MenuPopoverFormatter.editableUnits(metrics.units)
+                    unitsInputError = nil
+                    isEditingUnits = false
                 }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save", action: saveUnits)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .frame(width: 180)
+        }
+        .padding(16)
+    }
+
+    private func suspensionBanner(_ notice: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
+            Text(notice)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            if let onRetry {
+                Button("Retry Now", action: onRetry)
+                    .controlSize(.small)
             }
         }
+        .padding(10)
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
-    
-    private var chartColor: Color {
-        guard let firstPrice = viewModel.chartData.first?.price,
-              let lastPrice = viewModel.chartData.last?.price else {
-            return .accentColor
-        }
-        
-        return lastPrice >= firstPrice ? .green : .red
-    }
-    
-    // Calculate tight Y-axis range based on actual data with +/-5% buffer
-    private var chartYAxisRange: ClosedRange<Double> {
-        guard !viewModel.chartData.isEmpty else {
-            return 0...100 // Default range if no data
-        }
-        
-        let prices = viewModel.chartData.map { $0.price }
-        let minPrice = prices.min() ?? 0
-        let maxPrice = prices.max() ?? 100
-        
-        // Calculate 5% buffer above and below the actual data range
-        let priceRange = maxPrice - minPrice
-        let buffer = max(priceRange * 0.05, (maxPrice + minPrice) / 2 * 0.01) // At least 1% of average price
-        
-        let adjustedMin = max(0, minPrice - buffer) // Don't go below 0
-        let adjustedMax = maxPrice + buffer
-        
-        return adjustedMin...adjustedMax
-    }
-    
-    // Calculate appropriate stride for Y-axis labels
-    private var chartYAxisStride: Double {
-        let range = chartYAxisRange.upperBound - chartYAxisRange.lowerBound
-        
-        // Aim for 3-4 axis marks
-        let targetMarks = 3.0
-        let rawStride = range / targetMarks
-        
-        // Round to nice numbers
-        if rawStride >= 10 {
-            return (rawStride / 10).rounded() * 10
-        } else if rawStride >= 1 {
-            return rawStride.rounded()
-        } else if rawStride >= 0.1 {
-            return (rawStride * 10).rounded() / 10
-        } else {
-            return (rawStride * 100).rounded() / 100
-        }
-    }
-    
-    private var loadingView: some View {
-        VStack(spacing: 8) {
-            ProgressView()
-                .scaleEffect(0.7)
-                .tint(.accentColor)
-            Text("Loading chart...")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 16)
-    }
-    
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-                .foregroundColor(.secondary)
-                .font(.title3)
-            Text(message)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 16)
-    }
-    
-    private var emptyDataView: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "chart.xyaxis.line")
-                .foregroundColor(.secondary)
-                .font(.title3)
 
-            if !currentPrice.isFinite || currentPrice <= 0 {
-                Text("Price data unavailable")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            } else {
-                Text("No historical data")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+    private func saveUnits() {
+        guard metrics.canEditUnits else {
+            isEditingUnits = false
+            return
+        }
+        guard let newUnits = MenuPopoverFormatter.parseUnits(unitsInput) else {
+            unitsInputError = "Enter a number greater than zero."
+            return
+        }
+        onUnitsSave?(newUnits)
+        unitsInputError = nil
+        isEditingUnits = false
+    }
+
+    private var footerView: some View {
+        MenuPopoverFooter(
+            updatedText: metrics.updatedText,
+            onRefresh: {
+                NotificationCenter.default.post(name: .refreshRequested, object: nil)
+            },
+            onOpenApp: {
+                NSApp.sendAction(#selector(AppDelegate.showStockbarWindow(_:)), to: NSApp.delegate, from: nil)
+            },
+            onPreferences: {
+                NSApp.sendAction(#selector(AppDelegate.showPreferences(_:)), to: NSApp.delegate, from: nil)
+            },
+            onQuit: {
+                NSApplication.shared.terminate(nil)
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 16)
-    }
-    
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        
-        switch viewModel.selectedTimeRange {
-        case .day:
-            formatter.dateFormat = "HH:mm"
-        case .week:
-            formatter.dateFormat = "MMM d, HH:mm"
-        case .month:
-            formatter.dateFormat = "MMM d"
-        }
-        
-        return formatter.string(from: date)
-    }
-    
-    private func formatXAxisDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        
-        switch viewModel.selectedTimeRange {
-        case .day:
-            formatter.dateFormat = "HH:mm"
-        case .week:
-            formatter.dateFormat = "MMM d"
-        case .month:
-            formatter.dateFormat = "MMM d"
-        }
-        
-        return formatter.string(from: date)
-    }
-}
-
-// MARK: - NSHostingView Wrapper for Menu Integration
-
-class MenuPriceChartHostingView: NSHostingView<MenuPriceChartView> {
-    private let fixedSize = NSSize(width: 312, height: 232)
-
-    init(symbol: String, currentPrice: Double, currency: String) {
-        let chartView = MenuPriceChartView(
-            symbol: symbol,
-            currentPrice: currentPrice,
-            currency: currency
         )
-        super.init(rootView: chartView)
-
-        // Configure the hosting view for menu integration
-        self.translatesAutoresizingMaskIntoConstraints = false
-
-        // Set fixed frame to prevent sizing issues
-        self.frame = NSRect(origin: .zero, size: fixedSize)
-
-        // Add constraints to ensure consistent sizing
-        self.widthAnchor.constraint(equalToConstant: fixedSize.width).isActive = true
-        self.heightAnchor.constraint(equalToConstant: fixedSize.height).isActive = true
-
-        // NO background or layer styling - let SwiftUI handle it
-        // This ensures the menu items below remain translucent/frosted
-
-        // Ensure the view invalidates intrinsic content size properly
-        self.invalidateIntrinsicContentSize()
     }
 
-    required init(rootView: MenuPriceChartView) {
-        super.init(rootView: rootView)
-        self.frame = NSRect(origin: .zero, size: fixedSize)
+    static func signColor(_ value: Double?) -> Color {
+        StockbarPalette.signed(value, neutral: .primary)
     }
 
-    @MainActor required dynamic init?(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    static func benchmarkSymbol(for symbol: String) -> String? {
+        let uppercased = symbol.uppercased()
+        if SymbolMetadata.isUKSymbol(uppercased) {
+            return "^FTSE"
+        }
+        if !uppercased.contains(".") {
+            return "^GSPC"
+        }
+        return nil
     }
 
-    override var intrinsicContentSize: NSSize {
-        return fixedSize
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        // Force layout when added to superview
-        self.needsLayout = true
-        self.layoutSubtreeIfNeeded()
-    }
-
-    override var fittingSize: NSSize {
-        return fixedSize
+    static func benchmarkDisplayName(for symbol: String) -> String {
+        switch symbol {
+        case "^FTSE":
+            return "FTSE 100"
+        case "^GSPC":
+            return "S&P 500"
+        default:
+            return symbol
+        }
     }
 }

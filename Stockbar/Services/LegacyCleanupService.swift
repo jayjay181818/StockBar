@@ -1,26 +1,36 @@
 import Foundation
 
-/// Service to clean up legacy data storage on first app launch after migration
-class LegacyCleanupService {
+/// Reports legacy storage without deleting financial data.
+@MainActor
+final class LegacyCleanupService {
     static let shared = LegacyCleanupService()
     
-    private let cleanupDoneKey = "legacyCleanupDone"
-    private let legacyUserTradesKey = "usertrades"
+    private let reportDoneKey = "legacyLocationReportV2"
     
     private init() {}
     
     /// Performs one-time cleanup of legacy data storage
     func performCleanupIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: cleanupDoneKey) else {
-            return // Cleanup already performed
+        guard !StockbarRuntimeStorage.userDefaults.bool(forKey: reportDoneKey) else {
+            return
         }
-        
-        // Remove legacy usertrades JSON blob
-        UserDefaults.standard.removeObject(forKey: legacyUserTradesKey)
-        
-        // Mark cleanup as done
-        UserDefaults.standard.set(true, forKey: cleanupDoneKey)
-        
-        Task { await Logger.shared.info("Legacy cleanup completed - removed usertrades UserDefaults key") }
+
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent("Library/Application Support/com.fhl43211.Stockbar"),
+            home.appendingPathComponent("Library/Containers/com.fhl43211.Stockbar"),
+            home.appendingPathComponent("Library/Logs/com.fhl43211.Stockbar")
+        ]
+        let remaining = candidates.filter { fileManager.fileExists(atPath: $0.path) }.map(\.path)
+        StockbarRuntimeStorage.userDefaults.set(true, forKey: reportDoneKey)
+
+        Task {
+            if remaining.isEmpty {
+                await Logger.shared.info("No legacy Stockbar file locations remain")
+            } else {
+                await Logger.shared.info("Legacy Stockbar locations preserved for manual review: \(remaining)")
+            }
+        }
     }
-} 
+}

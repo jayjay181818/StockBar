@@ -26,8 +26,6 @@ struct UserSettings: Codable {
     var preferredCurrency: String = "USD"
     var showColorCoding: Bool = true
     var refreshInterval: TimeInterval = 300.0
-    
-    init() {}
 }
 
 struct StockInfo: Codable {
@@ -42,34 +40,30 @@ struct StockInfo: Codable {
 
 // MARK: - Existing Code
 
-class RealTimeTrade: ObservableObject, Identifiable {
+@Observable
+class RealTimeTrade: Identifiable {
     let id = UUID()
-    @Published var trade: Trade
-    @Published var realTimeInfo: TradingInfo
+    let sourceIdentity: String?
+    let displayLabel: String?
+    var trade: Trade
+    var realTimeInfo: TradingInfo
 
-    init(trade: Trade, realTimeInfo: TradingInfo) {
+    init(
+        trade: Trade,
+        realTimeInfo: TradingInfo,
+        sourceIdentity: String? = nil,
+        displayLabel: String? = nil
+    ) {
         self.trade = trade
         self.realTimeInfo = realTimeInfo
+        self.sourceIdentity = sourceIdentity
+        self.displayLabel = displayLabel
     }
 }
 
 func logToFile(_ message: String) {
-    if let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-        let logPath = documentsPath.appendingPathComponent("stockbar_debug.log")
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logMessage = "\(timestamp): \(message)\n"
-
-        if let data = logMessage.data(using: String.Encoding.utf8) {
-            if FileManager.default.fileExists(atPath: logPath.path) {
-                if let fileHandle = try? FileHandle(forWritingTo: logPath) {
-                    fileHandle.seekToEndOfFile()
-                    fileHandle.write(data)
-                    try? fileHandle.close()
-                }
-            } else {
-                try? logMessage.write(to: logPath, atomically: true, encoding: .utf8)
-            }
-        }
+    Task {
+        await Logger.shared.debug(message)
     }
 }
 

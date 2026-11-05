@@ -5,8 +5,8 @@
 //  Created by Stockbar Development Team on 10/4/25.
 //
 
-import SwiftUI
 import Combine
+import SwiftUI
 
 /// Manages interaction state for chart views including zoom, pan, and crosshair
 @MainActor

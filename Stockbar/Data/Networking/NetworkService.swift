@@ -5,7 +5,7 @@ import Foundation
 // Removed OSLog import to avoid conflict with custom Logger
 
 // Keep the original protocol for compatibility
-protocol NetworkService {
+protocol NetworkService: Sendable {
     func fetchQuote(for symbol: String) async throws -> StockFetchResult
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult]
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
@@ -15,7 +15,7 @@ protocol NetworkService {
 }
 
 // MARK: - Network Error Enum (Extended for script execution)
-enum NetworkError: LocalizedError {
+enum NetworkError: LocalizedError, Sendable {
     case invalidURL
     case invalidResponse(String? = nil)
     case httpError(Int)
@@ -105,10 +105,26 @@ enum NetworkError: LocalizedError {
 }
 
 // MARK: - Python Script Service
-class PythonNetworkService: NetworkService {
+actor PythonNetworkService: NetworkService {
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     private let scriptName = "get_stock_data.py"
-    private let config = PythonConfiguration.load()
+    private let scriptPathOverride: String?
+    /// Pinned configuration (tests); nil means settings are reloaded when needed so
+    /// interpreter changes made after launch are honoured.
+    private let pinnedConfig: PythonConfiguration?
+    private var config: PythonConfiguration { pinnedConfig ?? .load() }
+    private let processRunner: any PythonProcessRunning
+    private var didLogNotOpenSSLWarning = false
+
+    init(
+        config: PythonConfiguration? = nil,
+        processRunner: (any PythonProcessRunning)? = nil,
+        scriptPath: String? = nil
+    ) {
+        self.pinnedConfig = config
+        self.processRunner = processRunner ?? PythonProcessRunner(config: config)
+        self.scriptPathOverride = scriptPath
+    }
 
     /// Parse JSON error from Python script output
     private func parseError(from output: String) throws {
@@ -153,222 +169,87 @@ class PythonNetworkService: NetworkService {
         }
     }
 
+    private func runPythonProcess(
+        arguments: [String],
+        timeoutSeconds: TimeInterval,
+        logContext: String
+    ) async throws -> (stdout: Data, stderr: Data, exitCode: Int32) {
+        let result = try await processRunner.run(
+            arguments: arguments,
+            timeoutSeconds: timeoutSeconds,
+            logContext: logContext
+        )
+        await logProcessDiagnostics(result, context: logContext)
+        return (result.stdout, result.stderr, result.exitCode)
+    }
+
+    private func logProcessDiagnostics(_ result: PythonProcessResult, context: String) async {
+        let diagnostics = String(decoding: result.stderr, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !diagnostics.isEmpty else { return }
+
+        if diagnostics.contains("NotOpenSSLWarning"), !didLogNotOpenSSLWarning {
+            didLogNotOpenSSLWarning = true
+            await logger.debug("Python LibreSSL compatibility warning observed once this launch")
+        }
+
+        let lines = diagnostics
+            .components(separatedBy: .newlines)
+            .filter { !$0.contains("NotOpenSSLWarning") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lines.isEmpty else { return }
+
+        if result.exitCode != 0 {
+            await logger.error("\(context) exited \(result.exitCode): \(lines)")
+        } else if Self.containsProviderWarning(lines) {
+            await logger.warning("\(context): \(lines)")
+        } else {
+            await logger.debug("\(context): \(lines)")
+        }
+    }
+
+    private static func containsProviderWarning(_ diagnostics: String) -> Bool {
+        let value = diagnostics.lowercased()
+        return value.contains("rate limit")
+            || value.contains("http error")
+            || value.contains("forbidden")
+            || value.contains("api key invalid")
+            || value.contains("unauthorized")
+    }
+
     func fetchQuote(for symbol: String) async throws -> StockFetchResult {
-        await logger.debug("Attempting to fetch quote for \(symbol) using Python script.")
-
-        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            await logger.error("Script '\(scriptName)' not found in bundle.")
-            throw NetworkError.scriptNotFound(scriptName)
+        guard let result = try await fetchBatchQuotes(for: [symbol]).first,
+              result.regularMarketPrice.isFinite,
+              result.regularMarketPreviousClose.isFinite else {
+            throw NetworkError.noData("No valid quote returned for \(symbol)")
         }
-        await logger.debug("Found script at path: \(scriptPath)")
-
-        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, symbol]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            
-            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30)) // 30 second timeout
-                if process.isRunning {
-                    await logger.warning("Process timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.error("Python script stderr for \(symbol): \(err)")
-            }
-
-            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("Python script stdout for \(symbol) is empty.")
-                throw NetworkError.noData("Empty output from script for \(symbol)")
-            }
-            await logger.debug("Python script stdout for \(symbol): \(output)")
-
-            // Try to parse as JSON error first
-            do {
-                try parseError(from: output)
-            } catch let error as NetworkError {
-                throw error
-            } catch {
-                // Not a JSON error, continue with normal parsing
-            }
-
-            // Check for multi-line output which indicates an error from the legacy script format
-            let outputLines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-            if outputLines.count > 1 && outputLines.last == "FETCH_FAILED" {
-                await logger.warning("Script explicitly reported FETCH_FAILED for \(symbol). Error: \(outputLines.first ?? "Unknown error")")
-                throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol): \(outputLines.first ?? "")")
-            }
-            
-            // Try to parse the single line success output (legacy format)
-            // Example: "AAPL @ 2023-10-27 15:55:00-04:00 | 5m Low: 167.01, High: 167.09, Close: 167.02, PrevClose: 165.50"
-            // CRITICAL FIX: Replace force unwrap with safe optional binding
-            guard let regex = try? NSRegularExpression(pattern: "Close: (\\d+\\.\\d+), PrevClose: (\\d+\\.\\d+)") else {
-                await logger.error("Failed to create regex pattern for parsing script output for \(symbol)")
-                throw NetworkError.invalidResponse("Unable to create regex pattern for parsing")
-            }
-            if let match = regex.firstMatch(in: output, options: [], range: NSRange(location: 0, length: output.utf16.count)) {
-                if let closeRange = Range(match.range(at: 1), in: output),
-                   let prevCloseRange = Range(match.range(at: 2), in: output) {
-                    if let closePrice = Double(output[closeRange]),
-                       let prevClosePrice = Double(output[prevCloseRange]) {
-                        // Detect currency based on symbol - Python script already converts pence to pounds for .L stocks
-                        let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
-                        await logger.info("Successfully fetched Close=\(closePrice), PrevClose=\(prevClosePrice) for \(symbol) via Python. Detected currency: \(detectedCurrency)")
-                        // Determine timezone based on symbol
-                        let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
-                        return StockFetchResult(
-                            currency: detectedCurrency,
-                            symbol: symbol,
-                            shortName: symbol, // Placeholder
-                            regularMarketTime: Int(Date().timeIntervalSince1970),
-                            exchangeTimezoneName: timezone,
-                            regularMarketPrice: closePrice,
-                            regularMarketPreviousClose: prevClosePrice,
-                            displayPrice: closePrice  // For legacy method, display price = regular price
-                        )
-                    }
-                }
-            }
-            
-            // If parsing fails, it's an invalid response
-            await logger.error("Failed to parse script output for \(symbol): '\(output)'")
-            throw NetworkError.invalidResponse("Could not parse expected data from script output: \(output)")
-        } catch let netErr as NetworkError {
-            throw netErr
-        } catch {
-            await logger.error("Failed to run Python script for \(symbol): \(error.localizedDescription)")
-            throw NetworkError.scriptExecutionError(error.localizedDescription)
-        }
+        return result
     }
     
     /// Enhanced fetch quote with pre/post market data support
     func fetchEnhancedQuote(for symbol: String) async throws -> StockFetchResult {
-        await logger.debug("Attempting to fetch enhanced quote for \(symbol) using Python script.")
-
-        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            await logger.error("Script '\(scriptName)' not found in bundle.")
-            throw NetworkError.scriptNotFound(scriptName)
-        }
-
-        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            await logger.error("Python interpreter not found at \(config.interpreterPath)")
-            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        // Use multiple symbols to trigger JSON output format
-        process.arguments = [scriptPath, symbol, symbol] // Duplicate symbol to trigger batch mode
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            
-            // CRITICAL FIX: Add timeout protection to prevent indefinite hangs
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30)) // 30 second timeout
-                if process.isRunning {
-                    await logger.warning("Enhanced process timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.error("Python script stderr for enhanced \(symbol): \(err)")
-            }
-
-            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("Python script stdout for enhanced \(symbol) is empty.")
-                throw NetworkError.noData("Empty output from script for \(symbol)")
-            }
-            await logger.debug("Python script stdout for enhanced \(symbol): \(output)")
-
-            // Try to parse as JSON error first
-            do {
-                try parseError(from: output)
-            } catch let error as NetworkError {
-                throw error
-            } catch {
-                // Not a JSON error, continue with normal parsing
-            }
-
-            // Check for FETCH_FAILED
-            if output.contains("FETCH_FAILED") {
-                await logger.warning("Script explicitly reported FETCH_FAILED for enhanced \(symbol).")
-                throw NetworkError.noData("Script reported FETCH_FAILED for \(symbol)")
-            }
-            
-            // Parse JSON array response
-            guard let jsonData = output.data(using: .utf8) else {
-                throw NetworkError.invalidResponse("Could not convert output to data")
-            }
-            
-            do {
-                let quotesArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] ?? []
-                
-                // Find our symbol in the results (should be the first one)
-                guard let quoteData = quotesArray.first(where: { quote in
-                    (quote["symbol"] as? String) == symbol
-                }) else {
-                    throw NetworkError.noData("Symbol \(symbol) not found in enhanced response")
-                }
-                
-                return try parseEnhancedQuoteData(quoteData, symbol: symbol)
-                
-            } catch {
-                await logger.error("Failed to parse JSON from enhanced script output: \(error.localizedDescription)")
-                throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
-            }
-            
-        } catch let netErr as NetworkError {
-            throw netErr
-        } catch {
-            await logger.error("Failed to run Python script for enhanced \(symbol): \(error.localizedDescription)")
-            throw NetworkError.scriptExecutionError(error.localizedDescription)
-        }
+        try await fetchQuote(for: symbol)
     }
     
     private func parseEnhancedQuoteData(_ data: [String: Any], symbol: String) throws -> StockFetchResult {
         guard let displayPrice = data["price"] as? Double,
               let previousClose = data["previousClose"] as? Double,
-              let timestamp = data["timestamp"] as? TimeInterval else {
+              let timestamp = data["timestamp"] as? TimeInterval,
+              displayPrice.isFinite,
+              displayPrice > 0,
+              previousClose.isFinite,
+              previousClose > 0,
+              timestamp.isFinite,
+              timestamp > 0 else {
             throw NetworkError.invalidResponse("Missing required fields in enhanced quote data")
         }
         
         // If regularMarketPrice is not available (e.g., FMP fallback), use displayPrice
         let regularMarketPrice = data["regularMarketPrice"] as? Double ?? displayPrice
+        guard regularMarketPrice.isFinite, regularMarketPrice > 0 else {
+            throw NetworkError.invalidResponse("Invalid regular market price in enhanced quote data")
+        }
         
         let preMarketPrice = data["preMarketPrice"] as? Double
         let postMarketPrice = data["postMarketPrice"] as? Double
@@ -401,10 +282,11 @@ class PythonNetworkService: NetworkService {
         }
 
         // Detect currency and timezone
-        let detectedCurrency = symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD"
-        let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
+        let rawCurrency = data["currency"] as? String
+        let detectedCurrency = SymbolMetadata.normalizeCurrency(rawCurrency) ?? SymbolMetadata.defaultCurrency(for: symbol)
+        let timezone = SymbolMetadata.defaultTimezone(for: symbol)
 
-        Task { await logger.info("Successfully fetched enhanced data for \(symbol): displayPrice=\(displayPrice), regularMarketPrice=\(regularMarketPrice), preMarket=\(preMarketPrice?.description ?? "nil"), postMarket=\(postMarketPrice?.description ?? "nil"), state=\(marketStateString ?? "nil"), preMarketTime=\(preMarketTime?.description ?? "nil"), postMarketTime=\(postMarketTime?.description ?? "nil")") }
+        Task { await logger.debug("Fetched quote for \(symbol): state=\(marketStateString ?? "nil")") }
 
         return StockFetchResult(
             currency: detectedCurrency,
@@ -428,90 +310,103 @@ class PythonNetworkService: NetworkService {
     }
 
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
-        await logger.info("Starting batch fetch for \(symbols.count) symbols using Python script.")
-
         guard !symbols.isEmpty else { return [] }
-
-        var results: [StockFetchResult] = []
-        var errors: [Error] = [] // Optional: Collect errors if needed
-
-        for symbol in symbols {
-            do {
-                let result = try await fetchEnhancedQuote(for: symbol)
-                results.append(result)
-            } catch {
-                await logger.error("Failed to fetch quote for \(symbol) in batch: \(error.localizedDescription)")
-                // Create a placeholder result for failed fetches to maintain currency info
-                let timezone = symbol.uppercased().hasSuffix(".L") ? "Europe/London" : "America/New_York"
-                let placeholderResult = StockFetchResult(
-                    currency: symbol.uppercased().hasSuffix(".L") ? "GBP" : "USD",
-                    symbol: symbol,
-                    shortName: symbol,
-                    regularMarketTime: Int(Date().timeIntervalSince1970),
-                    exchangeTimezoneName: timezone,
-                    regularMarketPrice: Double.nan,
-                    regularMarketPreviousClose: Double.nan,
-                    displayPrice: Double.nan,
-                    preMarketPrice: nil,
-                    preMarketChange: nil,
-                    preMarketChangePercent: nil,
-                    preMarketTime: nil,
-                    postMarketPrice: nil,
-                    postMarketChange: nil,
-                    postMarketChangePercent: nil,
-                    postMarketTime: nil,
-                    marketState: nil
-                )
-                results.append(placeholderResult)
-                errors.append(error) // Example: collecting errors
-            }
-            
-            // Add a delay before the next symbol to avoid rate limiting
-            // Only delay if there are more symbols to process
-            if symbol != symbols.last {
-                do {
-                    try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-                } catch {
-                    await logger.warning("Task.sleep failed: \(error.localizedDescription)")
-                }
-            }
+        guard let scriptPath = scriptPathOverride ?? Bundle.main.path(
+            forResource: scriptName.replacingOccurrences(of: ".py", with: ""),
+            ofType: "py"
+        ) else {
+            throw NetworkError.scriptNotFound(scriptName)
+        }
+        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
+            throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        // If all symbols failed and you want to throw a general error:
-        // if results.isEmpty && !symbols.isEmpty && !errors.isEmpty {
-        //     throw NetworkError.scriptExecutionError("All symbols in batch failed to fetch. Last error: \(errors.last?.localizedDescription ?? "Unknown error")")
-        // }
+        // Drop anything argparse could misread as a flag. One bad ticker would
+        // otherwise fail the whole batch, not just itself.
+        let safeSymbols = symbols.filter { PythonConfiguration.validateSymbol($0) }
+        if safeSymbols.count != symbols.count {
+            let rejected = symbols.filter { !PythonConfiguration.validateSymbol($0) }
+            await logger.warning("Skipping \(rejected.count) invalid symbol(s) in quote batch: \(rejected)")
+        }
+        guard !safeSymbols.isEmpty else { return [] }
 
-        return results
+        let timeout = min(300, max(30, 20 + (Double(safeSymbols.count) * 5)))
+        let (stdout, _, _) = try await runPythonProcess(
+            arguments: [scriptPath, "--json"] + safeSymbols,
+            timeoutSeconds: timeout,
+            logContext: "Quote batch (\(safeSymbols.count) symbols)"
+        )
+        let output = String(decoding: stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else {
+            throw NetworkError.noData("Quote process returned no structured output")
+        }
+
+        try parseError(from: output)
+        guard let data = output.data(using: .utf8),
+              let envelopes = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw NetworkError.invalidResponse("Quote response was not a JSON array")
+        }
+
+        let envelopeBySymbol = Dictionary(
+            envelopes.map { envelope in
+                ((envelope["symbol"] as? String ?? "").uppercased(), envelope)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        return symbols.map { symbol in
+            let envelope = envelopeBySymbol[symbol.uppercased()]
+            guard envelope?["success"] as? Bool == true,
+                  let quote = envelope?["quote"] as? [String: Any],
+                  let parsed = try? parseEnhancedQuoteData(quote, symbol: symbol) else {
+                return placeholderQuote(for: symbol)
+            }
+            return parsed
+        }
+    }
+
+    private func placeholderQuote(for symbol: String) -> StockFetchResult {
+        StockFetchResult(
+            currency: SymbolMetadata.defaultCurrency(for: symbol),
+            symbol: symbol,
+            shortName: symbol,
+            regularMarketTime: Int(Date().timeIntervalSince1970),
+            exchangeTimezoneName: SymbolMetadata.defaultTimezone(for: symbol),
+            regularMarketPrice: .nan,
+            regularMarketPreviousClose: .nan,
+            displayPrice: .nan,
+            preMarketPrice: nil,
+            preMarketChange: nil,
+            preMarketChangePercent: nil,
+            preMarketTime: nil,
+            postMarketPrice: nil,
+            postMarketChange: nil,
+            postMarketChangePercent: nil,
+            postMarketTime: nil,
+            marketState: nil
+        )
     }
     
-    // MARK: - Helper Classes
-    
-    /// Thread-safe buffer for capturing process output
-    final class SafeDataBuffer: @unchecked Sendable {
-        private var data = Data()
-        private let lock = NSLock()
-        
-        func append(_ newData: Data) {
-            lock.lock()
-            defer { lock.unlock() }
-            data.append(newData)
-        }
-        
-        var contents: Data {
-            lock.lock()
-            defer { lock.unlock() }
-            return data
-        }
+    /// `YYYY-MM-DD` for the Python `--start-date`/`--end-date` arguments. Pinned to the
+    /// POSIX locale and Gregorian calendar so the user's calendar (Buddhist, Japanese,
+    /// Hijri...) or locale numerals can never change what the script receives.
+    static func scriptDateString(from date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] {
-        await logger.info("🐍 PYTHON SCRIPT: Starting historical data fetch for \(symbol)")
+        await logger.debug("Python historical fetch starting for \(symbol)")
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
-        await logger.info("🐍 PYTHON SCRIPT: Date range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
+        await logger.debug("Python historical range: \(dateFormatter.string(from: startDate)) to \(dateFormatter.string(from: endDate))")
         
         guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
             await logger.error("Script '\(scriptName)' not found in bundle.")
@@ -522,90 +417,36 @@ class PythonNetworkService: NetworkService {
             await logger.error("Python interpreter not found at \(config.interpreterPath)")
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
-        
+
+        guard PythonConfiguration.validateSymbol(symbol) else {
+            await logger.warning("Rejecting invalid symbol for historical fetch: \(symbol)")
+            throw NetworkError.invalidResponse("Invalid symbol: \(symbol)")
+        }
+
         // Format dates for Python script (YYYY-MM-DD)
-        let scriptDateFormatter = DateFormatter()
-        scriptDateFormatter.dateFormat = "yyyy-MM-dd"
-        let startDateString = scriptDateFormatter.string(from: startDate)
-        let endDateString = scriptDateFormatter.string(from: endDate)
+        let startDateString = Self.scriptDateString(from: startDate)
+        let endDateString = Self.scriptDateString(from: endDate)
         
-        await logger.info("🐍 PYTHON SCRIPT: Formatted dates - start: \(startDateString), end: \(endDateString)")
+        await logger.debug("Python historical dates: \(startDateString) to \(endDateString)")
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
-        
-        await logger.info("🐍 PYTHON SCRIPT: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
-        
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let arguments = [scriptPath, "--historical", symbol, "--start-date", startDateString, "--end-date", endDateString]
+        await logger.debug("Python historical command prepared for \(symbol)")
         
         do {
-            await logger.info("🐍 PYTHON SCRIPT: Executing process for \(symbol)")
-            try process.run()
-            
-            // Add timeout protection for historical data fetching (5 minutes max)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
-                if process.isRunning {
-                    await logger.warning("🐍 PYTHON SCRIPT: Timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-            
-            // Read data incrementally to avoid pipe buffer overflow (65KB limit)
-            // Use readability handler approach for reliable streaming
-            let outputBuffer = SafeDataBuffer()
-            let errorBuffer = SafeDataBuffer()
+            let (outputData, _, exitCode) = try await runPythonProcess(
+                arguments: arguments,
+                timeoutSeconds: 300,
+                logContext: "Historical fetch for \(symbol)"
+            )
 
-            outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if !chunk.isEmpty {
-                    outputBuffer.append(chunk)
-                }
-            }
+            await logger.debug("Python historical process exited \(exitCode) for \(symbol)")
 
-            errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if !chunk.isEmpty {
-                    errorBuffer.append(chunk)
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel() // Cancel timeout if process finishes normally
-
-            // Clear handlers and read any final data
-            outputPipe.fileHandleForReading.readabilityHandler = nil
-            errorPipe.fileHandleForReading.readabilityHandler = nil
-
-            // Read any remaining buffered data
-            let remainingOutput = outputPipe.fileHandleForReading.availableData
-            if !remainingOutput.isEmpty {
-                outputBuffer.append(remainingOutput)
-            }
-            let remainingError = errorPipe.fileHandleForReading.availableData
-            if !remainingError.isEmpty {
-                errorBuffer.append(remainingError)
-            }
-            
-            let exitCode = process.terminationStatus
-            await logger.info("🐍 PYTHON SCRIPT: Process completed with exit code \(exitCode) for \(symbol)")
-            
-            let errorData = errorBuffer.contents
-            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.info("🐍 PYTHON SCRIPT: Debug output for \(symbol): \(err)")
-            }
-            
-            let outputData = outputBuffer.contents
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
                 await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
             }
             
-            await logger.info("🐍 PYTHON SCRIPT: Raw output for \(symbol) (\(output.count) chars): \(String(output.prefix(200)))...")
+            await logger.debug("Python historical output received for \(symbol) (\(output.count) chars)")
 
             // Try to parse as JSON error first
             do {
@@ -657,24 +498,24 @@ class PythonNetworkService: NetworkService {
                     priceSnapshots.append(snapshot)
                 }
                 
-                await logger.info("🐍 PYTHON SCRIPT: Successfully parsed \(priceSnapshots.count) historical data points for \(symbol)")
+                await logger.info("Historical fetch completed for \(symbol): \(priceSnapshots.count) points")
                 
                 // Show sample of parsed data for debugging
                 if !priceSnapshots.isEmpty {
                     let sortedSnapshots = priceSnapshots.sorted { $0.timestamp < $1.timestamp }
                     if let first = sortedSnapshots.first, let last = sortedSnapshots.last {
-                        await logger.info("🐍 PYTHON SCRIPT: \(symbol) parsed data range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
+                        await logger.debug("Historical range for \(symbol): \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
                     }
                 }
                 
                 return priceSnapshots
-                
             } catch {
                 await logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
-                await logger.error("🐍 PYTHON SCRIPT: Problematic output for \(symbol) (first 500 chars): \(String(output.prefix(500)))")
+                await logger.debug("Python historical parse failure output length for \(symbol): \(output.count)")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
-            
+        } catch let accessError as ProviderAccessError {
+            throw accessError
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
@@ -704,34 +545,15 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
-
-        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(process.arguments?.joined(separator: " ") ?? "")")
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
+        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(arguments.joined(separator: " "))")
 
         do {
-            try process.run()
-
-            // Add timeout protection (2 minutes for OHLC data)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 120_000_000_000) // 2 minutes
-                if process.isRunning {
-                    await logger.warning("📊 OHLC: Timeout reached for \(symbol), terminating process")
-                    process.terminate()
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: arguments,
+                timeoutSeconds: 120,
+                logContext: "OHLC fetch for \(symbol)"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("📊 OHLC: Debug output for \(symbol): \(err)")
@@ -789,12 +611,10 @@ class PythonNetworkService: NetworkService {
 
                 await logger.info("📊 OHLC: Successfully parsed \(snapshots.count) candlesticks for \(symbol)")
                 return snapshots
-
             } catch {
                 await logger.error("📊 OHLC: Failed to parse JSON: \(error.localizedDescription)")
                 throw NetworkError.invalidResponse("Could not parse OHLC JSON: \(error.localizedDescription)")
             }
-
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
@@ -824,36 +644,19 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
-        args.append(contentsOf: symbols)
-        process.arguments = args
+        let safeSymbols = symbols.filter { PythonConfiguration.validateSymbol($0) }
+        guard !safeSymbols.isEmpty else { return [:] }
 
+        var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
+        args.append(contentsOf: safeSymbols)
         await logger.info("📊 OHLC BATCH: Command: \(config.interpreterPath) \(args.joined(separator: " "))")
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
         do {
-            try process.run()
-
-            // Add timeout protection (5 minutes for batch OHLC data)
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
-                if process.isRunning {
-                    await logger.warning("📊 OHLC BATCH: Timeout reached, terminating process")
-                    process.terminate()
-                }
-            }
-
-            process.waitUntilExit()
-            timeoutTask.cancel()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, errorData, _) = try await runPythonProcess(
+                arguments: args,
+                timeoutSeconds: 300,
+                logContext: "OHLC batch fetch"
+            )
 
             if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 await logger.info("📊 OHLC BATCH: Debug output: \(err)")
@@ -918,12 +721,10 @@ class PythonNetworkService: NetworkService {
 
                 await logger.info("📊 OHLC BATCH: Successfully parsed data for \(result.count) symbols")
                 return result
-
             } catch {
                 await logger.error("📊 OHLC BATCH: Failed to parse JSON: \(error.localizedDescription)")
                 throw NetworkError.invalidResponse("Could not parse OHLC batch JSON: \(error.localizedDescription)")
             }
-
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
@@ -948,31 +749,12 @@ class PythonNetworkService: NetworkService {
             throw NetworkError.pythonInterpreterNotFound(config.interpreterPath)
         }
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: config.interpreterPath)
-        process.arguments = [scriptPath, "--test-key", service]
-        
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
         do {
-            try process.run()
-            
-            // Timeout protection (30 seconds)
-            let timeoutTask = Task {
-                try await Task.sleep(for: .seconds(30))
-                if process.isRunning {
-                    await logger.warning("🔑 VERIFY: Timeout reached, terminating process")
-                    process.terminate()
-                }
-            }
-            
-            process.waitUntilExit()
-            timeoutTask.cancel()
-            
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let (outputData, _, _) = try await runPythonProcess(
+                arguments: [scriptPath, "--test-key", service],
+                timeoutSeconds: 30,
+                logContext: "Verify API key for \(service)"
+            )
             
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
                 await logger.warning("🔑 VERIFY: stdout is empty.")
@@ -995,7 +777,6 @@ class PythonNetworkService: NetworkService {
             }
             
             return false
-            
         } catch {
             await logger.error("🔑 VERIFY: Failed to run script: \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)

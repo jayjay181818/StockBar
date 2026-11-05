@@ -9,6 +9,11 @@ import urllib.parse
 import urllib.error
 import csv
 import io
+import math
+import re
+import fcntl
+import tempfile
+from contextlib import contextmanager
 
 try:
     import requests
@@ -29,29 +34,102 @@ except ImportError:
     YFINANCE_AVAILABLE = False
     print("Warning: yfinance not available, falling back to FMP for real-time data", file=sys.stderr)
 
-# Use a cache file in the user's home directory
-CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
-CACHE_DURATION_SECONDS = 300  # 5 minutes
+# Keep the cache injectable so tests and acceptance runs never touch production.
+# The app passes STOCKBAR_CACHE_FILE; the default matches the app's cache folder.
+DEFAULT_CACHE_FILE = os.path.expanduser("~/Library/Caches/stockbar-cache/quote_cache.json")
+LEGACY_CACHE_FILE = os.path.expanduser("~/.stockbar_cache.json")
+CACHE_FILE = os.path.expanduser(os.getenv("STOCKBAR_CACHE_FILE") or DEFAULT_CACHE_FILE)
+
+
+def migrate_legacy_cache(cache_file, default_file=DEFAULT_CACHE_FILE, legacy_file=LEGACY_CACHE_FILE):
+    """Move the pre-2.4.5 home-folder cache into the Caches folder once.
+
+    Only applies to the default location, so injected test/acceptance paths
+    never read or move the user's real cache. Best effort: a failure simply
+    leaves the legacy file in place and the cache starts empty.
+    """
+    try:
+        if os.path.realpath(cache_file) != os.path.realpath(default_file):
+            return False
+        if os.path.exists(cache_file) or not os.path.isfile(legacy_file):
+            return False
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        os.replace(legacy_file, cache_file)
+        try:
+            os.unlink(legacy_file + ".lock")
+        except OSError:
+            pass
+        return True
+    except OSError:
+        return False
+
+
+migrate_legacy_cache(CACHE_FILE)
+def quote_cache_seconds(raw_value, default=300):
+    """Quote cache lifetime; the app lowers it to match short refresh intervals."""
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return min(default, max(15, value))
+
+CACHE_DURATION_SECONDS = quote_cache_seconds(os.getenv("STOCKBAR_QUOTE_CACHE_SECONDS"))
+PREV_CLOSE_CACHE_KEY = "_prev_close_cache"
+PREV_CLOSE_CACHE_MAX_AGE_SECONDS = 18 * 60 * 60
 
 # API Base URLs
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 STOOQ_BASE_URL = "https://stooq.com/q/d/l"
 
+SECRET_REDACTION_PATTERNS = [
+    (re.compile(r"(?i)([?&](?:apikey|api_key|access_token|token|key)=)(?!\[REDACTED\])[^&\s\"'<>)\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b((?:FMP_API_KEY|TWELVE_DATA_API_KEY|API_KEY|TOKEN|ACCESS_TOKEN)\s*[:=]\s*)(?!\[REDACTED\])[^\s,;\"')\]]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Authorization\s*[:=]\s*Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(Bearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/\-=]+"), r"\1[REDACTED]"),
+]
+
+def sanitize_log_message(message):
+    """Remove credential values before emitting stderr/stdout diagnostics."""
+    sanitized = str(message)
+    for pattern, replacement in SECRET_REDACTION_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return re.sub(r"\[REDACTED\]\]+", "[REDACTED]", sanitized)
+
+def log_error(message):
+    print(sanitize_log_message(message), file=sys.stderr)
+
 def get_config():
     """Read the entire configuration file"""
-    try:
-        home_dir = os.path.expanduser("~")
-        config_file = os.path.join(home_dir, "Documents", ".stockbar_config.json")
-        
-        if os.path.exists(config_file):
+    candidate_paths = []
+    configured_path = os.getenv("STOCKBAR_CONFIG_FILE")
+    if configured_path:
+        candidate_paths.append(configured_path)
+
+    home_dir = os.path.expanduser("~")
+    candidate_paths.extend([
+        os.path.join(home_dir, "Library", "Application Support", "com.stockbar", ".stockbar_config.json"),
+        os.path.join(home_dir, ".stockbar_config.json"),
+    ])
+
+    for config_file in candidate_paths:
+        if not config_file:
+            continue
+        try:
+            config_file = os.path.expanduser(config_file)
+            if not os.path.isfile(config_file):
+                continue
             with open(config_file, 'r') as f:
                 return json.load(f)
-    except Exception as e:
-        print(f"Error reading config file: {e}", file=sys.stderr)
+        except Exception as e:
+            log_error(f"Error reading config file: {e}")
+            return {}
+
     return {}
 
 CONFIG = get_config()
+RAW_SYMBOL_ALIASES = CONFIG.get("SYMBOL_ALIASES", {}) if isinstance(CONFIG, dict) else {}
+SYMBOL_ALIASES = {str(k).upper(): str(v).upper() for k, v in RAW_SYMBOL_ALIASES.items()}
 
 def get_api_key(key_name, env_name=None):
     """Get API key from config or environment"""
@@ -66,34 +144,171 @@ def get_api_key(key_name, env_name=None):
 FMP_API_KEY = get_api_key("FMP_API_KEY", "FMP_API_KEY")
 TWELVE_DATA_API_KEY = get_api_key("TWELVE_DATA_API_KEY", "TWELVE_DATA_API_KEY")
 
-# Load cache from file
-if os.path.exists(CACHE_FILE):
-    with open(CACHE_FILE, 'r') as f:
-        try:
-            cache = json.load(f)
-        except Exception:
-            cache = {}
-else:
-    cache = {}
+cache = {}
 
-def save_cache():
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(cache, f)
+def finite_positive_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+def is_valid_quote(quote):
+    if not isinstance(quote, dict):
+        return False
+
+    display_price = finite_positive_number(quote.get('price'))
+    regular_price = finite_positive_number(
+        quote.get('regularMarketPrice', quote.get('price'))
+    )
+    previous_close = finite_positive_number(quote.get('previousClose'))
+    timestamp = finite_positive_number(quote.get('timestamp'))
+    return all(
+        value is not None
+        for value in (display_price, regular_price, previous_close, timestamp)
+    )
+
+@contextmanager
+def cache_lock():
+    cache_directory = os.path.dirname(CACHE_FILE) or "."
+    os.makedirs(cache_directory, exist_ok=True)
+    lock_path = CACHE_FILE + ".lock"
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+def load_cache_unlocked():
+    if not os.path.isfile(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r") as cache_file:
+            loaded = json.load(cache_file)
+            return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+def save_cache_unlocked(value):
+    cache_directory = os.path.dirname(CACHE_FILE) or "."
+    file_descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".stockbar-cache-",
+        suffix=".tmp",
+        dir=cache_directory,
+    )
+    try:
+        with os.fdopen(file_descriptor, "w") as temporary_file:
+            json.dump(make_json_safe(value), temporary_file, allow_nan=False)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, CACHE_FILE)
+        directory_descriptor = os.open(cache_directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
 
 def get_cached(symbol):
-    entry = cache.get(symbol)
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        entry = current_cache.get(symbol)
     if entry:
         ts = entry.get('timestamp')
         if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
-            return entry.get('result')
+            cached_result = entry.get('result')
+            cached_result = apply_previous_close_backfill(symbol, cached_result)
+            if is_valid_quote(cached_result):
+                return cached_result
+            with cache_lock():
+                current_cache = load_cache_unlocked()
+                current_cache.pop(symbol, None)
+                save_cache_unlocked(current_cache)
     return None
 
 def set_cache(symbol, result):
-    cache[symbol] = {
-        'timestamp': time.time(),
-        'result': result
-    }
-    save_cache()
+    if not is_valid_quote(result):
+        return False
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        current_cache[symbol] = {
+            'timestamp': time.time(),
+            'result': make_json_safe(result)
+        }
+        save_cache_unlocked(current_cache)
+    return True
+
+def exchange_today(index, symbol):
+    """Current calendar date in the exchange's timezone.
+
+    Bar dates in yfinance history are in the exchange timezone, so comparing
+    them with the Mac's local date can treat today's partial bar as complete.
+    Prefer the history index timezone; fall back to the symbol's market date.
+    """
+    tz = getattr(index, 'tz', None)
+    if tz is not None:
+        try:
+            return datetime.now(tz).date()
+        except Exception:
+            pass
+    return datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
+
+def market_date_for_symbol(symbol):
+    tz = None
+    try:
+        from zoneinfo import ZoneInfo
+        tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        try:
+            import pytz
+            tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = None
+    now = datetime.now(tz) if tz is not None else datetime.utcnow()
+    return now.date().isoformat()
+
+def get_cached_prev_close(symbol):
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        prev_cache = current_cache.get(PREV_CLOSE_CACHE_KEY, {})
+    entry = prev_cache.get(symbol)
+    if not isinstance(entry, dict):
+        return None
+    if entry.get('date') != market_date_for_symbol(symbol):
+        return None
+    ts = entry.get('timestamp')
+    if ts and (time.time() - ts > PREV_CLOSE_CACHE_MAX_AGE_SECONDS):
+        return None
+    value = entry.get('value')
+    try:
+        value = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+def set_cached_prev_close(symbol, value):
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        prev_cache = current_cache.get(PREV_CLOSE_CACHE_KEY)
+        if not isinstance(prev_cache, dict):
+            prev_cache = {}
+            current_cache[PREV_CLOSE_CACHE_KEY] = prev_cache
+        prev_cache[symbol] = {
+            'date': market_date_for_symbol(symbol),
+            'timestamp': time.time(),
+            'value': value
+        }
+        save_cache_unlocked(current_cache)
 
 def make_request(url, params=None, headers=None):
     """Generic request helper handling requests/urllib differences"""
@@ -111,7 +326,7 @@ def make_request(url, params=None, headers=None):
         except requests.exceptions.HTTPError as e:
             raise e
         except requests.exceptions.RequestException as e:
-            print(f"Request failed via requests: {e}", file=sys.stderr)
+            log_error(f"Request failed via requests: {e}")
             return None
     else:
         try:
@@ -134,10 +349,10 @@ def make_request(url, params=None, headers=None):
         except urllib.error.HTTPError as e:
             raise e
         except urllib.error.URLError as e:
-            print(f"Request failed via urllib: {e}", file=sys.stderr)
+            log_error(f"Request failed via urllib: {e}")
             return None
         except Exception as e:
-            print(f"Unexpected error during urllib request: {e}", file=sys.stderr)
+            log_error(f"Unexpected error during urllib request: {e}")
             return None
 
 def make_fmp_request(url, params=None):
@@ -149,13 +364,63 @@ def make_fmp_request(url, params=None):
     params['apikey'] = FMP_API_KEY
     return make_request(url, params)
 
+UK_SUFFIXES = ('.L', '.LON', '.XC')
+
+def is_uk_symbol(symbol):
+    return symbol.upper().endswith(UK_SUFFIXES)
+
+def resolve_symbol_alias(symbol):
+    upper = symbol.upper()
+    alias = SYMBOL_ALIASES.get(upper)
+    if alias:
+        return alias
+    if upper.endswith('.XC'):
+        return upper.replace('.XC', '.L')
+    return upper
+
+def history_symbol_for_prev_close(symbol):
+    """Map alt-venue UK symbols to a primary history symbol."""
+    upper = resolve_symbol_alias(symbol)
+    if upper.endswith('.XC'):
+        return upper.replace('.XC', '.L')
+    return upper
+
+# Only a trailing London suffix is a suffix; a plain replace() would also rewrite
+# ".L" inside tickers such as "ABC.LON" or "A.LSE.L".
+LSE_SUFFIX_PATTERN = re.compile(r'\.(?:LON|L)$')
+
 def handle_lse_symbol(symbol):
-    """Convert London Stock Exchange symbols for FMP API"""
-    if symbol.upper().endswith('.L'):
-        return symbol.upper()
-    elif symbol.upper().endswith('.LON'):
-        return symbol.upper().replace('.LON', '.L')
-    return symbol.upper()
+    """Convert London Stock Exchange symbols for FMP API (alias-resolved)."""
+    upper = resolve_symbol_alias(symbol)
+    return LSE_SUFFIX_PATTERN.sub('.L', upper)
+
+def resolve_market_state(reported_state, clock_state, now_market):
+    """Pick the market state: Yahoo's own marketState when present (it knows
+    holidays and early closes), otherwise the clock-derived state, forced to
+    CLOSED on weekends. Public holidays are not modelled here."""
+    if isinstance(reported_state, str):
+        normalized = reported_state.strip().upper()
+        if normalized in ("REGULAR", "PRE", "POST"):
+            return normalized
+        if normalized in ("CLOSED", "PREPRE", "POSTPOST"):
+            return "CLOSED"
+    if now_market.weekday() >= 5:
+        return "CLOSED"
+    return clock_state
+
+def normalize_currency(raw_currency, symbol):
+    """Normalize currency codes and detect pence-based quotes."""
+    if raw_currency is None:
+        if is_uk_symbol(symbol):
+            uses_pence = symbol.upper().endswith(('.L', '.LON'))
+            return "GBP", uses_pence
+        return None, False
+
+    raw = str(raw_currency).strip()
+    if raw in ("GBp", "GBX"):
+        return "GBP", True
+
+    return raw.upper(), False
 
 # --- Twelve Data Fetcher ---
 
@@ -164,10 +429,15 @@ def handle_twelvedata_symbol(symbol):
     # Twelve Data usually takes symbol and exchange separately or handles suffix
     # For LSE, it often uses just the ticker if exchange is specified, or ticker.L
     # We'll try to map common suffixes to exchanges if needed, or just pass through
-    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
+    upper = resolve_symbol_alias(symbol)
+    if upper == '^FTSE':
+        return 'FTSE', None
+    if upper.endswith('.XC'):
+        upper = upper[:-len('.XC')] + '.L'
+    if LSE_SUFFIX_PATTERN.search(upper):
         # Strip suffix, specify exchange in params
-        return symbol.upper().replace('.L', '').replace('.LON', ''), "LSE"
-    return symbol.upper(), None
+        return LSE_SUFFIX_PATTERN.sub('', upper), "LSE"
+    return upper, None
 
 def fetch_historical_data_twelvedata(symbol, start_date, end_date):
     """Fetch historical data from Twelve Data"""
@@ -235,7 +505,7 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
                     'previousClose': 0.0 # Placeholder, will fix in post-processing if possible
                 })
             except Exception as e:
-                print(f"Error parsing Twelve Data entry: {e}", file=sys.stderr)
+                log_error(f"Error parsing Twelve Data entry: {e}")
                 continue
         
         # Fix previousClose
@@ -251,7 +521,7 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
         return historical_data
 
     except Exception as e:
-        print(f"Twelve Data fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Twelve Data fetch failed for {symbol}: {e}")
         return None
 
 # --- Stooq Fetcher ---
@@ -259,13 +529,12 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
 def handle_stooq_symbol(symbol):
     """Convert symbols for Stooq (e.g. AV.L -> AV.UK)"""
     # Stooq uses .UK for LSE
-    if symbol.upper().endswith('.L'):
-        return symbol.upper().replace('.L', '.UK')
-    elif symbol.upper().endswith('.LON'):
-        return symbol.upper().replace('.LON', '.UK')
+    upper = resolve_symbol_alias(symbol)
+    if LSE_SUFFIX_PATTERN.search(upper):
+        return LSE_SUFFIX_PATTERN.sub('.UK', upper)
     # US stocks typically have .US suffix or just ticker, Stooq often needs .US for common ones
     # but let's stick to LSE fallback focus for now.
-    return symbol.upper()
+    return upper
 
 def fetch_historical_data_stooq(symbol, start_date, end_date):
     """Fetch historical data from Stooq (CSV)"""
@@ -355,7 +624,7 @@ def fetch_historical_data_stooq(symbol, start_date, end_date):
         return historical_data
 
     except Exception as e:
-        print(f"Stooq fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Stooq fetch failed for {symbol}: {e}")
         return None
 
 # --- Existing Fetchers (Refactored) ---
@@ -366,11 +635,14 @@ def fetch_real_time_quote_yfinance(symbol):
         return None
         
     try:
-        ticker = yf.Ticker(symbol)
+        resolved_symbol = resolve_symbol_alias(symbol)
+        ticker = yf.Ticker(resolved_symbol)
+        history_symbol = history_symbol_for_prev_close(resolved_symbol)
+        history_ticker = yf.Ticker(history_symbol) if history_symbol != resolved_symbol else ticker
         
         # 1. Get daily history to find a reliable previous day's close.
         # Fetch more days to ensure we get complete trading day data
-        daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        daily_hist = history_ticker.history(period="5d", interval="1d", auto_adjust=False)
         if daily_hist.empty:
             return None
         
@@ -378,7 +650,7 @@ def fetch_real_time_quote_yfinance(symbol):
         daily_hist = daily_hist.sort_index()
         
         # Remove today's data if it's incomplete (during market hours)
-        today = datetime.now().date()
+        today = exchange_today(daily_hist.index, symbol)
         complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
         
         if not complete_days.empty:
@@ -394,10 +666,15 @@ def fetch_real_time_quote_yfinance(symbol):
         pre_market_price = None
         post_market_price = None
         market_state = "REGULAR"
+        reported_market_state = None
         
+        currency = None
+
         # 2. Get comprehensive ticker info for pre/post market data
         try:
             info = ticker.info
+            currency = info.get('currency') or info.get('financialCurrency')
+            reported_market_state = info.get('marketState')
             
             # Extract timestamp from regularMarketTime
             if 'regularMarketTime' in info and info['regularMarketTime'] is not None:
@@ -417,15 +694,17 @@ def fetch_real_time_quote_yfinance(symbol):
                 current_price = regular_market_price
                 
         except Exception as e:
-            print(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.", file=sys.stderr)
+            log_error(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.")
 
         # 3. Try to get the latest price using fast_info if we don't have it yet
         if regular_market_price is None:
             try:
                 regular_market_price = float(ticker.fast_info['last_price'])
                 current_price = regular_market_price
+                if currency is None:
+                    currency = ticker.fast_info.get('currency')
             except Exception as e:
-                print(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.", file=sys.stderr)
+                log_error(f"yfinance fast_info failed for {symbol}: {e}. Falling back to intraday history.")
 
         # 4. If still no regular market price, try intraday history with pre/post market data
         if regular_market_price is None:
@@ -440,7 +719,7 @@ def fetch_real_time_quote_yfinance(symbol):
             current_price = regular_market_price
 
         # 6. Determine market state based on appropriate timezone for the stock
-        if symbol.upper().endswith('.L'):
+        if is_uk_symbol(symbol):
             # LSE stocks - use London timezone
             try:
                 from zoneinfo import ZoneInfo
@@ -460,19 +739,11 @@ def fetch_real_time_quote_yfinance(symbol):
             
             # Simplified LSE market hours logic for brevity in this view
             if (current_hour_market >= 7 and current_hour_market < 8):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
                 market_state = "REGULAR"
             elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
         else:
@@ -494,24 +765,22 @@ def fetch_real_time_quote_yfinance(symbol):
             current_minute_market = now_market.minute
             
             if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
-                if pre_market_price is not None:
-                    market_state = "PRE"
-                    current_price = pre_market_price
-                else:
-                    market_state = "PRE"
+                market_state = "PRE"
             elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
                 market_state = "REGULAR"
             elif current_hour_market >= 16 and current_hour_market < 20:
-                if post_market_price is not None:
-                    market_state = "POST"
-                    current_price = post_market_price
-                else:
-                    market_state = "POST"
+                market_state = "POST"
             else:
                 market_state = "CLOSED"
 
-        # 7. Handle LSE stocks - yfinance returns prices in pence for .L stocks.
-        if symbol.upper().endswith('.L'):
+        market_state = resolve_market_state(reported_market_state, market_state, now_market)
+        if market_state == "PRE" and pre_market_price is not None:
+            current_price = pre_market_price
+        elif market_state == "POST" and post_market_price is not None:
+            current_price = post_market_price
+
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
             current_price /= 100.0
             previous_close /= 100.0
             if regular_market_price is not None:
@@ -538,11 +807,12 @@ def fetch_real_time_quote_yfinance(symbol):
             'preMarketTime': pre_market_time,
             'postMarketTime': post_market_time,
             'marketState': market_state,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'currency': normalized_currency
         }
         
     except Exception as e:
-        print(f"yfinance fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"yfinance fetch failed for {symbol}: {e}")
         return None
 
 
@@ -561,12 +831,13 @@ def fetch_real_time_quote_fmp(symbol):
         current_price = quote.get('price', 0)
         previous_close = quote.get('previousClose', 0)
         timestamp = quote.get('timestamp', int(time.time()))
+        raw_currency = quote.get('currency')
         
         if current_price <= 0 or previous_close <= 0:
             return None
         
-        # Handle LSE stocks
-        if api_symbol.endswith('.L'):
+        normalized_currency, uses_pence = normalize_currency(raw_currency, symbol)
+        if uses_pence:
             current_price = current_price / 100.0
             previous_close = previous_close / 100.0
             
@@ -574,14 +845,378 @@ def fetch_real_time_quote_fmp(symbol):
             'symbol': symbol,
             'price': current_price,
             'previousClose': previous_close,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'currency': normalized_currency
         }
     except Exception as e:
         # Re-raise HTTP errors
         if "HTTP Error" in str(e) or hasattr(e, 'code') or (hasattr(e, 'response') and hasattr(e.response, 'status_code')):
             raise e
-        print(f"FMP fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"FMP fetch failed for {symbol}: {e}")
         return None
+
+def fetch_real_time_quote_twelvedata(symbol):
+    """Fetch real-time quote from Twelve Data (fallback)."""
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    base_symbol, exchange = handle_twelvedata_symbol(symbol)
+    url = f"{TWELVE_DATA_BASE_URL}/quote"
+    params = {
+        'symbol': base_symbol,
+        'apikey': TWELVE_DATA_API_KEY
+    }
+    if exchange:
+        params['exchange'] = exchange
+
+    try:
+        data = make_request(url, params)
+        if not data:
+            return None
+
+        if data.get('status') == 'error' or data.get('code') not in (None, 200):
+            print(f"Twelve Data error for {symbol}: {data.get('message')}", file=sys.stderr)
+            return None
+
+        close_raw = data.get('close')
+        previous_close_raw = data.get('previous_close')
+        timestamp = data.get('timestamp')
+
+        if close_raw is None or previous_close_raw is None:
+            return None
+
+        close_price = float(close_raw)
+        previous_close = float(previous_close_raw)
+
+        normalized_currency, uses_pence = normalize_currency(data.get('currency'), symbol)
+        if uses_pence:
+            close_price /= 100.0
+            previous_close /= 100.0
+
+        return {
+            'symbol': symbol,
+            'price': close_price,
+            'regularMarketPrice': close_price,
+            'previousClose': previous_close,
+            'timestamp': int(timestamp) if timestamp is not None else int(time.time()),
+            'currency': normalized_currency
+        }
+    except Exception as e:
+        log_error(f"Twelve Data fetch failed for {symbol}: {e}")
+        return None
+
+def fetch_real_time_quote_yahoo_api(symbol):
+    """Fetch real-time quote via Yahoo quote API (lightweight fallback)."""
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+    try:
+        resolved_symbol = resolve_symbol_alias(symbol)
+        data = make_request(url, params={'symbols': resolved_symbol})
+        if not data or 'quoteResponse' not in data:
+            return None
+
+        results = data.get('quoteResponse', {}).get('result', [])
+        if not results:
+            return None
+
+        quote = results[0]
+        regular_market_price = quote.get('regularMarketPrice')
+        previous_close = quote.get('regularMarketPreviousClose')
+        market_state = quote.get('marketState')
+        regular_market_time = quote.get('regularMarketTime')
+        pre_market_price = quote.get('preMarketPrice')
+        post_market_price = quote.get('postMarketPrice')
+        pre_market_time = quote.get('preMarketTime')
+        post_market_time = quote.get('postMarketTime')
+
+        if regular_market_price is None or previous_close is None:
+            return None
+
+        normalized_currency, uses_pence = normalize_currency(quote.get('currency'), symbol)
+        if uses_pence:
+            regular_market_price /= 100.0
+            previous_close /= 100.0
+            if pre_market_price is not None:
+                pre_market_price /= 100.0
+            if post_market_price is not None:
+                post_market_price /= 100.0
+
+        current_price = regular_market_price
+        if market_state == "PRE" and pre_market_price is not None:
+            current_price = pre_market_price
+        elif market_state == "POST" and post_market_price is not None:
+            current_price = post_market_price
+
+        timestamp = regular_market_time if regular_market_time is not None else int(time.time())
+
+        return {
+            'symbol': symbol,
+            'price': current_price,
+            'regularMarketPrice': regular_market_price,
+            'previousClose': previous_close,
+            'preMarketPrice': pre_market_price,
+            'postMarketPrice': post_market_price,
+            'preMarketTime': pre_market_time,
+            'postMarketTime': post_market_time,
+            'marketState': market_state,
+            'timestamp': timestamp,
+            'currency': normalized_currency
+        }
+    except Exception as e:
+        log_error(f"Yahoo API fetch failed for {symbol}: {e}")
+        return None
+
+def needs_prev_close_backfill(symbol, current_price, previous_close, currency):
+    try:
+        if previous_close is None or not math.isfinite(float(previous_close)) or float(previous_close) <= 0:
+            return True
+    except Exception:
+        return True
+
+    try:
+        price = float(current_price)
+    except Exception:
+        return False
+
+    if not math.isfinite(price) or price <= 0:
+        return False
+
+    currency_code = str(currency).upper() if currency else ""
+    if is_uk_symbol(symbol) or currency_code == "GBP":
+        epsilon = max(0.0001, price * 0.0001)
+        return abs(float(previous_close) - price) <= epsilon
+
+    return False
+
+def fetch_previous_close_twelvedata(symbol):
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    history_symbol = history_symbol_for_prev_close(symbol)
+    if history_symbol != symbol:
+        print(f"Prev close: mapping {symbol} -> {history_symbol} for Twelve Data history", file=sys.stderr)
+    ticker, exchange = handle_twelvedata_symbol(history_symbol)
+    url = f"{TWELVE_DATA_BASE_URL}/time_series"
+    params = {
+        'symbol': ticker,
+        'interval': '1day',
+        'outputsize': 2,
+        'order': 'ASC',
+        'apikey': TWELVE_DATA_API_KEY
+    }
+    if exchange:
+        params['exchange'] = exchange
+
+    try:
+        data = make_request(url, params)
+        if not data or 'values' not in data:
+            return None
+
+        values = data.get('values') or []
+        if not values:
+            return None
+
+        try:
+            values = sorted(values, key=lambda v: v.get('datetime', ''))
+        except Exception:
+            pass
+
+        target = values[-2] if len(values) > 1 else values[-1]
+        prev_close_raw = target.get('close')
+        if prev_close_raw is None:
+            return None
+
+        prev_close = float(prev_close_raw)
+        currency = None
+        meta = data.get('meta')
+        if isinstance(meta, dict):
+            currency = meta.get('currency')
+
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
+            prev_close /= 100.0
+
+        if not math.isfinite(prev_close) or prev_close <= 0:
+            return None
+
+        return prev_close
+    except Exception as e:
+        log_error(f"Twelve Data previous close fetch failed for {symbol}: {e}")
+        return None
+
+def fetch_previous_close_stooq(symbol):
+    try:
+        end_date = datetime.utcnow().date()
+        start_date = end_date - timedelta(days=14)
+        history_symbol = history_symbol_for_prev_close(symbol)
+        if history_symbol != symbol:
+            print(f"Prev close: mapping {symbol} -> {history_symbol} for Stooq history", file=sys.stderr)
+        data = fetch_historical_data_stooq(history_symbol, start_date.isoformat(), end_date.isoformat())
+        if not data:
+            return None
+        prev_close = data[-1].get('previousClose')
+        prev_close = float(prev_close) if prev_close is not None else None
+        if prev_close is None or not math.isfinite(prev_close) or prev_close <= 0:
+            return None
+        return prev_close
+    except Exception as e:
+        log_error(f"Stooq previous close fetch failed for {symbol}: {e}")
+        return None
+
+def fetch_previous_close_yfinance(symbol):
+    if not YFINANCE_AVAILABLE:
+        return None
+
+    try:
+        history_symbol = history_symbol_for_prev_close(symbol)
+        if history_symbol != symbol:
+            print(f"Prev close: mapping {symbol} -> {history_symbol} for yfinance history", file=sys.stderr)
+        ticker = yf.Ticker(history_symbol)
+        daily_hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        market_date = datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
+        previous_close = None
+
+        if not daily_hist.empty:
+            daily_hist = daily_hist.sort_index()
+            complete_days = daily_hist[daily_hist.index.to_series().dt.date < market_date]
+            for raw_close in reversed(complete_days['Close'].tolist()):
+                previous_close = finite_positive_number(raw_close)
+                if previous_close is not None:
+                    break
+
+        # Some index tickers intermittently expose a NaN/null daily close while
+        # their intraday history remains intact. Use the last finite close from
+        # the latest completed market session before giving up on the provider.
+        if previous_close is None:
+            hourly_hist = ticker.history(
+                period="5d",
+                interval="1h",
+                prepost=False,
+                auto_adjust=False
+            )
+            if not hourly_hist.empty:
+                hourly_hist = hourly_hist.sort_index()
+                completed_hours = hourly_hist[
+                    hourly_hist.index.to_series().dt.date < market_date
+                ]
+                for raw_close in reversed(completed_hours['Close'].tolist()):
+                    previous_close = finite_positive_number(raw_close)
+                    if previous_close is not None:
+                        print(
+                            f"Prev close: using completed-session hourly fallback for {symbol}",
+                            file=sys.stderr
+                        )
+                        break
+
+        if previous_close is None:
+            return None
+
+        currency = None
+        try:
+            info = ticker.info
+            currency = info.get('currency') or info.get('financialCurrency')
+        except Exception:
+            currency = None
+
+        normalized_currency, uses_pence = normalize_currency(currency, symbol)
+        if uses_pence:
+            previous_close /= 100.0
+
+        return previous_close
+    except Exception as e:
+        log_error(f"yfinance previous close fetch failed for {symbol}: {e}")
+        return None
+
+def fetch_previous_close_from_history(symbol):
+    prev_close = fetch_previous_close_twelvedata(symbol)
+    if prev_close is not None:
+        return prev_close
+
+    if symbol.upper().endswith(('.L', '.LON')):
+        prev_close = fetch_previous_close_stooq(symbol)
+        if prev_close is not None:
+            return prev_close
+
+    prev_close = fetch_previous_close_yfinance(symbol)
+    return prev_close
+
+def apply_previous_close_backfill(symbol, quote):
+    if not isinstance(quote, dict):
+        return quote
+
+    current_price = quote.get('regularMarketPrice') or quote.get('price')
+    previous_close = quote.get('previousClose')
+    currency = quote.get('currency')
+
+    if not needs_prev_close_backfill(symbol, current_price, previous_close, currency):
+        return quote
+
+    price_value = None
+    try:
+        price_value = float(current_price)
+    except Exception:
+        price_value = None
+
+    epsilon = max(0.0001, (price_value or 0) * 0.0001)
+
+    print(f"Prev close backfill needed for {symbol}. current={current_price} prev={previous_close} currency={currency}", file=sys.stderr)
+
+    cached_prev = get_cached_prev_close(symbol)
+    if cached_prev is not None:
+        if symbol.upper().endswith('.XC'):
+            print(f"Prev close cache bypassed for {symbol} to refetch history", file=sys.stderr)
+            cached_prev = None
+        elif price_value is not None and abs(cached_prev - price_value) <= epsilon and is_uk_symbol(symbol):
+            print(f"Prev close cache matches current price for {symbol}; refetching history", file=sys.stderr)
+            cached_prev = None
+        else:
+            print(f"Prev close backfill using cached value for {symbol}: {cached_prev}", file=sys.stderr)
+            quote['previousClose'] = cached_prev
+            return quote
+
+    fetched_prev = fetch_previous_close_from_history(symbol)
+    if fetched_prev is None:
+        print(f"Prev close backfill failed for {symbol}: no history result", file=sys.stderr)
+        return quote
+
+    if symbol.upper().endswith('.XC') and price_value is not None:
+        try:
+            ratio = float(price_value) / float(fetched_prev)
+        except Exception:
+            ratio = None
+        if ratio is not None:
+            if ratio > 50 and ratio < 200:
+                fetched_prev = float(fetched_prev) * 100.0
+                print(f"Prev close scale adjust for {symbol}: matched current price scale (x100)", file=sys.stderr)
+            elif ratio > 0 and ratio < 0.02:
+                fetched_prev = float(fetched_prev) / 100.0
+                print(f"Prev close scale adjust for {symbol}: matched current price scale (/100)", file=sys.stderr)
+
+    try:
+        prev_close_value = float(previous_close) if previous_close is not None else None
+    except Exception:
+        prev_close_value = None
+
+    if prev_close_value is None or not math.isfinite(prev_close_value) or prev_close_value <= 0 or (price_value is not None and abs(fetched_prev - prev_close_value) > epsilon):
+        quote['previousClose'] = fetched_prev
+        print(f"Prev close backfill applied for {symbol}: {fetched_prev}", file=sys.stderr)
+    else:
+        print(f"Prev close backfill skipped for {symbol}: history close ~= current prev close", file=sys.stderr)
+
+    if price_value is None or abs(fetched_prev - price_value) > epsilon or not is_uk_symbol(symbol):
+        set_cached_prev_close(symbol, fetched_prev)
+    return quote
+
+def validated_provider_quote(symbol, provider, quote):
+    quote = apply_previous_close_backfill(symbol, quote)
+    if is_valid_quote(quote):
+        print(f"Using {provider} for real-time data: {symbol}", file=sys.stderr)
+        return quote
+    if quote is not None:
+        print(
+            f"{provider} returned an incomplete quote for {symbol}; trying the next provider",
+            file=sys.stderr
+        )
+    return None
 
 def fetch_real_time_quote(symbol):
     """Fetch real-time quote using yfinance first, FMP as fallback"""
@@ -589,14 +1224,37 @@ def fetch_real_time_quote(symbol):
     # For now sticking to yfinance -> FMP as requested, only historical has deep problems
     if YFINANCE_AVAILABLE:
         result = fetch_real_time_quote_yfinance(symbol)
-        if result:
-            print(f"Using yfinance for real-time data: {symbol}", file=sys.stderr)
+        result = validated_provider_quote(symbol, "yfinance", result)
+        if result is not None:
             return result
-        else:
-            print(f"yfinance failed for {symbol}, falling back to FMP", file=sys.stderr)
-    
-    print(f"Using FMP for real-time data: {symbol}", file=sys.stderr)
-    return fetch_real_time_quote_fmp(symbol)
+
+    twelvedata_result = fetch_real_time_quote_twelvedata(symbol)
+    twelvedata_result = validated_provider_quote(symbol, "Twelve Data", twelvedata_result)
+    if twelvedata_result is not None:
+        return twelvedata_result
+
+    yahoo_result = fetch_real_time_quote_yahoo_api(symbol)
+    yahoo_result = validated_provider_quote(symbol, "Yahoo quote API", yahoo_result)
+    if yahoo_result is not None:
+        return yahoo_result
+
+    fmp_result = fetch_real_time_quote_fmp(symbol)
+    return validated_provider_quote(symbol, "FMP", fmp_result)
+
+def yfinance_reported_currency(ticker):
+    """Currency reported by yfinance for a ticker (history metadata, then fast_info, then info)."""
+    for getter in (
+        lambda: ticker.history_metadata.get('currency'),
+        lambda: ticker.fast_info['currency'],
+        lambda: ticker.info.get('currency'),
+    ):
+        try:
+            value = getter()
+            if value:
+                return value
+        except Exception:
+            continue
+    return None
 
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
@@ -621,6 +1279,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 
             historical_data = []
             prev_close_raw = None
+            _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
             
             for date, row in hist.iterrows():
                 close_price_raw = float(row['Close'])
@@ -630,7 +1289,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
                 else:
                     previous_close_raw = float(row['Open'])
                 
-                if symbol.upper().endswith('.L'):
+                if uses_pence:
                     close_price = close_price_raw / 100.0
                     previous_close = previous_close_raw / 100.0
                 else:
@@ -650,7 +1309,7 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
             return historical_data
             
         except Exception as e:
-            print(f"yfinance historical fetch failed for {symbol} (attempt {attempt+1}): {e}", file=sys.stderr)
+            log_error(f"yfinance historical fetch failed for {symbol} (attempt {attempt+1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)
     
@@ -673,6 +1332,7 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
         return []
     
     historical_data = []
+    reported_currency = data.get('currency')
     for entry in data['historical']:
         try:
             date_obj = datetime.strptime(entry['date'], '%Y-%m-%d')
@@ -681,7 +1341,8 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
             close_price = entry['close']
             previous_close = entry.get('open', close_price)
             
-            if api_symbol.endswith('.L'):
+            _, uses_pence = normalize_currency(entry.get('currency') or reported_currency, api_symbol)
+            if uses_pence:
                 close_price = close_price / 100.0
                 previous_close = previous_close / 100.0
             
@@ -692,7 +1353,7 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
                 'previousClose': previous_close
             })
         except Exception as e:
-            print(f"Error processing historical entry for {api_symbol}: {e}", file=sys.stderr)
+            log_error(f"Error processing historical entry for {api_symbol}: {e}")
             continue
     
     historical_data.sort(key=lambda x: x['timestamp'])
@@ -700,42 +1361,30 @@ def fetch_historical_data_fmp(symbol, start_date, end_date):
     return historical_data
 
 def get_fetch_priority(symbol):
-    """Get the priority list of fetch methods for historical data"""
-    # Default priority
+    """Return the configured provider order for historical data.
+
+    DATA_SOURCE_PRIORITY may be a list or a JSON-encoded list; a plain string is
+    treated as a single provider. The user's order is respected for all symbols
+    (including LSE listings, where a paid FMP plan may be available).
+    """
     default_priority = ["yfinance", "fmp"]
-    
-    # Read configured priority
-    # Expecting list of strings in config like ["yfinance", "twelvedata", "stooq", "fmp"]
     config_priority = CONFIG.get("DATA_SOURCE_PRIORITY")
-    
-    # Normalize config priority if string or json string
+
     if isinstance(config_priority, str):
         try:
             config_priority = json.loads(config_priority)
-        except:
+        except (TypeError, ValueError):
             config_priority = [config_priority]
-            
-    priority = config_priority if isinstance(config_priority, list) else default_priority
-    
-    # Filter out unavailable methods or auto-optimize
-    # e.g. skip FMP for LSE if key is not present or free? 
-    # Actually the task says "skip FMP for LSE if free".
-    # We don't easily know if the key is free or paid here without checking headers/response.
-    # But we can respect the user's configured order.
-    
-    # Special handling for LSE to avoid FMP 403 spam if user hasn't configured it
-    if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
-        # If FMP is in the list, and we know it's likely to fail for LSE on free tier,
-        # we might want to deprioritize it or remove it, BUT user might have paid tier.
-        # So we respect user order.
-        pass
-        
-    return priority
+
+    return config_priority if isinstance(config_priority, list) else default_priority
 
 def fetch_historical_data(symbol, start_date, end_date):
     """Fetch historical data using configured priority sources"""
-    
-    priority = get_fetch_priority(symbol)
+    fetch_symbol = resolve_symbol_alias(symbol)
+    if fetch_symbol != symbol:
+        print(f"Historical alias: {symbol} -> {fetch_symbol}", file=sys.stderr)
+
+    priority = get_fetch_priority(fetch_symbol)
     
     # Ensure we always have valid sources in the list
     # Filter duplicates and ensure valid names
@@ -755,7 +1404,10 @@ def fetch_historical_data(symbol, start_date, end_date):
             valid_sources.append(source)
             seen.add(source)
             
-    print(f"Fetch priority for {symbol}: {valid_sources}", file=sys.stderr)
+    if fetch_symbol == symbol:
+        print(f"Fetch priority for {symbol}: {valid_sources}", file=sys.stderr)
+    else:
+        print(f"Fetch priority for {fetch_symbol} (requested {symbol}): {valid_sources}", file=sys.stderr)
     
     last_error = None
     
@@ -764,23 +1416,26 @@ def fetch_historical_data(symbol, start_date, end_date):
             result = None
             if source == "yfinance":
                 if YFINANCE_AVAILABLE:
-                    result = fetch_historical_data_yfinance(symbol, start_date, end_date)
+                    result = fetch_historical_data_yfinance(fetch_symbol, start_date, end_date)
                 else:
                     print("Skipping yfinance (not available)", file=sys.stderr)
             elif source == "fmp":
                 # For LSE, only try FMP if it's high priority or others failed
-                result = fetch_historical_data_fmp(symbol, start_date, end_date)
+                result = fetch_historical_data_fmp(fetch_symbol, start_date, end_date)
             elif source == "twelvedata":
-                result = fetch_historical_data_twelvedata(symbol, start_date, end_date)
+                result = fetch_historical_data_twelvedata(fetch_symbol, start_date, end_date)
             elif source == "stooq":
-                result = fetch_historical_data_stooq(symbol, start_date, end_date)
+                result = fetch_historical_data_stooq(fetch_symbol, start_date, end_date)
                 
             if result:
+                if fetch_symbol != symbol:
+                    for entry in result:
+                        entry['symbol'] = symbol
                 print(f"Successfully fetched historical data from {source} for {symbol}", file=sys.stderr)
                 return result
                 
         except Exception as e:
-            print(f"Source {source} failed for {symbol}: {e}", file=sys.stderr)
+            log_error(f"Source {source} failed for {symbol}: {e}")
             
             # Check for specific errors to handle gracefully
             is_403 = False
@@ -822,7 +1477,7 @@ def fetch_batch(symbols):
                 
             # Fetch from API using enhanced method
             quote_data = fetch_real_time_quote(symbol)
-            if quote_data:
+            if is_valid_quote(quote_data):
                 # Return the enhanced quote data directly (JSON format)
                 set_cache(symbol, quote_data)
                 results[symbol] = quote_data
@@ -834,10 +1489,23 @@ def fetch_batch(symbols):
             time.sleep(1.0)  # 1 second delay between requests to be more conservative
             
         except Exception as e:
-            print(f"Error fetching {symbol}: {e}", file=sys.stderr)
+            log_error(f"Error fetching {symbol}: {e}")
             results[symbol] = None
     
     return results
+
+def make_json_safe(value):
+    """Recursively replace non-finite floats so emitted JSON is standards compliant."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(item) for item in value]
+    return value
+
+def print_json(value):
+    print(json.dumps(make_json_safe(value), allow_nan=False))
 
 def fetch_single(symbol):
     """Fallback to single fetch logic"""
@@ -850,7 +1518,7 @@ def fetch_single(symbol):
             
             return (timestamp_str, close_price, close_price, close_price, prev_close)
     except Exception as e:
-        print(f"Single fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"Single fetch failed for {symbol}: {e}")
     return None
 
 def output_error(error_code, message, symbol=None, retry_after=None):
@@ -858,7 +1526,7 @@ def output_error(error_code, message, symbol=None, retry_after=None):
     error_obj = {
         'error': True,
         'error_code': error_code,
-        'message': message,
+        'message': sanitize_log_message(message),
         'timestamp': int(time.time())
     }
     if symbol:
@@ -866,7 +1534,20 @@ def output_error(error_code, message, symbol=None, retry_after=None):
     if retry_after:
         error_obj['retry_after'] = retry_after
 
-    print(json.dumps(error_obj))
+    print_json(error_obj)
+
+def finite_ohlc_value(value):
+    """A price as a finite float, or None when missing or non-finite."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+def ohlc_volume(value):
+    """Share count as an int; a missing or non-finite volume becomes 0."""
+    number = finite_ohlc_value(value)
+    return int(number) if number is not None else 0
 
 def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
     """Fetch OHLC data using yfinance"""
@@ -880,19 +1561,19 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
         if hist.empty:
             return None
 
+        # Scale by the currency yfinance reports, as the history path does, so
+        # a .L listing quoted in GBP or USD is not divided by 100.
+        _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
+        divisor = 100.0 if uses_pence else 1.0
+
         ohlc_data = []
         for date, row in hist.iterrows():
-            open_price = float(row['Open'])
-            high_price = float(row['High'])
-            low_price = float(row['Low'])
-            close_price = float(row['Close'])
-            volume = int(row['Volume'])
-
-            if symbol.upper().endswith('.L'):
-                open_price /= 100.0
-                high_price /= 100.0
-                low_price /= 100.0
-                close_price /= 100.0
+            prices = [finite_ohlc_value(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
+            # A row with a missing price (often today's partial bar) would become
+            # null in the JSON and fail decoding of the whole response, so skip it.
+            if any(price is None for price in prices):
+                continue
+            open_price, high_price, low_price, close_price = (price / divisor for price in prices)
 
             ohlc_data.append({
                 'timestamp': int(date.timestamp()),
@@ -901,14 +1582,18 @@ def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
                 'high': high_price,
                 'low': low_price,
                 'close': close_price,
-                'volume': volume
+                # Indices and FX often have no volume; that must not fail the fetch.
+                'volume': ohlc_volume(row['Volume'])
             })
+
+        if not ohlc_data:
+            return None
 
         print(f"yfinance retrieved {len(ohlc_data)} OHLC data points for {symbol} (period={period}, interval={interval})", file=sys.stderr)
         return ohlc_data
 
     except Exception as e:
-        print(f"yfinance OHLC fetch failed for {symbol}: {e}", file=sys.stderr)
+        log_error(f"yfinance OHLC fetch failed for {symbol}: {e}")
         return None
 
 def fetch_ohlc_data(symbol, period='1mo', interval='1d'):
@@ -939,7 +1624,7 @@ def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
             time.sleep(1.0)
 
         except Exception as e:
-            print(f"Error fetching OHLC for {symbol}: {e}", file=sys.stderr)
+            log_error(f"Error fetching OHLC for {symbol}: {e}")
             results[symbol] = None
 
     return results
@@ -949,6 +1634,7 @@ def main():
     parser.add_argument('--historical', action='store_true', help='Fetch historical price data')
     parser.add_argument('--ohlc', action='store_true', help='Fetch OHLC (candlestick) data')
     parser.add_argument('--batch-ohlc', action='store_true', help='Fetch OHLC data for multiple symbols')
+    parser.add_argument('--json', action='store_true', help='Emit the unified per-symbol JSON response')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
@@ -985,16 +1671,16 @@ def main():
             else:
                 message = f"Unknown service: {service}"
                 
-            print(json.dumps({
+            print_json({
                 'success': result,
                 'message': message
-            }))
+            })
             
         except Exception as e:
-            print(json.dumps({
+            print_json({
                 'success': False,
                 'message': f"Exception during verification: {str(e)}"
-            }))
+            })
         sys.exit(0)
 
     if args.ohlc or args.batch_ohlc:
@@ -1012,12 +1698,12 @@ def main():
                 for symbol, data in ohlc_results.items():
                     if data:
                         output_data[symbol] = data
-                print(json.dumps(output_data))
+                print_json(output_data)
             else:
                 symbol = symbols[0]
                 ohlc_data = fetch_ohlc_data(symbol, period=args.period, interval=args.interval)
                 if ohlc_data:
-                    print(json.dumps(ohlc_data))
+                    print_json(ohlc_data)
                 else:
                     output_error('NO_DATA', f'No OHLC data available for {symbol}', symbol=symbol)
         except Exception as e:
@@ -1041,7 +1727,7 @@ def main():
         try:
             historical_data = fetch_historical_data(symbol, args.start_date, args.end_date)
             if historical_data:
-                print(json.dumps(historical_data))
+                print_json(historical_data)
             else:
                 output_error('NO_DATA', f'No historical data available for {symbol}', symbol=symbol)
         
@@ -1082,6 +1768,8 @@ def main():
                 for symbol, res in batch_results.items():
                     if res:
                         results[symbol] = res
+                    elif args.json:
+                        results[symbol] = None
                     else:
                         single_res = fetch_single(symbol)
                         if single_res:
@@ -1094,7 +1782,27 @@ def main():
                 output_error('NETWORK_ERROR', f'Network error: {str(e)}')
                 sys.exit(1)
 
-        if len(symbols) == 1:
+        if args.json:
+            envelopes = []
+            for symbol in symbols:
+                result = results.get(symbol)
+                if is_valid_quote(result):
+                    envelopes.append({
+                        'symbol': symbol,
+                        'success': True,
+                        'quote': result,
+                    })
+                else:
+                    envelopes.append({
+                        'symbol': symbol,
+                        'success': False,
+                        'error': {
+                            'error_code': 'NO_DATA',
+                            'message': f'No data received for {symbol}',
+                        },
+                    })
+            print_json(envelopes)
+        elif len(symbols) == 1:
             symbol = symbols[0]
             res = results.get(symbol)
             if res:
@@ -1124,7 +1832,7 @@ def main():
                     })
 
             if json_results:
-                print(json.dumps(json_results))
+                print_json(json_results)
             else:
                 output_error('NO_DATA', 'No data received for any symbols')
 

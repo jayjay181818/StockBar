@@ -1,5 +1,5 @@
-import Foundation
-import CoreData
+@preconcurrency import CoreData
+@preconcurrency import Foundation
 
 /// Errors that can occur during trade data migration
 enum TradeDataMigrationError: Error {
@@ -10,7 +10,7 @@ enum TradeDataMigrationError: Error {
 }
 
 /// Service responsible for migrating trade data from UserDefaults to Core Data
-class TradeDataMigrationService {
+final class TradeDataMigrationService: @unchecked Sendable {
     
     private let tradeDataService = TradeDataService()
     private let decoder = JSONDecoder()
@@ -36,9 +36,15 @@ class TradeDataMigrationService {
         Task { await logger.info("🔄 MIGRATION: Starting trade data migration from UserDefaults to Core Data") }
         
         // Check if migration has already been completed
-        if UserDefaults.standard.bool(forKey: migrationKey) {
-            Task { await logger.info("✅ MIGRATION: Trade data migration already completed") }
-            return
+        if StockbarRuntimeStorage.userDefaults.bool(forKey: migrationKey) {
+            let hasLegacyTrades = StockbarRuntimeStorage.userDefaults.data(forKey: "usertrades") != nil
+            let hasCoreDataTrades = await tradeDataService.areTradesMigrated()
+            if !hasLegacyTrades || hasCoreDataTrades {
+                Task { await logger.info("✅ MIGRATION: Trade data migration already completed") }
+                return
+            }
+
+            Task { await logger.warning("⚠️ MIGRATION: Migration was marked complete but Core Data has no trades; rerunning from UserDefaults") }
         }
         
         do {
@@ -58,7 +64,7 @@ class TradeDataMigrationService {
             throw error
         }
         
-        if UserDefaults.standard.object(forKey: "usertrades") == nil && UserDefaults.standard.object(forKey: "tradingInfoData") == nil {
+        if StockbarRuntimeStorage.userDefaults.object(forKey: "usertrades") == nil && StockbarRuntimeStorage.userDefaults.object(forKey: "tradingInfoData") == nil {
             Task { await logger.info("⏭️ MIGRATION: Trades already migrated, skipping") }
         }
         
@@ -76,12 +82,12 @@ class TradeDataMigrationService {
             throw error
         }
         
-        if UserDefaults.standard.object(forKey: "tradingInfoData") == nil {
+        if StockbarRuntimeStorage.userDefaults.object(forKey: "tradingInfoData") == nil {
             Task { await logger.info("⏭️ MIGRATION: Trading info already migrated, skipping") }
         }
         
         // Mark migration as completed
-        UserDefaults.standard.set(true, forKey: migrationKey)
+        StockbarRuntimeStorage.userDefaults.set(true, forKey: migrationKey)
         Task { await logger.info("🎉 MIGRATION: Complete trade data migration successful") }
     }
     
@@ -89,10 +95,9 @@ class TradeDataMigrationService {
         Task { await logger.info("🔄 MIGRATION: Migrating trades from UserDefaults") }
         
         // Check if UserDefaults has trade data (using correct key)
-        guard let tradesData = UserDefaults.standard.data(forKey: "usertrades") else {
+        guard let tradesData = StockbarRuntimeStorage.userDefaults.data(forKey: "usertrades") else {
             Task { await logger.info("ℹ️ MIGRATION: No trades found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
-            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
@@ -100,7 +105,8 @@ class TradeDataMigrationService {
         let trades: [Trade]
         do {
             trades = try JSONDecoder().decode([Trade].self, from: tradesData)
-            Task { await logger.info("📊 MIGRATION: Found \(trades.count) trades in UserDefaults") }
+                .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
+            Task { await logger.info("📊 MIGRATION: Found \(trades.count) portfolio trades in UserDefaults") }
         } catch {
             Task { await logger.error("❌ MIGRATION: Failed to decode trades from UserDefaults: \(error)") }
             throw TradeDataMigrationError.decodingFailed(error)
@@ -114,7 +120,6 @@ class TradeDataMigrationService {
             // Verify the migration
             let migratedTrades = try await tradeDataService.loadAllTrades()
             Task { await logger.info("✅ MIGRATION: Verified \(migratedTrades.count) trades in Core Data") }
-            
         } catch {
             Task { await logger.error("❌ MIGRATION: Failed to save trades to Core Data: \(error)") }
             throw error
@@ -125,10 +130,9 @@ class TradeDataMigrationService {
         Task { await logger.info("🔄 MIGRATION: Migrating trading info from UserDefaults") }
         
         // Check if UserDefaults has trading info data (using correct key)
-        guard let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfoData") else {
+        guard let tradingInfoData = StockbarRuntimeStorage.userDefaults.data(forKey: "tradingInfoData") else {
             Task { await logger.info("ℹ️ MIGRATION: No trading info found in UserDefaults, creating empty Core Data storage") }
             try backupUserDefaultsData()
-            UserDefaults.standard.set(true, forKey: migrationKey)
             return
         }
         
@@ -150,7 +154,6 @@ class TradeDataMigrationService {
             // Verify the migration
             let migratedTradingInfo = try await tradeDataService.loadAllTradingInfo()
             Task { await logger.info("✅ MIGRATION: Verified trading info for \(migratedTradingInfo.count) symbols in Core Data") }
-            
         } catch {
             Task { await logger.error("❌ MIGRATION: Failed to save trading info to Core Data: \(error)") }
             throw error
@@ -160,25 +163,28 @@ class TradeDataMigrationService {
     private func backupUserDefaultsData() throws {
         Task { await logger.info("💾 MIGRATION: Creating backup of UserDefaults trade data") }
         
-        let documentDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let backupDirectory = StockbarRuntimeStorage
+            .bundleApplicationSupportDirectory()
+            .appendingPathComponent("Migration Backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
         
         // Backup trades
-        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
-            let tradesBackupURL = documentDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
+        if let tradesData = StockbarRuntimeStorage.userDefaults.data(forKey: "usertrades") {
+            let tradesBackupURL = backupDirectory.appendingPathComponent("trades_backup_\(Date().timeIntervalSince1970).json")
             try tradesData.write(to: tradesBackupURL)
             Task { await logger.info("💾 MIGRATION: Trades backup saved to \(tradesBackupURL.path)") }
         }
         
         // Backup trading info
-        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
-            let tradingInfoBackupURL = documentDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
+        if let tradingInfoData = StockbarRuntimeStorage.userDefaults.data(forKey: "tradingInfoData") {
+            let tradingInfoBackupURL = backupDirectory.appendingPathComponent("tradingInfo_backup_\(Date().timeIntervalSince1970).json")
             try tradingInfoData.write(to: tradingInfoBackupURL)
             Task { await logger.info("💾 MIGRATION: Trading info backup saved to \(tradingInfoBackupURL.path)") }
         }
         
         // Backup other user data
-        let userDataDict = UserDefaults.standard.dictionaryRepresentation()
-        let userDataBackupURL = documentDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
+        let userDataDict = StockbarRuntimeStorage.userDefaults.dictionaryRepresentation()
+        let userDataBackupURL = backupDirectory.appendingPathComponent("user_data_backup_\(Date().timeIntervalSince1970).plist")
         (userDataDict as NSDictionary).write(to: userDataBackupURL, atomically: true)
         Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
     }
@@ -188,8 +194,8 @@ class TradeDataMigrationService {
         
         // For safety, we'll keep the UserDefaults data as backup
         // In a future version, we can add an option to clean it up
-        // UserDefaults.standard.removeObject(forKey: "trades")
-        // UserDefaults.standard.removeObject(forKey: "tradingInfo")
+        // StockbarRuntimeStorage.userDefaults.removeObject(forKey: "trades")
+        // StockbarRuntimeStorage.userDefaults.removeObject(forKey: "tradingInfo")
         
         Task { await logger.info("ℹ️ MIGRATION: UserDefaults cleanup skipped for safety - data remains as backup") }
     }
@@ -198,10 +204,12 @@ class TradeDataMigrationService {
         Task { await logger.info("🔍 MIGRATION: Validating migration integrity") }
         
         // Compare UserDefaults trades with Core Data trades
-        if let tradesData = UserDefaults.standard.data(forKey: "trades") {
+        if let tradesData = StockbarRuntimeStorage.userDefaults.data(forKey: "usertrades") {
             do {
                 let userDefaultsTrades = try JSONDecoder().decode([Trade].self, from: tradesData)
+                    .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
                 let coreDataTrades = try await tradeDataService.loadAllTrades()
+                    .filter { !SymbolMetadata.isBenchmarkSymbol($0.name) }
                 
                 if userDefaultsTrades.count != coreDataTrades.count {
                     Task { await logger.error("❌ MIGRATION: Trade count mismatch - UserDefaults: \(userDefaultsTrades.count), Core Data: \(coreDataTrades.count)") }
@@ -217,7 +225,6 @@ class TradeDataMigrationService {
                         return false
                     }
                 }
-                
             } catch {
                 Task { await logger.error("❌ MIGRATION: Failed to validate trades: \(error)") }
                 return false
@@ -225,7 +232,7 @@ class TradeDataMigrationService {
         }
         
         // Compare UserDefaults trading info with Core Data trading info
-        if let tradingInfoData = UserDefaults.standard.data(forKey: "tradingInfo") {
+        if let tradingInfoData = StockbarRuntimeStorage.userDefaults.data(forKey: "tradingInfoData") {
             do {
                 let userDefaultsTradingInfo = try JSONDecoder().decode([String: TradingInfo].self, from: tradingInfoData)
                 let coreDataTradingInfo = try await tradeDataService.loadAllTradingInfo()
@@ -236,7 +243,6 @@ class TradeDataMigrationService {
                 } else {
                     Task { await logger.info("✅ MIGRATION: Trading info counts match (\(userDefaultsTradingInfo.count))") }
                 }
-                
             } catch {
                 Task { await logger.error("❌ MIGRATION: Failed to validate trading info: \(error)") }
                 return false

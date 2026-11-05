@@ -8,6 +8,30 @@
 
 import Foundation
 
+struct HistoricalDataStatus: Sendable {
+    let isRunningComprehensive: Bool
+    let isRunningStandard: Bool
+    let lastComprehensiveCheck: Date
+    let nextComprehensiveCheck: Date
+}
+
+enum BackfillOutcome: Codable, Equatable, Sendable {
+    case addedData(Int)
+    case alreadyComplete
+    case earliestDataBoundary
+    case rateLimited
+    case noData
+    case failed
+}
+
+struct BackfillAttemptState: Codable, Equatable, Sendable {
+    var attemptCount: Int
+    var consecutiveFailures: Int
+    var lastAttempt: Date
+    var nextEligibleAt: Date
+    var outcome: BackfillOutcome
+}
+
 /// Service responsible for coordinating historical data backfill operations
 @MainActor
 class HistoricalDataCoordinator {
@@ -20,28 +44,35 @@ class HistoricalDataCoordinator {
     private var isRunningStandardCheck = false
     private var hasRunStartupBackfill = false
     private var lastComprehensiveCheckTime: Date = Date.distantPast
+    private let attemptStateKey = "historicalBackfillAttemptState.v1"
     
     // MARK: - Configuration
     
     /// Cooldown period between comprehensive checks (read from UserDefaults)
     private var comprehensiveCheckCooldown: TimeInterval {
-        let hours = UserDefaults.standard.integer(forKey: "backfillCooldownHours")
+        let hours = StockbarRuntimeStorage.userDefaults.integer(forKey: "backfillCooldownHours")
         return hours == 0 ? 1800 : TimeInterval(hours * 3600)
     }
     
     /// Backfill schedule mode (read from UserDefaults)
     private var backfillSchedule: String {
-        UserDefaults.standard.string(forKey: "backfillSchedule") ?? "startup"
+        StockbarRuntimeStorage.userDefaults.string(forKey: "backfillSchedule") ?? "startup"
     }
     
     /// Whether to show notifications for backfill progress
     private var backfillNotifications: Bool {
-        UserDefaults.standard.bool(forKey: "backfillNotifications")
+        StockbarRuntimeStorage.userDefaults.bool(forKey: "backfillNotifications")
     }
+
+    private let benchmarkBackfillDays = 30
+    private let benchmarkCoverageThreshold: Double = 0.10
     
     init(networkService: NetworkService, historicalDataManager: HistoricalDataManager) {
         self.networkService = networkService
         self.historicalDataManager = historicalDataManager
+        if let state = loadAttemptState() {
+            lastComprehensiveCheckTime = state.lastAttempt
+        }
     }
     
     // MARK: - Startup & Scheduling
@@ -70,10 +101,9 @@ class HistoricalDataCoordinator {
         let totalHistoricalSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
         let symbolCount = symbols.count
 
-        // More aggressive check: if we have less than 100 snapshots per symbol (about 4-5 months of data)
-        // force immediate backfill bypassing cooldown
-        if totalHistoricalSnapshots < (symbolCount * 100) {
-            await logger.warning("🔍 STARTUP: Detected minimal historical data (\(totalHistoricalSnapshots) snapshots for \(symbolCount) symbols, avg \(totalHistoricalSnapshots/max(1,symbolCount)) per symbol). Forcing immediate comprehensive backfill bypassing cooldown.")
+        // Minimal data may bypass cooldown only for the first persisted attempt.
+        if totalHistoricalSnapshots < (symbolCount * 100), loadAttemptState() == nil {
+            await logger.warning("🔍 STARTUP: Detected minimal historical data (\(totalHistoricalSnapshots) snapshots for \(symbolCount) symbols, avg \(totalHistoricalSnapshots / max(1, symbolCount)) per symbol). Forcing immediate comprehensive backfill bypassing cooldown.")
             lastComprehensiveCheckTime = Date.distantPast
         }
 
@@ -148,7 +178,12 @@ class HistoricalDataCoordinator {
         }
         
         // Safety check: Don't run too frequently
-        let timeSinceLastCheck = Date().timeIntervalSince(lastComprehensiveCheckTime)
+        let now = Date()
+        if let state = loadAttemptState(), now < state.nextEligibleAt {
+            await logger.info("🔍 COMPREHENSIVE: Skipping until persisted retry time \(state.nextEligibleAt)")
+            return
+        }
+        let timeSinceLastCheck = now.timeIntervalSince(lastComprehensiveCheckTime)
         guard timeSinceLastCheck >= comprehensiveCheckCooldown else {
             await logger.info("🔍 COMPREHENSIVE: Skipping - last check was only \(Int(timeSinceLastCheck/3600)) hours ago (minimum \(Int(comprehensiveCheckCooldown/3600)) hours)")
             return
@@ -180,23 +215,35 @@ class HistoricalDataCoordinator {
             await Task.yield()
             
             let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
-            let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= fiveYearsAgo }
+            let isBenchmark = SymbolMetadata.isBenchmarkSymbol(symbol)
+            let baseCoverageStartDate = isBenchmark
+                ? (calendar.date(byAdding: .day, value: -benchmarkBackfillDays, to: today) ?? today)
+                : fiveYearsAgo
+            var coverageStartDate = baseCoverageStartDate
+            var coverageLabel = isBenchmark ? "\(benchmarkBackfillDays)-day benchmark" : "5-year"
+            if let earliestAvailable = historicalDataManager.earliestAvailableDate(for: symbol),
+               earliestAvailable > baseCoverageStartDate {
+                coverageStartDate = earliestAvailable
+                coverageLabel = "\(coverageLabel) since \(DateFormatter.debug.string(from: earliestAvailable))"
+            }
+            let historicalSnapshots = existingSnapshots.filter { $0.timestamp >= coverageStartDate }
             
             // Count unique days with data in the past 5 years
             let uniqueDays = Set(historicalSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
             
-            // Calculate expected business days over 5 years
-            let daysIn5Years = calendar.dateComponents([.day], from: fiveYearsAgo, to: today).day ?? 0
-            let expectedBusinessDays = max(1, daysIn5Years * 5 / 7)
+            // Calculate expected business days over coverage window
+            let daysInRange = calendar.dateComponents([.day], from: coverageStartDate, to: today).day ?? 0
+            let expectedBusinessDays = max(1, daysInRange * 5 / 7)
             
             let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
+            let coverageThreshold = isBenchmark ? benchmarkCoverageThreshold : 0.10
 
             // If we have less than 10% coverage over 5 years, trigger backfill (lowered from 50% for better detection)
-            if coverageRatio < 0.10 {
+            if coverageRatio < coverageThreshold {
                 symbolsNeedingBackfill.append(symbol)
-                await logger.info("📊 COMPREHENSIVE: \(symbol) needs 5-year backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
+                await logger.info("📊 COMPREHENSIVE: \(symbol) needs \(coverageLabel) backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
             } else {
-                await logger.debug("✅ COMPREHENSIVE: \(symbol) has good 5-year coverage - \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
+                await logger.debug("✅ COMPREHENSIVE: \(symbol) has good \(coverageLabel) coverage - \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
             }
         }
         
@@ -207,35 +254,46 @@ class HistoricalDataCoordinator {
 
             await logger.info("🚀 COMPREHENSIVE: Starting automatic 5-year backfill for \(symbolsNeedingBackfill.count) symbols: \(symbolsNeedingBackfill.joined(separator: ", "))")
             await logger.info("⏱️ COMPREHENSIVE: Estimated time: \(symbolsNeedingBackfill.count * 5) minutes (5 years × \(symbolsNeedingBackfill.count) symbols with delays)")
-            await staggeredBackfillHistoricalData(for: symbolsNeedingBackfill)
+            let outcomes = await staggeredBackfillHistoricalData(for: symbolsNeedingBackfill)
+            let outcome = aggregate(outcomes)
+            recordAttempt(outcome: outcome)
 
-            if backfillNotifications {
+            if backfillNotifications, case .addedData = outcome {
                 sendBackfillNotification(title: "Historical Data Backfill Complete", message: "Successfully backfilled \(symbolsNeedingBackfill.count) symbols")
             }
-            await logger.info("✅ COMPREHENSIVE: Backfill completed for all \(symbolsNeedingBackfill.count) symbols")
+            await logComprehensiveOutcome(outcome, symbolCount: symbolsNeedingBackfill.count)
         } else {
             await logger.info("✅ COMPREHENSIVE: All symbols have good 5-year historical coverage")
+            recordAttempt(outcome: .alreadyComplete)
         }
     }
     
     // MARK: - Backfill Execution
     
     /// Staggered backfill that processes symbols with delays to prevent UI blocking
-    private func staggeredBackfillHistoricalData(for symbols: [String]) async {
+    private func staggeredBackfillHistoricalData(for symbols: [String]) async -> [BackfillOutcome] {
         await logger.info("⏱️ STAGGERED: Starting staggered 5-year backfill for \(symbols.count) symbols")
         let startTime = Date()
+        var outcomes: [BackfillOutcome] = []
 
         for (index, symbol) in symbols.enumerated() {
             let progress = "\(index + 1)/\(symbols.count)"
             await logger.info("⏱️ STAGGERED: [\(progress)] Processing \(symbol)...")
 
-            await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
+            let symbolOutcomes = await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
+            outcomes.append(contentsOf: symbolOutcomes)
+            let symbolOutcome = aggregate(symbolOutcomes)
 
             // Log progress update
             let elapsed = Date().timeIntervalSince(startTime)
             let avgTimePerSymbol = elapsed / Double(index + 1)
             let remaining = Int(avgTimePerSymbol * Double(symbols.count - index - 1) / 60)
-            await logger.info("✅ STAGGERED: [\(progress)] Completed \(symbol). Estimated time remaining: ~\(remaining) minutes")
+            await logStaggeredOutcome(
+                symbolOutcome,
+                symbol: symbol,
+                progress: progress,
+                remainingMinutes: remaining
+            )
 
             if index < symbols.count - 1 {
                 await logger.debug("⏱️ STAGGERED: Waiting 10 seconds before next symbol...")
@@ -244,7 +302,8 @@ class HistoricalDataCoordinator {
         }
 
         let totalTime = Int(Date().timeIntervalSince(startTime) / 60)
-        await logger.info("🏁 STAGGERED: Completed staggered 5-year backfill for all \(symbols.count) symbols in \(totalTime) minutes")
+        await logger.info("🏁 STAGGERED: Finished backfill attempts for \(symbols.count) symbols in \(totalTime) minutes")
+        return outcomes
     }
     
     /// Backfills historical data for specified symbols in chunks to avoid hanging
@@ -252,7 +311,7 @@ class HistoricalDataCoordinator {
         await logger.info("🚀 CHUNKED BACKFILL: Starting 5-year chunked historical data backfill")
         
         for symbol in symbols {
-            await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
+            _ = await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5)
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
         
@@ -260,9 +319,14 @@ class HistoricalDataCoordinator {
     }
     
     /// Backfills historical data for a single symbol in yearly chunks
-    private func backfillHistoricalDataForSymbol(_ symbol: String, yearsToFetch: Int) async {
+    private func backfillHistoricalDataForSymbol(_ symbol: String, yearsToFetch: Int) async -> [BackfillOutcome] {
+        if SymbolMetadata.isBenchmarkSymbol(symbol) {
+            return [await backfillBenchmarkHistory(for: symbol)]
+        }
+
         let calendar = Calendar.current
         let endDate = Date()
+        let earliestAvailableDate = historicalDataManager.earliestAvailableDate(for: symbol)
         
         await logger.info("🔄 CHUNKED BACKFILL: Starting \(yearsToFetch)-year backfill for \(symbol)")
         
@@ -287,9 +351,25 @@ class HistoricalDataCoordinator {
         }
         
         // Fetch data in yearly chunks, working backwards from current date
+        var outcomes: [BackfillOutcome] = []
         for yearOffset in 1...yearsToFetch {
             let chunkEndDate = calendar.date(byAdding: .year, value: -(yearOffset - 1), to: endDate) ?? endDate
-            let chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
+            var chunkStartDate = calendar.date(byAdding: .year, value: -yearOffset, to: endDate) ?? endDate
+
+            if let earliestAvailableDate {
+                if chunkEndDate <= earliestAvailableDate {
+                    await logger.info("⏭️ CHUNKED BACKFILL: \(symbol) skipping year \(yearOffset) - reached earliest available data at \(DateFormatter.debug.string(from: earliestAvailableDate))")
+                    break
+                }
+                if chunkStartDate < earliestAvailableDate {
+                    chunkStartDate = earliestAvailableDate
+                }
+            }
+
+            if chunkStartDate >= chunkEndDate {
+                await logger.info("⏭️ CHUNKED BACKFILL: \(symbol) skipping year \(yearOffset) - invalid range after bounds adjustment")
+                continue
+            }
 
             // Check if this chunk has significant gaps
             let daysInChunk = calendar.dateComponents([.day], from: chunkStartDate, to: chunkEndDate).day ?? 0
@@ -309,16 +389,52 @@ class HistoricalDataCoordinator {
             
             await logger.info("📅 CHUNKED BACKFILL: Fetching year \(yearOffset) for \(symbol) (\(chunkExistingDates.count)/\(expectedBusinessDays) days, \(String(format: "%.1f", coverageRatio * 100))% coverage)")
             
-            await fetchHistoricalDataChunk(for: symbol, from: chunkStartDate, to: chunkEndDate, yearOffset: yearOffset)
+            let outcome = await fetchHistoricalDataChunk(
+                for: symbol,
+                from: chunkStartDate,
+                to: chunkEndDate,
+                yearOffset: yearOffset
+            )
+            outcomes.append(outcome)
+            if outcome == .earliestDataBoundary {
+                await logger.info("⏹️ CHUNKED BACKFILL: Stopping older chunks for \(symbol) after reaching earliest available data")
+                break
+            }
+            if outcome == .rateLimited {
+                await logger.warning("⏹️ CHUNKED BACKFILL: Rate limited; deferring remaining chunks for \(symbol)")
+                break
+            }
+            if outcome == .failed {
+                await logger.warning("⏹️ CHUNKED BACKFILL: Fetch failed; deferring remaining chunks for \(symbol)")
+                break
+            }
             
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         
         await logger.info("✅ CHUNKED BACKFILL: Completed \(yearsToFetch)-year backfill for \(symbol)")
+        return outcomes.isEmpty ? [.alreadyComplete] : outcomes
+    }
+
+    private func backfillBenchmarkHistory(for symbol: String) async -> BackfillOutcome {
+        let calendar = Calendar.current
+        let endDate = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -benchmarkBackfillDays, to: endDate) else {
+            await logger.warning("⚠️ BENCHMARK: Unable to compute backfill window for \(symbol)")
+            return .failed
+        }
+
+        await logger.info("🧭 BENCHMARK: Backfilling last \(benchmarkBackfillDays) days for \(symbol)")
+        return await fetchHistoricalDataChunk(for: symbol, from: startDate, to: endDate, yearOffset: 1)
     }
     
     /// Fetches a single chunk of historical data
-    private func fetchHistoricalDataChunk(for symbol: String, from startDate: Date, to endDate: Date, yearOffset: Int) async {
+    private func fetchHistoricalDataChunk(
+        for symbol: String,
+        from startDate: Date,
+        to endDate: Date,
+        yearOffset: Int
+    ) async -> BackfillOutcome {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         
@@ -344,22 +460,46 @@ class HistoricalDataCoordinator {
                 
                 if !newSnapshots.isEmpty {
                     historicalDataManager.addImportedSnapshots(newSnapshots, for: symbol)
+                    BackfillScheduler.shared.historyDidChange()
                     await logger.info("✅ CHUNKED BACKFILL: Added \(newSnapshots.count) new data points for \(symbol) chunk \(yearOffset)")
                     
                     if let first = newSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).first,
                        let last = newSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).last {
                         await logger.info("📊 CHUNKED BACKFILL: \(symbol) chunk \(yearOffset) range: \(dateFormatter.string(from: first.timestamp)) to \(dateFormatter.string(from: last.timestamp))")
                     }
+                    return .addedData(newSnapshots.count)
                 } else {
                     await logger.info("ℹ️ CHUNKED BACKFILL: No new data needed for \(symbol) chunk \(yearOffset) - all dates already exist")
+                    return .alreadyComplete
                 }
             } else {
                 await logger.warning("⚠️ CHUNKED BACKFILL: No data received for \(symbol) chunk \(yearOffset)")
+                return .noData
             }
-            
+        } catch let error as ProviderAccessError {
+            await logger.debug(
+                "CHUNKED BACKFILL: \(symbol) skipped because provider access is disabled: \(error.localizedDescription)"
+            )
+            return .failed
+        } catch let error as NetworkError {
+            if case let .noData(details) = error,
+               let message = details?.lowercased(),
+               message.contains("no historical data available") {
+                historicalDataManager.recordEarliestAvailableDate(endDate, for: symbol)
+                await logger.warning("⛔️ CHUNKED BACKFILL: \(symbol) reported no historical data prior to \(dateFormatter.string(from: endDate))")
+                return .earliestDataBoundary
+            }
+            if case .rateLimit = error {
+                await logger.warning("❌ CHUNKED BACKFILL: Rate limited for \(symbol) chunk \(yearOffset)")
+                return .rateLimited
+            }
+            await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
+            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
+            return .failed
         } catch {
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
             await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
+            return .failed
         }
     }
     
@@ -373,14 +513,18 @@ class HistoricalDataCoordinator {
         }
         
         await logger.info("🚀 MANUAL TRIGGER: Starting full 5-year historical backfill for \(filteredSymbols.count) symbols")
-        await backfillHistoricalData(for: filteredSymbols)
+        var outcomes: [BackfillOutcome] = []
+        for symbol in filteredSymbols {
+            outcomes.append(contentsOf: await backfillHistoricalDataForSymbol(symbol, yearsToFetch: 5))
+        }
+        recordAttempt(outcome: aggregate(outcomes))
         await logger.info("🏁 MANUAL TRIGGER: Full 5-year historical backfill completed")
     }
     
     /// Returns the current status of automatic historical data checking
-    public func getHistoricalDataStatus() -> (isRunningComprehensive: Bool, isRunningStandard: Bool, lastComprehensiveCheck: Date, nextComprehensiveCheck: Date) {
+    public func getHistoricalDataStatus() -> HistoricalDataStatus {
         let nextCheck = lastComprehensiveCheckTime.addingTimeInterval(comprehensiveCheckCooldown)
-        return (
+        return HistoricalDataStatus(
             isRunningComprehensive: isRunningComprehensiveCheck,
             isRunningStandard: isRunningStandardCheck,
             lastComprehensiveCheck: lastComprehensiveCheckTime,
@@ -391,11 +535,89 @@ class HistoricalDataCoordinator {
     // MARK: - Notifications
     
     private func sendBackfillNotification(title: String, message: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = message
-        notification.soundName = NSUserNotificationDefaultSoundName
-        NSUserNotificationCenter.default.deliver(notification)
+        Task {
+            await StockbarNotificationPoster.post(title: title, body: message)
+        }
+    }
+
+    private func loadAttemptState() -> BackfillAttemptState? {
+        guard let data = StockbarRuntimeStorage.userDefaults.data(forKey: attemptStateKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(BackfillAttemptState.self, from: data)
+    }
+
+    private func recordAttempt(outcome: BackfillOutcome, now: Date = Date()) {
+        let previous = loadAttemptState()
+        let isFailure = outcome == .failed || outcome == .rateLimited
+        let failures = isFailure ? (previous?.consecutiveFailures ?? 0) + 1 : 0
+        let exponentialDelay = min(86_400, 60 * pow(2, Double(max(0, failures - 1))))
+        let delay = isFailure ? max(comprehensiveCheckCooldown, exponentialDelay) : comprehensiveCheckCooldown
+        let state = BackfillAttemptState(
+            attemptCount: (previous?.attemptCount ?? 0) + 1,
+            consecutiveFailures: failures,
+            lastAttempt: now,
+            nextEligibleAt: now.addingTimeInterval(delay),
+            outcome: outcome
+        )
+        if let data = try? JSONEncoder().encode(state) {
+            StockbarRuntimeStorage.userDefaults.set(data, forKey: attemptStateKey)
+        }
+        lastComprehensiveCheckTime = now
+    }
+
+    private func aggregate(_ outcomes: [BackfillOutcome]) -> BackfillOutcome {
+        if outcomes.contains(.rateLimited) { return .rateLimited }
+        if outcomes.contains(.failed) { return .failed }
+        let added = outcomes.reduce(0) { total, outcome in
+            if case .addedData(let count) = outcome { return total + count }
+            return total
+        }
+        if added > 0 { return .addedData(added) }
+        if outcomes.contains(.earliestDataBoundary) { return .earliestDataBoundary }
+        if outcomes.contains(.noData) { return .noData }
+        return .alreadyComplete
+    }
+
+    private func logStaggeredOutcome(
+        _ outcome: BackfillOutcome,
+        symbol: String,
+        progress: String,
+        remainingMinutes: Int
+    ) async {
+        let suffix = "Estimated time remaining: ~\(remainingMinutes) minutes"
+        switch outcome {
+        case .addedData(let count):
+            await logger.info("✅ STAGGERED: [\(progress)] Added \(count) points for \(symbol). \(suffix)")
+        case .alreadyComplete:
+            await logger.info("✅ STAGGERED: [\(progress)] \(symbol) was already complete. \(suffix)")
+        case .earliestDataBoundary:
+            await logger.info("⛔️ STAGGERED: [\(progress)] \(symbol) reached its earliest-data boundary. \(suffix)")
+        case .rateLimited:
+            await logger.warning("⏸️ STAGGERED: [\(progress)] \(symbol) was rate limited. \(suffix)")
+        case .noData:
+            await logger.warning("⚠️ STAGGERED: [\(progress)] No data was available for \(symbol). \(suffix)")
+        case .failed:
+            await logger.warning("⚠️ STAGGERED: [\(progress)] \(symbol) backfill failed. \(suffix)")
+        }
+    }
+
+    private func logComprehensiveOutcome(_ outcome: BackfillOutcome, symbolCount: Int) async {
+        switch outcome {
+        case .addedData(let count):
+            await logger.info(
+                "✅ COMPREHENSIVE: Added \(count) historical points across \(symbolCount) symbols"
+            )
+        case .alreadyComplete:
+            await logger.info("✅ COMPREHENSIVE: All \(symbolCount) symbols were already complete")
+        case .earliestDataBoundary:
+            await logger.info("⛔️ COMPREHENSIVE: Reached the earliest-data boundary")
+        case .rateLimited:
+            await logger.warning("⏸️ COMPREHENSIVE: Backfill deferred after rate limiting")
+        case .noData:
+            await logger.warning("⚠️ COMPREHENSIVE: Backfill finished without provider data")
+        case .failed:
+            await logger.warning("⚠️ COMPREHENSIVE: Backfill attempt failed and was recorded for retry")
+        }
     }
 }
-

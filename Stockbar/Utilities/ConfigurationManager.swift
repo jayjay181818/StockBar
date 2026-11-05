@@ -1,24 +1,37 @@
 import Foundation
 
 /// Manages storage of configuration data like API keys
-/// Uses plain-text JSON file storage in user's Documents directory
-public class ConfigurationManager {
+/// Uses local app support JSON storage for non-broker market-data settings.
+public final class ConfigurationManager: @unchecked Sendable {
     public static let shared = ConfigurationManager()
     private let fileManager = FileManager.default
+    private let lock = NSRecursiveLock()
 
     private init() {}
 
-    /// Gets the configuration file URL in the user's Documents directory
+    /// Gets the configuration file URL in Stockbar's Application Support directory.
     private func getConfigFileURL() -> URL? {
-        guard let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return nil
+        lock.lock()
+        defer { lock.unlock() }
+        let directory = StockbarRuntimeStorage.bundleApplicationSupportDirectory(fileManager: fileManager)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+            let canonicalURL = directory.appendingPathComponent(".stockbar_config.json")
+            migrateLegacyConfigIfNeeded(to: canonicalURL)
+            return canonicalURL
+        } catch {
+            Task { await Logger.shared.error("Failed to create configuration directory: \(error.localizedDescription)") }
         }
-        return documentsPath.appendingPathComponent(".stockbar_config.json")
+
+        if StockbarRuntimeStorage.acceptance.isEnabled { return nil }
+        return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stockbar_config.json")
     }
 
     // MARK: - Generic Helper
 
     private func getConfig() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
         guard let configFileURL = getConfigFileURL(),
               fileManager.fileExists(atPath: configFileURL.path) else {
             return [:]
@@ -33,15 +46,93 @@ public class ConfigurationManager {
         }
     }
 
+    /// Reads, changes and saves the config under one lock. A file that exists
+    /// but cannot be parsed is copied aside first, so saving one key never
+    /// silently discards the others.
+    private func updateConfig(_ change: (inout [String: Any]) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let configFileURL = getConfigFileURL(),
+           fileManager.fileExists(atPath: configFileURL.path),
+           !configFileIsReadable(configFileURL) {
+            let backupURL = configFileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+            do {
+                try fileManager.copyItem(at: configFileURL, to: backupURL)
+                restrictPermissions(of: backupURL)
+                Task { await Logger.shared.error("Configuration file could not be read; kept a copy at \(backupURL.lastPathComponent)") }
+            } catch {
+                Task { await Logger.shared.error("Configuration file could not be read or backed up; not saving: \(error.localizedDescription)") }
+                return
+            }
+        }
+        var config = getConfig()
+        change(&config)
+        saveConfig(config)
+    }
+
+    private func configFileIsReadable(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return (try? JSONSerialization.jsonObject(with: data, options: [])) is [String: Any]
+    }
+
     private func saveConfig(_ config: [String: Any]) {
+        lock.lock()
+        defer { lock.unlock() }
         guard let configFileURL = getConfigFileURL() else { return }
 
         do {
             let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: configFileURL, options: .atomic)
+            restrictPermissions(of: configFileURL)
             Task { await Logger.shared.info("Configuration updated successfully") }
         } catch {
             Task { await Logger.shared.error("Failed to save configuration: \(error.localizedDescription)") }
+        }
+    }
+
+    /// This file holds FMP and Twelve Data API keys in plaintext — it has to stay
+    /// readable by the Python subprocess, so the Keychain is not an option — but
+    /// it should not inherit a world-readable umask.
+    private func restrictPermissions(of url: URL) {
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            Task {
+                await Logger.shared.warning(
+                    "Could not restrict permissions on the configuration file: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func migrateLegacyConfigIfNeeded(to canonicalURL: URL) {
+        guard !StockbarRuntimeStorage.acceptance.isEnabled,
+              !fileManager.fileExists(atPath: canonicalURL.path) else {
+            return
+        }
+        let legacyURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.fhl43211.Stockbar", isDirectory: true)
+            .appendingPathComponent(".stockbar_config.json")
+        guard fileManager.fileExists(atPath: legacyURL.path) else { return }
+
+        do {
+            let data = try Data(contentsOf: legacyURL)
+            guard (try JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            try data.write(to: canonicalURL, options: .atomic)
+            restrictPermissions(of: canonicalURL)
+            Task {
+                await Logger.shared.info(
+                    "Copied validated legacy configuration to com.stockbar; original preserved at \(legacyURL.path)"
+                )
+            }
+        } catch {
+            Task {
+                await Logger.shared.warning(
+                    "Legacy configuration was preserved but not copied because validation failed: \(error.localizedDescription)"
+                )
+            }
         }
     }
     
@@ -54,16 +145,16 @@ public class ConfigurationManager {
 
     /// Sets the FMP API key in configuration file
     public func setFMPAPIKey(_ apiKey: String) {
-        var config = getConfig()
-        config["FMP_API_KEY"] = apiKey
-        saveConfig(config)
+        updateConfig { config in
+            config["FMP_API_KEY"] = apiKey
+        }
     }
 
     /// Removes the FMP API key from configuration file
     public func removeFMPAPIKey() {
-        var config = getConfig()
-        config.removeValue(forKey: "FMP_API_KEY")
-        saveConfig(config)
+        updateConfig { config in
+            config.removeValue(forKey: "FMP_API_KEY")
+        }
     }
     
     // MARK: - Twelve Data API Key
@@ -75,16 +166,16 @@ public class ConfigurationManager {
 
     /// Sets the Twelve Data API key in configuration file
     public func setTwelveDataAPIKey(_ apiKey: String) {
-        var config = getConfig()
-        config["TWELVE_DATA_API_KEY"] = apiKey
-        saveConfig(config)
+        updateConfig { config in
+            config["TWELVE_DATA_API_KEY"] = apiKey
+        }
     }
     
     /// Removes the Twelve Data API key from configuration file
     public func removeTwelveDataAPIKey() {
-        var config = getConfig()
-        config.removeValue(forKey: "TWELVE_DATA_API_KEY")
-        saveConfig(config)
+        updateConfig { config in
+            config.removeValue(forKey: "TWELVE_DATA_API_KEY")
+        }
     }
     
     // MARK: - Data Source Priority
@@ -96,9 +187,9 @@ public class ConfigurationManager {
     
     /// Sets the data source priority list
     public func setDataSourcePriority(_ priority: [String]) {
-        var config = getConfig()
-        config["DATA_SOURCE_PRIORITY"] = priority
-        saveConfig(config)
+        updateConfig { config in
+            config["DATA_SOURCE_PRIORITY"] = priority
+        }
     }
 
     // MARK: - File Management

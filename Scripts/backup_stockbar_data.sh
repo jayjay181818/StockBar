@@ -1,87 +1,119 @@
 #!/bin/bash
 
-# Stockbar Complete Data Backup Script
-# Backs up all Stockbar data including UserDefaults, Core Data, and config files
+# Stockbar data backup script.
+#
+# This backs up the data files used by Stockbar. It does not include Keychain
+# items, and it must not run while Stockbar is using its SQLite store.
 
-set -e  # Exit on error
+set -euo pipefail
+umask 077
 
-# Configuration
-BACKUP_DIR="$HOME/Library/Application Support/Stockbar/Backups"
+# STOCKBAR_HOME_OVERRIDE is intended for isolated fixture tests. In normal use
+# the script resolves paths below the current user's home directory.
+STOCKBAR_HOME="${STOCKBAR_HOME_OVERRIDE:-$HOME}"
+if [[ -n "${STOCKBAR_HOME_OVERRIDE:-}" ]]; then
+    [[ -n "${STOCKBAR_DEFAULTS_COMMAND:-}" ]] || {
+        echo "Error: STOCKBAR_HOME_OVERRIDE requires STOCKBAR_DEFAULTS_COMMAND to isolate defaults" >&2
+        exit 1
+    }
+fi
+DEFAULTS_COMMAND="${STOCKBAR_DEFAULTS_COMMAND:-defaults}"
+command -v "${DEFAULTS_COMMAND}" >/dev/null 2>&1 || {
+    echo "Error: defaults command is unavailable: ${DEFAULTS_COMMAND}" >&2
+    exit 1
+}
+APP_SUPPORT_DIR="${STOCKBAR_HOME}/Library/Application Support"
+STOCKBAR_DATA_DIR="${APP_SUPPORT_DIR}/Stockbar"
+BACKUP_DIR="${STOCKBAR_DATA_DIR}/Backups"
+CONFIG_FILE="${APP_SUPPORT_DIR}/com.stockbar/.stockbar_config.json"
+# Quote cache (optional). 2.4.5+ keeps it in Caches; older versions used the
+# home folder. The backup archive keeps the historical file name.
+CACHE_FILE="${STOCKBAR_HOME}/Library/Caches/stockbar-cache/quote_cache.json"
+LEGACY_CACHE_FILE="${STOCKBAR_HOME}/.stockbar_cache.json"
+
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 BACKUP_NAME="stockbar_complete_backup_${TIMESTAMP}"
 BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
 
-echo "=================================================="
-echo "Stockbar Complete Backup - $(date)"
-echo "=================================================="
-echo ""
+fail() {
+    echo "Error: $*" >&2
+    exit 1
+}
 
-# Create backup directory if it doesn't exist
-mkdir -p "${BACKUP_PATH}"
+require_stockbar_stopped() {
+    command -v pgrep >/dev/null 2>&1 || fail "cannot verify whether Stockbar is running (pgrep is unavailable)"
+    set +e
+    pgrep -x "Stockbar" >/dev/null 2>&1
+    local pgrep_status=$?
+    set -e
+    case "${pgrep_status}" in
+        0) fail "Stockbar is running; quit it and rerun this backup so SQLite files are copied consistently" ;;
+        1) return ;;
+        *) fail "cannot verify whether Stockbar is running (pgrep exited ${pgrep_status})" ;;
+    esac
+}
 
+file_size() {
+    du -h "$1" | awk '{print $1}'
+}
+
+require_stockbar_stopped
+mkdir -p "${BACKUP_DIR}"
+if ! mkdir "${BACKUP_PATH}"; then
+    fail "backup already exists at ${BACKUP_PATH}; refusing to overwrite it"
+fi
+
+echo "=================================================="
+echo "Stockbar Data Backup - $(date)"
+echo "=================================================="
+echo
 echo "Backup location: ${BACKUP_PATH}"
-echo ""
+echo
 
-# 1. Backup UserDefaults (portfolio, preferences)
 echo "[1/4] Backing up UserDefaults..."
-defaults export com.fhl43211.Stockbar "${BACKUP_PATH}/UserDefaults.plist"
-if [ -f "${BACKUP_PATH}/UserDefaults.plist" ]; then
-    SIZE=$(du -h "${BACKUP_PATH}/UserDefaults.plist" | cut -f1)
-    echo "✅ UserDefaults backed up (${SIZE})"
-else
-    echo "⚠️  UserDefaults backup failed"
-fi
-echo ""
+"${DEFAULTS_COMMAND}" export com.stockbar "${BACKUP_PATH}/UserDefaults.plist"
+echo "UserDefaults backed up ($(file_size "${BACKUP_PATH}/UserDefaults.plist"))"
+echo
 
-# 2. Backup Core Data (historical data, OHLC)
 echo "[2/4] Backing up Core Data database..."
-COREDATA_DIR="$HOME/Library/Application Support/Stockbar"
-if [ -f "${COREDATA_DIR}/StockbarDataModel.sqlite" ]; then
-    # Copy main database file
-    cp "${COREDATA_DIR}/StockbarDataModel.sqlite" "${BACKUP_PATH}/"
-
-    # Copy WAL and SHM files if they exist (for SQLite write-ahead logging)
-    [ -f "${COREDATA_DIR}/StockbarDataModel.sqlite-wal" ] && \
-        cp "${COREDATA_DIR}/StockbarDataModel.sqlite-wal" "${BACKUP_PATH}/"
-    [ -f "${COREDATA_DIR}/StockbarDataModel.sqlite-shm" ] && \
-        cp "${COREDATA_DIR}/StockbarDataModel.sqlite-shm" "${BACKUP_PATH}/"
-
-    SIZE=$(du -h "${BACKUP_PATH}/StockbarDataModel.sqlite" | cut -f1)
-    echo "✅ Core Data backed up (${SIZE})"
+if [[ -f "${STOCKBAR_DATA_DIR}/StockbarDataModel.sqlite" ]]; then
+    cp "${STOCKBAR_DATA_DIR}/StockbarDataModel.sqlite" "${BACKUP_PATH}/"
+    for sidecar in "StockbarDataModel.sqlite-wal" "StockbarDataModel.sqlite-shm"; do
+        if [[ -f "${STOCKBAR_DATA_DIR}/${sidecar}" ]]; then
+            cp "${STOCKBAR_DATA_DIR}/${sidecar}" "${BACKUP_PATH}/"
+        fi
+    done
+    echo "Core Data backed up ($(file_size "${BACKUP_PATH}/StockbarDataModel.sqlite"))"
 else
-    echo "⚠️  Core Data database not found"
+    echo "Warning: Core Data database not found"
 fi
-echo ""
+echo
 
-# 3. Backup API config file
 echo "[3/4] Backing up API configuration..."
-CONFIG_FILE="$HOME/Documents/.stockbar_config.json"
-if [ -f "${CONFIG_FILE}" ]; then
-    cp "${CONFIG_FILE}" "${BACKUP_PATH}/"
-    SIZE=$(du -h "${BACKUP_PATH}/.stockbar_config.json" | cut -f1)
-    echo "✅ Config file backed up (${SIZE})"
+if [[ -f "${CONFIG_FILE}" ]]; then
+    cp "${CONFIG_FILE}" "${BACKUP_PATH}/.stockbar_config.json"
+    chmod 600 "${BACKUP_PATH}/.stockbar_config.json"
+    echo "Config file backed up ($(file_size "${BACKUP_PATH}/.stockbar_config.json"))"
 else
-    echo "⚠️  Config file not found (may be first run)"
+    echo "Warning: config file not found (may be first run)"
 fi
-echo ""
+echo
 
-# 4. Backup cache file (optional)
 echo "[4/4] Backing up cache file..."
-CACHE_FILE="$HOME/.stockbar_cache.json"
-if [ -f "${CACHE_FILE}" ]; then
-    cp "${CACHE_FILE}" "${BACKUP_PATH}/"
-    SIZE=$(du -h "${BACKUP_PATH}/.stockbar_cache.json" | cut -f1)
-    echo "✅ Cache file backed up (${SIZE})"
+SOURCE_CACHE_FILE="${CACHE_FILE}"
+[[ -f "${SOURCE_CACHE_FILE}" ]] || SOURCE_CACHE_FILE="${LEGACY_CACHE_FILE}"
+if [[ -f "${SOURCE_CACHE_FILE}" ]]; then
+    cp "${SOURCE_CACHE_FILE}" "${BACKUP_PATH}/.stockbar_cache.json"
+    echo "Cache file backed up ($(file_size "${BACKUP_PATH}/.stockbar_cache.json"))"
 else
-    echo "ℹ️  No cache file found (expected)"
+    echo "No cache file found (expected)"
 fi
-echo ""
+echo
 
-# Create backup manifest
-echo "[5/5] Creating backup manifest..."
-cat > "${BACKUP_PATH}/MANIFEST.txt" << EOF
-Stockbar Complete Backup
-========================
+echo "Creating backup manifest..."
+cat > "${BACKUP_PATH}/MANIFEST.txt" <<EOF
+Stockbar Data Backup
+====================
 
 Backup Date: $(date)
 Backup Location: ${BACKUP_PATH}
@@ -90,51 +122,34 @@ Contents:
 ---------
 1. UserDefaults.plist - Portfolio configuration and app preferences
 2. StockbarDataModel.sqlite* - Historical price data and OHLC snapshots
-3. .stockbar_config.json - API keys and configuration
+3. .stockbar_config.json - API keys and configuration (if present)
 4. .stockbar_cache.json - Price cache (optional)
 
-Restore Instructions:
---------------------
-To restore this backup:
+Keychain items are not included. This backup alone does not prove complete
+recovery of credentials or other data held outside these files.
 
-1. Close Stockbar application
-2. Run: ./restore_stockbar_data.sh ${BACKUP_NAME}
-   OR manually restore each file:
+Restore prerequisites:
+---------------------
+1. Quit Stockbar and verify that no Stockbar process is running.
+2. From the repository root, run: bash Scripts/restore_stockbar_data.sh ${BACKUP_NAME}
+3. Review the restore output before restarting Stockbar.
 
-   # Restore UserDefaults
-   defaults import com.fhl43211.Stockbar "${BACKUP_PATH}/UserDefaults.plist"
-
-   # Restore Core Data
-   cp "${BACKUP_PATH}/StockbarDataModel.sqlite"* "$HOME/Library/Application Support/Stockbar/"
-
-   # Restore config
-   cp "${BACKUP_PATH}/.stockbar_config.json" "$HOME/Documents/"
-
-3. Restart Stockbar
-
+Canonical config path:
+${CONFIG_FILE}
 EOF
 
-TOTAL_SIZE=$(du -sh "${BACKUP_PATH}" | cut -f1)
-echo "✅ Manifest created"
-echo ""
-
+echo "Manifest created"
+echo
 echo "=================================================="
-echo "Backup Complete!"
+echo "Backup Complete"
 echo "=================================================="
-echo "Total backup size: ${TOTAL_SIZE}"
+echo "Total backup size: $(du -sh "${BACKUP_PATH}" | awk '{print $1}')"
 echo "Location: ${BACKUP_PATH}"
-echo ""
+echo
 echo "Files backed up:"
 ls -lh "${BACKUP_PATH}"
-echo ""
+echo
 echo "To restore this backup later:"
-echo "  ./restore_stockbar_data.sh ${BACKUP_NAME}"
-echo ""
-
-# Cleanup old backups (keep last 10)
-echo "Cleaning up old backups (keeping 10 most recent)..."
-cd "${BACKUP_DIR}"
-ls -t | grep "stockbar_complete_backup_" | tail -n +11 | xargs -I {} rm -rf {}
-REMAINING=$(ls -t | grep "stockbar_complete_backup_" | wc -l | tr -d ' ')
-echo "ℹ️  ${REMAINING} complete backups retained"
-echo ""
+echo "  bash Scripts/restore_stockbar_data.sh ${BACKUP_NAME}"
+echo
+echo "Existing backups were left untouched; retention cleanup is manual."

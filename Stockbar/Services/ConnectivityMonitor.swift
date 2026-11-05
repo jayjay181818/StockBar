@@ -6,16 +6,18 @@
 //  Uses NWPathMonitor to detect network changes.
 //
 
-import Foundation
-import Network
 import Combine
+import Foundation
+import Observation
+import Network
 
 @MainActor
-class ConnectivityMonitor: ObservableObject {
+@Observable
+class ConnectivityMonitor {
     static let shared = ConnectivityMonitor()
     
-    @Published var isConnected: Bool = true
-    @Published var isLowDataMode: Bool = false
+    var isConnected: Bool = true
+    var isLowDataMode: Bool = false
     
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "com.stockbar.connectivity", qos: .utility)
@@ -31,21 +33,26 @@ class ConnectivityMonitor: ObservableObject {
                 guard let self = self else { return }
                 
                 let wasConnected = self.isConnected
+                let wasLowDataMode = self.isLowDataMode
                 let isNowConnected = path.status == .satisfied
-                
-                self.isConnected = isNowConnected
-                self.isLowDataMode = path.isConstrained
-                
+                let isNowLowDataMode = path.isConstrained
+
                 if wasConnected != isNowConnected {
+                    self.isConnected = isNowConnected
                     if isNowConnected {
                         await self.logger.info("🌐 Network: Connected")
                     } else {
                         await self.logger.warning("🌐 Network: Disconnected")
                     }
                 }
-                
-                if path.isConstrained {
-                    await self.logger.debug("🌐 Network: Low data mode detected")
+
+                if wasLowDataMode != isNowLowDataMode {
+                    self.isLowDataMode = isNowLowDataMode
+                    await self.logger.debug(
+                        isNowLowDataMode
+                            ? "🌐 Network: Low data mode enabled"
+                            : "🌐 Network: Low data mode disabled"
+                    )
                 }
             }
         }
@@ -56,4 +63,3 @@ class ConnectivityMonitor: ObservableObject {
         monitor.cancel()
     }
 }
-

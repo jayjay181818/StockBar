@@ -8,7 +8,50 @@
 
 import Foundation
 
+struct DisplayPortfolioSummary {
+    let totalValue: Double
+    let totalGain: Double
+    let totalGainPct: Double
+    let dayGain: Double
+    let dayGainPct: Double
+    let totalCost: Double
+    let ownedPositionCount: Int
+    let currency: String
+    let valuationSource: PortfolioValuationSource
+
+    init(
+        totalValue: Double,
+        totalGain: Double,
+        totalGainPct: Double,
+        dayGain: Double,
+        dayGainPct: Double,
+        totalCost: Double,
+        ownedPositionCount: Int,
+        currency: String,
+        valuationSource: PortfolioValuationSource = .localCalculationFallback
+    ) {
+        self.totalValue = totalValue
+        self.totalGain = totalGain
+        self.totalGainPct = totalGainPct
+        self.dayGain = dayGain
+        self.dayGainPct = dayGainPct
+        self.totalCost = totalCost
+        self.ownedPositionCount = ownedPositionCount
+        self.currency = currency
+        self.valuationSource = valuationSource
+    }
+}
+
+struct PositionProfitLossSummary: Equatable {
+    let dayAmount: Double
+    let dayPercent: Double
+    let totalAmount: Double
+    let totalPercent: Double
+    let currency: String
+}
+
 /// Service responsible for portfolio value and gains calculations
+@MainActor
 class PortfolioCalculationService {
     private let currencyConverter: CurrencyConverter
     private let logger = Logger.shared
@@ -22,38 +65,51 @@ class PortfolioCalculationService {
     /// Calculates the total net gains across all trades in the preferred currency
     func calculateNetGains(
         trades: [RealTimeTrade],
-        preferredCurrency: String
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
     ) -> (amount: Double, currency: String) {
-        Task { await logger.debug("Calculating net gains in \(preferredCurrency)") }
+        if let brokerValuationSnapshot,
+           let brokerGain = brokerValuationSnapshot.totalUnrealizedProfitLoss,
+           brokerGain.isFinite {
+            let convertedGain = convertBrokerAmount(
+                brokerGain,
+                from: brokerValuationSnapshot.currency,
+                to: preferredCurrency
+            )
+            logger.post(.debug, "Using Trading 212 broker-provided net gains in \(preferredCurrency)")
+            return (convertedGain, preferredCurrency)
+        }
+
+        logger.post(.debug, "Calculating net gains in \(preferredCurrency)")
         var totalGainsUSD = 0.0
         
         for realTimeTradeItem in trades {
             // Skip watchlist-only stocks from portfolio calculations
             guard !realTimeTradeItem.trade.isWatchlistOnly else {
-                Task { await logger.debug("Skipping watchlist stock \(realTimeTradeItem.trade.name) from net gains calculation") }
+                logger.post(.debug, "Skipping watchlist stock \(realTimeTradeItem.trade.name) from net gains calculation")
                 continue
             }
             
             // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
-                Task { await logger.debug("Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
+            let currentPrice = realTimeTradeItem.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else {
+                logger.post(.debug, "Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid price.")
                 continue
             }
             
             // Get normalized average cost (handles GBX to GBP conversion automatically)
             let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: realTimeTradeItem.trade.name)
             guard !adjustedCost.isNaN, adjustedCost > 0 else {
-                Task { await logger.debug("Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid cost.") }
+                logger.post(.debug, "Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid cost.")
                 continue
             }
             
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
             let units = realTimeTradeItem.trade.position.unitSize
             let currency = realTimeTradeItem.realTimeInfo.currency
             let symbol = realTimeTradeItem.trade.name
             
-            Task { await logger.debug("Using normalized cost for \(symbol): \(adjustedCost) (from \(realTimeTradeItem.trade.position.positionAvgCostString) \(realTimeTradeItem.trade.position.costCurrency ?? "auto-detected"))") }
+            logger.post(.debug, "Using normalized cost for \(symbol): \(adjustedCost) (from \(realTimeTradeItem.trade.position.positionAvgCostString) \(realTimeTradeItem.trade.position.costCurrency ?? "auto-detected"))")
             
             // Calculate gains in the stock's currency (currentPrice and adjustedCost are now in same currency)
             let rawGains = (currentPrice - adjustedCost) * units
@@ -67,10 +123,11 @@ class PortfolioCalculationService {
                     gainsInUSD = currencyConverter.convert(amount: rawGains, from: knownCurrency, to: "USD")
                 }
             } else {
-                Task { await logger.warning("Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for gain calculation.") }
+                logger.post(.warning, "Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for gain calculation.")
             }
             
-            Task { await logger.debug("Gain calculation for \(symbol): currentPrice=\(currentPrice), adjustedCost=\(adjustedCost), units=\(units), currency=\(currency ?? "nil"), rawGains=\(rawGains), gainsInUSD=\(gainsInUSD)") }
+            logger.post(.debug, "Gain calculation for \(symbol): currentPrice=\(currentPrice), adjustedCost=\(adjustedCost), units=\(units), currency=\(currency ?? "nil"), rawGains=\(rawGains), gainsInUSD=\(gainsInUSD)")
+            guard gainsInUSD.isFinite else { continue } // no exchange rate for this currency
             totalGainsUSD += gainsInUSD
         }
         
@@ -83,33 +140,44 @@ class PortfolioCalculationService {
             finalAmount = currencyConverter.convert(amount: totalGainsUSD, from: "USD", to: preferredCurrency)
         }
         
-        Task { await logger.debug("Net gains calculated: \(finalAmount) \(preferredCurrency)") }
+        logger.post(.debug, "Net gains calculated: \(finalAmount) \(preferredCurrency)")
         return (finalAmount, preferredCurrency)
     }
     
     /// Calculates the total portfolio value (market value) in the preferred currency
     func calculateNetValue(
         trades: [RealTimeTrade],
-        preferredCurrency: String
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
     ) -> (amount: Double, currency: String) {
-        Task { await logger.debug("Calculating net value in \(preferredCurrency)") }
+        if let brokerValuationSnapshot {
+            let convertedValue = convertBrokerAmount(
+                brokerValuationSnapshot.accountValue,
+                from: brokerValuationSnapshot.currency,
+                to: preferredCurrency
+            )
+            logger.post(.debug, "Using Trading 212 broker-provided account value in \(preferredCurrency)")
+            return (convertedValue, preferredCurrency)
+        }
+
+        logger.post(.debug, "Calculating net value in \(preferredCurrency)")
         var totalValueUSD = 0.0
         
         for realTimeTradeItem in trades {
             // Skip watchlist-only stocks from portfolio calculations
             guard !realTimeTradeItem.trade.isWatchlistOnly else {
-                Task { await logger.debug("Skipping watchlist stock \(realTimeTradeItem.trade.name) from net value calculation") }
+                logger.post(.debug, "Skipping watchlist stock \(realTimeTradeItem.trade.name) from net value calculation")
                 continue
             }
             
             // Ensure price is valid before calculation
-            guard !realTimeTradeItem.realTimeInfo.currentPrice.isNaN,
-                  realTimeTradeItem.realTimeInfo.currentPrice != 0 else {
-                Task { await logger.debug("Skipping net value calculation for \(realTimeTradeItem.trade.name) due to invalid price.") }
+            let currentPrice = realTimeTradeItem.realTimeInfo.getCurrentDisplayPrice()
+            guard currentPrice.isFinite,
+                  currentPrice > 0 else {
+                logger.post(.debug, "Skipping net value calculation for \(realTimeTradeItem.trade.name) due to invalid price.")
                 continue
             }
             
-            let currentPrice = realTimeTradeItem.realTimeInfo.currentPrice
             let units = realTimeTradeItem.trade.position.unitSize
             let currency = realTimeTradeItem.realTimeInfo.currency
             let symbol = realTimeTradeItem.trade.name
@@ -126,10 +194,11 @@ class PortfolioCalculationService {
                     marketValueInUSD = currencyConverter.convert(amount: marketValueInStockCurrency, from: knownCurrency, to: "USD")
                 }
             } else {
-                Task { await logger.warning("Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for value calculation.") }
+                logger.post(.warning, "Currency unknown for \(realTimeTradeItem.trade.name), assuming USD for value calculation.")
             }
             
-            Task { await logger.debug("Value calculation for \(symbol): currentPrice=\(currentPrice), units=\(units), currency=\(currency ?? "nil"), marketValueInStockCurrency=\(marketValueInStockCurrency), marketValueInUSD=\(marketValueInUSD)") }
+            logger.post(.debug, "Value calculation for \(symbol): currentPrice=\(currentPrice), units=\(units), currency=\(currency ?? "nil"), marketValueInStockCurrency=\(marketValueInStockCurrency), marketValueInUSD=\(marketValueInUSD)")
+            guard marketValueInUSD.isFinite else { continue } // no exchange rate for this currency
             totalValueUSD += marketValueInUSD
         }
         
@@ -142,8 +211,211 @@ class PortfolioCalculationService {
             finalAmount = currencyConverter.convert(amount: totalValueUSD, from: "USD", to: preferredCurrency)
         }
         
-        Task { await logger.debug("Net value calculated: \(finalAmount) \(preferredCurrency)") }
+        logger.post(.debug, "Net value calculated: \(finalAmount) \(preferredCurrency)")
         return (finalAmount, preferredCurrency)
+    }
+
+    /// Calculates the menu bar portfolio summary using the same display-price semantics as symbol rows.
+    func calculateDisplayPortfolioSummary(
+        trades: [RealTimeTrade],
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot? = nil
+    ) -> DisplayPortfolioSummary {
+        if let brokerValuationSnapshot {
+            return calculateBrokerProvidedPortfolioSummary(
+                trades: trades,
+                preferredCurrency: preferredCurrency,
+                brokerValuationSnapshot: brokerValuationSnapshot
+            )
+        }
+
+        logger.post(.debug, "Calculating display portfolio summary in \(preferredCurrency)")
+
+        var totalValueUSD = 0.0
+        var totalPrevCloseUSD = 0.0
+        var totalGainUSD = 0.0
+        var totalCostUSD = 0.0
+        var dayGainUSD = 0.0
+        var ownedPositionCount = 0
+
+        for realTimeTradeItem in trades {
+            guard !realTimeTradeItem.trade.isWatchlistOnly else { continue }
+
+            let info = realTimeTradeItem.realTimeInfo
+            let displayPrice = info.getCurrentDisplayPrice()
+            let prevClosePrice = info.prevClosePrice
+            let units = realTimeTradeItem.trade.position.unitSize
+
+            guard displayPrice.isFinite, displayPrice > 0 else { continue }
+            guard units > 0 else { continue }
+
+            let symbol = realTimeTradeItem.trade.name
+            let currency = info.currency ?? "USD"
+            let currentValueUSD = convertToUSD(amount: displayPrice * units, currency: currency)
+            // A currency with no available rate converts to NaN; one such
+            // position must not turn every total and the menu-bar title into NaN.
+            guard currentValueUSD.isFinite else {
+                logger.post(.warning, "No exchange rate for \(currency); \(symbol) is left out of portfolio totals")
+                continue
+            }
+            totalValueUSD += currentValueUSD
+            ownedPositionCount += 1
+
+            if prevClosePrice.isFinite, prevClosePrice > 0 {
+                let prevValueUSD = convertToUSD(amount: prevClosePrice * units, currency: currency)
+                if prevValueUSD.isFinite {
+                    totalPrevCloseUSD += prevValueUSD
+                    dayGainUSD += currentValueUSD - prevValueUSD
+                }
+            }
+
+            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: symbol)
+            if adjustedCost.isFinite, adjustedCost > 0 {
+                let costUSD = convertToUSD(amount: adjustedCost * units, currency: currency)
+                if costUSD.isFinite {
+                    totalCostUSD += costUSD
+                    totalGainUSD += currentValueUSD - costUSD
+                }
+            }
+        }
+
+        let totalValue = convertFromUSD(amount: totalValueUSD, preferredCurrency: preferredCurrency)
+        let totalGain = convertFromUSD(amount: totalGainUSD, preferredCurrency: preferredCurrency)
+        let dayGain = convertFromUSD(amount: dayGainUSD, preferredCurrency: preferredCurrency)
+        let totalCost = convertFromUSD(amount: totalCostUSD, preferredCurrency: preferredCurrency)
+        let totalGainPct = totalCostUSD > 0 ? (totalGainUSD / totalCostUSD) * 100 : 0
+        let dayGainPct = totalPrevCloseUSD > 0 ? (dayGainUSD / totalPrevCloseUSD) * 100 : 0
+
+        return DisplayPortfolioSummary(
+            totalValue: totalValue,
+            totalGain: totalGain,
+            totalGainPct: totalGainPct,
+            dayGain: dayGain,
+            dayGainPct: dayGainPct,
+            totalCost: totalCost,
+            ownedPositionCount: ownedPositionCount,
+            currency: preferredCurrency,
+            valuationSource: .localCalculationFallback
+        )
+    }
+
+    /// Calculates per-position day and total P/L in the position display currency.
+    func calculatePositionProfitLoss(
+        for realTimeTrade: RealTimeTrade,
+        brokerValuation: Trading212BrokerPositionValuation? = nil
+    ) -> PositionProfitLossSummary {
+        let info = realTimeTrade.realTimeInfo
+        let displayPrice = info.getCurrentDisplayPrice()
+        let previousClose = info.prevClosePrice
+        let units = realTimeTrade.trade.position.unitSize
+        let symbol = realTimeTrade.trade.name
+        let averageCost = realTimeTrade.trade.position.getNormalizedAvgCost(for: symbol)
+        let currency = info.currency
+            ?? realTimeTrade.trade.position.currency
+            ?? realTimeTrade.trade.position.costCurrency
+            ?? ""
+
+        let dayAmount: Double
+        let dayPercent: Double
+        if displayPrice.isFinite,
+           previousClose.isFinite,
+           previousClose > 0,
+           units > 0 {
+            let dayDelta = displayPrice - previousClose
+            dayAmount = dayDelta * units
+            dayPercent = (dayDelta / previousClose) * 100.0
+        } else {
+            dayAmount = .nan
+            dayPercent = .nan
+        }
+
+        let totalAmount: Double
+        let totalPercent: Double
+        if displayPrice.isFinite,
+           averageCost.isFinite,
+           averageCost > 0,
+           units > 0 {
+            let totalDelta = displayPrice - averageCost
+            totalAmount = totalDelta * units
+            totalPercent = (totalDelta / averageCost) * 100.0
+        } else if let brokerValuation,
+                  let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
+                  brokerAmount.isFinite {
+            totalAmount = brokerAmount
+            totalPercent = brokerValuation.totalGainPercent
+        } else {
+            totalAmount = .nan
+            totalPercent = .nan
+        }
+
+        if let brokerValuation,
+           let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
+           brokerAmount.isFinite {
+            return PositionProfitLossSummary(
+                dayAmount: dayAmount,
+                dayPercent: dayPercent,
+                totalAmount: brokerAmount,
+                totalPercent: brokerValuation.totalGainPercent,
+                currency: brokerValuation.currency
+            )
+        }
+
+        return PositionProfitLossSummary(
+            dayAmount: dayAmount,
+            dayPercent: dayPercent,
+            totalAmount: totalAmount,
+            totalPercent: totalPercent,
+            currency: currency
+        )
+    }
+
+    private func calculateBrokerProvidedPortfolioSummary(
+        trades: [RealTimeTrade],
+        preferredCurrency: String,
+        brokerValuationSnapshot: Trading212BrokerValuationSnapshot
+    ) -> DisplayPortfolioSummary {
+        let localSummary = calculateDisplayPortfolioSummary(
+            trades: trades,
+            preferredCurrency: preferredCurrency,
+            brokerValuationSnapshot: nil
+        )
+        let totalValue = convertBrokerAmount(
+            brokerValuationSnapshot.accountValue,
+            from: brokerValuationSnapshot.currency,
+            to: preferredCurrency
+        )
+        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss ?? localSummary.totalGain
+        let totalGain = convertBrokerAmount(
+            totalGainSource,
+            from: brokerValuationSnapshot.totalUnrealizedProfitLoss == nil ? preferredCurrency : brokerValuationSnapshot.currency,
+            to: preferredCurrency
+        )
+        let totalCostSource = brokerValuationSnapshot.totalCost
+            ?? (brokerValuationSnapshot.investmentsValue.flatMap { investmentsValue in
+                brokerValuationSnapshot.totalUnrealizedProfitLoss.map { investmentsValue - $0 }
+            })
+        let totalCost = totalCostSource.map {
+            convertBrokerAmount($0, from: brokerValuationSnapshot.currency, to: preferredCurrency)
+        } ?? max(totalValue - totalGain, 0)
+        let totalGainPct: Double
+        if let totalCostSource, totalCostSource > 0,
+           let unrealized = brokerValuationSnapshot.totalUnrealizedProfitLoss {
+            totalGainPct = (unrealized / totalCostSource) * 100.0
+        } else {
+            totalGainPct = localSummary.totalGainPct
+        }
+
+        return DisplayPortfolioSummary(
+            totalValue: totalValue,
+            totalGain: totalGain,
+            totalGainPct: totalGainPct,
+            dayGain: localSummary.dayGain,
+            dayGainPct: localSummary.dayGainPct,
+            totalCost: totalCost,
+            ownedPositionCount: localSummary.ownedPositionCount,
+            currency: preferredCurrency,
+            valuationSource: .brokerProvided
+        )
     }
     
     /// Memory-efficient calculation of portfolio metrics
@@ -172,5 +444,43 @@ class PortfolioCalculationService {
         
         return (finalGains, finalValue, preferredCurrency)
     }
-}
 
+    private func convertToUSD(amount: Double, currency: String) -> Double {
+        if currency == "GBX" || currency == "GBp" {
+            let gbpAmount = amount / 100.0
+            return currencyConverter.convert(amount: gbpAmount, from: "GBP", to: "USD")
+        }
+
+        if currency == "GBP" {
+            return currencyConverter.convert(amount: amount, from: "GBP", to: "USD")
+        }
+
+        if currency == "USD" {
+            return amount
+        }
+
+        return currencyConverter.convert(amount: amount, from: currency, to: "USD")
+    }
+
+    private func convertFromUSD(amount: Double, preferredCurrency: String) -> Double {
+        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
+            let gbpAmount = currencyConverter.convert(amount: amount, from: "USD", to: "GBP")
+            return gbpAmount * 100.0
+        }
+
+        if preferredCurrency == "USD" {
+            return amount
+        }
+
+        return currencyConverter.convert(amount: amount, from: "USD", to: preferredCurrency)
+    }
+
+    private func convertBrokerAmount(_ amount: Double, from sourceCurrency: String, to targetCurrency: String) -> Double {
+        let normalizedSource = CurrencyConverter.isPenceCurrency(sourceCurrency) ? "GBP" : sourceCurrency.uppercased()
+        let normalizedTarget = CurrencyConverter.isPenceCurrency(targetCurrency) ? "GBP" : targetCurrency.uppercased()
+        let converted = normalizedSource == normalizedTarget
+            ? amount
+            : currencyConverter.convert(amount: amount, from: normalizedSource, to: normalizedTarget)
+        return CurrencyConverter.isPenceCurrency(targetCurrency) ? converted * 100.0 : converted
+    }
+}

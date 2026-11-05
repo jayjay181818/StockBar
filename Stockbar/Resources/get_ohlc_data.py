@@ -20,25 +20,60 @@ Output:
 
 import sys
 import json
+import math
 from datetime import datetime
 
 try:
     import yfinance as yf
+    YFINANCE_AVAILABLE = True
 except ImportError:
-    print(json.dumps({
-        "success": False,
-        "symbol": sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN",
-        "period": sys.argv[2] if len(sys.argv) > 2 else "1mo",
-        "interval": sys.argv[3] if len(sys.argv) > 3 else "1d",
-        "data": [],
-        "error": "yfinance library not installed. Run: pip3 install yfinance"
-    }))
-    sys.exit(1)
+    yf = None
+    YFINANCE_AVAILABLE = False
+
+
+UK_SUFFIXES = ('.L', '.LON', '.XC')
+
+
+def is_uk_symbol(symbol):
+    """Match the UK suffix set used by get_stock_data.py."""
+    return symbol.upper().endswith(UK_SUFFIXES)
+
+
+def uses_pence_quotes(symbol, reported_currency):
+    """Decide whether the provider quoted this symbol in pence (GBX).
+
+    Mirrors normalize_currency() in get_stock_data.py: trust the provider's
+    currency when it gives one, and fall back to the ticker suffix when it
+    does not. LSE quotes come back as 'GBp' from yfinance.
+    """
+    if reported_currency is not None:
+        return str(reported_currency).strip() in ("GBp", "GBX")
+    return symbol.upper().endswith(('.L', '.LON'))
+
+
+def finite_float(value):
+    """float(value) when it is a finite number, else None (NaN/inf/non-numeric)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def safe_volume(value):
+    """Share count as an int; missing or non-finite volume (common on indices and
+    FX) becomes 0 rather than failing the whole response."""
+    number = finite_float(value)
+    return int(number) if number is not None else 0
 
 
 def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
     """
     Fetch OHLC data for a symbol from Yahoo Finance
+
+    UK symbols are quoted in pence (GBX) and are converted to pounds (GBP)
+    here, so every downstream consumer receives major-currency units. This
+    matches the GBX->GBP handling in get_stock_data.py.
 
     Args:
         symbol: Stock ticker symbol
@@ -54,6 +89,16 @@ def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
 
         # Fetch historical data
         hist = ticker.history(period=period, interval=interval)
+
+        # Ask the provider what currency it quoted in; fall back to the suffix.
+        reported_currency = None
+        if is_uk_symbol(symbol):
+            try:
+                reported_currency = ticker.fast_info.get('currency')
+            except Exception:
+                reported_currency = None
+
+        pence_divisor = 100.0 if uses_pence_quotes(symbol, reported_currency) else 1.0
 
         if hist.empty:
             return {
@@ -71,21 +116,40 @@ def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
             # Convert timestamp to ISO 8601 format
             timestamp = index.isoformat()
 
-            # Extract OHLC values
+            # Extract OHLC values, converting GBX -> GBP where applicable.
+            # Volume is a share count and must never be scaled. Rows with a
+            # non-finite price are skipped: NaN is not valid JSON and would
+            # make the whole response unparseable for the app.
+            prices = [finite_float(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
+            if any(price is None for price in prices):
+                continue
+            open_price, high_price, low_price, close_price = prices
+
             ohlc_data.append({
                 "timestamp": timestamp,
-                "open": float(row['Open']),
-                "high": float(row['High']),
-                "low": float(row['Low']),
-                "close": float(row['Close']),
-                "volume": int(row['Volume'])
+                "open": open_price / pence_divisor,
+                "high": high_price / pence_divisor,
+                "low": low_price / pence_divisor,
+                "close": close_price / pence_divisor,
+                "volume": safe_volume(row['Volume'])
             })
+
+        if not ohlc_data:
+            return {
+                "success": False,
+                "symbol": symbol,
+                "period": period,
+                "interval": interval,
+                "data": [],
+                "error": f"No valid price data available for {symbol}"
+            }
 
         return {
             "success": True,
             "symbol": symbol,
             "period": period,
             "interval": interval,
+            "currency": "GBP" if pence_divisor != 1.0 else None,
             "data": ohlc_data,
             "error": None
         }
@@ -121,6 +185,17 @@ def main():
     period = sys.argv[2] if len(sys.argv) > 2 else "1mo"
     interval = sys.argv[3] if len(sys.argv) > 3 else "1d"
 
+    if not YFINANCE_AVAILABLE:
+        print(json.dumps({
+            "success": False,
+            "symbol": symbol,
+            "period": period,
+            "interval": interval,
+            "data": [],
+            "error": "yfinance library not installed. Run: pip3 install yfinance"
+        }))
+        sys.exit(1)
+
     # Validate interval based on period
     # yfinance has restrictions on valid interval/period combinations
     if period == "1d" and interval in ["1d", "1wk", "1mo"]:
@@ -130,7 +205,7 @@ def main():
     result = fetch_ohlc_data(symbol, period, interval)
 
     # Output JSON
-    print(json.dumps(result, indent=None))
+    print(json.dumps(result, indent=None, allow_nan=False))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,34 @@ struct Trade: Codable, Equatable {
     var name: String
     var position: Position
     var isWatchlistOnly: Bool = false  // If true, this is a watch-only stock (no position calculations)
+    var showInMenuBar: Bool = true     // If false, hide from menu bar but keep in portfolio
+
+    init(
+        name: String,
+        position: Position,
+        isWatchlistOnly: Bool = false,
+        showInMenuBar: Bool = true
+    ) {
+        self.name = name
+        self.position = position
+        self.isWatchlistOnly = isWatchlistOnly
+        self.showInMenuBar = showInMenuBar
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case position
+        case isWatchlistOnly
+        case showInMenuBar
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        position = try container.decode(Position.self, forKey: .position)
+        isWatchlistOnly = try container.decodeIfPresent(Bool.self, forKey: .isWatchlistOnly) ?? false
+        showInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? true
+    }
 }
 
 struct Position: Codable, Equatable {
@@ -24,23 +52,44 @@ struct Position: Codable, Equatable {
             return self._unitSize
         }
         set(newUnitSize) {
-            if Double(newUnitSize) != nil {
-                _unitSize = newUnitSize
-            } else {
-                _unitSize = "1"
-            }
+            _unitSize = newUnitSize
         }
     }
     var unitSize: Double {
         get {
-            return Double(unitSizeString) ?? 1
+            return Self.parseAmount(unitSizeString) ?? 0
         }
     }
     var positionAvgCostString: String
     var positionAvgCost: Double {
         get {
-            return Double(positionAvgCostString) ?? .nan
+            return Self.parseAmount(positionAvgCostString) ?? .nan
         }
+    }
+
+    /// Parses a typed units or cost value. A plain "1234.5" works in any locale;
+    /// otherwise the user's locale applies, so "1,000" (grouping) and "12,50"
+    /// (decimal comma) are read as entered instead of becoming 0 or NaN.
+    /// Returns nil for empty, non-numeric, non-finite or negative input.
+    /// Blank is fine (watchlist rows); anything else must parse.
+    static func isReadableAmount(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || parseAmount(text) != nil
+    }
+
+    static func parseAmount(_ text: String, locale: Locale = .current) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let plain = Double(trimmed) {
+            return plain.isFinite && plain >= 0 ? plain : nil
+        }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.isLenient = true
+        guard let value = formatter.number(from: trimmed)?.doubleValue, value.isFinite, value >= 0 else {
+            return nil
+        }
+        return value
     }
     private var _unitSize: String
     var currency: String?
@@ -63,7 +112,7 @@ struct Position: Codable, Equatable {
         let detectedCostCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
         
         // Convert GBX to GBP for UK stocks if needed
-        if symbol.uppercased().hasSuffix(".L") && detectedCostCurrency == "GBX" {
+        if SymbolMetadata.isUKSymbol(symbol) && detectedCostCurrency == "GBX" {
             return rawCost / 100.0
         }
         
@@ -72,7 +121,7 @@ struct Position: Codable, Equatable {
     
     /// Auto-detects the likely currency unit based on the symbol
     private func autoDetectCostCurrency(for symbol: String) -> String {
-        if symbol.uppercased().hasSuffix(".L") {
+        if SymbolMetadata.isUKSymbol(symbol) {
             return "GBX" // UK stocks are typically quoted in pence
         }
         return "USD" // Default to USD for other stocks
@@ -254,12 +303,17 @@ struct TradingInfo: Codable {
         // Return the most relevant price based on market state
         switch marketState {
         case "PRE":
-            return preMarketPrice ?? currentPrice
+            return validExtendedSessionPrice(preMarketPrice) ?? currentPrice
         case "POST":
-            return postMarketPrice ?? currentPrice
+            return validExtendedSessionPrice(postMarketPrice) ?? currentPrice
         default:
             return currentPrice
         }
+    }
+
+    private func validExtendedSessionPrice(_ price: Double?) -> Double? {
+        guard let price, price.isFinite, price > 0 else { return nil }
+        return price
     }
     
     func getCurrentDisplayPriceString() -> String {

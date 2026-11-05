@@ -6,14 +6,14 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
     var service: TechnicalIndicatorService!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         service = TechnicalIndicatorService.shared
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         service = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - Simple Moving Average (SMA) Tests
@@ -119,6 +119,22 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
         // Then: Should return empty
         XCTAssertTrue(ema.isEmpty, "EMA should return empty for insufficient data")
+    }
+
+    func testOBVIsUnavailableWhenEveryVolumeIsMissing() {
+        let data = (0..<3).map { index in
+            OHLCDataPoint(
+                timestamp: Date(timeIntervalSince1970: Double(index)),
+                open: 10,
+                high: 11,
+                low: 9,
+                close: 10 + Double(index),
+                volume: nil
+            )
+        }
+
+        XCTAssertTrue(service.calculateOBV(data: data).isEmpty)
+        XCTAssertTrue(service.calculateVolumeMA(data: data, period: 2).isEmpty)
     }
 
     // MARK: - RSI (Relative Strength Index) Tests
@@ -270,8 +286,8 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
         // Verify relationships: lower < middle < upper
         for band in bands {
-            XCTAssertLessThan(band.lowerBand, band.middleBand, "Lower band should be below middle")
-            XCTAssertLessThan(band.middleBand, band.upperBand, "Middle band should be below upper")
+            XCTAssertLessThan(band.lower, band.middle, "Lower band should be below middle")
+            XCTAssertLessThan(band.middle, band.upper, "Middle band should be below upper")
         }
     }
 
@@ -286,8 +302,8 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
         // Then: High volatility bands should be wider
         if let lowLast = lowVolBands.last, let highLast = highVolBands.last {
-            let lowWidth = lowLast.upperBand - lowLast.lowerBand
-            let highWidth = highLast.upperBand - highLast.lowerBand
+            let lowWidth = lowLast.upper - lowLast.lower
+            let highWidth = highLast.upper - highLast.lower
             XCTAssertGreaterThan(highWidth, lowWidth, "High volatility should produce wider bands")
         }
     }
@@ -315,6 +331,33 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
 
     // MARK: - Helper Methods
 
+    func testRSI_IsHundredForSteadyGainsWhateverThePriceScale() {
+        let rising = (0..<30).map { makeBar(day: $0, close: 0.50 + Double($0) * 0.01) }
+        let flat = (0..<30).map { makeBar(day: $0, close: 0.50) }
+
+        XCTAssertEqual(service.calculateRSI(data: rising, period: 14).map(\.1), Array(repeating: 100, count: 16))
+        XCTAssertEqual(service.calculateRSI(data: flat, period: 14).last?.1, 50)
+    }
+
+    func testMACD_PairsFastAndSlowEMAsFromTheSameBar() {
+        let data = createMockOHLCData(count: 60, startPrice: 100, volatility: 0.03)
+        let fast = service.calculateEMA(data: data, period: 12)
+        let slow = service.calculateEMA(data: data, period: 26)
+
+        let macd = service.calculateMACD(data: data)
+
+        let last = try? XCTUnwrap(macd.last)
+        XCTAssertEqual(last?.timestamp, data.last?.timestamp)
+        XCTAssertEqual(last?.macdLine ?? .nan, fast[fast.count - 1].1 - slow[slow.count - 1].1, accuracy: 1e-9)
+    }
+
+    private func makeBar(day: Int, close: Double) -> OHLCDataPoint {
+        OHLCDataPoint(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000 + Double(day) * 86_400),
+            open: close, high: close, low: close, close: close, volume: 1000
+        )
+    }
+
     private func createMockOHLCData(count: Int, startPrice: Double, volatility: Double = 0.02) -> [OHLCDataPoint] {
         var data: [OHLCDataPoint] = []
         var price = startPrice
@@ -339,18 +382,5 @@ final class TechnicalIndicatorServiceTests: XCTestCase {
         }
 
         return data
-    }
-}
-
-// MARK: - OHLCDataPoint Extension for Testing
-
-extension OHLCDataPoint {
-    init(timestamp: Date, open: Double, high: Double, low: Double, close: Double, volume: Int64) {
-        self.timestamp = timestamp
-        self.open = open
-        self.high = high
-        self.low = low
-        self.close = close
-        self.volume = volume
     }
 }
