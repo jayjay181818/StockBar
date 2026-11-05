@@ -1,14 +1,14 @@
 # StockBar
 
-**Version 2.4.4** | **macOS 15.4+** | **Swift 5 mode, complete strict-concurrency checking**
+**Version 3.0.0** | **macOS 15.4+** | **Swift 5 mode, complete strict-concurrency checking**
 
 StockBar is a native macOS menu bar and portfolio window app for tracking holdings, watchlists, gains/losses, charts, alerts, backups, diagnostics, and multi-currency market data. It supports manual portfolios and linked Trading 212 broker holdings while keeping the existing yfinance/FMP/Twelve Data/Stooq market-data and historical-chart pipeline intact.
 
 ## Key Features
 
 ### Portfolio And Holdings
-- Native Stockbar window with sidebar navigation: Holdings, Charts, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, and Settings.
-- Editable Holdings table for visibility, symbol, units, average cost, currency, current price, value, Day P/L, Total P/L, and row actions.
+- Native Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Performance, Risk, Allocation), Maintenance (Backups, Data Health, Diagnostics) and Settings. The sidebar footer shows the active portfolio source, the last update and a Refresh button.
+- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus current price, value, Day P/L and Total P/L.
 - Day P/L and Total P/L columns toggle between amount and percentage when clicked.
 - Net Value, Total Net Gains, and Tracked Symbols summary cards with currency symbols, thousands
   separators, and USD equivalents in brackets when USD is not the primary display currency.
@@ -63,12 +63,13 @@ StockBar is a native macOS menu bar and portfolio window app for tracking holdin
 - The portfolio dropdown `1D` reconstructs the current portfolio over the last 24 hours from
   current holdings plus available symbol snapshots/live samples, with missing symbol history
   fetched in the background when coverage is thin.
-- Menu bar values update from Trading 212 broker sync for linked holdings and from market-data refreshes for manual/watchlist symbols.
+- Menu bar values update from Trading 212 broker sync for linked holdings, from Folync when it is the portfolio source, and from market-data refreshes for manual/watchlist symbols.
+- Stock items can be limited to times when an external display is connected (Settings -> Menu Bar -> Menu Bar Visibility).
 
 ### Settings
 - Embedded Settings section in the main Stockbar window with tabs: General, Menu Bar, Appearance, Connections, Refresh, and Advanced.
 - App menu Settings, `Cmd+,`, sidebar Settings, and menu popover Preferences all route to the embedded Settings section.
-- Connections includes API key fields for FMP and Twelve Data, fetch priority/fallback order, and Trading 212 broker configuration.
+- Connections includes API key fields for FMP and Twelve Data (with Save & Test and Remove), the Folync portfolio source, fetch priority/fallback order, and Trading 212 broker configuration.
 - Trading 212 settings include enable/disable, environment, account type, account label, credential status, Test Connection, Preview Import, Link Matched Holdings, auto-sync settings, and missing-position deletion behavior.
 - Sensitive credential fields stay empty after save by design; stored status is shown instead.
 
@@ -88,7 +89,7 @@ StockBar uses a hybrid Swift + Python architecture:
 
 - **Swift/AppKit/SwiftUI**: Main app windows, settings, menu bar controllers, portfolio state, Trading 212 provider, broker sync, analytics, diagnostics, and persistence orchestration.
 - **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
-- **Keychain**: Trading 212 credentials and other secrets where supported.
+- **Keychain**: Trading 212 credentials, the Folync client token and market-data API keys.
 - **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches when the corresponding Folync category is disabled, unavailable with fallback enabled, or the symbol is local-only.
 - **MarketDataProvider path**: yfinance, FMP, Twelve Data, and Stooq for quotes, watchlists, and history.
 - **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
@@ -115,11 +116,13 @@ cd StockBar
 open Stockbar.xcodeproj
 ```
 
-Or build/run from this local workspace:
+Or build and launch from the command line:
 
 ```bash
-./script/build_and_run.sh --verify
+bash script/develop.sh run
 ```
+
+Upgrading from 2.x: make a backup first (Backups -> Back Up Now). The first 3.0.0 launch migrates the store in place, and older backups still restore.
 
 ### Manual Portfolio Setup
 1. Launch StockBar.
@@ -127,7 +130,7 @@ Or build/run from this local workspace:
 3. Go to Holdings.
 4. Use Add Holding to add or edit manual positions.
 5. Use Settings -> Connections to configure market-data API keys and provider priority if needed.
-6. Use Charts, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, and Settings from the sidebar as needed.
+6. Use Overview, Performance, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, and Settings from the sidebar as needed.
 
 ### Trading 212 Setup
 1. Open Settings -> Connections.
@@ -168,6 +171,8 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
   missing held-symbol history in the background when needed.
 - The live chart samples are memory-only and do not increase historical snapshot writes.
 - Risk and Allocation views use stored portfolio and historical data.
+- Allocation, attribution and risk convert every position into one currency with current exchange rates. Until every position can be valued that way (for example before the first rate refresh), Allocation shows no sector data rather than a mixed or estimated split.
+- Holdings with no known sector appear as **Unclassified** and are left out of the diversification score.
 
 ### Backups And Data Health
 - Create a backup before large portfolio changes or broker-linking work.
@@ -193,7 +198,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 
 ### Storage
 - **UserDefaults**: non-secret preferences and settings.
-- **Keychain**: Trading 212 API Key/API Secret.
+- **Keychain**: Trading 212 API Key/API Secret, the Folync client token and FMP/Twelve Data keys.
 - **Core Data**: portfolio trades, trading info, historical data, portfolio snapshots.
 - **Broker links**: local broker-link records keyed by broker account and instrument identity.
 - **Folync supplemental cache**: separate atomic Application Support files keyed by endpoint fingerprint, scope, resource, identity, and range. ETag, payload, and receipt time are stored; bearer tokens are never cached.
@@ -213,8 +218,16 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - FMP `403` messages usually indicate key/plan limits; keys are redacted in logs.
 - Python `urllib3`/LibreSSL warnings can appear from the local Python environment and are separate from Trading 212 broker sync.
 
+### Folync Shows "Not Configured" After An Update Or Rebuild
+- macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read, so Folync reports "not configured", exchange rates don't refresh and Allocation stays empty.
+- Choose **Always Allow** in the prompt. Locally built ad-hoc-signed builds ask again after every rebuild; builds signed with a stable identity ask once.
+
+### Menu Bar Item Missing
+- A full menu bar, the notch, or a menu-bar manager can hide the portfolio item. Check the manager's hidden section first.
+- Stock items also hide when **Only with an external display** is on and no external display is connected.
+
 ### Logs
-- Diagnostics shows redacted logs.
+- Diagnostics shows redacted logs. **Clear Logs** asks for confirmation and offers to export a copy first.
 - Log files are stored under `~/Library/Logs/com.stockbar/stockbar.log`.
 - Trading 212 sync health can be confirmed by log lines like:
 
@@ -227,30 +240,43 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 ### Useful Commands
 
 ```bash
-# Build
-xcodebuild build -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
-
-# Test
-xcodebuild test -project Stockbar.xcodeproj -scheme Stockbar -destination 'platform=macOS'
-
-# Build and run local debug app
-./script/build_and_run.sh --verify
-
-# Python market-data smoke test
-python3 Stockbar/Resources/get_stock_data.py AAPL
+bash script/develop.sh build          # Debug build, signing disabled, no launch
+bash script/develop.sh test           # Full XCTest suite
+bash script/develop.sh python-tests   # Offline Python helper tests
+bash script/develop.sh checks         # SwiftLint, entitlements, invariants, docs
+bash script/develop.sh docs-check     # Documentation links and structure
+bash script/develop.sh run            # Signed build and launch
 ```
 
+See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rules, the acceptance harness, and the release and dependency-update process.
+
+### Contributing
+- Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build, test and analyze gates on every PR.
+- Releases are tagged `vX.Y.Z` on the merged commit.
+- Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
+
 ### Test Coverage
-- Portfolio calculation tests cover day/total P/L amount and percentage calculations.
-- Trading 212 auth tests cover API Key/API Secret Basic auth and secret redaction.
-- Trading 212 preview/resolver tests cover UK `.L`/`.LON`/legacy `.XC`, LSE/GBP hints, US symbols, HIMS aliasing, and manual-match safety.
-- Trading 212 broker-link/sync tests cover broker account keys, linked updates, missing-position deletion behavior, 30-second sync defaults, and GBX/GBP normalization.
-- Portfolio menu chart tests cover display-only `1D` synthetic history, mixed-currency holdings,
-  low-coverage filtering, background fetch candidate selection, and preserved `1W`/`1M` behavior.
+- 509 XCTest tests plus offline Python tests run in CI.
+- Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
+- Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
+- Trading 212 tests cover auth and redaction, ticker resolution (including London-listed USD ETFs), linking, empty-response safety and account re-keying.
+- Folync tests cover sessions, 401/429 backoff, cache corruption, supplemental routing and partial benchmarks.
+- Analytics tests cover risk, correlation, attribution, indicators, sector classification and chart reload targeting.
+- Test runs use isolated defaults, storage and Keychain items and never touch the real app data.
 
 ## Release History
 
-### Version 2.4.4 (Current) - Trading 212 Broker Valuation Accuracy
+### Version 3.0.0 (Current) - Reliability And Data-Safety Release
+- **Data Safety**: Stored price history is loaded and kept; recalculations never replace recorded snapshots; saves are atomic and ordered; a failed startup load can no longer lead to the stored portfolio being overwritten.
+- **Crash And Broker Fixes**: Duplicate symbols no longer crash the app; an empty Trading 212 response no longer deletes linked holdings; account-label or key changes keep broker links.
+- **Backups**: Safer restores, Folync-aware backups, more fields preserved, newest five always kept.
+- **Folync**: Shared 401/429 backoff, corrupt-cache recovery, isolated Test Connection and Preview.
+- **Correct Numbers**: Missing exchange rates no longer break totals; correct UK, ZAc and ILA minor-unit handling; single-currency analytics; fixed risk, indicator and attribution maths; honest range changes.
+- **Interface**: Redesigned main window and settings, confirmations for destructive actions, removable API keys, accessibility and Reduce Motion support.
+- **Upgrade**: Stored data is migrated on first launch; back up first.
+- See [Changelogs/release_notes_v3.0.0.md](./Changelogs/release_notes_v3.0.0.md).
+
+### Version 2.4.4 - Trading 212 Broker Valuation Accuracy
 - **Broker Account Value**: Linked Trading 212 portfolios use the broker account value, including cash, for Net Value and portfolio summaries while a matching valuation snapshot is fresh.
 - **Broker P/L**: Linked position and portfolio Total P/L use Trading 212 unrealised P/L and cost data when available; Day P/L retains Stockbar's previous-close calculation.
 - **Currency Safety**: Broker values are converted from the account currency without revaluing broker-provided GBP positions through the local USD path, with GBX/GBP normalization preserved.
@@ -312,4 +338,4 @@ python3 Stockbar/Resources/get_stock_data.py AAPL
 
 Built with Swift, SwiftUI, AppKit, Core Data, and Python/yfinance.
 
-Last updated: July 12, 2026 - Version 2.4.4
+Last updated: November 5, 2026 - Version 3.0.0

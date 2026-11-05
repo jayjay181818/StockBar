@@ -40,6 +40,14 @@ The acceptance harness requires an existing manifest below the operating-system 
 
 The app source folder is synchronized into Xcode. New app Swift files compile automatically; new XCTest Swift files require explicit project membership. Internal agent docs must remain excluded from app resources. Directory `AGENTS.md` files contain local exceptions, while [architecture](Architecture.md) contains background explanations. Keep one canonical instruction file per directory; tool adapters point to shared guidance.
 
+## Branches, releases and dependencies
+
+Work on a branch and open a pull request into `testing`; do not push to `testing` or `main` directly. CI runs on every pull request to either branch. To release, bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the project, add `Changelogs/release_notes_vX.Y.Z.md`, update the README version and release history, then tag `vX.Y.Z` on the merged commit.
+
+[Dependabot](../.github/dependabot.yml) opens weekly, grouped pull requests into `testing` for GitHub Actions and the pinned Python helper packages. `urllib3` stays on 1.26.x because the runtime target is Apple's `/usr/bin/python3` 3.9 with LibreSSL; check that CI's Python tests pass before merging any helper update.
+
+Before publishing, search the diff for credentials, tokens, private hostnames, personal paths and real portfolio data. Private notes belong in ignored files (see [.gitignore](../.gitignore)).
+
 ## Logs and recovery
 
 Normal logs resolve to `~/Library/Logs/<bundle-id>/stockbar.log` with rotation; acceptance logs use its temporary root. Diagnostics in the main window also displays logs. Use [backup/restore procedures](../Scripts/README.md) for recovery; file backups do not export broker/Folync Keychain credentials.
