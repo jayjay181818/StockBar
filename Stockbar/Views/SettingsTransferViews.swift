@@ -242,7 +242,7 @@ final class SettingsTransferModel {
         alert.window.level = .floating
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else {
-            NSApp.terminate(nil)
+            StockbarRelauncher.quitAfterCurrentWork()
             return
         }
         do {
@@ -253,7 +253,7 @@ final class SettingsTransferModel {
             failure.informativeText = "\(error.localizedDescription) Stockbar will quit now. Open it again to use the imported settings."
             failure.addButton(withTitle: "Quit")
             failure.runModal()
-            NSApp.terminate(nil)
+            StockbarRelauncher.quitAfterCurrentWork()
         }
     }
 
