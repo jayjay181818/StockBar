@@ -207,7 +207,8 @@ extension DataModel {
     }
 
     private func isFolyncSessionCurrent(generation: UUID, settings: FolyncStoredSettings? = nil) -> Bool {
-        guard !Task.isCancelled, generation == folyncRefreshGeneration else { return false }
+        guard !Task.isCancelled, !isBackgroundWorkPausedForImport,
+              generation == folyncRefreshGeneration else { return false }
         let current = folyncSessionDependencies.settingsStore.load()
         guard current.isEnabled else { return false }
         if let settings {

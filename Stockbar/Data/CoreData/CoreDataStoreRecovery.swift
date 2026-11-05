@@ -81,8 +81,7 @@ struct CoreDataStoreRecovery {
             throw CoreDataStoreRecoveryError.noStoreFilesFound
         }
 
-        let backupDirectory = recoveryRoot.appendingPathComponent(makeBackupDirectoryName(), isDirectory: true)
-        try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        let backupDirectory = try makeBackupDirectory(prefix: "store-load-failure")
 
         let copiedFiles = try sourceFiles.map { sourceURL in
             let destinationURL = backupDirectory.appendingPathComponent(sourceURL.lastPathComponent)
@@ -107,10 +106,14 @@ struct CoreDataStoreRecovery {
             .appendingPathComponent("StoreRecovery", isDirectory: true)
     }
 
-    private func makeBackupDirectoryName() -> String {
+    /// Creates a new, uniquely named directory under the recovery root.
+    func makeBackupDirectory(prefix: String) throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        return "store-load-failure-\(formatter.string(from: timestampProvider()))-\(UUID().uuidString.prefix(8))"
+        let name = "\(prefix)-\(formatter.string(from: timestampProvider()))-\(UUID().uuidString.prefix(8))"
+        let directory = recoveryRoot.appendingPathComponent(name, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }

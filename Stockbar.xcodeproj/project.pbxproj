@@ -23,6 +23,7 @@
 		04C0FFEE000000000000001E /* TechnicalIndicatorServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */; };
 		04C0FFEE0000000000000020 /* ProjectTestTargetMembershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */; };
 		04C0FFEE0000000000000022 /* LogRedactorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000023 /* LogRedactorTests.swift */; };
+		04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000041 /* SettingsTransferTests.swift */; };
 		04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */; };
 		04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */; };
 		04C0FFEE0000000000000A03 /* RefreshSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */; };
@@ -53,6 +54,7 @@
 		04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TechnicalIndicatorServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectTestTargetMembershipTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000023 /* LogRedactorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRedactorTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000041 /* SettingsTransferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTransferTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStoreRecoveryTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OHLCFetchServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshSchedulerTests.swift; sourceTree = "<group>"; };
@@ -158,6 +160,7 @@
 				04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */,
 				04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */,
 				04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */,
+				04C0FFEE0000000000000041 /* SettingsTransferTests.swift */,
 			);
 			path = StockbarTests;
 			sourceTree = "<group>";
@@ -310,6 +313,7 @@
 				04C0FFEE0000000000000032 /* StockbarAcceptanceRuntimeTests.swift in Sources */,
 				04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */,
 				04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */,
+				04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

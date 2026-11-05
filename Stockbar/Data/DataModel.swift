@@ -190,6 +190,9 @@ class DataModel {
     @ObservationIgnored private var isMemoryOptimizationEnabled = true
     @ObservationIgnored private var hasCompletedInitialTradeLoad = false
     @ObservationIgnored private var mayStartRuntimeSchedulers = false
+    /// Set while a settings import runs and until relaunch; cleared only when
+    /// a failed import is rolled back.
+    @ObservationIgnored private(set) var isBackgroundWorkPausedForImport = false
 
     var userData: UserData {
         didSet {
@@ -293,7 +296,9 @@ class DataModel {
             // Wait 60 seconds after app startup to avoid interfering with initial data loading
             try? await Task.sleep(nanoseconds: 60_000_000_000)
 
-            guard mayStartRuntimeSchedulers else { return }
+            // A settings import pauses background work until Stockbar relaunches;
+            // this delayed work must not write the old in-memory state meanwhile.
+            guard mayStartRuntimeSchedulers, !isBackgroundWorkPausedForImport else { return }
 
             // Check if migration service indicates retroactive calculation is needed
             if migrationService.needsRetroactiveCalculation {
@@ -309,8 +314,11 @@ class DataModel {
             }
 
             // AUTO-BACKFILL: Delegate to HistoricalDataCoordinator for startup backfill
+            guard !isBackgroundWorkPausedForImport else { return }
             let symbols = legacyHistoryBackfillSymbols(from: realTimeTrades.map { $0.trade.name })
-            await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols)
+            await historicalDataCoordinator.performStartupBackfillIfNeeded(symbols: symbols) { [weak self] in
+                self?.isBackgroundWorkPausedForImport ?? true
+            }
         }
 
         // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
@@ -500,7 +508,7 @@ class DataModel {
 
     /// Set once Core Data has held a portfolio (or legacy trades were recovered
     /// once). After that an empty store means the user emptied it on purpose.
-    static let coreDataPortfolioEstablishedKey = "coreDataPortfolioEstablished"
+    nonisolated static let coreDataPortfolioEstablishedKey = "coreDataPortfolioEstablished"
 
     private func recoverLegacyUserTradesIfNeeded(afterLoading trades: [Trade]) async throws -> [Trade] {
         let defaults = StockbarRuntimeStorage.userDefaults
@@ -779,7 +787,7 @@ class DataModel {
         trading212NextScheduledAttempt = .distantPast
         trading212ScheduledFailureCount = 0
 
-        guard !isFolyncPortfolioActive else { return }
+        guard !isFolyncPortfolioActive, !isBackgroundWorkPausedForImport else { return }
 
         let settings = trading212SettingsStore.load()
         let credentialState = trading212CredentialStore.storageState(environment: settings.environment)
@@ -1599,6 +1607,48 @@ class DataModel {
         // Delegate to RefreshService
         Task { @MainActor in
             refreshService?.startRefreshTimer()
+        }
+    }
+
+    // MARK: - Settings Import
+
+    /// Stops market refresh, Trading 212 and Folync syncs and scheduled
+    /// backfills, and writes pending changes first, so nothing writes the old
+    /// in-memory state over imported settings or data before Stockbar relaunches.
+    func pauseBackgroundWorkForImport() async {
+        isBackgroundWorkPausedForImport = true
+        await flushPendingPersistence()
+        refreshService?.stopRefreshTimer()
+        trading212BrokerSyncTimer?.invalidate()
+        trading212BrokerSyncTimer = nil
+        trading212BrokerSyncTask?.cancel()
+        trading212BrokerSyncTask = nil
+        // A new generation makes in-flight Folync work stale.
+        folyncRefreshGeneration = UUID()
+        folyncRefreshTimer?.invalidate()
+        folyncRefreshTimer = nil
+        folyncRefreshTask?.cancel()
+        folyncRefreshTask = nil
+        folyncSupplementalRefreshTimer?.invalidate()
+        folyncSupplementalRefreshTimer = nil
+        folyncSupplementalRefreshTask?.cancel()
+        folyncSupplementalRefreshTask = nil
+        BackfillScheduler.shared.stop()
+    }
+
+    /// Restarts what `pauseBackgroundWorkForImport()` stopped, after an import
+    /// failed and was rolled back.
+    func resumeBackgroundWorkAfterFailedImport() async {
+        isBackgroundWorkPausedForImport = false
+        refreshService?.startRefreshTimer()
+        if isFolyncEnabled {
+            await restartFolyncPortfolioScheduler(runImmediately: false)
+        }
+        if !isFolyncPortfolioActive {
+            restartTrading212LinkedSyncScheduler(runImmediately: false)
+        }
+        if mayStartRuntimeSchedulers {
+            BackfillScheduler.shared.start(dataModel: self)
         }
     }
 

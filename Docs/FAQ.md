@@ -134,6 +134,10 @@ Yes. Settings → Menu Bar → Display Mode → Custom, with the tokens listed i
 
 Stockbar makes one automatic backup per day while running. The Backups screen and Settings → Advanced → Backups offer Back Up Now, Restore from Backup and View Backups, and how long to keep them (30 days by default). Backups are plain JSON listing your holdings, so store them privately. Keychain credentials are not included. Command-line recovery is described in [Scripts/README.md](../Scripts/README.md).
 
+### How do I move Stockbar to another Mac?
+
+Use Settings → Advanced → Export & Import. Choose **Everything** to bring your portfolio and history as well as your settings and keys, or **Settings & Keys** for just those. The export is encrypted with a password you choose; keep both safe. On the new Mac, choose **Import…**, check what the file contains, and confirm. Stockbar then relaunches. Set up Stockbar's Python on the new Mac when asked.
+
 ### Where are the logs?
 
 Diagnostics in the main window shows them; the file is `~/Library/Logs/com.stockbar/stockbar.log`. Credentials and API keys are redacted.
