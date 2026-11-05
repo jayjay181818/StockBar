@@ -130,6 +130,7 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 ## Backups, Data Health and Diagnostics
 
 - **Backups** — Stockbar makes an automatic backup once a day. The Backups screen (and Settings → Advanced → Backups) shows the last backup and offers **Back Up Now**, **Restore from Backup…** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
+- **Export & Import** — Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds your preferences plus the FMP, Twelve Data, Trading 212 and Folync keys. **Everything** adds your portfolio database; its estimated size is shown first. The file contains your API keys, so keep it and its password safe. **Import…** shows what the file contains and asks before replacing anything. Keys not in the file stay as they are, and Stockbar backs up your portfolio before replacing it, then relaunches. The Python setup, window positions and caches are not exported.
 - **Data Health** — price and exchange-rate freshness, portfolio source, tracked symbols, menu-bar visibility and preferred currency.
 - **Diagnostics** — view, refresh and clear the log. The log file is at `~/Library/Logs/com.stockbar/stockbar.log`.
 

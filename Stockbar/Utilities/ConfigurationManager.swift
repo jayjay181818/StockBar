@@ -6,24 +6,36 @@ public final class ConfigurationManager: @unchecked Sendable {
     public static let shared = ConfigurationManager()
     private let fileManager = FileManager.default
     private let lock = NSRecursiveLock()
+    /// Set only for isolated tests; production uses Application Support.
+    private let directoryOverride: URL?
 
-    private init() {}
+    private init() {
+        directoryOverride = nil
+    }
+
+    /// A manager whose file lives in `directory`. For isolated tests.
+    init(directory: URL) {
+        directoryOverride = directory
+    }
 
     /// Gets the configuration file URL in Stockbar's Application Support directory.
     private func getConfigFileURL() -> URL? {
         lock.lock()
         defer { lock.unlock() }
-        let directory = StockbarRuntimeStorage.bundleApplicationSupportDirectory(fileManager: fileManager)
+        let directory = directoryOverride
+            ?? StockbarRuntimeStorage.bundleApplicationSupportDirectory(fileManager: fileManager)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
             let canonicalURL = directory.appendingPathComponent(".stockbar_config.json")
-            migrateLegacyConfigIfNeeded(to: canonicalURL)
+            if directoryOverride == nil {
+                migrateLegacyConfigIfNeeded(to: canonicalURL)
+            }
             return canonicalURL
         } catch {
             Task { await Logger.shared.error("Failed to create configuration directory: \(error.localizedDescription)") }
         }
 
-        if StockbarRuntimeStorage.acceptance.isEnabled { return nil }
+        if StockbarRuntimeStorage.acceptance.isEnabled || directoryOverride != nil { return nil }
         return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stockbar_config.json")
     }
 
@@ -192,6 +204,85 @@ public final class ConfigurationManager: @unchecked Sendable {
         }
     }
 
+    // MARK: - Settings Transfer
+
+    /// Values a settings export carries. Throws when the file exists but
+    /// cannot be read, rather than exporting nothing. Placeholder sample keys
+    /// are left out.
+    func exportableValues() throws -> ConfigurationTransferValues {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let config = try readConfigForTransfer() else {
+            return ConfigurationTransferValues(fmpAPIKey: nil, twelveDataAPIKey: nil, dataSourcePriority: nil)
+        }
+        func key(_ name: String, placeholder: String) -> String? {
+            guard let value = (config[name] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty, value != placeholder else { return nil }
+            return value
+        }
+        return ConfigurationTransferValues(
+            fmpAPIKey: key("FMP_API_KEY", placeholder: "your_fmp_api_key_here"),
+            twelveDataAPIKey: key("TWELVE_DATA_API_KEY", placeholder: "your_twelve_data_api_key_here"),
+            dataSourcePriority: config["DATA_SOURCE_PRIORITY"] as? [String]
+        )
+    }
+
+    /// The file's exact bytes, or nil when there is none, so an import can put it back unchanged.
+    func configurationFileContents() throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    /// Restores bytes from `configurationFileContents()`; nil removes the file.
+    func restoreConfigurationFile(_ contents: Data?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+        guard let contents else {
+            if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+            return
+        }
+        try contents.write(to: url, options: .atomic)
+        restrictPermissions(of: url)
+    }
+
+    /// Applies imported values in one write and throws instead of logging, so
+    /// an import can roll back. Nil API keys are left as they are; a nil
+    /// priority removes the setting so the default order applies.
+    func applyImportedValues(fmpAPIKey: String?, twelveDataAPIKey: String?, dataSourcePriority: [String]?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+        let existing = try readConfigForTransfer()
+        guard existing != nil || fmpAPIKey != nil || twelveDataAPIKey != nil || dataSourcePriority != nil else {
+            return
+        }
+        var config = existing ?? [:]
+        if let fmpAPIKey { config["FMP_API_KEY"] = fmpAPIKey }
+        if let twelveDataAPIKey { config["TWELVE_DATA_API_KEY"] = twelveDataAPIKey }
+        if let dataSourcePriority {
+            config["DATA_SOURCE_PRIORITY"] = dataSourcePriority
+        } else {
+            config.removeValue(forKey: "DATA_SOURCE_PRIORITY")
+        }
+        let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+        restrictPermissions(of: url)
+    }
+
+    private func readConfigForTransfer() throws -> [String: Any]? {
+        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        guard let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return config
+    }
+
     // MARK: - File Management
 
     /// Gets the configuration file path for display
@@ -222,4 +313,11 @@ public final class ConfigurationManager: @unchecked Sendable {
         saveConfig(sampleConfig)
         Task { await Logger.shared.info("Sample configuration file created at: \(configFileURL.path)") }
     }
+}
+
+/// Market-data values carried by a settings export.
+struct ConfigurationTransferValues: Equatable, Sendable {
+    let fmpAPIKey: String?
+    let twelveDataAPIKey: String?
+    let dataSourcePriority: [String]?
 }
