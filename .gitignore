@@ -158,6 +158,7 @@ GITHUB_RELEASE_*.md
 .claude/settings.local.json
 .claude/worktrees/
 Docs/Opus5_Findings_2026-07-26_archive.md
+Docs/Remediation_Plan_*.md
 
 # Secrets and local data (never commit)
 .env
