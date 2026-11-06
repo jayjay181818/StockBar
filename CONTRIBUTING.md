@@ -536,7 +536,7 @@ Fixes #(issue number)
 **Description:**
 ```markdown
 ## Environment
-- Stockbar Version: [e.g., 3.3.0]
+- Stockbar Version: [e.g., 3.4.0]
 - macOS Version: [e.g., macOS 15.4]
 - Python Version: [e.g., 3.13.18]
 - yfinance Version: [e.g., 1.8.0]

@@ -117,7 +117,7 @@ London prices are often quoted in pence (**GBX**, 100 GBX = £1). Stockbar conve
 Settings → **Connections** manages optional sources. Credentials are stored in your Keychain.
 
 - **Trading 212** — link a read-only account, preview matches and differences, then link holdings. Linked positions take quantity, price, average cost and P&L from the broker.
-- **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Supplemental routes (history, candles, benchmarks, FX) can be switched on or off individually.
+- **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Supplemental routes (history, candles, benchmarks, FX) can be switched on or off individually. With VoiceOver, Stockbar speaks the result of each Folync action and of **Refresh Now**, and announces a connection problem once when it starts.
 
 Market-data API keys for FMP and Twelve Data, and the provider order, are also configured here.
 
