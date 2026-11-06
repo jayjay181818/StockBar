@@ -25,6 +25,7 @@
 		04C0FFEE0000000000000022 /* LogRedactorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000023 /* LogRedactorTests.swift */; };
 		04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000041 /* SettingsTransferTests.swift */; };
 		04C0FFEE0000000000000042 /* FolyncStatusAnnouncementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */; };
+		04C0FFEE0000000000000044 /* TestDefaultsSuite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000045 /* TestDefaultsSuite.swift */; };
 		04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */; };
 		04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */; };
 		04C0FFEE0000000000000A03 /* RefreshSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */; };
@@ -57,6 +58,7 @@
 		04C0FFEE0000000000000023 /* LogRedactorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRedactorTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000041 /* SettingsTransferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTransferTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolyncStatusAnnouncementTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000045 /* TestDefaultsSuite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDefaultsSuite.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStoreRecoveryTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OHLCFetchServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshSchedulerTests.swift; sourceTree = "<group>"; };
@@ -164,6 +166,7 @@
 				04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */,
 				04C0FFEE0000000000000041 /* SettingsTransferTests.swift */,
 				04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */,
+				04C0FFEE0000000000000045 /* TestDefaultsSuite.swift */,
 			);
 			path = StockbarTests;
 			sourceTree = "<group>";
@@ -318,6 +321,7 @@
 				04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */,
 				04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */,
 				04C0FFEE0000000000000042 /* FolyncStatusAnnouncementTests.swift in Sources */,
+				04C0FFEE0000000000000044 /* TestDefaultsSuite.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

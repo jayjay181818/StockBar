@@ -1562,9 +1562,9 @@ class PortfolioCalculationTests: XCTestCase {
             )
         }
 
-        let suiteName = "StockbarTests.MenuChartRange.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("StockbarTests.MenuChartRange.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let selectionStore = MenuChartTimeRangeSelectionStore(defaults: defaults)
         let firstViewModel = MenuChartViewModel(
             symbol: symbol,
@@ -2128,9 +2128,9 @@ class PortfolioCalculationTests: XCTestCase {
 
     @MainActor
     func testSymbolChartLoadsOnceOnPresentationAndCoalescesRangeAndPriceChanges() async {
-        let suite = "StockbarTests.ChartLoads.\(UUID().uuidString)"
+        let suite = TestDefaultsSuite.makeName("StockbarTests.ChartLoads.")
         let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaultsSuite.remove(suite) }
         let model = MenuChartViewModel(
             symbol: "CHART-\(UUID().uuidString)", currentPrice: 100, benchmarkSymbol: nil,
             timeRangeSelectionStore: MenuChartTimeRangeSelectionStore(defaults: defaults)
@@ -2163,10 +2163,10 @@ class PortfolioCalculationTests: XCTestCase {
             makePriceSnapshot(timestamp: now.addingTimeInterval(Double(index - 12) * 60),
                               price: Double(100 + index), symbol: symbol)
         }
-        let suite = "StockbarTests.ChartVisibility.\(UUID().uuidString)"
+        let suite = TestDefaultsSuite.makeName("StockbarTests.ChartVisibility.")
         let defaults = UserDefaults(suiteName: suite)!
         defer {
-            defaults.removePersistentDomain(forName: suite)
+            TestDefaultsSuite.remove(suite)
             manager.priceSnapshots.removeValue(forKey: symbol)
         }
         let model = MenuChartViewModel(
