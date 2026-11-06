@@ -54,8 +54,16 @@ struct StockbarAcceptanceRuntime: Sendable {
         root?.appendingPathComponent("Caches/stockbar-cache", isDirectory: true)
     }
 
+    /// An isolated run keeps its defaults inside its own root: a suite named by
+    /// an absolute path is stored at that path. A named suite would live in
+    /// ~/Library/Preferences, where macOS keeps an empty file after the domain
+    /// is removed and cfprefsd can write it back after it is deleted.
     var defaultsSuiteName: String? {
-        runID.map { "com.stockbar.acceptance.\($0)" }
+        guard let runID else { return nil }
+        let domain = "com.stockbar.acceptance.\(runID)"
+        guard let root else { return domain }
+        return root.appendingPathComponent("Preferences", isDirectory: true)
+            .appendingPathComponent(domain).path
     }
 
     var coreDataStoreURL: URL? {
@@ -87,8 +95,8 @@ struct StockbarAcceptanceRuntime: Sendable {
     /// explicit acceptance runs.
     func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
         guard isAutomaticXCTestIsolation else { return }
-        if let root { try? fileManager.removeItem(at: root) }
         if let defaultsSuiteName { UserDefaults.standard.removePersistentDomain(forName: defaultsSuiteName) }
+        if let root { try? fileManager.removeItem(at: root) }
         try? FolyncCredentialStore(service: folyncKeychainService).delete()
         let trading212Store = Trading212CredentialStore(service: trading212KeychainService)
         for environment in Trading212Environment.allCases {

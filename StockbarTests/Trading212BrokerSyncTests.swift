@@ -65,9 +65,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testExistingFolyncV1SettingsMigrateWithSupplementalRoutesDisabled() throws {
-        let suiteName = "FolyncSettingsMigrationTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncSettingsMigrationTests-")
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { suite.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let legacy = """
         {"isEnabled":true,"baseURL":"https://folync.example.test","scopeID":"all","pollingIntervalSeconds":60}
         """.data(using: .utf8)!
@@ -600,9 +600,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
 
     func testTrading212SyncSettingsDefaultToFiveMinuteAutoSync() {
         // Given a fresh install
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
 
         // When settings are loaded
         let settings = Trading212SettingsStore(defaults: defaults).load()
@@ -615,9 +615,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
 
     func testLegacyThirtySecondSyncIntervalIsMigratedToNewDefault() {
         // Given an install still carrying the old 30s default
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         defaults.set(30, forKey: "trading212.syncIntervalSeconds")
 
         // When the store is constructed
@@ -629,9 +629,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
 
     func testDeliberateSyncIntervalSurvivesTheDefaultMigration() {
         // Given a user who deliberately picked a non-default cadence
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         defaults.set(900, forKey: "trading212.syncIntervalSeconds")
 
         // When the store is constructed
@@ -643,9 +643,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
 
     func testSyncIntervalDefaultMigrationRunsOnlyOnce() {
         // Given an install migrated off the legacy default
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         defaults.set(30, forKey: "trading212.syncIntervalSeconds")
         _ = Trading212SettingsStore(defaults: defaults)
 
@@ -658,9 +658,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testTrading212SettingsDefaultToManualHoldingReconciliation() {
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         let settings = Trading212SettingsStore(defaults: defaults).load()
 
         XCTAssertFalse(settings.autoReconcileHoldingsEnabled)
@@ -669,9 +669,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testTrading212SettingsStorePersistsHourlyHoldingReconciliation() {
-        let suiteName = "Trading212SyncSettingsTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("Trading212SyncSettingsTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         let store = Trading212SettingsStore(defaults: defaults)
 
         var settings = Trading212StoredSettings.defaults
@@ -687,7 +687,7 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testTrading212SettingsStoreIgnoresLegacyMinuteIntervalForBrokerSyncDefault() {
-        let defaults = UserDefaults(suiteName: "Trading212SyncSettingsTests.\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: TestDefaultsSuite.makeName("Trading212SyncSettingsTests."))!
         defaults.set(5, forKey: "trading212.syncIntervalMinutes")
         let settings = Trading212SettingsStore(defaults: defaults).load()
 
@@ -918,9 +918,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testPreviewMatchesManualHoldingThroughKnownFolyncAlias() throws {
-        let suiteName = "folync-alias-preview-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("folync-alias-preview-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let identityStore = InstrumentAliasStore(defaults: defaults)
         identityStore.merge(["MNMD": "DFTX"])
 
@@ -937,9 +937,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testPreviewMatchesManualHoldingThroughFolyncISIN() throws {
-        let suiteName = "folync-isin-preview-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("folync-isin-preview-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let identityStore = InstrumentAliasStore(defaults: defaults)
         identityStore.mergeISIN("CA60255C8850", displaySymbol: "DFTX")
 
@@ -1203,9 +1203,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
     }
 
     func testAliasAwareHistoryKeepsRawSeriesAndPrefersRequestedDisplaySymbolAtCollision() throws {
-        let suiteName = "instrument-alias-history-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("instrument-alias-history-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let store = InstrumentAliasStore(defaults: defaults)
         store.merge(["MNMD": "DFTX"])
         let firstDate = Date(timeIntervalSince1970: 100)
@@ -1560,9 +1560,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
 
     @MainActor
     func testPortfolioMenuLoadsFolyncDayHistoryAndUsesReferenceOnlyWhenSparse() async throws {
-        let suiteName = "FolyncMenuHistory-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncMenuHistory-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
         let settingsStore = FolyncSettingsStore(defaults: defaults)
@@ -1658,9 +1658,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testPortfolioHistoryDoesNotRequireSupplementalMarketCharts() async throws {
-        let suiteName = "FolyncPortfolioHistory-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncPortfolioHistory-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(suiteName, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -1747,9 +1747,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testSupplementalAliasRoutingUsesETagsStaleCacheAndNeverStoresToken() async throws {
-        let suiteName = "FolyncSupplementalTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncSupplementalTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("folync-supplemental-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -1885,9 +1885,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testSupplementalFallbackPrecedenceForDisabledAndUnsupportedRoutes() async throws {
-        let suiteName = "FolyncFallbackTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncFallbackTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("folync-fallback-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -1939,9 +1939,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testCapabilitiesRemainDiscoverableWhenMigratedSupplementalRoutesAreDisabled() async throws {
-        let suiteName = "FolyncCapabilityDiscoveryTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncCapabilityDiscoveryTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("folync-capability-discovery-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -1984,9 +1984,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testExplicitMarketIdentityReadinessCannotBeBypassedByTrackedSymbol() async throws {
-        let suiteName = "FolyncMissingIdentityTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncMissingIdentityTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("folync-missing-identity-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -2034,9 +2034,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testSupplementalBenchmarkAndFXRoutesUseFolyncWithoutLegacyRequests() async throws {
-        let suiteName = "FolyncBenchmarkFXTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncBenchmarkFXTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("folync-benchmark-fx-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -2347,9 +2347,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testBlockedKeychainReadDoesNotBlockTheSupplementalCoordinator() async throws {
-        let suiteName = "FolyncKeychainActor-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncKeychainActor-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
         let settingsStore = FolyncSettingsStore(defaults: defaults)
@@ -2456,9 +2456,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testSupplementalRoutesShareAndEnforceBackoffOn401And429() async throws {
-        let suiteName = "FolyncBackoffSupplemental-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncBackoffSupplemental-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(suiteName, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -2667,9 +2667,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     func testExtraAdvertisedFXQuotesAreRequestedAndAccepted() async throws {
-        let suiteName = "FolyncExtraFXQuotes-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncExtraFXQuotes-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(suiteName, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cacheDirectory) }
@@ -2929,7 +2929,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     private func makeIsolatedSessionEnvironment(storedToken: String = "test-token") throws -> IsolatedSessionEnvironment {
-        let suiteName = "FolyncSessionTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("FolyncSessionTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         let cacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(suiteName, isDirectory: true)
@@ -2966,7 +2966,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
             cacheDirectory: cacheDirectory,
             dependencies: dependencies,
             cleanup: {
-                defaults.removePersistentDomain(forName: suiteName)
+                TestDefaultsSuite.remove(suiteName)
                 try? FileManager.default.removeItem(at: cacheDirectory)
                 try? FileManager.default.removeItem(at: supplementalCacheDirectory)
             }

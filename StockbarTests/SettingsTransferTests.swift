@@ -511,7 +511,7 @@ private final class TransferSide {
 
     init(root: URL, withStore: Bool, brokerLinksURL: URL?) throws {
         let id = UUID().uuidString
-        let suite = "StockbarSettingsTransferTests-\(id)"
+        let suite = TestDefaultsSuite.makeName("StockbarSettingsTransferTests-")
         let configDirectory = root.appendingPathComponent("com.stockbar", isDirectory: true)
         let configuration = ConfigurationManager(directory: configDirectory)
         let trading212 = Trading212CredentialStore(service: "com.stockbar.tests.settings-transfer.trading212.\(id)")
@@ -548,7 +548,7 @@ private final class TransferSide {
 
     func removeArtifacts() {
         store?.close()
-        defaults.removePersistentDomain(forName: defaultsSuite)
+        TestDefaultsSuite.remove(defaultsSuite)
         for environment in Trading212Environment.allCases {
             try? trading212.delete(environment: environment)
         }

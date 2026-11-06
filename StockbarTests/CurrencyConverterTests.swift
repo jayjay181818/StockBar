@@ -161,9 +161,9 @@ class CurrencyConverterTests: XCTestCase {
     }
 
     func testActivatesLatestHistoricalRatesBeforeHardCodedFallback() throws {
-        let suiteName = "CurrencyConverterTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("CurrencyConverterTests-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let key = "currencyRateHistory"
 
         let historicalSnapshot = CurrencyRateSnapshot(
@@ -269,9 +269,9 @@ class CurrencyConverterTests: XCTestCase {
 
     @MainActor
     func testFailedLegacyRefreshRetriesSoonAndSuccessCancelsTheRetry() async throws {
-        let suiteName = "CurrencyRetry-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("CurrencyRetry-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         // refreshOnInit starts the hourly timer; the router keeps it offline.
         let converter = CurrencyConverter(
             exchangeRates: [:], refreshOnInit: true, loadHistoryOnInit: false,
