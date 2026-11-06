@@ -24,6 +24,7 @@
 		04C0FFEE0000000000000020 /* ProjectTestTargetMembershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */; };
 		04C0FFEE0000000000000022 /* LogRedactorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000023 /* LogRedactorTests.swift */; };
 		04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000041 /* SettingsTransferTests.swift */; };
+		04C0FFEE0000000000000042 /* FolyncStatusAnnouncementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */; };
 		04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */; };
 		04C0FFEE0000000000000026 /* OHLCFetchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */; };
 		04C0FFEE0000000000000A03 /* RefreshSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */; };
@@ -55,6 +56,7 @@
 		04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectTestTargetMembershipTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000023 /* LogRedactorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRedactorTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000041 /* SettingsTransferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTransferTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolyncStatusAnnouncementTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStoreRecoveryTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000027 /* OHLCFetchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OHLCFetchServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000A04 /* RefreshSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshSchedulerTests.swift; sourceTree = "<group>"; };
@@ -161,6 +163,7 @@
 				04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */,
 				04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */,
 				04C0FFEE0000000000000041 /* SettingsTransferTests.swift */,
+				04C0FFEE0000000000000043 /* FolyncStatusAnnouncementTests.swift */,
 			);
 			path = StockbarTests;
 			sourceTree = "<group>";
@@ -314,6 +317,7 @@
 				04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */,
 				04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */,
 				04C0FFEE0000000000000040 /* SettingsTransferTests.swift in Sources */,
+				04C0FFEE0000000000000042 /* FolyncStatusAnnouncementTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -460,7 +464,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 330;
+				CURRENT_PROJECT_VERSION = 340;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
@@ -472,7 +476,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.3.0;
+				MARKETING_VERSION = 3.4.0;
 					PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 					PRODUCT_NAME = "$(TARGET_NAME)";
 					REGISTER_APP_GROUPS = YES;
@@ -490,7 +494,7 @@
 				CODE_SIGN_ENTITLEMENTS = Stockbar/Stockbar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 330;
+				CURRENT_PROJECT_VERSION = 340;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -503,7 +507,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.3.0;
+				MARKETING_VERSION = 3.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.stockbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
