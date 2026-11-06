@@ -378,7 +378,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ### 🆕 Version 3.2.0 (current): Stockbar's own Python everywhere
 - **Setup**: Settings > Advanced > Python > Set Up works on a Mac with nothing installed. Stockbar downloads a pinned, checksum-verified uv and keeps it and its Python in its own folders.
-- **Python**: Apple's `/usr/bin/python3` 3.9 is no longer used. After updating, Stockbar asks once to set up its own Python.
+- **Python**: Apple's `/usr/bin/python3` 3.9 is no longer used. After updating, Stockbar asks once to set up its own Python, or to rebuild it (**Python Dependencies Required**) if you already had one. Choose **Set Up Automatically**.
 - **Market Data**: yfinance 1.8.0; the pandas warnings on every fetch are gone.
 - **Fixes**: Fetch errors say when Stockbar's Python is not set up and point to Set Up.
 - See [Changelogs/release_notes_v3.2.0.md](./Changelogs/release_notes_v3.2.0.md).
