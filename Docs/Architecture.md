@@ -56,6 +56,8 @@ Three sources coexist and must stay non-destructive to each other:
 | Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | FMP + Twelve Data keys, `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path) |
 | Keychain | `com.stockbar.folync`, Trading 212 service | Persistent broker/Folync credentials; acceptance fixtures use a separate restricted token file |
 
+Settings export/import (`SettingsTransferService`) seals an allowlist of defaults (`SettingsTransferKeys`), the config-file keys and Keychain credentials, and for Everything a Core Data copy, into one AES-GCM `.stockbarexport` file (`SettingsTransferContainer`). Imports validate everything first, snapshot the current state, and roll back on failure. `CoreDataStoreTransfer` copies and replaces stores through `replacePersistentStore`, and keeps the live store read-only until relaunch.
+
 ### Caching & failure policy
 
 `Stockbar/Services/CacheCoordinator.swift` owns freshness, retry intervals and circuit-breaker thresholds. Preserve that policy when adding fetch paths.

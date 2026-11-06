@@ -77,8 +77,10 @@ class HistoricalDataCoordinator {
     
     // MARK: - Startup & Scheduling
     
-    /// Performs startup backfill check if enabled by user preferences
-    func performStartupBackfillIfNeeded(symbols: [String]) async {
+    /// Performs startup backfill check if enabled by user preferences.
+    /// `isPaused` is checked again after the startup delay, so a settings
+    /// import that started in the meantime stops the backfill.
+    func performStartupBackfillIfNeeded(symbols: [String], isPaused: () -> Bool = { false }) async {
         // Check user preference for backfill schedule
         guard backfillSchedule == "startup" else {
             await logger.info("🔍 STARTUP: Skipping startup backfill - schedule set to '\(backfillSchedule)'")
@@ -93,6 +95,11 @@ class HistoricalDataCoordinator {
         
         // Wait 60 seconds after app startup to avoid interfering with initial data loading
         try? await Task.sleep(nanoseconds: 60_000_000_000)
+
+        guard !isPaused() else {
+            await logger.info("🔍 STARTUP: Skipping startup backfill - background work is paused for a settings import")
+            return
+        }
         
         await logger.info("🔍 STARTUP: Checking for missing historical data coverage")
         await logger.info("🚀 AUTO-BACKFILL: Starting automatic historical data check")

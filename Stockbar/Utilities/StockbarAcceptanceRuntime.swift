@@ -25,6 +25,7 @@ enum StockbarAcceptanceRuntimeError: Error, Equatable, LocalizedError {
 
 struct StockbarAcceptanceRuntime: Sendable {
     static let productionFolyncKeychainService = "com.stockbar.folync"
+    static let productionTrading212KeychainService = "com.stockbar.trading212"
     static let markerName = ".stockbar-acceptance-run"
 
     let root: URL?
@@ -33,6 +34,13 @@ struct StockbarAcceptanceRuntime: Sendable {
     let liveProviderRequestsAllowed: Bool
 
     var isEnabled: Bool { root != nil }
+
+    /// Acceptance and XCTest runs keep Trading 212 credentials in their own
+    /// Keychain service, like Folync, so they never read or replace the real item.
+    var trading212KeychainService: String {
+        guard let runID else { return Self.productionTrading212KeychainService }
+        return "\(Self.productionTrading212KeychainService).acceptance.\(runID)"
+    }
 
     var applicationSupportRoot: URL? {
         root?.appendingPathComponent("Application Support/Stockbar", isDirectory: true)
@@ -75,12 +83,17 @@ struct StockbarAcceptanceRuntime: Sendable {
     }
 
     /// Removes everything an automatic XCTest run created: temporary root, defaults
-    /// suite and Folync Keychain item. Never touches explicit acceptance runs.
+    /// suite, and its Folync and Trading 212 Keychain items. Never touches
+    /// explicit acceptance runs.
     func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
         guard isAutomaticXCTestIsolation else { return }
         if let root { try? fileManager.removeItem(at: root) }
         if let defaultsSuiteName { UserDefaults.standard.removePersistentDomain(forName: defaultsSuiteName) }
         try? FolyncCredentialStore(service: folyncKeychainService).delete()
+        let trading212Store = Trading212CredentialStore(service: trading212KeychainService)
+        for environment in Trading212Environment.allCases {
+            try? trading212Store.delete(environment: environment)
+        }
     }
 
     nonisolated(unsafe) private static var runtimePendingCleanup: Self?

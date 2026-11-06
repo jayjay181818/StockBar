@@ -279,7 +279,7 @@ actor BrokerLinkStore {
         )
     }
 
-    private static func defaultFileURL(fileManager: FileManager) -> URL {
+    static func defaultFileURL(fileManager: FileManager = .default) -> URL {
         StockbarRuntimeStorage
             .stockbarApplicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("BrokerLinks", isDirectory: true)

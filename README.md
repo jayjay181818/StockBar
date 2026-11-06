@@ -81,6 +81,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 
 ### 🛡️ Reliability
 - Automatic daily backups, restore from any backup, and Data Health and Diagnostics screens.
+- Password-protected export and import of settings, API keys and, optionally, the whole portfolio, for moving to another Mac.
 - Atomic, ordered Core Data saves, retry and cooldown for failing symbols, and redacted logs.
 
 <details>
@@ -147,6 +148,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 
 #### Reliability, Backups, And Diagnostics
 - Backups view for creating, inspecting, and restoring portfolio backups.
+- Settings → Advanced → Export & Import saves settings and API keys (**Settings & Keys**), or those plus the portfolio database (**Everything**), to one `.stockbarexport` file encrypted with AES-256-GCM under a password you choose. Import checks the whole file first, backs up the portfolio, rolls back on any failure, then offers to relaunch.
 - Data Health and Diagnostics views for current portfolio/cache state and log review.
 - Core Data persistence for trades, trading info, historical snapshots, and analytics data.
 - Broker links are stored separately from market quote/historical caches.
@@ -364,8 +366,9 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- 542 XCTest tests plus offline Python tests run in CI.
+- 559 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
+- Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
 - Trading 212 tests cover auth and redaction, ticker resolution (including London-listed USD ETFs), linking, empty-response safety and account re-keying.
 - Folync tests cover sessions, 401/429 backoff, cache corruption, supplemental routing and partial benchmarks.
@@ -376,9 +379,14 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.2.0 (current): Stockbar's own Python everywhere
+### 🆕 Version 3.3.0 (current): Export and import settings
+- **Export & Import**: Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds preferences and API keys; **Everything** adds the portfolio database.
+- **Fixes**: Relaunch Now and Quit after an import no longer hang. The Python Dependencies Required alert no longer offers a pip command that cannot work in Stockbar's own environment.
+- See [Changelogs/release_notes_v3.3.0.md](./Changelogs/release_notes_v3.3.0.md).
+
+### Version 3.2.0: Stockbar's own Python everywhere
 - **Setup**: Settings > Advanced > Python > Set Up works on a Mac with nothing installed. Stockbar downloads a pinned, checksum-verified uv and keeps it and its Python in its own folders.
-- **Python**: Apple's `/usr/bin/python3` 3.9 is no longer used. After updating, Stockbar asks once to set up its own Python.
+- **Python**: Apple's `/usr/bin/python3` 3.9 is no longer used. After updating, Stockbar asks once to set up its own Python, or to rebuild it (**Python Dependencies Required**) if you already had one. Choose **Set Up Automatically**.
 - **Market Data**: yfinance 1.8.0; the pandas warnings on every fetch are gone.
 - **Fixes**: Fetch errors say when Stockbar's Python is not set up and point to Set Up.
 - See [Changelogs/release_notes_v3.2.0.md](./Changelogs/release_notes_v3.2.0.md).
@@ -477,6 +485,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 5, 2026 · Version 3.2.0</sub>
+<sub>Last updated: November 6, 2026 · Version 3.3.0</sub>
 
 </div>
