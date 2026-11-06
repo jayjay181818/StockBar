@@ -41,7 +41,10 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.isEnabled)
         XCTAssertEqual(runtime.runID, "xctest-4242-run-0001")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
-        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.xctest-4242-run-0001")
+        XCTAssertEqual(
+            runtime.defaultsSuiteName,
+            try runtime.root.unwrap().appendingPathComponent("Preferences/com.stockbar.acceptance.xctest-4242-run-0001").path
+        )
         XCTAssertEqual(
             runtime.folyncKeychainService,
             "com.stockbar.folync.acceptance.xctest-4242-run-0001"
@@ -129,7 +132,10 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(try runtime.coreDataStoreURL.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.folyncSnapshotCacheRoot.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.folyncSupplementalCacheRoot.unwrap().isDescendant(of: root))
-        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.\(runID)")
+        XCTAssertEqual(
+            runtime.defaultsSuiteName,
+            root.standardizedFileURL.appendingPathComponent("Preferences/com.stockbar.acceptance.\(runID)").path
+        )
     }
 
     func testCacheManagerUsesAnExplicitAcceptanceCacheRoot() throws {
