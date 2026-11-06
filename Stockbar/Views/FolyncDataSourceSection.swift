@@ -14,6 +14,9 @@ struct FolyncDataSourceSection: View {
     @State private var supplemental = FolyncSupplementalSettings.disabled
     @State private var isWorking = false
     @State private var statusMessage: String?
+    @State private var manualRefreshInProgress = false
+    @State private var announcementPolicy = FolyncStatusAnnouncementPolicy()
+    private let accessibilityAnnouncer = FolyncStatusAccessibilityAnnouncer.live
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -64,18 +67,19 @@ struct FolyncDataSourceSection: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(isWorking || !canSubmitConnectionRequest || preview?.scope.id != selectedScope)
                 if dataModel.isFolyncEnabled {
-                    Button("Refresh Now") {
-                        statusMessage = nil
-                        Task { await dataModel.refreshFolyncPortfolio() }
-                    }
+                    Button("Refresh Now") { refreshNow() }
                     .disabled(isWorking)
                     Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync") {
                         dataModel.deactivateFolyncPortfolio()
-                        statusMessage = "Folync has been disabled."
+                        showStatus("Folync has been disabled.")
                     }
                     .disabled(isWorking)
                 }
-                if isWorking { ProgressView().controlSize(.small) }
+                if isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Folync request in progress")
+                }
             }
 
             if let setupHint, !dataModel.isFolyncEnabled {
@@ -87,6 +91,10 @@ struct FolyncDataSourceSection: View {
             Text(displayedStatusMessage)
                 .font(.caption)
                 .foregroundStyle(statusColor)
+                .accessibilityLabel("Folync status")
+                .accessibilityValue(Text(displayedStatusMessage))
+                .accessibilityAddTraits(.updatesFrequently)
+                .accessibilityIdentifier("folync-connection-status")
 
             if dataModel.isFolyncEnabled {
                 VStack(alignment: .leading, spacing: 3) {
@@ -165,6 +173,14 @@ struct FolyncDataSourceSection: View {
         .stockbarCard()
         .onAppear(perform: loadStoredSettings)
         .onChange(of: selectedScope) { _, _ in preview = nil }
+        .onChange(of: dataModel.folyncConnectionState) { _, newState in
+            // Background checks only; a manual refresh announces its own result.
+            guard !manualRefreshInProgress,
+                  statusMessage == nil,
+                  dataModel.isFolyncEnabled,
+                  let message = announcementPolicy.announcement(for: newState) else { return }
+            accessibilityAnnouncer.announce(message)
+        }
     }
 
     private var endpointURL: URL? {
@@ -240,9 +256,31 @@ struct FolyncDataSourceSection: View {
         return isCheckingStoredToken ? "Checking Keychain…" : "Required"
     }
 
+    /// Shows a result of the user's own action and announces it, even when it
+    /// repeats the previous one.
+    private func showStatus(_ message: String?) {
+        statusMessage = message
+        if let message { accessibilityAnnouncer.announce(message) }
+    }
+
+    private func refreshNow() {
+        statusMessage = nil
+        isWorking = true
+        manualRefreshInProgress = true
+        Task {
+            defer {
+                manualRefreshInProgress = false
+                isWorking = false
+            }
+            await dataModel.refreshFolyncPortfolio()
+            let message = announcementPolicy.manualRefreshAnnouncement(for: dataModel.folyncConnectionState)
+            accessibilityAnnouncer.announce(message)
+        }
+    }
+
     func testConnection() {
         guard let endpointURL else {
-            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            showStatus(FolyncPortfolioSourceError.invalidEndpoint.errorDescription)
             return
         }
         isWorking = true
@@ -254,18 +292,18 @@ struct FolyncDataSourceSection: View {
                     selectedScope = fetchedPortfolios.first?.id ?? "all"
                 }
                 portfolios = fetchedPortfolios
-                statusMessage = "Connected. Select a portfolio and preview it before activation."
+                showStatus("Connected. Select a portfolio and preview it before activation.")
             } catch {
                 portfolios = []
                 preview = nil
-                statusMessage = LogRedactor.redact(error.localizedDescription)
+                showStatus(LogRedactor.redact(error.localizedDescription))
             }
         }
     }
 
     private func loadPreview() {
         guard let endpointURL else {
-            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            showStatus(FolyncPortfolioSourceError.invalidEndpoint.errorDescription)
             return
         }
         isWorking = true
@@ -273,17 +311,17 @@ struct FolyncDataSourceSection: View {
             defer { isWorking = false }
             do {
                 preview = try await dataModel.previewFolyncPortfolio(baseURL: endpointURL, token: token, scopeID: selectedScope)
-                statusMessage = "Preview loaded. No local holdings were changed."
+                showStatus("Preview loaded. No local holdings were changed.")
             } catch {
                 preview = nil
-                statusMessage = LogRedactor.redact(error.localizedDescription)
+                showStatus(LogRedactor.redact(error.localizedDescription))
             }
         }
     }
 
     private func activate() {
         guard let endpointURL else {
-            statusMessage = FolyncPortfolioSourceError.invalidEndpoint.errorDescription
+            showStatus(FolyncPortfolioSourceError.invalidEndpoint.errorDescription)
             return
         }
         isWorking = true
@@ -295,8 +333,9 @@ struct FolyncDataSourceSection: View {
                 hasStoredToken = true
                 token = ""
                 statusMessage = nil
+                accessibilityAnnouncer.announce("Folync is active.")
             } catch {
-                statusMessage = LogRedactor.redact(error.localizedDescription)
+                showStatus(LogRedactor.redact(error.localizedDescription))
             }
         }
     }
