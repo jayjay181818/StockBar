@@ -26,7 +26,7 @@ Stockbar uses the interpreter in the `pythonInterpreterPath` setting if there is
 
 Open **Settings → Advanced → Python** and choose **Set Up**. Stockbar installs a current Python and its pinned packages in its own environment and uses it from the next refresh. It uses `uv` or a Python 3.10 or later from Homebrew or python.org if one is installed; otherwise it downloads a pinned release of `uv`, checks its SHA-256, and keeps it and its Python in Stockbar's Application Support folder, so nothing needs installing first. It needs an internet connection. **Rebuild** reinstalls it.
 
-On first launch, and again after an update changes the pinned versions, Stockbar checks the interpreter it uses. If the environment is not set up, or packages are missing or out of date, an alert offers **Set Up Automatically**, which does the same as the Settings button. For an interpreter set with `pythonInterpreterPath`, the alert also offers **Copy Command**, which copies a ready-to-run command such as:
+On first launch, and again after an update changes the pinned versions, Stockbar checks the interpreter it uses. If the environment is not set up, or packages are missing or out of date, an alert offers **Set Up Automatically**, which does the same as the Settings button. For an interpreter set with `pythonInterpreterPath`, the alert also offers **Copy Command** and **Open Terminal**; Copy Command copies a ready-to-run command such as:
 
 ```bash
 '/opt/homebrew/bin/python3' -m pip install -r '/Applications/Stockbar.app/Contents/Resources/requirements.txt'
