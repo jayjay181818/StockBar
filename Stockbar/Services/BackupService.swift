@@ -88,6 +88,11 @@ class BackupService {
         return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
     }
 
+    /// Backup taken before a settings import replaces the portfolio database.
+    func performPreImportBackup(trades: [RealTimeTrade]) async -> Bool {
+        return await performBackup(trades: trades, automatic: false)
+    }
+
     /// Core backup implementation
     private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
         do {

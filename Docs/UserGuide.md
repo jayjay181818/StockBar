@@ -26,7 +26,7 @@ Stockbar uses the interpreter in the `pythonInterpreterPath` setting if there is
 
 Open **Settings → Advanced → Python** and choose **Set Up**. Stockbar installs a current Python and its pinned packages in its own environment and uses it from the next refresh. It uses `uv` or a Python 3.10 or later from Homebrew or python.org if one is installed; otherwise it downloads a pinned release of `uv`, checks its SHA-256, and keeps it and its Python in Stockbar's Application Support folder, so nothing needs installing first. It needs an internet connection. **Rebuild** reinstalls it.
 
-On first launch, and again after an update changes the pinned versions, Stockbar checks the interpreter it uses. If the environment is not set up, or packages are missing or out of date, an alert offers **Set Up Automatically**, which does the same as the Settings button. For an interpreter set with `pythonInterpreterPath`, the alert also offers **Copy Command**, which copies a ready-to-run command such as:
+On first launch, and again after an update changes the pinned versions, Stockbar checks the interpreter it uses. If the environment is not set up, or packages are missing or out of date, an alert offers **Set Up Automatically**, which does the same as the Settings button. For an interpreter set with `pythonInterpreterPath`, the alert also offers **Copy Command** and **Open Terminal**; Copy Command copies a ready-to-run command such as:
 
 ```bash
 '/opt/homebrew/bin/python3' -m pip install -r '/Applications/Stockbar.app/Contents/Resources/requirements.txt'
@@ -130,6 +130,7 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 ## Backups, Data Health and Diagnostics
 
 - **Backups** — Stockbar makes an automatic backup once a day. The Backups screen (and Settings → Advanced → Backups) shows the last backup and offers **Back Up Now**, **Restore from Backup…** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
+- **Export & Import** — Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds your preferences plus the FMP, Twelve Data, Trading 212 and Folync keys. **Everything** adds your portfolio database; its estimated size is shown first. The file contains your API keys, so keep it and its password safe. **Import…** shows what the file contains and asks before replacing anything. Keys not in the file stay as they are, and Stockbar backs up your portfolio before replacing it, then relaunches. The Python setup, window positions and caches are not exported.
 - **Data Health** — price and exchange-rate freshness, portfolio source, tracked symbols, menu-bar visibility and preferred currency.
 - **Diagnostics** — view, refresh and clear the log. The log file is at `~/Library/Logs/com.stockbar/stockbar.log`.
 

@@ -332,6 +332,8 @@ class RefreshService {
     /// Starts the refresh timer (Batch Refresh)
     func startRefreshTimer() {
         stopRefreshTimer()
+        // A settings import pauses refresh until Stockbar relaunches.
+        guard dataModel?.isBackgroundWorkPausedForImport != true else { return }
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }

@@ -328,6 +328,8 @@ struct StockbarSettingsView: View {
             Text("Stockbar backs up your holdings once a day. Keychain credentials are not included.")
         }
 
+        SettingsTransferSection(dataModel: dataModel)
+
         pythonSection
 
         Section("Diagnostics") {
@@ -527,7 +529,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: "Light, dark or match the system."
         case .dataSources: "Brokers, Folync and market-data providers."
         case .refresh: "How often prices and chart history update."
-        case .advanced: "Backups and troubleshooting."
+        case .advanced: "Backups, export and troubleshooting."
         }
     }
 }
