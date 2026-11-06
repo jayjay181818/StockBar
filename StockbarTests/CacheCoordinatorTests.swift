@@ -11,13 +11,13 @@ class CacheCoordinatorTests: XCTestCase {
         // CacheCoordinator now persists across launches, so each test needs its
         // own defaults suite or state would leak between tests and from the
         // developer's real app data.
-        suiteName = "CacheCoordinatorTests-\(UUID().uuidString)"
+        suiteName = TestDefaultsSuite.makeName("CacheCoordinatorTests-")
         cacheCoordinator = CacheCoordinator(defaults: Self.makeDefaults(suiteName: suiteName))
     }
 
     override func tearDown() {
         cacheCoordinator = nil
-        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         suiteName = nil
         super.tearDown()
     }

@@ -232,9 +232,9 @@ final class StockbarProviderAccessPolicyTests: XCTestCase {
     @MainActor
     func testCurrencyConverterDoesNotBeginLegacyRefreshWhenDirectFXIsDenied() async {
         let observer = InvocationCounter()
-        let suiteName = "StockbarProviderPolicyTests-\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("StockbarProviderPolicyTests-")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaultsSuite.remove(suiteName) }
         let converter = CurrencyConverter(
             refreshOnInit: false,
             loadHistoryOnInit: false,

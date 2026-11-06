@@ -186,9 +186,9 @@ final class MenuBarFormattingServiceTests: XCTestCase {
     }
 
     func testMenuBarVisibilityPolicy_PersistsExternalDisplayRequirement() {
-        let suiteName = "MenuBarVisibilityPolicyTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("MenuBarVisibilityPolicyTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
 
         XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
 
