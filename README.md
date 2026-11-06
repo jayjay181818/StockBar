@@ -366,7 +366,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- 559 XCTest tests plus offline Python tests run in CI.
+- 564 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
@@ -379,7 +379,12 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.3.0 (current): Export and import settings
+### 🆕 Version 3.4.0 (current): Folync status for VoiceOver
+- **Accessibility**: VoiceOver reads the Folync connection status in Settings → Connections and speaks the result of Test Connection, Preview, Activate, Disable and Refresh Now. Background checks announce a problem once, not every minute.
+- **Refresh Now** for Folync shows progress while it runs.
+- See [Changelogs/release_notes_v3.4.0.md](./Changelogs/release_notes_v3.4.0.md).
+
+### Version 3.3.0: Export and import settings
 - **Export & Import**: Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds preferences and API keys; **Everything** adds the portfolio database.
 - **Fixes**: Relaunch Now and Quit after an import no longer hang. The Python Dependencies Required alert no longer offers a pip command that cannot work in Stockbar's own environment.
 - See [Changelogs/release_notes_v3.3.0.md](./Changelogs/release_notes_v3.3.0.md).
@@ -485,6 +490,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 6, 2026 · Version 3.3.0</sub>
+<sub>Last updated: November 6, 2026 · Version 3.4.0</sub>
 
 </div>
