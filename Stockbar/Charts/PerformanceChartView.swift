@@ -41,7 +41,9 @@ struct PerformanceChartView: View {
     @State private var seriesIsDayGranular = false
     @State private var isLoadingData = false
     @State private var silentReloadTask: Task<Void, Never>?
-    @State private var chartError: String?
+    /// Period metrics for the series on screen. Kept outside observed state so
+    /// a hover, which redraws the view, does not recompute them.
+    @State private var metricsCache = PeriodMetricsCache()
 
     // Comparison Mode state variables
     @State private var comparisonMode: Bool = false
@@ -74,8 +76,19 @@ struct PerformanceChartView: View {
     private let ohlcFetchService = OHLCFetchService.shared
     
     init(availableSymbols: [String] = [], dataModel: DataModel? = nil) {
-        self.availableSymbols = availableSymbols
+        // The same ticker held twice would give two picker rows one identity.
+        var seen = Set<String>()
+        self.availableSymbols = availableSymbols.filter { seen.insert($0).inserted }
         self.dataModel = dataModel
+
+        // Reopen on the chart, period and style last used.
+        let saved = ChartViewSelection.load()
+        let chartType = saved.chartType(among: self.availableSymbols)
+        _selectedChartType = State(initialValue: chartType)
+        _selectedTimeRange = State(initialValue: saved.timeRange)
+        if case .individualStock = chartType {
+            _chartVisualizationStyle = State(initialValue: saved.style)
+        }
     }
     
     var body: some View {
@@ -168,14 +181,17 @@ struct PerformanceChartView: View {
             hoveredDataPoint = nil
             // Candles belong to one symbol; drop them so they never show under another title.
             resetOHLCState()
+            defer { saveSelection() }
             if case .individualStock = newType { return }
             comparisonMode = false
             chartVisualizationStyle = .line
         }
         .onChange(of: selectedTimeRange) { _, _ in
             resetOHLCState()
+            saveSelection()
         }
         .onChange(of: chartVisualizationStyle) { _, _ in
+            saveSelection()
             // The candlestick view's own reload hooks only exist once it is on screen, so
             // switching to it must start the first load.
             guard isCandlestickActive, ohlcData.isEmpty else { return }
@@ -220,6 +236,12 @@ struct PerformanceChartView: View {
             silentReloadTask?.cancel()
             silentReloadTask = nil
         }
+    }
+
+    private func saveSelection() {
+        ChartViewSelection(
+            chartType: selectedChartType, timeRange: selectedTimeRange, style: chartVisualizationStyle
+        ).save()
     }
 
     private struct ChartLoadKey: Hashable {
@@ -525,15 +547,26 @@ struct PerformanceChartView: View {
                             // Clear selection when disabling comparison
                             selectedComparisonSymbols.removeAll()
                             comparisonChartData.removeAll()
+                        } else if case .individualStock(let symbol) = selectedChartType,
+                                  availableSymbols.contains(symbol) {
+                            // The stock on screen is the one being compared against.
+                            selectedComparisonSymbols.insert(symbol)
+                            Task { await loadComparisonData(for: symbol) }
                         }
                     }
 
                 Spacer()
 
                 if comparisonMode {
-                    Toggle("Normalized (%)", isOn: $normalizedComparison)
+                    Toggle("Normalized (%)", isOn: Binding(
+                        get: { usesNormalizedComparison },
+                        set: { normalizedComparison = $0 }
+                    ))
                         .toggleStyle(SwitchToggleStyle())
-                        .help("Show as percentage change from start date")
+                        .disabled(comparisonMixesCurrencies)
+                        .help(comparisonMixesCurrencies
+                            ? "These stocks trade in different currencies, so only percentage change can be compared"
+                            : "Show as percentage change from the first date all selected stocks have")
                 }
             }
 
@@ -686,7 +719,6 @@ struct PerformanceChartView: View {
         chartRequestGeneration &+= 1
         let generation = chartRequestGeneration
         if showsLoading { isLoadingData = true }
-        chartError = nil
 
         let data = historicalDataManager.getChartData(
             for: selectedChartType,
@@ -752,7 +784,7 @@ struct PerformanceChartView: View {
                     await MainActor.run {
                         guard requestGeneration == ohlcRequestGeneration,
                               configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
-                        ohlcData = cachedData
+                        ohlcData = ChartSeriesProcessing.aggregatedCandles(cachedData)
                         ohlcSourceStatus = .legacy
                         ohlcCoverageLabel = "\(cachedData.count) points · \(interval) · local cache"
                         isLoadingOHLC = false
@@ -786,7 +818,7 @@ struct PerformanceChartView: View {
             await MainActor.run {
                 guard requestGeneration == ohlcRequestGeneration,
                       configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
-                ohlcData = dataPoints
+                ohlcData = ChartSeriesProcessing.aggregatedCandles(dataPoints)
                 ohlcSourceStatus = result.sourceStatus
                 ohlcCoverageLabel = result.coverageLabel
                 isLoadingOHLC = false
@@ -812,7 +844,7 @@ struct PerformanceChartView: View {
                       configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                 isLoadingOHLC = false
                 if !staleData.isEmpty {
-                    ohlcData = staleData
+                    ohlcData = ChartSeriesProcessing.aggregatedCandles(staleData)
                     ohlcSourceStatus = .legacy
                     ohlcCoverageLabel = "\(staleData.count) points · \(selectedTimeRange.suggestedInterval) · stale local cache"
                     return
@@ -931,25 +963,21 @@ struct PerformanceChartView: View {
     }
 
     private var yAxisDomain: ClosedRange<Double> {
-        guard !displayableChartData.isEmpty else { return 0...1 }
-        
-        let values = displayableChartData.map { $0.value }
-        let minValue = values.min() ?? 0
-        let maxValue = values.max() ?? 1
-        
-        // Add 5% padding to top and bottom for better visualization
-        let range = maxValue - minValue
-        let padding = range * 0.05
-        
-        let paddedMin = minValue - padding
-        let paddedMax = maxValue + padding
-        
-        // Ensure we don't have a zero range
-        if paddedMin == paddedMax {
-            return (paddedMin - 0.5)...(paddedMax + 0.5)
-        } else {
-            return paddedMin...paddedMax
+        guard let visible = visibleXDomain else {
+            return ChartSeriesProcessing.paddedDomain(displayableChartData.map(\.value))
         }
+        let shown = displayableChartData.filter { visible.contains($0.date) }.map(\.value)
+        return ChartSeriesProcessing.paddedDomain(shown.isEmpty ? displayableChartData.map(\.value) : shown)
+    }
+
+    /// The dates on screen when zoomed in, or nil at normal size.
+    private var visibleXDomain: ClosedRange<Date>? {
+        guard let first = displayableChartData.first?.date, let last = displayableChartData.last?.date else {
+            return nil
+        }
+        return ChartSeriesProcessing.zoomedDomain(
+            first: first, last: last, scale: chartScale, panFraction: Double(chartOffset.width)
+        )
     }
     
     private var chartView: some View {
@@ -959,10 +987,6 @@ struct PerformanceChartView: View {
                 candlestickChartPlaceholder
             } else if isLoadingData && displayableChartData.isEmpty {
                 ProgressView("Loading chart data...")
-                    .frame(height: 300)
-            } else if let error = chartError {
-                Text("Error: \(error)")
-                    .foregroundColor(.red)
                     .frame(height: 300)
             } else if displayableChartData.isEmpty {
                 emptyChartView
@@ -1025,7 +1049,11 @@ struct PerformanceChartView: View {
                         }
 
                         // Zero baseline for gains charts
-                        if case .portfolioGains = selectedChartType, dataPoint.value == 0 {
+                        // Drawn once, wherever the range crosses zero; it used to
+                        // appear only when a point was exactly zero.
+                        if case .portfolioGains = selectedChartType,
+                           dataPoint.id == displayableChartData.first?.id,
+                           domain.contains(0) {
                             RuleMark(y: .value("Zero", 0))
                                 .foregroundStyle(Color.secondary.opacity(0.5))
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
@@ -1071,10 +1099,11 @@ struct PerformanceChartView: View {
                     }
                     .accessibilityLabel("\(selectedChartType.title), \(selectedTimeRange.description)")
                     .accessibilityValue(chartAccessibilitySummary)
-                    .frame(height: max(200, 250 * chartScale))
-                    .scaleEffect(chartScale)
-                    .offset(chartOffset)
-                    .clipped()
+                    // Zooming narrows the dates shown and redraws at full
+                    // sharpness; it used to magnify a clipped picture of the chart.
+                    .chartXDomain(visibleXDomain)
+                    .chartPlotStyle { $0.clipped() }
+                    .frame(height: 250)
                     .overlay(
                         // Hover tooltip as overlay - doesn't affect layout
                         Group {
@@ -1104,8 +1133,8 @@ struct PerformanceChartView: View {
     private var chartAccessibilitySummary: String {
         guard let first = displayableChartData.first, let last = displayableChartData.last else { return "No data" }
         let values = displayableChartData.map(\.value)
-        let low = values.min() ?? first.value
-        let high = values.max() ?? last.value
+        let low = values.filter(\.isFinite).min() ?? first.value
+        let high = values.filter(\.isFinite).max() ?? last.value
         let style = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(2))
         return "\(displayableChartData.count) points. Latest \(last.value.formatted(style)). Low \(low.formatted(style)), high \(high.formatted(style))."
     }
@@ -1215,11 +1244,13 @@ struct PerformanceChartView: View {
 
     private var comparisonChart: some View {
         let sortedSymbols = Array(selectedComparisonSymbols).sorted()
+        let normalized = usesNormalizedComparison
+        let selected = comparisonChartData.filter { selectedComparisonSymbols.contains($0.key) }
+        let series = normalized ? ChartSeriesProcessing.rebasedToCommonStart(selected) : selected
 
         return Chart {
             ForEach(sortedSymbols, id: \.self) { symbol in
-                if let data = comparisonChartData[symbol] {
-                    let processedData = normalizedComparison ? normalizeData(data) : data
+                if let processedData = series[symbol] {
                     let color = colorForSymbol(symbol)
 
                     ForEach(processedData) { dataPoint in
@@ -1235,7 +1266,7 @@ struct PerformanceChartView: View {
             }
         }
         .accessibilityLabel("Comparison of \(sortedSymbols.joined(separator: ", ")), \(selectedTimeRange.description)")
-        .accessibilityValue(normalizedComparison ? "Normalised to percentage change" : "Absolute prices")
+        .accessibilityValue(normalized ? "Normalised to percentage change" : "Absolute prices")
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 6))
         }
@@ -1243,7 +1274,7 @@ struct PerformanceChartView: View {
             AxisMarks(values: .automatic(desiredCount: 8)) { value in
                 AxisGridLine()
                 AxisTick()
-                if normalizedComparison {
+                if normalized {
                     AxisValueLabel {
                         if let doubleValue = value.as(Double.self) {
                             Text(doubleValue.formatted(.percent.precision(.fractionLength(0))))
@@ -1257,7 +1288,9 @@ struct PerformanceChartView: View {
     }
 
     private var comparisonLegend: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // Read once for the legend, not once per entry.
+        let lineRouteActive = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
+        return VStack(alignment: .leading, spacing: 6) {
             Text("Legend")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -1273,7 +1306,7 @@ struct PerformanceChartView: View {
                             Text(symbol)
                                 .font(.caption)
                                 .foregroundColor(.primary)
-                            if let status = comparisonSourceStatus(for: symbol) {
+                            if let status = comparisonSourceStatus(for: symbol, lineRouteActive: lineRouteActive) {
                                 Text(status.label)
                                     .font(.caption2)
                                     .foregroundStyle(status == .unavailable ? .red : .secondary)
@@ -1306,7 +1339,7 @@ struct PerformanceChartView: View {
 
     // MARK: - Comparison Helper Functions
 
-    private func comparisonSourceStatus(for symbol: String) -> FolyncSupplementalSourceStatus? {
+    private func comparisonSourceStatus(for symbol: String, lineRouteActive: Bool) -> FolyncSupplementalSourceStatus? {
         if let status = historicalDataManager.folyncSourceStatus(
             for: symbol,
             timeRange: selectedTimeRange,
@@ -1315,22 +1348,23 @@ struct PerformanceChartView: View {
         ) {
             return status
         }
-        let settings = FolyncSettingsStore.shared.load()
-        guard settings.isSupplementalRouteActive(.historicalLineCharts),
+        guard lineRouteActive,
               dataModel?.folyncCapabilities?.isTrackedOrAllowlisted(symbol) == true else {
             return .legacy
         }
         return nil
     }
 
-    private func normalizeData(_ data: [ChartDataPoint]) -> [ChartDataPoint] {
-        guard let firstValue = data.first?.value, firstValue != 0 else { return data }
-
-        return data.map { point in
-            let percentChange = ((point.value - firstValue) / firstValue)
-            return ChartDataPoint(date: point.date, value: percentChange, symbol: point.symbol)
-        }
+    /// Prices in different currencies cannot share one axis.
+    private var comparisonMixesCurrencies: Bool {
+        Set(selectedComparisonSymbols.map { symbol in
+            dataModel?.realTimeTrades.first { $0.trade.name == symbol }?.realTimeInfo.currency
+                ?? SymbolMetadata.defaultCurrency(for: symbol)
+        }).count > 1
     }
+
+    private var usesNormalizedComparison: Bool { normalizedComparison || comparisonMixesCurrencies }
+
 
     private func colorForSymbol(_ symbol: String) -> Color {
         let colors: [Color] = [.blue, .green, .orange, .purple, .pink]
@@ -1543,8 +1577,8 @@ struct PerformanceChartView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        Text("Calculating...")
-                            .font(.title2)
+                        Text("Not enough history")
+                            .font(.title3)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -1563,13 +1597,6 @@ struct PerformanceChartView: View {
                             .font(.title2)
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
-                        
-                        let avgPrice = calculateAverageCurrentPrice()
-                        if avgPrice.amount > 0 {
-                            Text("Avg: \(formatCurrency(avgPrice.amount, currency: avgPrice.currency))")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
                     }
                 }
             }
@@ -1655,7 +1682,7 @@ struct PerformanceChartView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         
-                        if let metrics = historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange) {
+                        if let metrics = stockPerformanceMetrics(for: symbol) {
                             Text(formatCurrency(metrics.totalReturn, currency: metrics.currency))
                                 .font(.title2)
                                 .fontWeight(.semibold)
@@ -1665,8 +1692,8 @@ struct PerformanceChartView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Text("Calculating...")
-                                .font(.title2)
+                            Text("Not enough history")
+                                .font(.title3)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -1679,14 +1706,14 @@ struct PerformanceChartView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         
-                        let currentPrice = stockTrade.realTimeInfo.currentPrice
-                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
+                        // The linked source's own profit figure when there is one,
+                        // as in the Holdings table.
                         let units = stockTrade.trade.position.unitSize
-                        let avgCost = stockTrade.trade.position.getNormalizedAvgCost(for: symbol)
-                        let marketValue = currentPrice * units
-                        let positionGain = marketValue - (avgCost * units)
+                        let profitLoss = dataModel?.calculatePositionProfitLoss(for: stockTrade)
+                        let positionGain = profitLoss?.totalAmount ?? .nan
+                        let currency = profitLoss?.currency ?? stockTrade.realTimeInfo.currency ?? "USD"
                         
-                        Text("\(Int(units)) shares")
+                        Text("\(units.formatted(.number.precision(.fractionLength(0...4)))) \(units == 1 ? "share" : "shares")")
                             .font(.title2)
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
@@ -1729,7 +1756,7 @@ struct PerformanceChartView: View {
                     
                     Spacer()
                     
-                    if let metrics = historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange) {
+                    if let metrics = stockPerformanceMetrics(for: symbol) {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("Volatility")
                                 .font(.caption)
@@ -1793,25 +1820,6 @@ struct PerformanceChartView: View {
         }
         
         return (finalAmount, preferredCurrency)
-    }
-    
-    private func calculateAverageCurrentPrice() -> (amount: Double, currency: String) {
-        guard let model = dataModel else { return (0, "USD") }
-        
-        var totalValue = 0.0
-        var totalUnits = 0.0
-        let currency = model.preferredCurrency
-        
-        for trade in model.realTimeTrades {
-            guard !trade.realTimeInfo.currentPrice.isNaN, trade.realTimeInfo.currentPrice > 0 else { continue }
-            
-            let units = trade.trade.position.unitSize
-            totalValue += trade.realTimeInfo.currentPrice * units
-            totalUnits += units
-        }
-        
-        let averagePrice = totalUnits > 0 ? totalValue / totalUnits : 0
-        return (averagePrice, currency)
     }
     
     private func formatCurrency(_ amount: Double, currency: String) -> String {
@@ -1920,20 +1928,23 @@ struct PerformanceChartView: View {
         return style
     }
 
+    /// Chosen from the dates actually on screen. The selected range is a poor
+    /// guide: "All" may hold two weeks of history, and zooming shortens any range.
     private var baseDateFormat: Date.FormatStyle {
-        switch selectedTimeRange {
-        case .day:
+        let shown = visibleXDomain ?? displayableChartData.first.flatMap { first in
+            displayableChartData.last.map { first.date...max(first.date, $0.date) }
+        }
+        guard let shown else { return .dateTime.day().month(.abbreviated) }
+        let days = shown.upperBound.timeIntervalSince(shown.lowerBound) / 86_400
+        switch days {
+        case ..<1.5:
             return .dateTime.hour().minute()
-        case .week:
+        case ..<10:
             return .dateTime.weekday(.abbreviated).day()
-        case .month:
+        case ..<200:
             return .dateTime.day().month(.abbreviated)
-        case .threeMonths, .sixMonths:
-            return .dateTime.month(.abbreviated).day()
-        case .year, .all:
+        default:
             return .dateTime.month(.abbreviated).year()
-        case .custom:
-            return .dateTime.month(.abbreviated).day().year()
         }
     }
     
@@ -1973,14 +1984,40 @@ struct PerformanceChartView: View {
         }
     }
 
+    /// Changes whenever the range or the loaded series does.
+    private func metricsKey(_ subject: String) -> String {
+        let range = selectedTimeRange == .custom
+            ? "\(customQueryRange.from.timeIntervalSince1970)-\(customQueryRange.toExclusive.timeIntervalSince1970)"
+            : selectedTimeRange.rawValue
+        let last = fullResolutionChartData.last
+        return [
+            subject, range, dataModel?.preferredCurrency ?? "",
+            String(fullResolutionChartData.count),
+            String(last?.date.timeIntervalSince1970 ?? 0), String(last?.value ?? 0)
+        ].joined(separator: "|")
+    }
+
     /// Period metrics over the same range the portfolio chart shows.
     private var portfolioPerformanceMetrics: PerformanceMetrics? {
-        historicalDataManager.getPerformanceMetrics(
-            for: selectedTimeRange,
-            customFrom: queryCustomFrom,
-            customTo: queryCustomTo,
-            currency: dataModel?.preferredCurrency
-        )
+        metricsCache.value(for: metricsKey("portfolio")) {
+            historicalDataManager.getPerformanceMetrics(
+                for: selectedTimeRange,
+                customFrom: queryCustomFrom,
+                customTo: queryCustomTo,
+                currency: dataModel?.preferredCurrency
+            )
+        }
+    }
+
+    private func stockPerformanceMetrics(for symbol: String) -> PerformanceMetrics? {
+        metricsCache.value(for: metricsKey("stock:" + symbol)) {
+            historicalDataManager.getStockPerformanceMetrics(
+                for: symbol,
+                timeRange: selectedTimeRange,
+                customFrom: queryCustomFrom,
+                customTo: queryCustomTo
+            )
+        }
     }
 
     private func getRelevantPerformanceMetrics() -> PerformanceMetrics? {
@@ -1990,7 +2027,7 @@ struct PerformanceChartView: View {
         case .portfolioValue, .portfolioGains:
             return portfolioPerformanceMetrics
         case .individualStock(let symbol):
-            return historicalDataManager.getStockPerformanceMetrics(for: symbol, timeRange: selectedTimeRange)
+            return stockPerformanceMetrics(for: symbol)
         }
     }
     
@@ -2154,22 +2191,28 @@ struct PerformanceChartView: View {
                     .foregroundColor(.secondary)
                 
                 Button("-") {
-                    chartScale = max(0.5, chartScale - 0.1)
+                    chartScale = max(1.0, chartScale - 0.25)
+                    if chartScale <= 1 { chartOffset = .zero }
                 }
                 .buttonStyle(PlainButtonStyle())
                 .font(.caption)
                 .foregroundColor(.blue)
+                .disabled(chartScale <= 1)
+                .accessibilityLabel("Zoom out")
                 
                 Text(String(format: "%.0f%%", chartScale * 100))
                     .font(.caption)
-                    .frame(width: 40)
+                    .frame(width: 44)
+                    .accessibilityLabel("Zoom \(Int((chartScale * 100).rounded())) percent")
                 
                 Button("+") {
-                    chartScale = min(3.0, chartScale + 0.1)
+                    chartScale = min(ChartSeriesProcessing.maxZoom, chartScale + 0.25)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .font(.caption)
                 .foregroundColor(.blue)
+                .disabled(chartScale >= ChartSeriesProcessing.maxZoom)
+                .accessibilityLabel("Zoom in")
                 
                 Button("Reset") {
                     chartScale = 1.0
@@ -2178,6 +2221,9 @@ struct PerformanceChartView: View {
                 .buttonStyle(PlainButtonStyle())
                 .font(.caption)
                 .foregroundColor(.orange)
+                .disabled(chartScale <= 1)
+                .accessibilityLabel("Reset zoom")
+                .help("Option-scroll or pinch to zoom, Option-drag to move")
                 
                 Spacer()
             }
@@ -2311,21 +2357,35 @@ struct PerformanceChartView: View {
     }
     
     private func exportDetailedPortfolioCSV() {
-        let startDate = selectedTimeRange.startDate()
+        let startDate = queryCustomFrom ?? selectedTimeRange.startDate()
+        let endDate = queryCustomTo ?? Date()
         let timeRange = selectedTimeRange
         Task {
             // Read every stored snapshot: the in-memory history keeps only one per
             // day for older dates.
-            let snapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: Date())
+            let snapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
                 .sorted { $0.date < $1.date }
             exportManager.exportPortfolioSnapshotsToCSV(snapshots: snapshots, timeRange: timeRange)
         }
     }
     
+    /// A plain line chart of the exported series for the PDF.
     private func captureChartAsImage() -> NSImage? {
-        // For now, return nil - in a full implementation, we would capture the chart view
-        // This would require rendering the chart to an image context
-        return nil
+        let points = exportSeries().filter { $0.value.isFinite }
+        guard points.count > 1 else { return nil }
+        let domain = ChartSeriesProcessing.paddedDomain(points.map(\.value))
+        let snapshot = Chart(points) { point in
+            LineMark(x: .value("Date", point.date), y: .value("Value", point.value))
+                .foregroundStyle(Color.blue)
+        }
+        .chartYScale(domain: domain)
+        .frame(width: 720, height: 320)
+        .padding(12)
+        .background(Color.white)
+        .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: snapshot)
+        renderer.scale = 2
+        return renderer.nsImage
     }
     
     private func getDisplayCurrency() -> String {
@@ -2424,9 +2484,13 @@ struct EnhancedChartInteractionView: NSViewRepresentable {
         }
         view.onScaleChanged = { newScale in
             chartScale = newScale
+            if newScale <= 1 { chartOffset = .zero }
         }
         view.onOffsetChanged = { newOffset in
-            chartOffset = newOffset
+            // Width is the pan as a fraction of the visible span; there is
+            // nothing to pan to beyond the ends of the series.
+            let limit = max(0, (chartScale - 1) / 2)
+            chartOffset = CGSize(width: max(-limit, min(limit, newOffset.width)), height: 0)
         }
         return view
     }
@@ -2465,6 +2529,7 @@ class EnhancedChartView: NSView {
     override var isFlipped: Bool { true }
     
     private var isSelecting = false
+    private var isPanning = false
     private var selectionStartPoint: CGPoint = .zero
     private var selectionEndPoint: CGPoint = .zero
     
@@ -2556,7 +2621,15 @@ class EnhancedChartView: NSView {
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
         
-        if event.modifierFlags.contains(.command) {
+        // Always the start of this gesture; a stale point made the first drag jump.
+        selectionStartPoint = location
+        selectionEndPoint = location
+        isSelecting = false
+        isPanning = false
+
+        if event.modifierFlags.contains(.option) {
+            isPanning = chartScale > 1
+        } else if event.modifierFlags.contains(.command) {
             // Multi-selection mode
             if let clickedPoint = findDataPointAt(location: location) {
                 var newSelection = selectedDataPoints
@@ -2577,8 +2650,6 @@ class EnhancedChartView: NSView {
         } else {
             // Start selection rectangle
             isSelecting = true
-            selectionStartPoint = location
-            selectionEndPoint = location
         }
     }
     
@@ -2599,21 +2670,17 @@ class EnhancedChartView: NSView {
             
             let pointsInRect = findDataPointsInRect(selectionRect)
             onSelectionChanged?(Set(pointsInRect.map { $0.id }))
-        } else {
-            // Pan the chart
+        } else if isPanning, bounds.width > 0 {
+            // Option-drag pans a zoomed chart, as a fraction of what is visible.
             let deltaX = location.x - selectionStartPoint.x
-            let deltaY = location.y - selectionStartPoint.y
-            let newOffset = CGSize(
-                width: chartOffset.width + deltaX,
-                height: chartOffset.height + deltaY
-            )
-            onOffsetChanged?(newOffset)
+            onOffsetChanged?(CGSize(width: chartOffset.width + deltaX / bounds.width, height: 0))
             selectionStartPoint = location
         }
     }
     
     override func mouseUp(with event: NSEvent) {
         isSelecting = false
+        isPanning = false
         needsDisplay = true
     }
     
@@ -2624,12 +2691,12 @@ class EnhancedChartView: NSView {
             return
         }
         let zoomFactor = 1.0 + (event.scrollingDeltaY * 0.01)
-        onScaleChanged?(max(0.5, min(3.0, chartScale * zoomFactor)))
+        onScaleChanged?(max(1.0, min(ChartSeriesProcessing.maxZoom, chartScale * zoomFactor)))
     }
 
     override func magnify(with event: NSEvent) {
         // Trackpad pinch
-        onScaleChanged?(max(0.5, min(3.0, chartScale * (1.0 + event.magnification))))
+        onScaleChanged?(max(1.0, min(ChartSeriesProcessing.maxZoom, chartScale * (1.0 + event.magnification))))
     }
     
     override func keyDown(with event: NSEvent) {
@@ -2778,5 +2845,86 @@ extension ChartType: Hashable {
 struct PerformanceChartView_Previews: PreviewProvider {
     static var previews: some View {
         PerformanceChartView(availableSymbols: ["AAPL", "GOOGL", "MSFT"])
+    }
+}
+
+/// Remembers the last period metrics computed for a key.
+@MainActor
+final class PeriodMetricsCache {
+    private var key: String?
+    private var metrics: PerformanceMetrics?
+
+    func value(for key: String, compute: () -> PerformanceMetrics?) -> PerformanceMetrics? {
+        if self.key != key {
+            self.key = key
+            metrics = compute()
+        }
+        return metrics
+    }
+}
+
+private extension View {
+    /// Pins the x-axis to `domain`, or leaves it automatic when nil.
+    @ViewBuilder
+    func chartXDomain(_ domain: ClosedRange<Date>?) -> some View {
+        if let domain {
+            chartXScale(domain: domain)
+        } else {
+            self
+        }
+    }
+}
+
+/// The chart, period and style last shown, kept between sessions.
+struct ChartViewSelection: Equatable {
+    /// "value", "gains" or "stock:SYMBOL".
+    var chart = "value"
+    var timeRange = ChartTimeRange.month
+    var style = ChartVisualizationStyle.line
+
+    private static let chartKey = "chartSelectionChart"
+    private static let rangeKey = "chartSelectionRange"
+    private static let styleKey = "chartSelectionStyle"
+
+    init() {}
+
+    init(chartType: ChartType, timeRange: ChartTimeRange, style: ChartVisualizationStyle) {
+        switch chartType {
+        case .portfolioValue: chart = "value"
+        case .portfolioGains: chart = "gains"
+        case .individualStock(let symbol): chart = "stock:" + symbol
+        }
+        // Custom dates are not kept, so a Custom range would reopen on dates
+        // the user never chose.
+        self.timeRange = timeRange == .custom ? .month : timeRange
+        self.style = style
+    }
+
+    /// A stock no longer in the portfolio falls back to the portfolio chart.
+    func chartType(among symbols: [String]) -> ChartType {
+        if chart == "gains" { return .portfolioGains }
+        if chart.hasPrefix("stock:") {
+            let symbol = String(chart.dropFirst("stock:".count))
+            if symbols.contains(symbol) { return .individualStock(symbol) }
+        }
+        return .portfolioValue
+    }
+
+    static func load(from store: UserDefaults = StockbarRuntimeStorage.userDefaults) -> ChartViewSelection {
+        var selection = ChartViewSelection()
+        if let chart = store.string(forKey: chartKey) { selection.chart = chart }
+        if let range = store.string(forKey: rangeKey).flatMap(ChartTimeRange.init(rawValue:)), range != .custom {
+            selection.timeRange = range
+        }
+        if let style = store.string(forKey: styleKey).flatMap(ChartVisualizationStyle.init(rawValue:)) {
+            selection.style = style
+        }
+        return selection
+    }
+
+    func save(to store: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        store.set(chart, forKey: Self.chartKey)
+        store.set(timeRange.rawValue, forKey: Self.rangeKey)
+        store.set(style.rawValue, forKey: Self.styleKey)
     }
 }
