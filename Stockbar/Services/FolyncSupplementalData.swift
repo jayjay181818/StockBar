@@ -510,7 +510,11 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         tokenProvider: (@Sendable () throws -> String)? = nil
     ) {
         self.settingsStore = settingsStore
-        self.tokenProvider = tokenProvider ?? { try credentialStore.load() }
+        self.tokenProvider = tokenProvider ?? {
+            let baseURL = settingsStore.load().baseURL
+            credentialStore.recordServerIfMissing(baseURL)
+            return try credentialStore.load(for: baseURL)
+        }
         self.cache = cache
         self.session = session
         self.providerPolicy = providerPolicy

@@ -42,9 +42,12 @@ struct FolyncSessionDependencies {
     var supplementalCoordinator: FolyncSupplementalCoordinator
     var urlSession: URLSession
     var providerPolicy: StockbarProviderAccessPolicy
+    /// The stored token, if it was saved for the server in the saved settings.
     var loadToken: @Sendable () async -> String?
-    var saveToken: @Sendable (String) throws -> Void
+    /// Stores a token for the server at the given base URL.
+    var saveToken: @Sendable (_ token: String, _ baseURL: String) throws -> Void
     var hasToken: @Sendable () async -> Bool
+    var deleteToken: @Sendable () async throws -> Void = {}
     /// How long the first token read may take before the status says Stockbar
     /// is waiting for Keychain access.
     var keychainWaitNoticeDelay: TimeInterval = 2
@@ -58,15 +61,22 @@ struct FolyncSessionDependencies {
         providerPolicy: .current,
         loadToken: {
             await Task.detached(priority: .userInitiated) {
-                try? FolyncCredentialStore.shared.load()
+                let baseURL = FolyncSettingsStore.shared.load().baseURL
+                FolyncCredentialStore.shared.recordServerIfMissing(baseURL)
+                return try? FolyncCredentialStore.shared.load(for: baseURL)
             }.value
         },
-        saveToken: { token in
-            try FolyncCredentialStore.shared.save(token: token)
+        saveToken: { token, baseURL in
+            try FolyncCredentialStore.shared.save(token: token, for: baseURL)
         },
         hasToken: {
             await Task.detached(priority: .userInitiated) {
                 FolyncCredentialStore.shared.hasToken()
+            }.value
+        },
+        deleteToken: {
+            try await Task.detached(priority: .userInitiated) {
+                try FolyncCredentialStore.shared.delete()
             }.value
         }
     )
@@ -94,10 +104,35 @@ extension DataModel {
         await folyncSessionDependencies.hasToken()
     }
 
-    private func resolveFolyncToken(_ candidate: String) async throws -> (token: String, isNewToken: Bool) {
+    /// Whether the stored token belongs to the server at `baseURL`. The token is
+    /// kept for the server in the saved settings.
+    func storedFolyncTokenApplies(to baseURL: URL?) -> Bool {
+        guard let baseURL, let requested = FolyncCredentialStore.server(of: baseURL.absoluteString) else {
+            return false
+        }
+        let savedBaseURL = folyncSessionDependencies.settingsStore.load().baseURL
+        return requested == FolyncCredentialStore.server(of: savedBaseURL)
+    }
+
+    /// Stops using Folync and deletes the token from the Keychain.
+    func removeStoredFolyncToken() async throws {
+        deactivateFolyncPortfolio()
+        try await folyncSessionDependencies.deleteToken()
+    }
+
+    /// A typed token is always used. The stored one is only reused for the
+    /// server it was saved for, so pointing Stockbar at a new server with the
+    /// token field left blank never sends the existing token there.
+    private func resolveFolyncToken(
+        _ candidate: String,
+        baseURL: URL
+    ) async throws -> (token: String, isNewToken: Bool) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             return (trimmed, true)
+        }
+        guard storedFolyncTokenApplies(to: baseURL) else {
+            throw FolyncPortfolioSourceError.missingToken
         }
         if let stored = await folyncSessionDependencies.loadToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
            !stored.isEmpty {
@@ -113,7 +148,7 @@ extension DataModel {
             folyncConnectionState = previousState
             folyncCapabilities = previousCapabilities
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -131,7 +166,7 @@ extension DataModel {
             folyncConnectionState = previousState
             folyncCapabilities = previousCapabilities
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -153,7 +188,7 @@ extension DataModel {
                 folyncConnectionState = previousState
             }
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -171,7 +206,7 @@ extension DataModel {
         }
         let capabilities = try? await source.fetchCapabilities()
         if resolved.isNewToken {
-            try deps.saveToken(resolved.token)
+            try deps.saveToken(resolved.token, baseURL.absoluteString)
         }
         // A successful hot reconfiguration establishes a new cache/overlay
         // identity. Remove only in-memory overlays from the previous endpoint

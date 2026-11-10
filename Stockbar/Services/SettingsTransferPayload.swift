@@ -46,6 +46,32 @@ enum SettingsTransferValue: Codable, Equatable, Sendable {
         }
     }
 
+    /// The value limited to `range`, or nil for a number that is not finite.
+    func limited(to range: ClosedRange<Double>) -> SettingsTransferValue? {
+        switch self {
+        case .bool(let value):
+            // Defaults can hand back 0 and 1 as a Boolean.
+            return SettingsTransferValue.integer(value ? 1 : 0).limited(to: range)
+        case .integer(let value):
+            return .integer(Int(min(max(Double(value), range.lowerBound), range.upperBound)))
+        case .double(let value):
+            guard value.isFinite else { return nil }
+            return .double(min(max(value, range.lowerBound), range.upperBound))
+        default:
+            return self
+        }
+    }
+
+    /// Whether a Boolean setting stored as this value reads as on.
+    var readsAsTrue: Bool {
+        switch self {
+        case .bool(let value): value
+        case .integer(let value): value != 0
+        case .double(let value): value != 0
+        default: false
+        }
+    }
+
     var defaultsValue: Any {
         switch self {
         case .bool(let value): value
@@ -184,6 +210,24 @@ enum SettingsTransferKeys {
         "stockDisplayOrder": .stringArray
     ]
 
+    /// Numbers are brought into the range the Settings window offers. A file
+    /// can otherwise carry, say, a negative backup retention, which would
+    /// delete every backup at the next clean-up.
+    static let numberRanges: [String: ClosedRange<Double>] = [
+        "refreshInterval": 60...3600,
+        "portfolioSnapshotIntervalSeconds": 30...86_400,
+        "backfillCooldownHours": 0...168,
+        "backupRetentionDays": 7...3650,
+        "debugLogMaxLines": 100...2000,
+        MenuBarDisplaySettings.UserDefaultsKey.decimalPlaces: 0...4,
+        PortfolioMenuBarDisplaySettings.UserDefaultsKey.decimalPlaces: 0...4,
+        "trading212.syncIntervalSeconds": 30...86_400,
+        "trading212.holdingReconciliationIntervalSeconds": 60...604_800
+    ]
+
+    /// Options that delete data. An import can turn them off but never on.
+    static let destructiveOptionKeys: Set<String> = ["trading212.deleteMissingLinkedHoldings"]
+
     /// `DATA_SOURCE_PRIORITY` lives in ConfigurationManager's file, not defaults.
     static let allowedDataSources: Set<String> = ["yfinance", "fmp", "twelvedata"]
 }
@@ -263,6 +307,8 @@ struct SettingsTransferPreview: Equatable, Sendable {
     let manifest: SettingsTransferManifest
     let settingsCount: Int
     let ignoredSettingsCount: Int
+    /// The file asked to turn on an option that deletes data; it was left off.
+    var keepsDestructiveOptionsOff = false
     let includesDataSourcePriority: Bool
     let credentialNames: [String]
     let database: DatabaseSummary?

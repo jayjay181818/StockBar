@@ -42,7 +42,7 @@ final class SettingsTransferTests: XCTestCase {
         let demo = Trading212AuthConfiguration(apiKey: "t212-demo-key", apiSecret: "t212-demo-secret")
         try source.trading212.save(live, environment: .live)
         try source.trading212.save(demo, environment: .demo)
-        try source.folync.save(token: "folync-test-token")
+        try source.folync.save(token: "folync-test-token", for: "https://folync.example.test")
 
         let target = try makeSide("target")
         target.defaults.set(false, forKey: "showColorCoding")
@@ -72,7 +72,7 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertEqual(configuration.dataSourcePriority, ["fmp", "yfinance"])
         XCTAssertEqual(try target.trading212.load(environment: .live), live)
         XCTAssertEqual(try target.trading212.load(environment: .demo), demo)
-        XCTAssertEqual(try target.folync.load(), "folync-test-token")
+        XCTAssertEqual(try target.folync.load(for: "https://folync.example.test/any/path"), "folync-test-token")
     }
 
     func testCredentialsMissingFromTheFileAreLeftUnchanged() async throws {
@@ -83,7 +83,7 @@ final class SettingsTransferTests: XCTestCase {
         try target.configuration.applyImportedValues(fmpAPIKey: "old-fmp", twelveDataAPIKey: "keep-td", dataSourcePriority: nil)
         let existing = Trading212AuthConfiguration(apiKey: "keep-key", apiSecret: "keep-secret")
         try target.trading212.save(existing, environment: .live)
-        try target.folync.save(token: "keep-folync")
+        try target.folync.save(token: "keep-folync", for: Self.oldFolyncAddress)
 
         let file = root.appendingPathComponent("fmp.stockbarexport")
         _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
@@ -289,7 +289,7 @@ final class SettingsTransferTests: XCTestCase {
         try source.configuration.applyImportedValues(fmpAPIKey: "new-fmp", twelveDataAPIKey: nil, dataSourcePriority: nil)
         try source.trading212.save(Trading212AuthConfiguration(apiKey: "new-key", apiSecret: "new-secret"), environment: .live)
         try source.trading212.save(Trading212AuthConfiguration(apiKey: "new-demo", apiSecret: "new-demo-secret"), environment: .demo)
-        try source.folync.save(token: "new-folync")
+        try storeFolync(token: "new-folync", address: Self.newFolyncAddress, on: source)
         let file = root.appendingPathComponent("partial.stockbarexport")
         _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
 
@@ -297,7 +297,7 @@ final class SettingsTransferTests: XCTestCase {
         target.defaults.set("light", forKey: "appearanceMode")
         let previous = Trading212AuthConfiguration(apiKey: "old-key", apiSecret: "old-secret")
         try target.trading212.save(previous, environment: .live)
-        try target.folync.save(token: "old-folync")
+        try storeFolync(token: "old-folync", address: Self.oldFolyncAddress, on: target)
         // An unreadable API key file makes the import fail after defaults and
         // Keychain items were already written.
         let configURL = target.configDirectory.appendingPathComponent(".stockbar_config.json")
@@ -315,7 +315,7 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertEqual(target.defaults.string(forKey: "appearanceMode"), "light")
         XCTAssertEqual(try target.trading212.load(environment: .live), previous)
         XCTAssertFalse(target.trading212.hasCredentials(environment: .demo))
-        XCTAssertEqual(try target.folync.load(), "old-folync")
+        XCTAssertEqual(try target.folync.load(for: Self.oldFolyncAddress), "old-folync", "The token goes back to its own server")
         XCTAssertEqual(try Data(contentsOf: configURL), unreadable)
     }
 
@@ -325,7 +325,7 @@ final class SettingsTransferTests: XCTestCase {
         source.defaults.set("dark", forKey: "appearanceMode")
         source.defaults.set(["NEW1", "NEW2"], forKey: "stockDisplayOrder")
         try write(try makeBrokerLinksData(), to: source.brokerLinksURL)
-        try source.folync.save(token: "new-folync")
+        try storeFolync(token: "new-folync", address: Self.newFolyncAddress, on: source)
         let file = root.appendingPathComponent("partial-everything.stockbarexport")
         _ = try await source.service.export(.everything, password: password, to: file)
 
@@ -337,7 +337,7 @@ final class SettingsTransferTests: XCTestCase {
         try target.store?.insertPortfolio(trades: ["OLD"], snapshots: 3, priceSnapshots: 0)
         target.defaults.set("light", forKey: "appearanceMode")
         target.defaults.set(["OLD"], forKey: "stockDisplayOrder")
-        try target.folync.save(token: "old-folync")
+        try storeFolync(token: "old-folync", address: Self.oldFolyncAddress, on: target)
 
         let prepared = try await target.service.prepareImport(from: file, password: password)
         do {
@@ -433,18 +433,163 @@ final class SettingsTransferTests: XCTestCase {
         )
     }
 
+    // MARK: - Values a file may not set
+
+    func testImportBoundsNumbersAndNeverTurnsOnAnOptionThatDeletesData() async throws {
+        let source = try makeSide("source")
+        source.defaults.set(-5, forKey: "backupRetentionDays")
+        source.defaults.set(1.0, forKey: "refreshInterval")
+        source.defaults.set(1_000_000, forKey: "debugLogMaxLines")
+        source.defaults.set(-3, forKey: MenuBarDisplaySettings.UserDefaultsKey.decimalPlaces)
+        source.defaults.set(14, forKey: "backfillCooldownHours")
+        source.defaults.set(true, forKey: "trading212.deleteMissingLinkedHoldings")
+        let file = root.appendingPathComponent("out-of-range.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        XCTAssertTrue(prepared.preview.keepsDestructiveOptionsOff)
+        try await target.service.apply(prepared) { true }
+
+        XCTAssertEqual(target.defaults.integer(forKey: "backupRetentionDays"), 7)
+        XCTAssertEqual(target.defaults.double(forKey: "refreshInterval"), 60, accuracy: 0.001)
+        XCTAssertEqual(target.defaults.integer(forKey: "debugLogMaxLines"), 2000)
+        XCTAssertEqual(target.defaults.integer(forKey: MenuBarDisplaySettings.UserDefaultsKey.decimalPlaces), 0)
+        XCTAssertEqual(target.defaults.integer(forKey: "backfillCooldownHours"), 14, "Values in range are kept")
+        XCTAssertEqual(target.defaults.object(forKey: "trading212.deleteMissingLinkedHoldings") as? Bool, false)
+
+        // A Mac that already has the option on keeps it, and a file can turn it off.
+        let already = try makeSide("already-on")
+        already.defaults.set(true, forKey: "trading212.deleteMissingLinkedHoldings")
+        let kept = try await already.service.prepareImport(from: file, password: password)
+        XCTAssertFalse(kept.preview.keepsDestructiveOptionsOff)
+        try await already.service.apply(kept) { true }
+        XCTAssertTrue(already.defaults.bool(forKey: "trading212.deleteMissingLinkedHoldings"))
+    }
+
+    func testLeftoverStagedDatabaseCopiesAreRemovedAtLaunch() throws {
+        let side = try makeSide("staging")
+        let leftover = side.service.dependencies.stagingRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        try write(Data("decrypted".utf8), to: leftover.appendingPathComponent("Stockbar.sqlite"))
+
+        side.service.removeLeftoverStagedFiles()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: leftover.path))
+        XCTAssertNoThrow(try makeSide("no-staging-folder").service.removeLeftoverStagedFiles())
+    }
+
+    func testFolyncAddressRejectsCredentialsQueryAndFragment() {
+        for address in [
+            "https://user:secret@folync.example.test",
+            "https://user@folync.example.test",
+            "https://folync.example.test/?token=abc",
+            "https://folync.example.test/#section"
+        ] {
+            XCTAssertThrowsError(try FolyncEndpointPolicy.validate(URL(string: address)!), address) { error in
+                XCTAssertEqual(error as? FolyncPortfolioSourceError, .invalidEndpoint)
+            }
+        }
+        XCTAssertNoThrow(try FolyncEndpointPolicy.validate(URL(string: "https://folync.example.test/base")!))
+        XCTAssertNoThrow(try FolyncEndpointPolicy.validate(URL(string: "http://localhost:8080")!))
+    }
+
+    // MARK: - Folync token and its server
+
+    func testImportThatChangesTheFolyncAddressWithoutATokenNeverReusesTheStoredToken() async throws {
+        let source = try makeSide("source")
+        setFolyncAddress(Self.newFolyncAddress, on: source)
+        let file = root.appendingPathComponent("address-only.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        try storeFolync(token: "old-folync", address: Self.oldFolyncAddress, on: target)
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        XCTAssertEqual(prepared.preview.credentialNames, [])
+        try await target.service.apply(prepared) { true }
+
+        XCTAssertEqual(FolyncSettingsStore(defaults: target.defaults).load().baseURL, Self.newFolyncAddress)
+        XCTAssertThrowsError(try target.folync.load(for: Self.newFolyncAddress)) { error in
+            XCTAssertEqual(error as? FolyncCredentialStoreError, .savedForAnotherServer)
+        }
+        XCTAssertEqual(try target.folync.load(for: Self.oldFolyncAddress), "old-folync")
+    }
+
+    func testTokenStoredByAnEarlierVersionIsTiedToTheAddressInUseBeforeAnImport() async throws {
+        let source = try makeSide("source")
+        setFolyncAddress(Self.newFolyncAddress, on: source)
+        let file = root.appendingPathComponent("legacy-token.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        setFolyncAddress(Self.oldFolyncAddress, on: target)
+        try target.folync.save(token: "old-folync", server: nil)
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        try await target.service.apply(prepared) { true }
+
+        XCTAssertEqual(try target.folync.savedServer(), "https://old.folync.example.test:443")
+        XCTAssertThrowsError(try target.folync.load(for: Self.newFolyncAddress))
+    }
+
+    func testExportLeavesOutATokenSavedForAnotherServer() async throws {
+        let source = try makeSide("source")
+        setFolyncAddress(Self.newFolyncAddress, on: source)
+        try source.folync.save(token: "old-folync", for: Self.oldFolyncAddress)
+        let file = root.appendingPathComponent("mismatch.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        XCTAssertEqual(prepared.preview.credentialNames, [])
+    }
+
+    func testFolyncTokenServerIgnoresPathAndCaseButNotSchemeHostOrPort() throws {
+        let server = FolyncCredentialStore.server(of:)
+        XCTAssertEqual(server("https://Folync.Example.test/api/"), "https://folync.example.test:443")
+        XCTAssertEqual(server("https://folync.example.test"), server(" https://folync.example.test:443/x?y=1 "))
+        XCTAssertNotEqual(server("https://folync.example.test"), server("http://folync.example.test"))
+        XCTAssertNotEqual(server("https://folync.example.test"), server("https://folync.example.test:8443"))
+        XCTAssertNotEqual(server("https://folync.example.test"), server("https://folync.example.test.evil.test"))
+        XCTAssertNil(server(""))
+        XCTAssertNil(server("folync.example.test"))
+
+        let side = try makeSide("store")
+        try side.folync.save(token: "first", for: Self.oldFolyncAddress)
+        try side.folync.save(token: "second", for: Self.newFolyncAddress)
+        XCTAssertThrowsError(try side.folync.load(for: Self.oldFolyncAddress))
+        XCTAssertEqual(try side.folync.load(for: Self.newFolyncAddress), "second")
+        try side.folync.delete()
+        XCTAssertFalse(side.folync.hasToken())
+        XCTAssertNil(try side.folync.savedServer())
+    }
+
     // MARK: - Helpers
+
+    private static let oldFolyncAddress = "https://old.folync.example.test"
+    private static let newFolyncAddress = "https://new.folync.example.test"
+
+    private func setFolyncAddress(_ address: String, on side: TransferSide) {
+        FolyncSettingsStore(defaults: side.defaults).save(FolyncStoredSettings(
+            isEnabled: true, baseURL: address, scopeID: "all", pollingIntervalSeconds: 60
+        ))
+    }
+
+    private func storeFolync(token: String, address: String, on side: TransferSide) throws {
+        setFolyncAddress(address, on: side)
+        try side.folync.save(token: token, for: address)
+    }
 
     private func exportSettingsFile() async throws -> (URL, TransferSide) {
         let source = try makeSide("source")
         source.defaults.set("dark", forKey: "appearanceMode")
-        try source.folync.save(token: "new-folync")
+        try storeFolync(token: "new-folync", address: Self.newFolyncAddress, on: source)
         let file = root.appendingPathComponent("rejected-\(UUID().uuidString).stockbarexport")
         _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
 
         let target = try makeSide("target")
         target.defaults.set("light", forKey: "appearanceMode")
-        try target.folync.save(token: "old-folync")
+        try storeFolync(token: "old-folync", address: Self.oldFolyncAddress, on: target)
         return (file, target)
     }
 
