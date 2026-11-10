@@ -42,7 +42,8 @@ class ConnectivityMonitor {
                     if isNowConnected {
                         await self.logger.info("🌐 Network: Connected")
                     } else {
-                        await self.logger.warning("🌐 Network: Disconnected")
+                        // Sleep and changing networks do this many times a day.
+                        await self.logger.info("🌐 Network: Disconnected")
                     }
                 }
 

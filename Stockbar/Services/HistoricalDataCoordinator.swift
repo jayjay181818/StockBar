@@ -410,11 +410,11 @@ class HistoricalDataCoordinator {
                 break
             }
             if outcome == .rateLimited {
-                await logger.warning("⏹️ CHUNKED BACKFILL: Rate limited; deferring remaining chunks for \(symbol)")
+                await logger.debug("⏹️ CHUNKED BACKFILL: Rate limited; deferring remaining chunks for \(symbol)")
                 break
             }
             if outcome == .failed {
-                await logger.warning("⏹️ CHUNKED BACKFILL: Fetch failed; deferring remaining chunks for \(symbol)")
+                await logger.debug("⏹️ CHUNKED BACKFILL: Fetch failed; deferring remaining chunks for \(symbol)")
                 break
             }
             
@@ -513,11 +513,9 @@ class HistoricalDataCoordinator {
                 return .rateLimited
             }
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
-            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
             return .failed
         } catch {
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
-            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
             return .failed
         }
     }

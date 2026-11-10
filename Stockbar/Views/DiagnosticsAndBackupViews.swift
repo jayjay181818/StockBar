@@ -24,6 +24,8 @@ struct DebugLogView: View {
     /// True while the newest entry (the top of the list) is in view. New logs only pull the
     /// view back to the top when the reader is already there.
     @State private var isScrolledToTop = true
+    /// What the issue monitor found in the last ten minutes, if anything.
+    @State private var recentIssues: RuntimeIssueSnapshot?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -50,7 +52,7 @@ struct DebugLogView: View {
                     } label: {
                         Label("Export…", systemImage: "square.and.arrow.up")
                     }
-                    .help("Save a copy of the log file")
+                    .help("Save a copy of the current log and the two older ones kept beside it")
 
                     Button(role: .destructive) {
                         confirmingClear = true
@@ -75,6 +77,16 @@ struct DebugLogView: View {
                 }
             }
             
+            if let recentIssues, let summary = recentIssues.summary {
+                Label(
+                    "Last 10 minutes: \(summary)",
+                    systemImage: recentIssues.severity == .critical
+                        ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(recentIssues.severity == .critical ? Color.red : Color.orange)
+            }
+
             // Log display - full width
             ScrollViewReader { proxy in
                 ScrollView {
@@ -147,7 +159,7 @@ struct DebugLogView: View {
             Button("Clear Without Exporting", role: .destructive) { clearLogs() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Clearing permanently deletes the diagnostic log. Export a copy first if you may need it to investigate a problem.")
+            Text("Clearing permanently deletes the current log and the two older ones kept beside it. Export a copy first if you may need it to investigate a problem.")
         }
         .alert("Couldn't export logs", isPresented: Binding(
             get: { exportErrorMessage != nil },
@@ -159,7 +171,7 @@ struct DebugLogView: View {
         }
     }
 
-    /// Saves a copy of the log file where the user chooses. With `thenClear`,
+    /// Saves a copy of every log file where the user chooses. With `thenClear`,
     /// the log is cleared afterwards, and only if the copy was written.
     private func exportLogs(thenClear: Bool) {
         let panel = NSSavePanel()
@@ -170,17 +182,9 @@ struct DebugLogView: View {
             guard response == .OK, let destination = panel.url else { return }
             Task { @MainActor in
                 do {
-                    let sourcePath = await logger.getLogFilePath()
-                    let fallback = logEntries.joined(separator: "\n")
-                    try await Task.detached {
-                        let data: Data
-                        if let sourcePath, FileManager.default.fileExists(atPath: sourcePath) {
-                            data = try Data(contentsOf: URL(fileURLWithPath: sourcePath))
-                        } else {
-                            data = Data(fallback.utf8)
-                        }
-                        try data.write(to: destination, options: .atomic)
-                    }.value
+                    // All three files, oldest first, written by the logger so
+                    // nothing is appended half-way through the copy.
+                    try await logger.exportAllLogs(to: destination)
                     if thenClear { clearLogs() }
                 } catch {
                     exportErrorMessage = thenClear
@@ -202,16 +206,18 @@ struct DebugLogView: View {
             // Always read from the end of the file, for as many lines as asked.
             // "Tail Mode" used to cap this at 500 whatever Max Lines said.
             let logs = await logger.getRecentLogs(maxLines: maxLines)
+            let issues = await RuntimeIssueMonitor.shared.latestSnapshot()
 
             await MainActor.run {
                 logEntries = logs
+                recentIssues = issues
             }
         }
     }
     
     private func clearLogs() {
         Task {
-            await logger.clearLogs()
+            await logger.clearAllLogs()
             await MainActor.run {
                 logEntries = []
             }

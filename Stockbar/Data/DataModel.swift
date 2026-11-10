@@ -87,6 +87,11 @@ class DataModel {
     @ObservationIgnored var folyncETag: String?
     /// Set after a rejected token or rate limit; automatic polls wait until then.
     @ObservationIgnored var folyncBackoffUntil: Date?
+    /// Failed polls in a row; drives the slower retry and the one-line log on
+    /// the first failure and on recovery.
+    @ObservationIgnored var folyncConsecutivePollFailures = 0
+    @ObservationIgnored private var didLogStaleTrading212Valuation = false
+    @ObservationIgnored var folyncLastPollFailureCategory: String?
 
     var isFolyncPortfolioActive: Bool { folyncPortfolioSnapshot != nil }
 
@@ -1623,12 +1628,17 @@ class DataModel {
 
         let maxAge = max(TimeInterval(settings.syncIntervalSeconds * 4), 120)
         guard snapshot.isFresh(now: now, maxAge: maxAge) else {
-            Task {
-                await Logger.shared.debug("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+            // Read on every redraw, so say it once per stale spell.
+            if !didLogStaleTrading212Valuation {
+                didLogStaleTrading212Valuation = true
+                Task {
+                    await Logger.shared.info("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+                }
             }
             return nil
         }
 
+        didLogStaleTrading212Valuation = false
         return snapshot
     }
 
@@ -1830,7 +1840,7 @@ class DataModel {
         let tradeModels = tradesToSave.map { $0.trade }
 
         guard !tradeModels.isEmpty || allowEmptyPortfolio else {
-            Task { await logger.warning("Skipped Core Data save because only benchmark/internal rows were present") }
+            Task { await logger.debug("Skipped Core Data save because only benchmark/internal rows were present") }
             return
         }
         
@@ -2177,7 +2187,7 @@ extension RealTimeTrade {
         if isFetchFailure && retainOnFailure {
             Task { await logger.info("Retained old data for \(self.trade.name): Price \(updatedInfo.currentPrice) Currency: \(updatedInfo.currency ?? "N/A") (fetch failed)") }
         } else {
-            Task { await logger.info("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
+            Task { await logger.debug("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
         }
 
         return !isFetchFailure // Return true if successful, false if failed

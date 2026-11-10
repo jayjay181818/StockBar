@@ -292,6 +292,16 @@ extension DataModel {
                     self.scheduleFolyncCheck(at: backoff, isCatchUp: false)
                     return
                 }
+                // No network at all: a poll can only fail, so wait for the
+                // next minute instead. A Folync on this Mac is still asked.
+                if !ConnectivityMonitor.shared.isConnected,
+                   let url = URL(string: self.folyncSessionDependencies.settingsStore.load().baseURL),
+                   !FolyncRefreshSchedule.isLoopback(url) {
+                    self.scheduleFolyncCheck(
+                        at: FolyncRefreshSchedule.nextRegularCheck(after: Date()), isCatchUp: false
+                    )
+                    return
+                }
                 await self.refreshFolyncPortfolio(allowCatchUp: !isCatchUp)
             }
         }
@@ -334,8 +344,6 @@ extension DataModel {
             let startedAt = Date()
             let token = await deps.loadToken()
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
-            await Logger.shared.info("Folync poll started at \(startedAt.ISO8601Format())")
-            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             var succeeded = false
             if let token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 succeeded = await refreshFolyncPortfolio(
@@ -346,6 +354,7 @@ extension DataModel {
                 )
             } else {
                 markFolyncRefreshFailure(FolyncPortfolioSourceError.missingToken)
+                noteFolyncPollFailure(FolyncPortfolioSourceError.missingToken)
             }
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             let completedAt = Date()
@@ -359,10 +368,36 @@ extension DataModel {
             let next = catchUp ? completedAt.addingTimeInterval(FolyncRefreshSchedule.catchUpDelay)
                 : max(regular, folyncBackoffUntil ?? regular)
             scheduleFolyncCheck(at: next, isCatchUp: catchUp)
-            await Logger.shared.info("Folync poll completed: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp), backoff=\(isFolyncBackingOff)")
+            await logFolyncPollOutcome(succeeded: succeeded, next: next)
+            await Logger.shared.debug("Folync poll: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp), backoff=\(isFolyncBackingOff)")
         }
         folyncRefreshTask = task
         await task.value
+    }
+
+    private func noteFolyncPollFailure(_ error: Error) {
+        folyncConsecutivePollFailures += 1
+        folyncLastPollFailureCategory = FolyncRefreshSchedule.failureCategory(error)
+    }
+
+    /// One line when polling starts to fail and one when it works again. A
+    /// pair of lines for every poll was more than half of the log.
+    private func logFolyncPollOutcome(succeeded: Bool, next: Date) async {
+        if succeeded {
+            let failures = folyncConsecutivePollFailures
+            folyncConsecutivePollFailures = 0
+            folyncLastPollFailureCategory = nil
+            if failures > 0 {
+                await Logger.shared.info("Folync poll recovered after \(failures) failed poll\(failures == 1 ? "" : "s")")
+            }
+            return
+        }
+        let category = folyncLastPollFailureCategory ?? "other"
+        if folyncConsecutivePollFailures == 1 {
+            await Logger.shared.warning("Folync poll failed (\(category)); next try \(next.ISO8601Format())")
+        } else {
+            await Logger.shared.debug("Folync poll failed again (\(category)), \(folyncConsecutivePollFailures) in a row; next try \(next.ISO8601Format())")
+        }
     }
 
     private func refreshFolyncPortfolio(
@@ -426,9 +461,13 @@ extension DataModel {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
             markFolyncRefreshFailure(error)
+            noteFolyncPollFailure(error)
             let now = Date()
             let backoff = await deps.supplementalCoordinator.recordBackoff(after: error, at: now)
                 ?? FolyncRefreshSchedule.backoff(after: error, at: now)
+                ?? FolyncRefreshSchedule.repeatedFailureBackoff(
+                    consecutiveFailures: folyncConsecutivePollFailures, at: now
+                )
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             folyncBackoffUntil = backoff
             return false
@@ -666,6 +705,8 @@ extension DataModel {
         folyncLastCheckedAt = nil
         folyncNextCheckAt = nil
         folyncBackoffUntil = nil
+        folyncConsecutivePollFailures = 0
+        folyncLastPollFailureCategory = nil
         restoreFolyncBenchmarkOverlays()
         currencyConverter.deactivateFolyncOverlay()
         folyncRefreshTimer?.invalidate()
