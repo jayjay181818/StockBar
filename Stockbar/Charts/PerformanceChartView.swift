@@ -1766,7 +1766,7 @@ struct PerformanceChartView: View {
     }
     
     private func formatCurrency(_ amount: Double, currency: String) -> String {
-        guard amount.isFinite else { return "Unavailable" }
+        guard amount.isFinite else { return "—" }
         // For individual stock charts, don't apply currency conversion - just format with the native currency
         switch selectedChartType {
         case .individualStock:
@@ -1819,7 +1819,7 @@ struct PerformanceChartView: View {
             }
             
             // Primary display currency
-            guard convertedAmount.isFinite else { return "Unavailable" }
+            guard convertedAmount.isFinite else { return "—" }
             formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
             let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
             
