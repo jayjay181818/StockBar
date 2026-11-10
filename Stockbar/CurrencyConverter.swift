@@ -349,9 +349,14 @@ public final class CurrencyConverter: @unchecked Sendable {
         }
         Task { await Logger.shared.info("💱 [CurrencyConverter] Fetching exchange rates from legacy API...") }
 
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
-            guard let data = data,
-                  let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
+        URLSession.shared.dataTask(with: url) { [weak self] data, urlResponse, _ in
+            // An error page can be valid JSON, and a zero or negative rate would
+            // turn every converted value into nonsense or infinity.
+            let succeeded = (urlResponse as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            guard succeeded, let data = data,
+                  let decoded = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data),
+                  case let usable = decoded.rates.filter({ $0.value.isFinite && $0.value > 0 }),
+                  !usable.isEmpty else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
                 Task { @MainActor [weak self] in
                     self?.finishFailedLegacyRefresh()
@@ -360,13 +365,13 @@ public final class CurrencyConverter: @unchecked Sendable {
             }
 
             Task { @MainActor [weak self] in
-                self?.finishSuccessfulLegacyRefresh(rates: response.rates)
+                self?.finishSuccessfulLegacyRefresh(rates: usable)
 
                 Task {
                     await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
-                    await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
-                    await Logger.shared.info("💱 [CurrencyConverter] USD to EUR: \(response.rates["EUR"] ?? 0.0)")
-                    if let gbpRate = response.rates["GBP"] {
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(usable["GBP"] ?? 0.0)")
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to EUR: \(usable["EUR"] ?? 0.0)")
+                    if let gbpRate = usable["GBP"] {
                         let gbpToUsd = 1.0 / gbpRate
                         await Logger.shared.debug("💱 [CurrencyConverter] GBP to USD: \(gbpToUsd) (£1 = $\(String(format: "%.4f", gbpToUsd)))")
                     }
