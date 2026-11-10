@@ -271,11 +271,37 @@ def get_cached(symbol):
                 save_cache_unlocked(current_cache)
     return None
 
+CACHE_ENTRY_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+def prune_cache(current_cache, now=None):
+    """Drop entries too old to be used again, so symbols no longer tracked do
+    not stay in the cache file for good. Returns the number removed."""
+    now = time.time() if now is None else now
+
+    def expired(entry, max_age):
+        if not isinstance(entry, dict):
+            return True
+        ts = entry.get('timestamp')
+        return not isinstance(ts, (int, float)) or now - ts > max_age
+
+    removed = 0
+    for key in [k for k in current_cache if not str(k).startswith('_')]:
+        if expired(current_cache[key], CACHE_ENTRY_MAX_AGE_SECONDS):
+            del current_cache[key]
+            removed += 1
+    prev_cache = current_cache.get(PREV_CLOSE_CACHE_KEY)
+    if isinstance(prev_cache, dict):
+        for key in [k for k in prev_cache if expired(prev_cache[k], PREV_CLOSE_CACHE_MAX_AGE_SECONDS)]:
+            del prev_cache[key]
+            removed += 1
+    return removed
+
 def set_cache(symbol, result):
     if not is_valid_quote(result):
         return False
     with cache_lock():
         current_cache = load_cache_unlocked()
+        prune_cache(current_cache)
         current_cache[symbol] = {
             'timestamp': time.time(),
             'result': make_json_safe(result)
@@ -298,19 +324,66 @@ def exchange_today(index, symbol):
             pass
     return datetime.strptime(market_date_for_symbol(symbol), "%Y-%m-%d").date()
 
-def market_date_for_symbol(symbol):
-    tz = None
+EXCHANGE_TIMEZONES = {
+    '.L': 'Europe/London', '.LON': 'Europe/London', '.XC': 'Europe/London', '.IL': 'Europe/London',
+    '.IR': 'Europe/Dublin', '.PA': 'Europe/Paris', '.AS': 'Europe/Amsterdam', '.BR': 'Europe/Brussels',
+    '.LS': 'Europe/Lisbon', '.DE': 'Europe/Berlin', '.F': 'Europe/Berlin', '.MI': 'Europe/Rome',
+    '.MC': 'Europe/Madrid', '.SW': 'Europe/Zurich', '.VI': 'Europe/Vienna', '.ST': 'Europe/Stockholm',
+    '.CO': 'Europe/Copenhagen', '.OL': 'Europe/Oslo', '.HE': 'Europe/Helsinki', '.WA': 'Europe/Warsaw',
+    '.TO': 'America/Toronto', '.V': 'America/Toronto', '.NE': 'America/Toronto', '.MX': 'America/Mexico_City',
+    '.SA': 'America/Sao_Paulo', '.AX': 'Australia/Sydney', '.NZ': 'Pacific/Auckland', '.T': 'Asia/Tokyo',
+    '.HK': 'Asia/Hong_Kong', '.SS': 'Asia/Shanghai', '.SZ': 'Asia/Shanghai', '.TW': 'Asia/Taipei',
+    '.KS': 'Asia/Seoul', '.KQ': 'Asia/Seoul', '.SI': 'Asia/Singapore', '.NS': 'Asia/Kolkata',
+    '.BO': 'Asia/Kolkata', '.JO': 'Africa/Johannesburg', '.TA': 'Asia/Jerusalem',
+}
+
+def market_timezone_name(symbol):
+    """Time zone of the exchange a symbol trades on, from its Yahoo suffix.
+    Symbols with no suffix, or one not listed, are taken as New York."""
+    upper = symbol.upper()
+    dot = upper.rfind('.')
+    if dot > 0:
+        return EXCHANGE_TIMEZONES.get(upper[dot:], 'America/New_York')
+    return 'America/New_York'
+
+def market_timezone(symbol):
+    tz_name = market_timezone_name(symbol)
     try:
         from zoneinfo import ZoneInfo
-        tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
-        tz = ZoneInfo(tz_name)
+        return ZoneInfo(tz_name)
     except Exception:
         try:
             import pytz
-            tz_name = "Europe/London" if is_uk_symbol(symbol) else "America/New_York"
-            tz = pytz.timezone(tz_name)
+            return pytz.timezone(tz_name)
         except Exception:
-            tz = None
+            return None
+
+def clock_market_state(symbol, now_market):
+    """Market state from the exchange's local clock, for when Yahoo reports none.
+    London and New York have their auction and extended sessions; other
+    exchanges get a plain 09:00-17:30 day, which is close enough for a fallback."""
+    minutes = now_market.hour * 60 + now_market.minute
+    tz_name = market_timezone_name(symbol)
+    if tz_name == 'Europe/London':
+        if 7 * 60 <= minutes < 8 * 60:
+            return "PRE"
+        if 8 * 60 <= minutes < 16 * 60 + 30:
+            return "REGULAR"
+        if 16 * 60 + 30 <= minutes < 17 * 60 + 30:
+            return "POST"
+        return "CLOSED"
+    if tz_name == 'America/New_York':
+        if 4 * 60 <= minutes < 9 * 60 + 30:
+            return "PRE"
+        if 9 * 60 + 30 <= minutes < 16 * 60:
+            return "REGULAR"
+        if 16 * 60 <= minutes < 20 * 60:
+            return "POST"
+        return "CLOSED"
+    return "REGULAR" if 9 * 60 <= minutes < 17 * 60 + 30 else "CLOSED"
+
+def market_date_for_symbol(symbol):
+    tz = market_timezone(symbol)
     now = datetime.now(tz) if tz is not None else datetime.now(timezone.utc)
     return now.date().isoformat()
 
@@ -447,6 +520,21 @@ def resolve_market_state(reported_state, clock_state, now_market):
         return "CLOSED"
     return clock_state
 
+def trading_currency(ticker, info):
+    """The currency prices are quoted in. `financialCurrency` is the currency
+    of the company's accounts (USD for a London-listed miner, say), so it is
+    not a substitute; the chart metadata is."""
+    currency = info.get('currency') if isinstance(info, dict) else None
+    if currency:
+        return currency
+    try:
+        metadata = ticker.history_metadata
+        if isinstance(metadata, dict):
+            return metadata.get('currency')
+    except Exception:
+        pass
+    return None
+
 def normalize_currency(raw_currency, symbol):
     """Normalize currency codes and detect pence-based quotes."""
     if raw_currency is None:
@@ -478,6 +566,48 @@ def handle_twelvedata_symbol(symbol):
         return LSE_SUFFIX_PATTERN.sub('', upper), "LSE"
     return upper, None
 
+PROVIDER_COOLDOWN_KEY = "_provider_cooldown"
+TWELVE_DATA_COOLDOWN_SECONDS = 65
+
+def provider_cooldown_remaining(provider, now=None):
+    now = time.time() if now is None else now
+    with cache_lock():
+        cooldowns = load_cache_unlocked().get(PROVIDER_COOLDOWN_KEY)
+    until = cooldowns.get(provider) if isinstance(cooldowns, dict) else None
+    return max(0.0, until - now) if isinstance(until, (int, float)) else 0.0
+
+def start_provider_cooldown(provider, seconds, now=None):
+    now = time.time() if now is None else now
+    with cache_lock():
+        current_cache = load_cache_unlocked()
+        cooldowns = current_cache.get(PROVIDER_COOLDOWN_KEY)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            current_cache[PROVIDER_COOLDOWN_KEY] = cooldowns
+        cooldowns[provider] = now + seconds
+        save_cache_unlocked(current_cache)
+
+def twelvedata_request(url, params):
+    """A Twelve Data request that stands down for a minute after the service
+    says the per-minute allowance is used up, instead of spending the rest of
+    the batch on requests that will also be refused. The pause is kept in the
+    cache file because each batch may run in a new process."""
+    if provider_cooldown_remaining("twelvedata") > 0:
+        return None
+    try:
+        data = make_request(url, params)
+    except Exception as e:
+        if getattr(e, 'code', None) == 429 or getattr(getattr(e, 'response', None), 'status_code', None) == 429:
+            start_provider_cooldown("twelvedata", TWELVE_DATA_COOLDOWN_SECONDS)
+            print("Twelve Data allowance used up; pausing it for a minute", file=sys.stderr)
+            return None
+        raise
+    if isinstance(data, dict) and data.get('code') == 429:
+        start_provider_cooldown("twelvedata", TWELVE_DATA_COOLDOWN_SECONDS)
+        print("Twelve Data allowance used up; pausing it for a minute", file=sys.stderr)
+        return None
+    return data
+
 def fetch_historical_data_twelvedata(symbol, start_date, end_date):
     """Fetch historical data from Twelve Data"""
     if not TWELVE_DATA_API_KEY:
@@ -501,7 +631,7 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
     print(f"Fetching historical data for {symbol} using Twelve Data", file=sys.stderr)
     
     try:
-        data = make_request(url, params)
+        data = twelvedata_request(url, params)
         
         if not data:
             return None
@@ -624,7 +754,7 @@ def fetch_real_time_quote_yfinance(symbol):
         # 2. Get comprehensive ticker info for pre/post market data
         try:
             info = ticker.info
-            currency = info.get('currency') or info.get('financialCurrency')
+            currency = trading_currency(ticker, info)
             reported_market_state = info.get('marketState')
             
             # Extract timestamp from regularMarketTime
@@ -669,60 +799,10 @@ def fetch_real_time_quote_yfinance(symbol):
             regular_market_price = previous_close
             current_price = regular_market_price
 
-        # 6. Determine market state based on appropriate timezone for the stock
-        if is_uk_symbol(symbol):
-            # LSE stocks - use London timezone
-            try:
-                from zoneinfo import ZoneInfo
-                market_tz = ZoneInfo("Europe/London")
-            except ImportError:
-                try:
-                    import pytz
-                    market_tz = pytz.timezone("Europe/London")
-                except ImportError:
-                    from datetime import timezone, timedelta
-                    market_tz = timezone(timedelta(hours=0))  # GMT
-            
-            # Get current time in London timezone
-            now_market = datetime.now(market_tz)
-            current_hour_market = now_market.hour
-            current_minute_market = now_market.minute
-            
-            # Simplified LSE market hours logic for brevity in this view
-            if (current_hour_market >= 7 and current_hour_market < 8):
-                market_state = "PRE"
-            elif (current_hour_market == 8) or (current_hour_market >= 9 and current_hour_market < 16) or (current_hour_market == 16 and current_minute_market < 30):
-                market_state = "REGULAR"
-            elif (current_hour_market == 16 and current_minute_market >= 30) or (current_hour_market == 17 and current_minute_market < 30):
-                market_state = "POST"
-            else:
-                market_state = "CLOSED"
-        else:
-            # US stocks - use US Eastern timezone
-            try:
-                from zoneinfo import ZoneInfo
-                market_tz = ZoneInfo("America/New_York")
-            except ImportError:
-                try:
-                    import pytz
-                    market_tz = pytz.timezone("America/New_York")
-                except ImportError:
-                    from datetime import timezone, timedelta
-                    market_tz = timezone(timedelta(hours=-4))  # EDT
-            
-            # Get current time in US Eastern timezone
-            now_market = datetime.now(market_tz)
-            current_hour_market = now_market.hour
-            current_minute_market = now_market.minute
-            
-            if (current_hour_market >= 4 and current_hour_market < 9) or (current_hour_market == 9 and current_minute_market < 30):
-                market_state = "PRE"
-            elif (current_hour_market == 9 and current_minute_market >= 30) or (current_hour_market >= 10 and current_hour_market < 16):
-                market_state = "REGULAR"
-            elif current_hour_market >= 16 and current_hour_market < 20:
-                market_state = "POST"
-            else:
-                market_state = "CLOSED"
+        # 6. Market state from the exchange's own clock; Yahoo's reported state wins below.
+        market_tz = market_timezone(symbol)
+        now_market = datetime.now(market_tz) if market_tz is not None else datetime.now(timezone.utc)
+        market_state = clock_market_state(symbol, now_market)
 
         market_state = resolve_market_state(reported_market_state, market_state, now_market)
         if market_state == "PRE" and pre_market_price is not None:
@@ -831,7 +911,7 @@ def fetch_real_time_quote_twelvedata(symbol):
         params['exchange'] = exchange
 
     try:
-        data = make_request(url, params)
+        data = twelvedata_request(url, params)
         if not data:
             return None
 
@@ -895,7 +975,7 @@ def fetch_previous_close_twelvedata(symbol):
         params['exchange'] = exchange
 
     try:
-        data = make_request(url, params)
+        data = twelvedata_request(url, params)
         if not data or 'values' not in data:
             return None
 
@@ -982,7 +1062,7 @@ def fetch_previous_close_yfinance(symbol):
         currency = None
         try:
             info = ticker.info
-            currency = info.get('currency') or info.get('financialCurrency')
+            currency = trading_currency(ticker, info)
         except Exception:
             currency = None
 
@@ -1447,110 +1527,13 @@ def output_error(error_code, message, symbol=None, retry_after=None):
 
     print_json(error_obj)
 
-def finite_ohlc_value(value):
-    """A price as a finite float, or None when missing or non-finite."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-def ohlc_volume(value):
-    """Share count as an int; a missing or non-finite volume becomes 0."""
-    number = finite_ohlc_value(value)
-    return int(number) if number is not None else 0
-
-def fetch_ohlc_data_yfinance(symbol, period='1mo', interval='1d'):
-    """Fetch OHLC data using yfinance"""
-    if not YFINANCE_AVAILABLE:
-        return None
-
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=period, interval=interval, auto_adjust=False)
-
-        if hist.empty:
-            return None
-
-        # Scale by the currency yfinance reports, as the history path does, so
-        # a .L listing quoted in GBP or USD is not divided by 100.
-        _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
-        divisor = 100.0 if uses_pence else 1.0
-
-        ohlc_data = []
-        for date, row in hist.iterrows():
-            prices = [finite_ohlc_value(row[column]) for column in ('Open', 'High', 'Low', 'Close')]
-            # A row with a missing price (often today's partial bar) would become
-            # null in the JSON and fail decoding of the whole response, so skip it.
-            if any(price is None for price in prices):
-                continue
-            open_price, high_price, low_price, close_price = (price / divisor for price in prices)
-
-            ohlc_data.append({
-                'timestamp': int(date.timestamp()),
-                'symbol': symbol,
-                'open': open_price,
-                'high': high_price,
-                'low': low_price,
-                'close': close_price,
-                # Indices and FX often have no volume; that must not fail the fetch.
-                'volume': ohlc_volume(row['Volume'])
-            })
-
-        if not ohlc_data:
-            return None
-
-        print(f"yfinance retrieved {len(ohlc_data)} OHLC data points for {symbol} (period={period}, interval={interval})", file=sys.stderr)
-        return ohlc_data
-
-    except Exception as e:
-        log_error(f"yfinance OHLC fetch failed for {symbol}: {e}")
-        return None
-
-def fetch_ohlc_data(symbol, period='1mo', interval='1d'):
-    """Fetch OHLC data using yfinance"""
-    if YFINANCE_AVAILABLE:
-        result = fetch_ohlc_data_yfinance(symbol, period, interval)
-        if result:
-            print(f"Using yfinance for OHLC data: {symbol}", file=sys.stderr)
-            return result
-        else:
-            print(f"yfinance OHLC failed for {symbol}", file=sys.stderr)
-
-    return None
-
-def fetch_batch_ohlc(symbols, period='1mo', interval='1d'):
-    """Fetch OHLC data for multiple symbols"""
-    results = {}
-
-    for symbol in symbols:
-        try:
-            ohlc_data = fetch_ohlc_data(symbol, period, interval)
-            if ohlc_data:
-                results[symbol] = ohlc_data
-            else:
-                print(f"Failed to fetch OHLC data for {symbol}", file=sys.stderr)
-                results[symbol] = None
-
-            time.sleep(1.0)
-
-        except Exception as e:
-            log_error(f"Error fetching OHLC for {symbol}: {e}")
-            results[symbol] = None
-
-    return results
-
 def main():
     parser = argparse.ArgumentParser(description='Fetch stock data using multiple providers')
     parser.add_argument('--historical', action='store_true', help='Fetch historical price data')
-    parser.add_argument('--ohlc', action='store_true', help='Fetch OHLC (candlestick) data')
-    parser.add_argument('--batch-ohlc', action='store_true', help='Fetch OHLC data for multiple symbols')
     parser.add_argument('--json', action='store_true', help='Emit the unified per-symbol JSON response')
     parser.add_argument('symbols', nargs='*', help='Stock symbols to fetch')
     parser.add_argument('--start-date', help='Start date for historical data (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='End date for historical data (YYYY-MM-DD)')
-    parser.add_argument('--period', default='1mo', help='Period for OHLC data')
-    parser.add_argument('--interval', default='1d', help='Interval for OHLC data')
     parser.add_argument('--test-key', help='Test API key for a specific service (fmp, twelvedata)')
     parser.add_argument('--deadline-seconds', type=float, default=None,
                         help='Time budget for a quote batch; symbols not reached in time report TIMEOUT')
@@ -1596,40 +1579,7 @@ def main():
             })
         sys.exit(0)
 
-    if args.ohlc or args.batch_ohlc:
-        if not args.symbols:
-            print("Error: OHLC mode requires at least one symbol", file=sys.stderr)
-            output_error('INVALID_REQUEST', 'OHLC mode requires at least one symbol')
-            sys.exit(1)
-
-        symbols = [s.upper() for s in args.symbols]
-
-        try:
-            if args.batch_ohlc and len(symbols) > 1:
-                ohlc_results = fetch_batch_ohlc(symbols, period=args.period, interval=args.interval)
-                output_data = {}
-                for symbol, data in ohlc_results.items():
-                    if data:
-                        output_data[symbol] = data
-                print_json(output_data)
-            else:
-                symbol = symbols[0]
-                ohlc_data = fetch_ohlc_data(symbol, period=args.period, interval=args.interval)
-                if ohlc_data:
-                    print_json(ohlc_data)
-                else:
-                    output_error('NO_DATA', f'No OHLC data available for {symbol}', symbol=symbol)
-        except Exception as e:
-            error_str = str(e)
-            if 'timeout' in error_str.lower():
-                output_error('TIMEOUT', f'Request timed out')
-            elif 'rate limit' in error_str.lower():
-                output_error('RATE_LIMIT', 'API rate limit exceeded.', retry_after=60)
-            else:
-                output_error('UNKNOWN', f'Unexpected error: {str(e)}')
-            sys.exit(1)
-
-    elif args.historical:
+    if args.historical:
         if not args.symbols or not args.start_date or not args.end_date:
             print("Error: Historical mode requires symbol, start-date, and end-date", file=sys.stderr)
             output_error('INVALID_REQUEST', 'Historical mode requires symbol, start-date, and end-date')
