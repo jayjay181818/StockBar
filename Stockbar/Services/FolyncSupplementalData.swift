@@ -458,6 +458,10 @@ actor FolyncSupplementalCache {
         receiptTime: Date = Date()
     ) throws {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !hasRemovedOldEntries {
+            hasRemovedOldEntries = true
+            removeEntries()
+        }
         let key = cacheKey(endpoint: endpoint, scopeID: scopeID, resource: resource, identity: identity, range: range)
         let envelope = FolyncSupplementalCacheEnvelope(
             endpointFingerprint: key.endpointFingerprint,
@@ -471,6 +475,26 @@ actor FolyncSupplementalCache {
         )
         let data = try JSONEncoder().encode(envelope)
         try data.write(to: directory.appendingPathComponent("response-\(key.digest).json"), options: .atomic)
+    }
+
+    /// Responses for holdings since sold, or for a server no longer used, are
+    /// never asked for again, so nothing else would remove them.
+    static let maximumEntryAge: TimeInterval = 30 * 24 * 60 * 60
+    private var hasRemovedOldEntries = false
+
+    @discardableResult
+    func removeEntries(olderThan age: TimeInterval = FolyncSupplementalCache.maximumEntryAge, now: Date = Date()) -> Int {
+        let files = (try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        var removed = 0
+        for file in files
+        where file.lastPathComponent.hasPrefix("response-") && file.pathExtension == "json" {
+            guard let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  now.timeIntervalSince(modified) > age else { continue }
+            if (try? fileManager.removeItem(at: file)) != nil { removed += 1 }
+        }
+        return removed
     }
 
     private func cacheKey(

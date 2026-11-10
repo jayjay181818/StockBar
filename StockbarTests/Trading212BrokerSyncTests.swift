@@ -2882,6 +2882,34 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(dataModel.folyncRefreshTimer?.isValid, true)
     }
 
+    func testTheSupplementalCacheDropsOnlyOldResponses() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = FolyncSupplementalCache(directory: directory)
+        for identity in ["OLD", "NEW"] {
+            try await cache.save(
+                ["value": 1], endpoint: "https://folync.example.test", scopeID: "all",
+                resource: "chart", identity: identity, range: "1m", etag: nil
+            )
+        }
+        let unrelated = directory.appendingPathComponent("notes.txt")
+        try Data("keep".utf8).write(to: unrelated)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("response-") }
+        XCTAssertEqual(files.count, 2)
+        let longAgo = Date().addingTimeInterval(-40 * 24 * 60 * 60)
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: files[0].path)
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: unrelated.path)
+
+        let removed = await cache.removeEntries()
+
+        XCTAssertEqual(removed, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files[0].path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files[1].path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
     @MainActor
     func testPartialBenchmarkResponseAppliesUsableBenchmarksAndMarksUnavailablePerSymbol() async throws {
         let env = try makeIsolatedSessionEnvironment()
