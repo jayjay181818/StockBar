@@ -456,25 +456,6 @@ actor SectorAnalysisService {
 
     // MARK: - Sector Performance
 
-    /// Calculate sector performance metrics
-    func calculateSectorPerformance(
-        sectorAllocations: [SectorAllocation]
-    ) async -> [SectorPerformance] {
-        var performance: [SectorPerformance] = []
-
-        for allocation in sectorAllocations {
-            performance.append(SectorPerformance(
-                sector: allocation.sector,
-                totalReturn: allocation.dayChange,
-                percentReturn: allocation.dayChangePercent,
-                contribution: allocation.dayChange,  // Contribution to total portfolio return
-                positionCount: allocation.positions.count
-            ))
-        }
-
-        return performance.sorted { $0.percentReturn > $1.percentReturn }
-    }
-
     struct SectorPerformance: Identifiable {
         let id = UUID()
         let sector: Sector

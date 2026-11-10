@@ -7,16 +7,6 @@ import Observation
 import Security
 
 extension String {
-    func appendToFile(url: URL) throws {
-        if FileManager.default.fileExists(atPath: url.path) {
-            let fileHandle = try FileHandle(forWritingTo: url)
-            fileHandle.seekToEndOfFile()
-            fileHandle.write(self.data(using: .utf8)!)
-            fileHandle.closeFile()
-        } else {
-            try self.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
@@ -565,23 +555,6 @@ class DataModel {
         return legacyTrades
     }
     
-    /// Load trading info asynchronously from Core Data
-    private func loadTradingInfoAsync(for trades: [RealTimeTrade]) async {
-        do {
-            await logger.info("📊 Loading trading info from Core Data")
-            let tradingInfoDict = try await tradeDataService.loadAllTradingInfo()
-            
-            // Apply trading info to trades
-            for trade in trades {
-                if let savedInfo = tradingInfoDict[trade.trade.name] {
-                    trade.realTimeInfo = savedInfo
-                    await logger.debug("Restored trading info for \(trade.trade.name) from Core Data")
-                }
-            }
-        } catch {
-            await logger.error("❌ Failed to load trading info from Core Data: \(error)")
-        }
-    }
     
     internal func saveTradingInfo() {
         // Folync display rows must not overwrite the local price cache.
@@ -683,11 +656,6 @@ class DataModel {
         await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
     
-    /// Adds historical snapshots to the data manager
-    @MainActor
-    private func addHistoricalSnapshots(_ snapshots: [PriceSnapshot], for symbol: String) async {
-        historicalDataManager.addImportedSnapshots(snapshots, for: symbol)
-    }
     
     /// Manually triggers a 5-year chunked historical data backfill for all symbols - delegates to HistoricalDataCoordinator
     public func triggerFullHistoricalBackfill() async {
@@ -705,58 +673,8 @@ class DataModel {
         return historicalDataCoordinator.getHistoricalDataStatus()
     }
     
-    /// Triggers comprehensive 5-year portfolio value calculation in monthly chunks
-    public func calculate5YearPortfolioValues() async {
-        await logger.info("🚀 MANUAL TRIGGER: Starting 5-year portfolio value calculation")
-        await historicalDataManager.calculate5YearHistoricalPortfolioValues(using: self)
-        await logger.info("🏁 MANUAL TRIGGER: Completed 5-year portfolio value calculation")
-    }
     
-    /// Checks if portfolio value calculation is needed and triggers it automatically
-    private func checkAndCalculatePortfolioValues() async {
-        await logger.info("🔍 STARTUP: Checking if portfolio value calculation is needed")
-        
-        // Check if we have sufficient historical price data but no portfolio value data
-        let totalPriceSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
-        let portfolioValueCount = historicalDataManager.cachedHistoricalPortfolioValues.count
-        
-        await logger.info("🔍 STARTUP: Found \(totalPriceSnapshots) price snapshots and \(portfolioValueCount) portfolio value points")
-        
-        // If we have lots of price data but no portfolio values, trigger calculation
-        if totalPriceSnapshots > 100 && portfolioValueCount < 50 {
-            await logger.info("🚀 STARTUP: Sufficient price data available, triggering automatic 5-year portfolio value calculation")
-            await historicalDataManager.calculate5YearHistoricalPortfolioValues(using: self)
-            await logger.info("🏁 STARTUP: Automatic portfolio value calculation completed")
-        } else {
-            await logger.info("ℹ️ STARTUP: Portfolio value calculation not needed - sufficient data already exists")
-        }
-    }
     
-    /// Tests the API connection with a simple request
-    func testAPIConnection() async throws -> Bool {
-        await logger.info("Testing API connection (default AAPL fetch)")
-        
-        do {
-            // Test with a simple quote request for Apple stock
-            let result = try await networkService.fetchQuote(for: "AAPL")
-            
-            // Check if we got valid data back
-            let isValid = !result.regularMarketPrice.isNaN && 
-                         !result.regularMarketPreviousClose.isNaN && 
-                         result.regularMarketPrice > 0
-            
-            if isValid {
-                await logger.info("API test successful - received valid data for AAPL")
-            } else {
-                await logger.warning("API test returned invalid data - price: \(result.regularMarketPrice)")
-            }
-            
-            return isValid
-        } catch {
-            await logger.error("API test failed: \(error.localizedDescription)")
-            throw error
-        }
-    }
     
     /// Verifies a specific API key for a service
     func verifyAPIKey(service: String) async throws -> Bool {
@@ -764,14 +682,6 @@ class DataModel {
         return try await networkService.verifyAPIKey(service: service)
     }
     
-    /// Manually triggers retroactive portfolio calculation
-    public func triggerRetroactivePortfolioCalculation(force: Bool = false) {
-        Task {
-            await logger.info("🔄 MANUAL: Starting retroactive portfolio calculation (force: \(force))")
-            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: force)
-            await logger.info("🔄 MANUAL: Retroactive portfolio calculation completed")
-        }
-    }
 
     /// Triggers retroactive portfolio calculation for a specific number of days
     /// This will calculate portfolio values retroactively from existing historical data
@@ -1688,13 +1598,6 @@ class DataModel {
         }
         if mayStartRuntimeSchedulers {
             BackfillScheduler.shared.start(dataModel: self)
-        }
-    }
-
-    func stopStaggeredRefresh() {
-        // Delegate to RefreshService
-        Task { @MainActor in
-            refreshService?.stopRefreshTimer()
         }
     }
 

@@ -257,32 +257,6 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
         return nil
     }
     
-    /// Same lookup as `retrieve(_:forKey:)`, but disk and archive reads happen off the
-    /// calling thread. Prefer this from `@MainActor` code.
-    func retrieveAsync<T: Codable & Sendable>(_ type: T.Type, forKey key: String) async -> T? {
-        if let value = retrieveFromMemoryCache(type, key: key) {
-            updateStatistics(for: .memory, operation: .hit)
-            return value
-        }
-        updateStatistics(for: .memory, operation: .miss)
-
-        if let value = await retrieveFromDiskCacheAsync(type, key: key) {
-            updateStatistics(for: .disk, operation: .hit)
-            promoteToMemoryCache(value, key: key)
-            return value
-        }
-        updateStatistics(for: .disk, operation: .miss)
-
-        if let value = await retrieveFromArchiveCacheAsync(type, key: key) {
-            updateStatistics(for: .archived, operation: .hit)
-            promoteToHigherTier(value, key: key)
-            return value
-        }
-        updateStatistics(for: .archived, operation: .miss)
-
-        Task { await logger.debug("🔍 Cache miss for key: \(key)") }
-        return nil
-    }
 
     /// Remove value from all cache tiers
     func remove(forKey key: String) {
@@ -306,31 +280,6 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
         Task { await logger.debug("🗑️ Removed \(key) from all cache tiers") }
     }
     
-    /// Clear all cache data
-    func clearAll() {
-        memoryCacheQueue.async { [weak self] in
-            self?.memoryCache.removeAll()
-        }
-        
-        diskCacheQueue.async { [weak self] in
-            guard let self = self else { return }
-            try? FileManager.default.removeItem(at: self.diskCacheDirectory)
-            try? FileManager.default.createDirectory(at: self.diskCacheDirectory, withIntermediateDirectories: true)
-            self.diskAccessStats.removeAll()
-        }
-        
-        archiveCacheQueue.async { [weak self] in
-            guard let self = self else { return }
-            try? FileManager.default.removeItem(at: self.archiveCacheDirectory)
-            try? FileManager.default.createDirectory(at: self.archiveCacheDirectory, withIntermediateDirectories: true)
-        }
-        
-        DispatchQueue.main.async { [weak self] in
-            self?.cacheStats = CacheStatistics()
-        }
-        
-        Task { await logger.info("🧹 Cleared all cache data") }
-    }
     
     // MARK: - Cache Tier Operations
     
@@ -410,14 +359,6 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
         return diskCacheQueue.sync { readDiskCacheEntry(type, key: key) }
     }
 
-    private func retrieveFromDiskCacheAsync<T: Codable & Sendable>(_ type: T.Type, key: String) async -> T? {
-        await withCheckedContinuation { continuation in
-            diskCacheQueue.async { [self] in
-                continuation.resume(returning: readDiskCacheEntry(type, key: key))
-            }
-        }
-    }
-
     private func readArchiveCacheEntry<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         let fileURL = archiveCacheDirectory.appendingPathComponent("\(key).archive")
 
@@ -436,14 +377,6 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
 
     private func retrieveFromArchiveCache<T: Codable & Sendable>(_ type: T.Type, key: String) -> T? {
         return archiveCacheQueue.sync { readArchiveCacheEntry(type, key: key) }
-    }
-
-    private func retrieveFromArchiveCacheAsync<T: Codable & Sendable>(_ type: T.Type, key: String) async -> T? {
-        await withCheckedContinuation { continuation in
-            archiveCacheQueue.async { [self] in
-                continuation.resume(returning: readArchiveCacheEntry(type, key: key))
-            }
-        }
     }
     
     // MARK: - Cache Management
