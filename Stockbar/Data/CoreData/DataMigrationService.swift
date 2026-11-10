@@ -142,7 +142,11 @@ final class DataMigrationService: @unchecked Sendable {
                 // Delete the old-schema entities exactly once. Without its own marker this
                 // ran on every launch until verification passed, deleting newly
                 // computed snapshots each time.
-                if !userDefaults.bool(forKey: MigrationKeys.preV3PortfolioSnapshotsDeleted) {
+                // Version 0 means there is no record of an older version: a fresh install, or
+                // preferences that were reset. Neither has old-schema rows, and after a reset the
+                // store holds current snapshots that must not be deleted.
+                if migrationVersionStored > 0,
+                   !userDefaults.bool(forKey: MigrationKeys.preV3PortfolioSnapshotsDeleted) {
                     try await deleteOldPortfolioSnapshotEntities()
                     userDefaults.set(true, forKey: MigrationKeys.preV3PortfolioSnapshotsDeleted)
                     Task { await Logger.shared.info("DataMigrationService: Deleted old PortfolioSnapshotEntity instances (if any existed).") }

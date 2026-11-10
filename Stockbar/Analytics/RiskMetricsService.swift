@@ -61,7 +61,10 @@ actor RiskMetricsService {
         calendar: Calendar = .current
     ) -> (dates: [Date], values: [Double]) {
         var lastByDay: [Date: (date: Date, value: Double)] = [:]
-        for (date, value) in zip(dates, values) where value.isFinite && value > 0 {
+        // Markets are closed at weekends; a repeated Friday value there would add zero-return
+        // "trading days" and understate every figure annualised with 252.
+        for (date, value) in zip(dates, values)
+        where value.isFinite && value > 0 && !calendar.isDateInWeekend(date) {
             let day = calendar.startOfDay(for: date)
             if let existing = lastByDay[day], existing.date > date { continue }
             lastByDay[day] = (date, value)
@@ -120,7 +123,9 @@ actor RiskMetricsService {
         calendar: Calendar = .current
     ) -> DailyRiskSeries? {
         var lastByDay: [Date: HistoricalPortfolioSnapshot] = [:]
-        for snapshot in snapshots where snapshot.totalValue.isFinite && snapshot.totalValue > 0 {
+        // Weekend snapshots are left out for the same reason as in `dailyCloses`.
+        for snapshot in snapshots
+        where snapshot.totalValue.isFinite && snapshot.totalValue > 0 && !calendar.isDateInWeekend(snapshot.date) {
             let day = calendar.startOfDay(for: snapshot.date)
             if let existing = lastByDay[day], existing.date > snapshot.date { continue }
             lastByDay[day] = snapshot
