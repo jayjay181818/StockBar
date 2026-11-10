@@ -4,17 +4,9 @@ import XCTest
 @MainActor
 final class TechnicalIndicatorServiceTests: XCTestCase {
 
-    var service: TechnicalIndicatorService!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        service = TechnicalIndicatorService.shared
-    }
-
-    override func tearDown() async throws {
-        service = nil
-        try await super.tearDown()
-    }
+    // A property, not async setUp and tearDown: on a main-actor test class
+    // those two hops cost about 0.2 s for every test.
+    private var service: TechnicalIndicatorService { .shared }
 
     // MARK: - Simple Moving Average (SMA) Tests
 
