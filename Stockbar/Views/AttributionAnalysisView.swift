@@ -20,7 +20,6 @@ struct AttributionAnalysisView: View {
     /// True when `errorMessage` only says there is not enough history yet:
     /// that is the normal state of a new install, not a fault.
     @State private var messageIsNotice = false
-    @State private var showDetailedView: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     let dataModel: DataModel?

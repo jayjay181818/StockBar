@@ -453,15 +453,4 @@ actor SectorAnalysisService {
             unclassifiedPercentage: unclassifiedPercentage
         )
     }
-
-    // MARK: - Sector Performance
-
-    struct SectorPerformance: Identifiable {
-        let id = UUID()
-        let sector: Sector
-        let totalReturn: Double
-        let percentReturn: Double
-        let contribution: Double
-        let positionCount: Int
-    }
 }

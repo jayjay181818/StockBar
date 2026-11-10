@@ -17,10 +17,7 @@ class DataModel {
 
     // MARK: - Properties
 
-    // --- SWITCHED SERVICE ---
-    // Use the Python script-based service implementation
-    private let networkService: NetworkService = PythonNetworkService()
-    // ------------------------
+    private let networkService: NetworkService = PythonNetworkService.shared
 
     internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
@@ -104,7 +101,6 @@ class DataModel {
     @ObservationIgnored private var refreshService: RefreshService!
     @ObservationIgnored private var portfolioCalculationService: PortfolioCalculationService!
     @ObservationIgnored private var historicalDataCoordinator: HistoricalDataCoordinator!
-    private let chartAnnotationService = ChartAnnotationService.shared
     
     var realTimeTrades: [RealTimeTrade] = [] {
         didSet { realTimeTradesRevision &+= 1 }
@@ -217,9 +213,6 @@ class DataModel {
         currencyConverter: CurrencyConverter = .shared,
         startRuntimeServices: Bool = true
     ) {
-        // Ensure network service uses the correct implementation
-        // self.networkService = PythonNetworkService() // Already done in property declaration
-
         self.currencyConverter = currencyConverter
         // Pure calculation service: create it up front so totals never fall
         // back to a placeholder $0.00 while runtime services start.

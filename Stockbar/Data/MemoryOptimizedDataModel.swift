@@ -154,31 +154,6 @@ extension Notification.Name {
     static let memoryPressureDetected = Notification.Name("memoryPressureDetected")
 }
 
-// MARK: - CacheManager Extensions
-
-extension CacheManager {
-    func clearMemoryCache() {
-        memoryCacheQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            let removedSize = self.memoryCache.values.reduce(0) { $0 + $1.size }
-            let removedCount = self.memoryCache.count
-            if removedCount > 0 {
-                Task { await Logger.shared.info("🧹 Cleared \(removedCount) item(s) from the memory cache under memory pressure") }
-            }
-            self.memoryCache.removeAll(keepingCapacity: false)
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.cacheStats.memorySize = max(0, self.cacheStats.memorySize - removedSize)
-                self.cacheStats.totalEntries = max(0, self.cacheStats.totalEntries - removedCount)
-                self.cacheStats.lastCleanup = Date()
-            }
-        }
-    }
-    
-}
-
 // MARK: - Memory Helper Functions
 
 private func mach_task_basic_info() -> mach_task_basic_info_data_t {

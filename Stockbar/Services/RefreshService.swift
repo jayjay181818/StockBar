@@ -19,7 +19,6 @@ class RefreshService {
 
     // MARK: - State
     private var refreshTimer: Timer?
-    private var currentSymbolIndex = 0
     private var cancellables = Set<AnyCancellable>()
     private var scheduler: RefreshPassScheduler!
     private var lastImmediateFireAt: Date?

@@ -55,15 +55,6 @@ struct InstrumentAliasHistoryLookup {
     }
 }
 
-struct ComprehensiveDataStatus: Sendable {
-    let symbol: String
-    let daily: Int
-    let weekly: Int
-    let monthly: Int
-    let oldestDate: String
-    let newestDate: String
-}
-
 struct FolyncLineSeriesKey: Hashable, Sendable {
     let symbol: String
     let range: String
@@ -155,7 +146,6 @@ class HistoricalDataManager {
     private let encoder = JSONEncoder()
     
     // Performance optimization services
-    private let memoryService = MemoryManagementService.shared
     private let decoder = JSONDecoder()
     private let cacheManager = CacheManager.shared
     private let coreDataService: HistoricalDataServiceProtocol
@@ -187,7 +177,6 @@ class HistoricalDataManager {
     
     // CRITICAL FIX: Prevent concurrent calculation overlaps
     @ObservationIgnored private var isCalculationInProgress = false
-    private let calculationLock = NSLock()
     @ObservationIgnored private var lastPortfolioCalculationDate: Date = Date.distantPast
     private let portfolioCalculationCacheInterval: TimeInterval = 1800 // 30 minutes cache (increased from 5 minutes)
     @ObservationIgnored private var earliestAvailableDates: [String: Date] = [:]
@@ -401,13 +390,10 @@ class HistoricalDataManager {
         await logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)")
     }
     
-    // MARK: - Tiered Cache Integration
-    
-    /// Store data in appropriate cache tier based on recency and access patterns
-    private func storeInCache<T: Codable & Sendable>(_ data: T, key: String, isRecent: Bool = false) {
-        let cacheLevel: CacheManager.CacheLevel = isRecent ? .memory : 
-                        (key.contains("historical") ? .archived : .disk)
-        cacheManager.store(data, forKey: key, level: cacheLevel)
+    // MARK: - Cache
+
+    private func storeInCache<T: Codable & Sendable>(_ data: T, key: String) {
+        cacheManager.store(data, forKey: key)
     }
     
     /// Retrieve data from cache with fallback to UserDefaults for migration
@@ -437,22 +423,6 @@ class HistoricalDataManager {
         return historicalPortfolioSnapshots.filter { $0.date >= cutoffDate }
     }
     
-    /// Invalidate cache when data changes
-    private func invalidateRelatedCaches(for symbol: String? = nil) {
-        if let symbol = symbol {
-            // Invalidate symbol-specific caches
-            for days in [7, 30, 90] {
-                cacheManager.remove(forKey: "recent_prices_\(symbol)_\(days)")
-            }
-        }
-        
-        // Invalidate portfolio caches
-        for timeRange in ChartTimeRange.allCases {
-            cacheManager.remove(forKey: "portfolio_snapshots_\(timeRange.rawValue)")
-        }
-        
-        Task { await logger.debug("🗑️ Invalidated caches for symbol: \(symbol ?? "all")") }
-    }
     
     // MARK: - Performance Enhancement Methods
     
@@ -538,9 +508,6 @@ class HistoricalDataManager {
         
         // Clean up old data
         cleanupOldData()
-        
-        // Invalidate relevant caches since we have new data
-        invalidateRelatedCaches()
         
         // Save data to legacy storage
         saveHistoricalData()
@@ -1116,11 +1083,9 @@ class HistoricalDataManager {
         }
     }
     
-    /// Gets the NetworkService instance - this should be updated to use dependency injection
+    /// The one quote service the app uses, shared with `DataModel`.
     private func getNetworkService() -> NetworkService? {
-        // For now, we'll create a PythonNetworkService instance
-        // In the future, this should be injected as a dependency
-        return PythonNetworkService()
+        PythonNetworkService.shared
     }
     
     /// Start and end of a portfolio chart range; `.custom` uses the user's dates.
@@ -1535,9 +1500,6 @@ class HistoricalDataManager {
         
         let totalSnaps = priceSnapshots.values.reduce(0) { $0 + $1.count }
         Task { await logger.info("HistoricalDataManager: Loaded. Price snapshots in memory: \(totalSnaps). Historical portfolio snapshots in memory: \(historicalPortfolioSnapshots.count). Legacy portfolio snapshots in memory: \(portfolioSnapshots.count).") }
-        // Log cache performance statistics
-        let cacheInfo = cacheManager.getCacheInfo()
-        Task { await logger.debug("HistoricalDataManager: Cache Statistics:\n\(cacheInfo)") }
     }
     
     func saveHistoricalData() {
@@ -1608,16 +1570,16 @@ class HistoricalDataManager {
         if let composition = portfolioComposition {
             // Written to the disk tier: a memory-only write left an older disk copy in place,
             // which the next launch read first and took for a changed portfolio.
-            storeInCache(composition, key: StorageKeys.currentPortfolioComposition, isRecent: false)
+            storeInCache(composition, key: StorageKeys.currentPortfolioComposition)
         } else {
             // If composition is nil, consider removing it from cache or storing a representation of nil
             // For now, we just don't store it if it's nil. A remove(forKey:) might be better.
             cacheManager.remove(forKey: StorageKeys.currentPortfolioComposition)
         }
-        storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: false)
-        storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: false)
+        storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate)
+        storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate)
         if !earliestAvailableDates.isEmpty {
-            storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates, isRecent: false)
+            storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates)
         }
         
         Task { await logger.debug("HistoricalDataManager: Metadata saved to tiered cache.") }
@@ -1682,7 +1644,7 @@ class HistoricalDataManager {
             return
         }
         earliestAvailableDates[key] = date
-        storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates, isRecent: false)
+        storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates)
         Task { await logger.info("HistoricalDataManager: Recorded earliest available date for \(symbol): \(DateFormatter.debug.string(from: date))") }
     }
     
