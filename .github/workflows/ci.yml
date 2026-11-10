@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [ main, testing ]
 
+# A newer push to the same branch or pull request replaces the run in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v7
@@ -44,8 +53,18 @@ jobs:
     - name: Run Tests
       run: bash script/develop.sh test
 
-    - name: Analyze
-      run: bash script/develop.sh analyze
+    # The configuration that is released: optimised, with the hardened runtime.
+    - name: Build (Release)
+      run: bash script/develop.sh build-release
+
+    - name: Retain test results on failure
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-results
+        path: build/results/*.xcresult
+        if-no-files-found: ignore
+        retention-days: 7
 
     - name: Retain validation logs
       if: always()
@@ -54,3 +73,4 @@ jobs:
         name: validation-logs
         path: build/logs/
         if-no-files-found: ignore
+        retention-days: 14

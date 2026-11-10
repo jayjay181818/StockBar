@@ -1,3 +1,6 @@
+# Length rules are off: several files and types are far over any useful limit
+# and are being split up separately. Their thresholds were removed with them,
+# because a threshold for a disabled rule checks nothing.
 disabled_rules:
   - trailing_whitespace
   - line_length
@@ -19,11 +22,6 @@ excluded:
   - Pods
   - .build
   - DerivedData
-
-line_length: 120
-function_body_length: 60
-type_body_length: 300
-file_length: 500
 
 identifier_name:
   min_length: 1
