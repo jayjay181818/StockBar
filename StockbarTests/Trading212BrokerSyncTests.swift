@@ -2537,6 +2537,28 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     @MainActor
+    func testTrading212SyncIsSkippedWhileFolyncSuppliesThePortfolio() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+        dataModel.applyFolyncSnapshot(try FolyncPortfolioDecoder().decodeSnapshot(Data(versionTwoSnapshotJSON.utf8)))
+
+        let sync = try await dataModel.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(sync.skippedReason, DataModel.trading212SkippedForFolyncReason)
+        XCTAssertEqual(sync.deletedCount, 0)
+        let reconcile = try await dataModel.reconcileTrading212Holdings(reason: "auto-reconcile")
+        XCTAssertEqual(reconcile.skippedReason, DataModel.trading212SkippedForFolyncReason)
+        XCTAssertEqual(reconcile.deletedCount, 0)
+    }
+
+    func testCachedFolyncDataIsNotCalledOfflineWhenTheServerAnswered() {
+        let rejected = FolyncConnectionState.offlineCached(message: "Folync access token was rejected.")
+        XCTAssertEqual(rejected.message, "Showing the last Folync data. Folync access token was rejected.")
+        XCTAssertFalse(rejected.message.contains("Offline"))
+    }
+
+    @MainActor
     func testTestConnectionAndPreviewDoNotMutateActiveSessionStateAndRestoreOnFailure() async throws {
         let env = try makeIsolatedSessionEnvironment()
         defer { env.cleanup() }
