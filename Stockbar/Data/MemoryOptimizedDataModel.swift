@@ -10,7 +10,9 @@ class MemoryOptimizedDataModel: ObservableObject {
     private struct MemoryLimits {
         static let maxRealTimeTradesInMemory = 50
         static let maxCachedSymbolsData = 20
-        static let cacheCleanupInterval: TimeInterval = 300 // 5 minutes
+        /// Only trims the per-symbol bookkeeping; CacheManager cleans its own
+        /// cache hourly, so this need not run more often than that.
+        static let cacheCleanupInterval: TimeInterval = 3600
         static let memoryWarningThreshold = 100_000_000 // 100MB
     }
     
@@ -45,6 +47,8 @@ class MemoryOptimizedDataModel: ObservableObject {
     }
     
     private func performPeriodicCleanup() async {
+        // Nothing over the limit: nothing to do and nothing to log.
+        guard symbolAccessTimes.count > MemoryLimits.maxCachedSymbolsData else { return }
         await performMemoryCleanup(aggressive: false)
     }
     
@@ -216,13 +220,14 @@ extension Notification.Name {
 
 extension CacheManager {
     func clearMemoryCache() {
-        Task { await Logger.shared.info("🧹 Clearing memory cache due to memory pressure") }
-
         memoryCacheQueue.async { [weak self] in
             guard let self = self else { return }
 
             let removedSize = self.memoryCache.values.reduce(0) { $0 + $1.size }
             let removedCount = self.memoryCache.count
+            if removedCount > 0 {
+                Task { await Logger.shared.info("🧹 Cleared \(removedCount) item(s) from the memory cache under memory pressure") }
+            }
             self.memoryCache.removeAll(keepingCapacity: false)
 
             DispatchQueue.main.async { [weak self] in

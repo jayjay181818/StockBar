@@ -1613,7 +1613,7 @@ class HistoricalDataManager {
         Task { await logger.info("HistoricalDataManager: Loaded. Price snapshots in memory: \(totalSnaps). Historical portfolio snapshots in memory: \(historicalPortfolioSnapshots.count). Legacy portfolio snapshots in memory: \(portfolioSnapshots.count).") }
         // Log cache performance statistics
         let cacheInfo = cacheManager.getCacheInfo()
-        Task { await logger.info("HistoricalDataManager: Cache Statistics:\n\(cacheInfo)") }
+        Task { await logger.debug("HistoricalDataManager: Cache Statistics:\n\(cacheInfo)") }
     }
     
     func saveHistoricalData() {
