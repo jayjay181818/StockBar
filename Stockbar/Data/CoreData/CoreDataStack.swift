@@ -56,6 +56,13 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         if let description {
             Self.applySQLiteOptions(to: description)
         }
+        // Compaction leaves free pages behind; SQLite only returns them to the
+        // disk when the file is rebuilt, which Core Data does while opening.
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let vacuumPending = defaults.bool(forKey: StoreMaintenance.vacuumPendingKey)
+        if vacuumPending, description?.type == NSSQLiteStoreType {
+            description?.setOption(true as NSNumber, forKey: NSSQLiteManualVacuumOption)
+        }
         
         // Enable query optimization (NSPersistentStoreFileProtectionKey is iOS-only, skip on macOS)
         
@@ -65,6 +72,9 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
                 self.handlePersistentStoreLoadFailure(error: error, storeDescription: storeDescription, container: container)
             } else {
                 self.updateStoreLoadState(.loaded)
+                if vacuumPending {
+                    defaults.removeObject(forKey: StoreMaintenance.vacuumPendingKey)
+                }
                 Task { await Logger.shared.info("Core Data store loaded successfully with performance optimizations") }
                 // Nothing reads persistent history, so it only grows. It must stay
                 // enabled (turning it off makes Core Data open the store read-only),
@@ -161,10 +171,6 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         }
     }
     
-    func saveViewContext() {
-        save(context: viewContext)
-    }
-    
     // MARK: - Background Operations
     
     func performBackgroundTask<T: Sendable>(_ block: @Sendable @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
@@ -253,24 +259,6 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         return totalInserted
     }
     
-    func performBatchUpdate(
-        entityName: String,
-        predicate: NSPredicate,
-        propertiesToUpdate: CoreDataBatchValues
-    ) async throws -> Int {
-        return try await performOptimizedBatchTask { context in
-            let batchUpdate = NSBatchUpdateRequest(entityName: entityName)
-            batchUpdate.predicate = predicate
-            batchUpdate.propertiesToUpdate = propertiesToUpdate.reduce(into: [String: Any]()) { result, pair in
-                result[pair.key] = pair.value
-            }
-            batchUpdate.resultType = .updatedObjectsCountResultType
-            
-            let result = try context.execute(batchUpdate) as? NSBatchUpdateResult
-            return result?.result as? Int ?? 0
-        }
-    }
-    
     func performBatchDelete(
         entityName: String,
         predicate: NSPredicate
@@ -332,35 +320,6 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
     
     // MARK: - Cleanup
     
-    func deleteAllData() async throws {
-        try await performBackgroundTask { context in
-            // Delete all entities
-            let entities = ["PriceSnapshotEntity", "PortfolioSnapshotEntity", "PositionSnapshotEntity"]
-            
-            for entityName in entities {
-                let fetchRequest = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
-                let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-                
-                try context.execute(deleteRequest)
-            }
-            
-            Task { await Logger.shared.info("Deleted all Core Data entities") }
-        }
-    }
-    
     // MARK: - Migration Support
     
-    func migrationIsRequired() -> Bool {
-        guard let storeURL = persistentContainer.persistentStoreDescriptions.first?.url else { return false }
-        
-        do {
-            let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(ofType: NSSQLiteStoreType, at: storeURL, options: nil)
-            let model = persistentContainer.managedObjectModel
-            
-            return !model.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata)
-        } catch {
-            Task { await Logger.shared.error("Failed to check migration requirement: \(error)") }
-            return false
-        }
-    }
 }

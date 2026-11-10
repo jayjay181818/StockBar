@@ -75,7 +75,9 @@ public final class CurrencyConverter: @unchecked Sendable {
     
     // Currency history tracking (keep last 30 days)
     @ObservationIgnored private var rateHistory: [CurrencyRateSnapshot] = []
-    private let maxHistoryDays: Int = 30
+    /// Only the newest saved rates are ever read back (as a fallback when a
+    /// live fetch fails). Thirty days of them was 145 KB of preferences.
+    private let maxHistorySnapshots = 10
     private let significantChangeThreshold: Double = 0.02 // 2% change threshold for alerts
     
     // Alert tracking to prevent spam
@@ -379,9 +381,7 @@ public final class CurrencyConverter: @unchecked Sendable {
         let snapshot = CurrencyRateSnapshot(timestamp: Date(), rates: rates, baseCurrency: "USD")
         rateHistory.append(snapshot)
         
-        // Trim old history (keep only last 30 days)
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -maxHistoryDays, to: Date()) ?? Date()
-        rateHistory = rateHistory.filter { $0.timestamp >= cutoffDate }
+        rateHistory = Array(rateHistory.sorted { $0.timestamp < $1.timestamp }.suffix(maxHistorySnapshots))
         
         saveRateHistory()
         let snapshotCount = rateHistory.count
@@ -420,30 +420,6 @@ public final class CurrencyConverter: @unchecked Sendable {
             await Logger.shared.warning("💱 [CurrencyConverter] Using latest saved historical exchange rates after live fetch failed.")
         }
         return true
-    }
-    
-    // Get historical rate for a specific currency pair
-    public func getRateHistory(from: String, to: String, days: Int = 30) -> [(date: Date, rate: Double)] {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-        
-        return rateHistory
-            .filter { $0.timestamp >= cutoffDate }
-            .compactMap { snapshot -> (Date, Double)? in
-                let rate: Double
-                if from == "USD" {
-                    guard let targetRate = snapshot.rates[to] else { return nil }
-                    rate = targetRate
-                } else if to == "USD" {
-                    guard let sourceRate = snapshot.rates[from] else { return nil }
-                    rate = 1.0 / sourceRate
-                } else {
-                    guard let sourceRate = snapshot.rates[from],
-                          let targetRate = snapshot.rates[to] else { return nil }
-                    rate = targetRate / sourceRate
-                }
-                return (snapshot.timestamp, rate)
-            }
-            .sorted { $0.date < $1.date }
     }
     
     // MARK: - Significant Change Detection

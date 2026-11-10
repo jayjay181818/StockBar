@@ -125,7 +125,13 @@ for file in "StockbarDataModel.sqlite" "StockbarDataModel.sqlite-wal" "StockbarD
         cp "${STOCKBAR_DATA_DIR}/${file}" "${SAFETY_BACKUP}/${file}" || fail "cannot save current ${file}; restore aborted before any change"
     fi
 done
-echo "Current UserDefaults, config, cache and database files preserved in: ${SAFETY_BACKUP}"
+STATE_FOLDERS=("BrokerLinks" "AliasIdentityMigration" "Folync" "FolyncSupplemental")
+for folder in "${STATE_FOLDERS[@]}"; do
+    if [[ -d "${STOCKBAR_DATA_DIR}/${folder}" ]]; then
+        cp -R "${STOCKBAR_DATA_DIR}/${folder}" "${SAFETY_BACKUP}/${folder}" || fail "cannot save current ${folder}; restore aborted before any change"
+    fi
+done
+echo "Current UserDefaults, config, cache, database and linked data preserved in: ${SAFETY_BACKUP}"
 echo
 
 echo "[1/4] Restoring UserDefaults..."
@@ -153,6 +159,18 @@ if [[ -f "${BACKUP_PATH}/StockbarDataModel.sqlite" ]]; then
 else
     echo "Warning: StockbarDataModel.sqlite not found in backup"
 fi
+echo
+
+echo "Restoring broker links, alias records and Folync data..."
+# Only folders present in the backup are replaced: an older backup without
+# them leaves the current ones alone (they were preserved above either way).
+for folder in "${STATE_FOLDERS[@]}"; do
+    if [[ -d "${BACKUP_PATH}/${folder}" ]]; then
+        rm -rf "${STOCKBAR_DATA_DIR:?}/${folder}"
+        cp -R "${BACKUP_PATH}/${folder}" "${STOCKBAR_DATA_DIR}/${folder}"
+        echo "${folder} restored"
+    fi
+done
 echo
 
 echo "[3/4] Restoring API configuration..."

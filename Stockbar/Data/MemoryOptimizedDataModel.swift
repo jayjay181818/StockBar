@@ -90,11 +90,11 @@ class MemoryOptimizedDataModel: ObservableObject {
     }
     
     private func cleanupHistoricalDataCache(aggressive: Bool) async {
-        // Use CacheManager to clean up historical data caches
+        // CacheManager runs its own hourly clean-up. Running it from this
+        // five-minute timer as well rewrote the whole preferences file each
+        // time just to save the clean-up time.
         if aggressive {
             CacheManager.shared.clearMemoryCache()
-        } else {
-            CacheManager.shared.performMaintenance()
         }
     }
     
@@ -234,10 +234,6 @@ extension CacheManager {
         }
     }
     
-    func performMaintenance() {
-        Task { await Logger.shared.debug("🔧 Performing cache maintenance") }
-        self.performCleanup()
-    }
 }
 
 // MARK: - Memory Helper Functions
