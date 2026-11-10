@@ -175,7 +175,7 @@ enum Trading212PermissionPolicy {
             area: .ordersExecute,
             requirement: .neverRequired,
             stockBarUse: "None",
-            notes: "StockBar must not request trading permission."
+            notes: "Stockbar must not request trading permission."
         )
     ]
 }

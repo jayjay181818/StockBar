@@ -24,7 +24,7 @@ enum Trading212ProviderError: Error, LocalizedError, Equatable {
         case .httpStatus(let status):
             return "Trading 212 request failed with HTTP \(status)."
         case .decodingFailed:
-            return "Trading 212 returned data StockBar could not read."
+            return "Trading 212 returned data Stockbar could not read."
         }
     }
 }

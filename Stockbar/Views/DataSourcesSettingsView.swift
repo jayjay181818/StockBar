@@ -50,7 +50,9 @@ struct DataSourcesSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Financial Modeling Prep:")
-                                .frame(width: 160, alignment: .leading)
+                                // Grows with larger text instead of truncating.
+                                .frame(minWidth: 160, alignment: .leading)
+                                .fixedSize()
                             
                             Group {
                                 if showFmpKey {
@@ -104,7 +106,9 @@ struct DataSourcesSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Twelve Data:")
-                                .frame(width: 160, alignment: .leading)
+                                // Grows with larger text instead of truncating.
+                                .frame(minWidth: 160, alignment: .leading)
+                                .fixedSize()
                             
                             Group {
                                 if showTwelveDataKey {
@@ -184,7 +188,9 @@ struct DataSourcesSettingsView: View {
                         }
                     }
                     
-                    Text("Drag to reorder. The app will attempt to fetch data from sources in this order.")
+                    Text(isEditingPriority
+                         ? "Drag to reorder. Stockbar tries each source in this order until one answers."
+                         : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -260,6 +266,7 @@ struct DataSourcesSettingsView: View {
         default:
             return
         }
+        Self.storeVerification(nil, for: service)
         refreshStoredKeyFlags()
     }
 
@@ -331,6 +338,14 @@ struct DataSourcesSettingsView: View {
         fmpApiKey = configManager.getFMPAPIKey() ?? ""
         twelveDataApiKey = configManager.getTwelveDataAPIKey() ?? ""
         refreshStoredKeyFlags()
+        // Show the last test result for a stored key, rather than "Not
+        // verified" every time the tab is opened.
+        if fmpStatus == .none, hasStoredFmpKey, let result = Self.storedVerification(for: "fmp") {
+            fmpStatus = result ? .success : .failure
+        }
+        if twelveDataStatus == .none, hasStoredTwelveDataKey, let result = Self.storedVerification(for: "twelvedata") {
+            twelveDataStatus = result ? .success : .failure
+        }
         
         let savedPriority = configManager.getDataSourcePriority()
         if let saved = savedPriority, !saved.isEmpty {
@@ -352,10 +367,29 @@ struct DataSourcesSettingsView: View {
         configManager.setDataSourcePriority(dataSourcePriority)
     }
     
+    // Only whether the last test passed is remembered, never the key itself.
+    private static func verificationDefaultsKey(_ service: String) -> String { "dataSourceKeyVerified.\(service)" }
+
+    private static func storedVerification(for service: String) -> Bool? {
+        StockbarRuntimeStorage.userDefaults.object(forKey: verificationDefaultsKey(service)) as? Bool
+    }
+
+    private static func storeVerification(_ passed: Bool?, for service: String) {
+        let defaults = StockbarRuntimeStorage.userDefaults
+        if let passed {
+            defaults.set(passed, forKey: verificationDefaultsKey(service))
+        } else {
+            defaults.removeObject(forKey: verificationDefaultsKey(service))
+        }
+    }
+
     private func saveAndTestKey(service: String, key: String) {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else { return }
         
+        // A new key has not been tested yet, whatever the old one's result was.
+        Self.storeVerification(nil, for: service)
+
         // Save first
         if service == "fmp" {
             configManager.setFMPAPIKey(trimmedKey)
@@ -373,6 +407,7 @@ struct DataSourcesSettingsView: View {
                 let isValid = try await dataModel.verifyAPIKey(service: service)
                 
                 await MainActor.run {
+                    Self.storeVerification(isValid, for: service)
                     if service == "fmp" {
                         fmpStatus = isValid ? .success : .failure
                     } else if service == "twelvedata" {

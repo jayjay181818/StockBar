@@ -13,6 +13,10 @@ struct FolyncDataSourceSection: View {
     @State private var preview: FolyncPortfolioSnapshot?
     @State private var supplemental = FolyncSupplementalSettings.disabled
     @State private var isWorking = false
+    @State private var confirmingDisable = false
+    /// Per-holding menu-bar choices, read once. Decoding the stored JSON
+    /// inside each row's binding ran it for every holding on every render.
+    @State private var overlays: [String: FolyncHoldingOverlay] = [:]
     @State private var statusMessage: String?
     @State private var manualRefreshInProgress = false
     @State private var announcementPolicy = FolyncStatusAnnouncementPolicy()
@@ -39,11 +43,14 @@ struct FolyncDataSourceSection: View {
                     Text("HTTPS URL:")
                     TextField("https://folync.example.com", text: $endpoint)
                         .textFieldStyle(.roundedBorder)
+                        // Otherwise VoiceOver reads the example address as the field's name.
+                        .accessibilityLabel("Folync HTTPS URL")
                 }
                 GridRow {
                     Text("Client token:")
                     SecureField(tokenPlaceholder, text: $token)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Folync client token")
                 }
                 if !portfolios.isEmpty {
                     GridRow {
@@ -69,11 +76,23 @@ struct FolyncDataSourceSection: View {
                 if dataModel.isFolyncEnabled {
                     Button("Refresh Now") { refreshNow() }
                     .disabled(isWorking)
-                    Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync") {
-                        dataModel.deactivateFolyncPortfolio()
-                        showStatus("Folync has been disabled.")
+                    Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio…" : "Disable Folync…") {
+                        confirmingDisable = true
                     }
                     .disabled(isWorking)
+                    .confirmationDialog(
+                        dataModel.isFolyncPortfolioActive ? "Switch back to the local portfolio?" : "Disable Folync?",
+                        isPresented: $confirmingDisable,
+                        titleVisibility: .visible
+                    ) {
+                        Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync", role: .destructive) {
+                            dataModel.deactivateFolyncPortfolio()
+                            showStatus("Folync has been disabled.")
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Stockbar stops showing Folync's holdings and figures and goes back to the holdings entered here. The saved address and token are kept, so you can activate it again.")
+                    }
                 }
                 if isWorking {
                     ProgressView()
@@ -172,6 +191,7 @@ struct FolyncDataSourceSection: View {
         }
         .stockbarCard()
         .onAppear(perform: loadStoredSettings)
+        .onAppear { overlays = dataModel.folyncSessionDependencies.overlayStore.load() }
         .onChange(of: selectedScope) { _, _ in preview = nil }
         .onChange(of: dataModel.folyncConnectionState) { _, newState in
             // Background checks only; a manual refresh announces its own result.
@@ -422,9 +442,12 @@ struct FolyncDataSourceSection: View {
         Binding(
             get: {
                 let key = holding.overlayKey(scopeID: dataModel.folyncPortfolioSnapshot?.scope.id ?? selectedScope)
-                return dataModel.folyncSessionDependencies.overlayStore.load()[key]?.showInMenuBar ?? true
+                return overlays[key]?.showInMenuBar ?? true
             },
-            set: { dataModel.setFolyncHoldingVisibleInMenuBar($0, holding: holding) }
+            set: {
+                dataModel.setFolyncHoldingVisibleInMenuBar($0, holding: holding)
+                overlays = dataModel.folyncSessionDependencies.overlayStore.load()
+            }
         )
     }
 

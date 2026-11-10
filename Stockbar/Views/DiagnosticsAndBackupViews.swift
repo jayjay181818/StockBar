@@ -16,7 +16,6 @@ struct DebugLogView: View {
     @State private var logFilePath: String = ""
     @AppStorage("debugLogAutoRefresh", store: StockbarRuntimeStorage.userDefaults) private var isAutoRefresh: Bool = true
     @AppStorage("debugLogMaxLines", store: StockbarRuntimeStorage.userDefaults) private var maxLines: Int = 500
-    @AppStorage("debugLogTailMode", store: StockbarRuntimeStorage.userDefaults) private var useTailMode: Bool = false
     private let logger = Logger.shared
     // CRITICAL FIX: Use @State for timer to ensure proper cleanup
     @State private var timerCancellable: AnyCancellable?
@@ -35,11 +34,6 @@ struct DebugLogView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
 
-                    Toggle("Tail Mode", isOn: $useTailMode)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .help("Read only the end of the file; faster for very large logs")
-
                     Stepper("Max Lines: \(maxLines)", value: $maxLines, in: 100...2000, step: 100)
                         .fixedSize()
 
@@ -50,6 +44,13 @@ struct DebugLogView: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
+
+                    Button {
+                        exportLogs(thenClear: false)
+                    } label: {
+                        Label("Export…", systemImage: "square.and.arrow.up")
+                    }
+                    .help("Save a copy of the log file")
 
                     Button(role: .destructive) {
                         confirmingClear = true
@@ -138,11 +139,11 @@ struct DebugLogView: View {
                 stopAutoRefreshTimer()
             }
         }
-        .onChange(of: useTailMode) { _, _ in
+        .onChange(of: maxLines) { _, _ in
             refreshLogs()
         }
         .confirmationDialog("Clear all logs?", isPresented: $confirmingClear) {
-            Button("Export Logs, Then Clear…") { exportThenClearLogs() }
+            Button("Export Logs, Then Clear…") { exportLogs(thenClear: true) }
             Button("Clear Without Exporting", role: .destructive) { clearLogs() }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -154,12 +155,13 @@ struct DebugLogView: View {
         )) {
             Button("OK") { exportErrorMessage = nil }
         } message: {
-            Text("\(exportErrorMessage ?? "") The logs were not cleared.")
+            Text(exportErrorMessage ?? "")
         }
     }
 
-    /// Saves a copy of the log file where the user chooses, and clears the log only if that worked.
-    private func exportThenClearLogs() {
+    /// Saves a copy of the log file where the user chooses. With `thenClear`,
+    /// the log is cleared afterwards, and only if the copy was written.
+    private func exportLogs(thenClear: Bool) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "stockbar-logs-\(DebugLogView.exportTimestamp()).log"
         panel.allowedContentTypes = [.plainText]
@@ -179,9 +181,11 @@ struct DebugLogView: View {
                         }
                         try data.write(to: destination, options: .atomic)
                     }.value
-                    clearLogs()
+                    if thenClear { clearLogs() }
                 } catch {
-                    exportErrorMessage = error.localizedDescription
+                    exportErrorMessage = thenClear
+                        ? "\(error.localizedDescription) The logs were not cleared."
+                        : error.localizedDescription
                 }
             }
         }
@@ -195,13 +199,10 @@ struct DebugLogView: View {
     
     private func refreshLogs() {
         Task {
-            let logs: [String]
-            if useTailMode {
-                logs = await logger.getTailLogs(maxLines: min(maxLines, 500)) // Limit tail mode to 500 lines max
-            } else {
-                logs = await logger.getRecentLogs(maxLines: maxLines)
-            }
-            
+            // Always read from the end of the file, for as many lines as asked.
+            // "Tail Mode" used to cap this at 500 whatever Max Lines said.
+            let logs = await logger.getRecentLogs(maxLines: maxLines)
+
             await MainActor.run {
                 logEntries = logs
             }
@@ -258,9 +259,10 @@ struct RestoreBackupView: View {
     let dataModel: DataModel
     @State private var availableBackups: [BackupInfo] = []
     @State private var selectedBackup: BackupInfo?
-    @State private var previewData: [PortfolioExportData] = []
-    @State private var showingPreview = false
+    @State private var preview: BackupPreviewPayload?
     @State private var showingConfirmation = false
+    @State private var isRestoring = false
+    @State private var restoreResult: String?
     @State private var showingError = false
     @State private var errorMessage = ""
 
@@ -271,12 +273,19 @@ struct RestoreBackupView: View {
                 Text("Restore from Backup")
                     .font(.headline)
                 Spacer()
+                if isRestoring {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Restoring backup")
+                }
                 Button("Close") {
                     isPresented = false
                 }
+                .keyboardShortcut(.cancelAction)
+                .disabled(isRestoring)
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .background(StockbarPalette.sheetHeaderFill)
 
             Divider()
 
@@ -313,6 +322,7 @@ struct RestoreBackupView: View {
                             previewBackup(backup)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isRestoring)
 
                         Button("Restore") {
                             selectedBackup = backup
@@ -320,7 +330,7 @@ struct RestoreBackupView: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(.blue)
-                        .disabled(dataModel.isFolyncPortfolioActive)
+                        .disabled(dataModel.isFolyncPortfolioActive || isRestoring)
                         .help(dataModel.isFolyncPortfolioActive
                               ? "Folync is providing the portfolio. Switch to the local portfolio before restoring."
                               : "Replace the current portfolio with this backup")
@@ -334,10 +344,13 @@ struct RestoreBackupView: View {
         .onAppear {
             loadAvailableBackups()
         }
-        .sheet(isPresented: $showingPreview) {
-            if !previewData.isEmpty {
-                BackupPreviewView(stocks: previewData, isPresented: $showingPreview)
-            }
+        // Presented from the loaded contents themselves, so the sheet can never
+        // open before they are there and show an empty window.
+        .sheet(item: $preview) { payload in
+            BackupPreviewView(stocks: payload.stocks, isPresented: Binding(
+                get: { preview != nil },
+                set: { if !$0 { preview = nil } }
+            ))
         }
         .alert("Confirm Restore", isPresented: $showingConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -345,7 +358,15 @@ struct RestoreBackupView: View {
                 performRestore()
             }
         } message: {
-            Text("This will replace your current portfolio with the backup. This action cannot be undone. Current portfolio will be backed up first.")
+            Text("This replaces your current portfolio with the backup. A copy of the current portfolio is saved first, so you can restore that one if you change your mind.")
+        }
+        .alert("Portfolio Restored", isPresented: Binding(
+            get: { restoreResult != nil },
+            set: { if !$0 { restoreResult = nil } }
+        )) {
+            Button("OK") { isPresented = false }
+        } message: {
+            Text(restoreResult ?? "")
         }
         .alert("Error", isPresented: $showingError) {
             Button("OK") { }
@@ -360,8 +381,13 @@ struct RestoreBackupView: View {
 
     private func previewBackup(_ backup: BackupInfo) {
         do {
-            previewData = try BackupService.shared.previewBackup(backupURL: backup.url)
-            showingPreview = true
+            let stocks = try BackupService.shared.previewBackup(backupURL: backup.url)
+            guard !stocks.isEmpty else {
+                errorMessage = "This backup has no holdings in it."
+                showingError = true
+                return
+            }
+            preview = BackupPreviewPayload(stocks: stocks)
         } catch {
             errorMessage = "Failed to preview backup: \(error.localizedDescription)"
             showingError = true
@@ -369,9 +395,11 @@ struct RestoreBackupView: View {
     }
 
     private func performRestore() {
-        guard let backup = selectedBackup else { return }
+        guard let backup = selectedBackup, !isRestoring else { return }
 
+        isRestoring = true
         Task {
+            defer { isRestoring = false }
             do {
                 // Read the chosen backup first, so a bad file changes nothing.
                 let restoredTrades = try await BackupService.shared.restoreFromBackup(backupURL: backup.url)
@@ -381,15 +409,16 @@ struct RestoreBackupView: View {
                 // restore rather than replacing holdings with no way back.
                 let current = dataModel.localPortfolioTradesForBackup
                 let safetyCopied = await BackupService.shared.performPreRestoreBackup(trades: current, keeping: backup.url)
-                if !safetyCopied && current.contains(where: { !$0.trade.name.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                if !safetyCopied {
                     throw BackupRestoreSafetyError.safetyBackupFailed
                 }
 
                 try await dataModel.replacePortfolioTrades(restoredTrades, source: "backup-restore")
 
+                let count = restoredTrades.count
                 await MainActor.run {
-                    // Close the sheet
-                    isPresented = false
+                    // Say what happened; OK then closes the sheet.
+                    restoreResult = "Restored \(count) \(count == 1 ? "holding" : "holdings") from \(backup.filename)."
                 }
             } catch {
                 await MainActor.run {
@@ -417,9 +446,10 @@ struct BackupPreviewView: View {
                 Button("Close") {
                     isPresented = false
                 }
+                .keyboardShortcut(.cancelAction)
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+            .background(StockbarPalette.sheetHeaderFill)
 
             Divider()
 
@@ -452,6 +482,12 @@ struct BackupPreviewView: View {
     }
 }
 
+/// The holdings read from one backup, for the preview sheet.
+private struct BackupPreviewPayload: Identifiable {
+    let id = UUID()
+    let stocks: [PortfolioExportData]
+}
+
 private enum BackupRestoreSafetyError: LocalizedError {
     case safetyBackupFailed
 
@@ -478,6 +514,7 @@ enum BackupPreviewFormat {
         formatter.maximumFractionDigits = 4
         let number = formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
         let code = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return "\(code.isEmpty ? "USD" : code) \(number)"
+        // No currency recorded: the bare number, not a guess at dollars.
+        return code.isEmpty ? number : "\(code) \(number)"
     }
 }
