@@ -107,6 +107,10 @@ enum NetworkError: LocalizedError, Sendable {
 
 // MARK: - Python Script Service
 actor PythonNetworkService: NetworkService {
+    /// The instance the app uses for quotes and history. Tests build their
+    /// own with a fake process runner.
+    static let shared = PythonNetworkService()
+
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     private let scriptName = "get_stock_data.py"
     private let scriptPathOverride: String?

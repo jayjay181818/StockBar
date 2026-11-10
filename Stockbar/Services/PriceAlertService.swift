@@ -173,7 +173,6 @@ class PriceAlertService {
 
     // Track last known prices to detect threshold crossings
     @ObservationIgnored private var lastKnownPrices: [String: Double] = [:]
-    @ObservationIgnored private var lastKnownPortfolioValue: Double = 0.0
 
     private init() {
         // Migrate from UserDefaults to Core Data if needed

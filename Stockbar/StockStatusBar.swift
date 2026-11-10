@@ -800,7 +800,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         let updateId = titleUpdateCounter
 
         Task { @MainActor in
-            let formatted = await formattingService.formatStockTitle(
+            let formatted = formattingService.formatStockTitle(
                 symbol: displaySymbol,
                 price: safeDisplay,
                 change: changeSummary.change,
