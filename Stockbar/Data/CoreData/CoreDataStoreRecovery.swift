@@ -111,7 +111,7 @@ struct CoreDataStoreRecovery {
 
     /// Removes all but the `keeping` newest directories with this prefix. Failures are ignored:
     /// an extra copy left behind is harmless.
-    private func pruneBackupDirectories(prefix: String, keeping: Int) {
+    func pruneBackupDirectories(prefix: String, keeping: Int) {
         guard let names = try? fileManager.contentsOfDirectory(atPath: recoveryRoot.path) else { return }
         let matching = names.filter { $0.hasPrefix(prefix + "-") }.sorted()
         for name in matching.dropLast(keeping) {

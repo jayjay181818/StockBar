@@ -96,6 +96,35 @@ class RecoveryScriptTests(unittest.TestCase):
         self.assertIn("com.stockbar/.stockbar_config.json", result.stdout)
         self.assertIn("Keychain items were not restored", result.stdout)
 
+    def test_linked_data_folders_round_trip_with_a_safety_copy(self):
+        self.seed("before")
+        folders = ("BrokerLinks", "AliasIdentityMigration", "Folync", "FolyncSupplemental")
+        for folder in folders:
+            (self.data / folder).mkdir()
+            (self.data / folder / "state.json").write_text(f"before-{folder}")
+        backup = self.create_backup()
+        for folder in folders:
+            (self.data / folder / "state.json").write_text(f"after-{folder}")
+            (self.data / folder / "newer.json").write_text("newer")
+
+        result = self.run_script(RESTORE, backup.name, input_text="yes\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        safety = sorted(self.data.glob("StockbarDataModel_pre_restore_*"))[-1]
+        for folder in folders:
+            self.assertEqual((self.data / folder / "state.json").read_text(), f"before-{folder}")
+            self.assertFalse((self.data / folder / "newer.json").exists())
+            self.assertEqual((safety / folder / "state.json").read_text(), f"after-{folder}")
+
+    def test_backup_without_linked_folders_leaves_current_ones_alone(self):
+        self.seed("before")
+        backup = self.create_backup()
+        (self.data / "BrokerLinks").mkdir()
+        (self.data / "BrokerLinks" / "state.json").write_text("current")
+
+        result = self.run_script(RESTORE, backup.name, input_text="yes\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.data / "BrokerLinks" / "state.json").read_text(), "current")
+
     def test_backup_falls_back_to_legacy_home_folder_cache(self):
         self.seed("before")
         (self.home / "Library" / "Caches" / "stockbar-cache" / "quote_cache.json").unlink()

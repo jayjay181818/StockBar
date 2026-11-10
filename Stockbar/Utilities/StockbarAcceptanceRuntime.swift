@@ -235,17 +235,26 @@ public enum StockbarRuntimeStorage {
         return defaults
     }
 
+    /// Where the folder normally is, for the rare case the system lookup
+    /// returns nothing. The temporary directory used before is emptied by
+    /// macOS, which would have silently discarded the portfolio.
+    private static func libraryFallback(_ name: String, fileManager: FileManager) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+    }
+
     static func stockbarApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.applicationSupportRoot { return directory }
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Application Support", fileManager: fileManager)
         return applicationSupport.appendingPathComponent("Stockbar", isDirectory: true)
     }
 
     static func bundleApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.bundleApplicationSupportRoot { return directory }
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Application Support", fileManager: fileManager)
         let bundleIdentifier = Bundle.main.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 }
             ?? "com.stockbar"
         return applicationSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
@@ -254,7 +263,7 @@ public enum StockbarRuntimeStorage {
     static func cacheDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.cacheRoot { return directory }
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Caches", fileManager: fileManager)
         return caches.appendingPathComponent("stockbar-cache", isDirectory: true)
     }
 }

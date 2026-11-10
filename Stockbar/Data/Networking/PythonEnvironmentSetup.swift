@@ -127,6 +127,10 @@ final class PythonEnvironmentSetup {
         var environment = ProcessInfo.processInfo.environment
         environment["STOCKBAR_REQUIREMENTS"] = requirementsPath
         environment["STOCKBAR_SUPPORT_DIR"] = supportDirectory.path
+        // Test-only overrides of the uv download and its checksum; the app
+        // never honours them from whatever environment launched it.
+        environment["STOCKBAR_UV_URL"] = nil
+        environment["STOCKBAR_UV_SHA256"] = nil
         process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe

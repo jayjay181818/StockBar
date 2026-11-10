@@ -35,8 +35,9 @@ public final class ConfigurationManager: @unchecked Sendable {
             Task { await Logger.shared.error("Failed to create configuration directory: \(error.localizedDescription)") }
         }
 
-        if StockbarRuntimeStorage.acceptance.isEnabled || directoryOverride != nil { return nil }
-        return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stockbar_config.json")
+        // No fallback to a dot-file in the home folder: settings would be split
+        // between two places and the second is never backed up or cleaned.
+        return nil
     }
 
     // MARK: - Generic Helper

@@ -99,12 +99,16 @@ class BackupService {
             let backupDir = try getBackupDirectory()
 
             // Generate filename with today's date
+            // A fixed locale: a non-Gregorian system calendar would otherwise
+            // change the year in the name and the order the files sort in.
             let dateFormatter = DateFormatter()
+            dateFormatter.locale = Locale(identifier: "en_US_POSIX")
             dateFormatter.dateFormat = "yyyy-MM-dd"
             let dateString = dateFormatter.string(from: Date())
 
             // Add time suffix for manual backups (allow multiple per day)
             let timeFormatter = DateFormatter()
+            timeFormatter.locale = Locale(identifier: "en_US_POSIX")
             timeFormatter.dateFormat = "HHmmss"
             let timeString = automatic ? "" : "_\(timeFormatter.string(from: Date()))"
 
@@ -136,7 +140,8 @@ class BackupService {
             encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
 
             let jsonData = try encoder.encode(exportData)
-            try jsonData.write(to: backupURL)
+            // Atomic, so a crash mid-write cannot leave a truncated backup in place of a good one.
+            try jsonData.write(to: backupURL, options: .atomic)
 
             // Update last backup date
             lastBackupDate = Date()

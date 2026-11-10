@@ -129,6 +129,7 @@ final class DataMigrationService: @unchecked Sendable {
                 Task { await Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.") }
                 // Consider how to trigger this or notify HistoricalDataManager
             }
+            removeMigratedSnapshotCopies()
             return
         }
         
@@ -404,23 +405,19 @@ final class DataMigrationService: @unchecked Sendable {
     
     // MARK: - Cleanup
     
-    func cleanupLegacyData() {
-        Task { await Logger.shared.info("Cleaning up legacy UserDefaults data...") }
-        
-        let keysToRemove = [
-            "priceSnapshots",
-            "portfolioSnapshots",
-            "historicalPortfolioSnapshots",
-            "tieredCacheData"
-            // Note: We're keeping "usertrades" and "tradingInfoData" as backup for now
-            // These can be removed in a future version after validation
-        ]
-        
-        for key in keysToRemove {
+    /// Removes the snapshot arrays left in preferences after they were moved
+    /// to Core Data. Nothing reads them once the migration version is current,
+    /// and they made every preferences write several hundred kilobytes.
+    /// "usertrades" and "tradingInfoData" stay: the holdings are small and
+    /// are still read as a fallback.
+    private func removeMigratedSnapshotCopies() {
+        let keys = ["priceSnapshots", "portfolioSnapshots", "historicalPortfolioSnapshots", "tieredCacheData"]
+            .filter { userDefaults.object(forKey: $0) != nil }
+        guard !keys.isEmpty else { return }
+        for key in keys {
             userDefaults.removeObject(forKey: key)
         }
-        
-        Task { await Logger.shared.info("Legacy data cleanup completed") }
+        Task { await Logger.shared.info("Removed migrated snapshot copies from preferences: \(keys.joined(separator: ", "))") }
     }
     
     // MARK: - Verification

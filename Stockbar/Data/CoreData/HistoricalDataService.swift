@@ -6,12 +6,9 @@ protocol HistoricalDataServiceProtocol: Sendable {
     func fetchPriceSnapshots(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
     func fetchAllPriceSnapshots(for symbol: String) async throws -> [PriceSnapshot]
     func fetchStoredPriceSymbols() async throws -> [String]
-    func fetchPriceSnapshotsPaginated(for symbol: String, from startDate: Date, to endDate: Date, offset: Int, limit: Int) async throws -> [PriceSnapshot]
     func savePortfolioSnapshot(_ snapshot: HistoricalPortfolioSnapshot) async throws
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot]
     func fetchAllPortfolioSnapshots() async throws -> [HistoricalPortfolioSnapshot]
-    func deletePriceSnapshots(for symbol: String, before date: Date) async throws
-    func deletePortfolioSnapshots(before date: Date) async throws
     func getDataCount(for symbol: String) async throws -> Int
     func getTotalPriceSnapshotCount() async throws -> Int
     func getPortfolioSnapshotCount() async throws -> Int
@@ -55,6 +52,8 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
         // Convert to dictionary format for batch insert
         let snapshotDicts: [CoreDataBatchValues] = newSnapshots.map { snapshot in
             return [
+                // A batch insert bypasses the entity code that sets the id.
+                "id": UUID(),
                 "symbol": snapshot.symbol,
                 "timestamp": snapshot.timestamp,
                 "price": snapshot.price,
@@ -165,46 +164,6 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
         }
     }
 
-    func fetchPriceSnapshotsPaginated(
-        for symbol: String,
-        from startDate: Date,
-        to endDate: Date,
-        offset: Int = 0,
-        limit: Int = 1000
-    ) async throws -> [PriceSnapshot] {
-        return try await coreDataStack.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "symbol == %@ AND timestamp >= %@ AND timestamp <= %@",
-                                               symbol,
-                                               startDate as NSDate,
-                                               endDate as NSDate)
-            fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
-            fetchRequest.fetchOffset = offset
-            fetchRequest.fetchLimit = limit
-            
-            // Performance optimizations
-            fetchRequest.fetchBatchSize = min(limit, 500)
-            fetchRequest.includesSubentities = false
-            fetchRequest.includesPropertyValues = true
-            fetchRequest.returnsObjectsAsFaults = false
-            
-            let entities = try context.fetch(fetchRequest)
-            return entities.map { $0.toPriceSnapshot() }
-        }
-    }
-    
-    func deletePriceSnapshots(for symbol: String, before date: Date) async throws {
-        let predicate = NSPredicate(format: "symbol == %@ AND timestamp < %@",
-                                   symbol,
-                                   date as NSDate)
-        let deletedCount = try await coreDataStack.performBatchDelete(
-            entityName: "PriceSnapshotEntity",
-            predicate: predicate
-        )
-        
-        Task { await Logger.shared.debug("Deleted \(deletedCount) price snapshots for \(symbol) before \(date)") }
-    }
-    
     func getDataCount(for symbol: String) async throws -> Int {
         return try await coreDataStack.performBackgroundTask { context in
             let fetchRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
@@ -238,6 +197,9 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
                                                startDate as NSDate,
                                                endDate as NSDate)
             fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+            // Without this every snapshot's positions are a separate query.
+            fetchRequest.relationshipKeyPathsForPrefetching = ["positionSnapshots"]
+            fetchRequest.returnsObjectsAsFaults = false
             
             let entities = try context.fetch(fetchRequest)
             return entities.map { $0.toHistoricalPortfolioSnapshot() }
@@ -248,21 +210,12 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
         return try await coreDataStack.performBackgroundTask { context in
             let fetchRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
             fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+            // Without this every snapshot's positions are a separate query.
+            fetchRequest.relationshipKeyPathsForPrefetching = ["positionSnapshots"]
+            fetchRequest.returnsObjectsAsFaults = false
             
             let entities = try context.fetch(fetchRequest)
             return entities.map { $0.toHistoricalPortfolioSnapshot() }
-        }
-    }
-    
-    func deletePortfolioSnapshots(before date: Date) async throws {
-        try await coreDataStack.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "PortfolioSnapshotEntity")
-            fetchRequest.predicate = NSPredicate(format: "timestamp < %@", date as NSDate)
-            
-            let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-            try context.execute(deleteRequest)
-            
-            Task { await Logger.shared.debug("Deleted portfolio snapshots before \(date)") }
         }
     }
     
@@ -282,77 +235,4 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
     
     // MARK: - Data Management
     
-    func optimizeData(maxPriceSnapshotsPerSymbol: Int = 2500, maxPortfolioSnapshots: Int = 2000) async throws {
-        try await coreDataStack.performBackgroundTask { context in
-            // Get all unique symbols
-            let symbolFetchRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "PriceSnapshotEntity")
-            symbolFetchRequest.propertiesToFetch = ["symbol"]
-            symbolFetchRequest.returnsDistinctResults = true
-            symbolFetchRequest.resultType = .dictionaryResultType
-            
-            guard let symbolResults = try context.fetch(symbolFetchRequest) as? [[String: Any]] else {
-                throw NSError(
-                    domain: "HistoricalDataService",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to read distinct price snapshot symbols"]
-                )
-            }
-            let symbols = symbolResults.compactMap { $0["symbol"] as? String }
-            
-            // Optimize price snapshots for each symbol
-            for symbol in symbols {
-                try self.optimizePriceSnapshots(for: symbol, maxCount: maxPriceSnapshotsPerSymbol, in: context)
-            }
-            
-            // Optimize portfolio snapshots
-            try self.optimizePortfolioSnapshots(maxCount: maxPortfolioSnapshots, in: context)
-            
-            Task { await Logger.shared.info("Optimized Core Data storage: max \(maxPriceSnapshotsPerSymbol) price snapshots per symbol, max \(maxPortfolioSnapshots) portfolio snapshots") }
-        }
-    }
-    
-    private func optimizePriceSnapshots(for symbol: String, maxCount: Int, in context: NSManagedObjectContext) throws {
-        let countRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
-        countRequest.predicate = NSPredicate(format: "symbol == %@", symbol)
-        
-        let count = try context.count(for: countRequest)
-        
-        if count > maxCount {
-            let excessCount = count - maxCount
-            
-            let deleteRequest: NSFetchRequest<PriceSnapshotEntity> = PriceSnapshotEntity.fetchRequest()
-            deleteRequest.predicate = NSPredicate(format: "symbol == %@", symbol)
-            deleteRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
-            deleteRequest.fetchLimit = excessCount
-            
-            let entitiesToDelete = try context.fetch(deleteRequest)
-            
-            for entity in entitiesToDelete {
-                context.delete(entity)
-            }
-            
-            Task { await Logger.shared.debug("Deleted \(excessCount) old price snapshots for \(symbol)") }
-        }
-    }
-    
-    private func optimizePortfolioSnapshots(maxCount: Int, in context: NSManagedObjectContext) throws {
-        let countRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
-        let count = try context.count(for: countRequest)
-        
-        if count > maxCount {
-            let excessCount = count - maxCount
-            
-            let deleteRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
-            deleteRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
-            deleteRequest.fetchLimit = excessCount
-            
-            let entitiesToDelete = try context.fetch(deleteRequest)
-            
-            for entity in entitiesToDelete {
-                context.delete(entity)
-            }
-            
-            Task { await Logger.shared.debug("Deleted \(excessCount) old portfolio snapshots") }
-        }
-    }
 }
