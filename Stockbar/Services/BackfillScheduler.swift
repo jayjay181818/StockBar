@@ -256,8 +256,8 @@ final class BackfillScheduler {
         // Use existing backfill method
         await dataModel.calculateRetroactivePortfolioHistory(days: backfillDays)
 
-        // Reload snapshots into memory
-        await historicalDataManager.reloadPortfolioSnapshotsFromCoreData()
+        // The calculation merges its estimated days into the series in memory. They are not
+        // stored, so reloading from Core Data here would throw the result straight away.
 
         await logger.info("✅ BACKFILL: Intelligent backfill completed")
     }

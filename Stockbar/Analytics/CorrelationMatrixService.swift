@@ -345,7 +345,8 @@ actor CorrelationMatrixService {
         var dailyPrices: [String: [Date: Double]] = [:]
         for (symbol, prices) in snapshots {
             var byDay: [Date: (timestamp: Date, price: Double)] = [:]
-            for snapshot in prices where snapshot.price.isFinite && snapshot.price > 0 {
+            for snapshot in prices
+            where snapshot.price.isFinite && snapshot.price > 0 && !calendar.isDateInWeekend(snapshot.timestamp) {
                 let day = calendar.startOfDay(for: snapshot.timestamp)
                 if let existing = byDay[day], existing.timestamp > snapshot.timestamp { continue }
                 byDay[day] = (snapshot.timestamp, snapshot.price)
