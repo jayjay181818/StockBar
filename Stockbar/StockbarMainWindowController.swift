@@ -82,12 +82,17 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     override func showWindow(_ sender: Any?) {
+        // Only a window coming back on screen needs checking: one already
+        // showing is where the user put it.
+        let wasVisible = window?.isVisible ?? false
         super.showWindow(sender)
         if shouldCenterOnNextShow {
             window?.center()
             shouldCenterOnNextShow = false
         }
-        fitWindowToVisibleScreen()
+        if !wasVisible {
+            fitWindowToVisibleScreen()
+        }
         NSApp.activate()
     }
 
@@ -120,17 +125,25 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
+    /// Pulls a window back on screen after a display was unplugged or shrunk.
+    /// A window already wholly on screen is left exactly where it is, and a
+    /// full-screen window is never touched: its frame belongs to the system.
     private func fitWindowToVisibleScreen() {
-        guard let window else { return }
-        let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame
-            .insetBy(dx: WindowMetrics.visibleScreenInset, dy: WindowMetrics.visibleScreenInset)
-        guard let visibleFrame else { return }
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        guard let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+        let fitted = Self.frame(window.frame, fittedTo: visibleFrame)
+        guard fitted != window.frame else { return }
+        window.setFrame(fitted, display: true)
+    }
 
-        var frame = window.frame
-        frame.size.width = min(frame.width, visibleFrame.width)
-        frame.size.height = min(frame.height, visibleFrame.height)
-        frame.origin.x = min(max(frame.minX, visibleFrame.minX), visibleFrame.maxX - frame.width)
-        frame.origin.y = min(max(frame.minY, visibleFrame.minY), visibleFrame.maxY - frame.height)
-        window.setFrame(frame, display: true)
+    /// `frame` moved and, only if it must be, shrunk so it lies inside `visibleFrame`.
+    nonisolated static func frame(_ frame: NSRect, fittedTo visibleFrame: NSRect) -> NSRect {
+        guard !visibleFrame.contains(frame) else { return frame }
+        var fitted = frame
+        fitted.size.width = min(frame.width, visibleFrame.width)
+        fitted.size.height = min(frame.height, visibleFrame.height)
+        fitted.origin.x = min(max(frame.minX, visibleFrame.minX), visibleFrame.maxX - fitted.width)
+        fitted.origin.y = min(max(frame.minY, visibleFrame.minY), visibleFrame.maxY - fitted.height)
+        return fitted
     }
 }

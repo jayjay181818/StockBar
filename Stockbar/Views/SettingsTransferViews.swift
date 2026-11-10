@@ -123,7 +123,9 @@ final class SettingsTransferModel {
         panel.isExtensionHidden = false
         let date = Date().formatted(.iso8601.year().month().day())
         panel.nameFieldStringValue = "Stockbar \(exportType.title.replacingOccurrences(of: "&", with: "and")) \(date)"
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        // Not runModal: that spins a nested run loop on the main actor and holds
+        // up price refreshes and the menu bar for as long as the panel is open.
+        guard await Self.present(panel) == .OK, let destination = panel.url else { return }
 
         errorMessage = nil
         progress = "Exporting and encrypting…"
@@ -152,8 +154,19 @@ final class SettingsTransferModel {
         panel.allowedContentTypes = [Self.contentType]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await checkImportFile(url) }
+        Task {
+            guard await Self.present(panel) == .OK, let url = panel.url else { return }
+            await checkImportFile(url)
+        }
+    }
+
+    /// Shows a save or open panel without blocking: as a sheet on the front
+    /// window when there is one, otherwise as its own window.
+    private static func present(_ panel: NSSavePanel) async -> NSApplication.ModalResponse {
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            return await panel.beginSheetModal(for: window)
+        }
+        return await panel.begin()
     }
 
     private func checkImportFile(_ url: URL) async {

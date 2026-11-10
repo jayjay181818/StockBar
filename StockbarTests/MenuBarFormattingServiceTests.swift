@@ -1049,7 +1049,7 @@ final class BackupPreviewFormatTests: XCTestCase {
     func testCostKeepsSubPennyPrecisionAndMissingIsADash() {
         XCTAssertEqual(BackupPreviewFormat.cost(12.5, currency: "GBP", locale: locale), "GBP 12.50")
         XCTAssertEqual(BackupPreviewFormat.cost(0.0123, currency: "USD", locale: locale), "USD 0.0123")
-        XCTAssertEqual(BackupPreviewFormat.cost(10, currency: nil, locale: locale), "USD 10.00")
+        XCTAssertEqual(BackupPreviewFormat.cost(10, currency: nil, locale: locale), "10.00")
         XCTAssertEqual(BackupPreviewFormat.cost(.nan, currency: "USD", locale: locale), "—")
     }
 }
@@ -1105,5 +1105,67 @@ final class HoldingsAndStatusViewHelperTests: XCTestCase {
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.failure), "Verification failed")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.none), "Not verified")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.verifying), "Verifying")
+    }
+}
+
+/// Main-window and settings fixes from the audit.
+@MainActor
+final class MainWindowAuditFixTests: XCTestCase {
+    func testZeroAmountsCarryNoSignAndNegativesPutTheSignFirst() {
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(0, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(-0.001, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(0.004, currency: "USD"), "$0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(5, currency: "GBP"), "+£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(-5, currency: "GBP"), "-£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(-5, currency: "GBP"), "-£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(-0.001, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.compactAmount(-0.001, currency: "GBP", includeSign: true), "£0.00")
+    }
+
+    func testAmountThatDisplaysAsZeroIsNotColouredAsAGainOrLoss() {
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: -0.001, currency: "GBP"), 0)
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: 0.004, currency: "GBP"), 0)
+        XCTAssertLessThan(HoldingsCurrencyFormatter.displayedSign(of: -0.02, currency: "GBP"), 0)
+        XCTAssertGreaterThan(HoldingsCurrencyFormatter.displayedSign(of: 12, currency: "GBP"), 0)
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: .nan, currency: "GBP"), 0)
+    }
+
+    func testAlertMoneyMatchesTheHoldingsTableAndNeverGuessesACurrency() {
+        let alert = PriceAlert(symbol: "AAPL", condition: .above, threshold: 150)
+        XCTAssertEqual(alert.formattedThreshold(currency: "GBP"), "£150.00")
+        XCTAssertEqual(alert.formattedThreshold(currency: "USD"), "$150.00")
+        XCTAssertEqual(alert.formattedThreshold(currency: ""), "150.00")
+        let percent = PriceAlert(symbol: "AAPL", condition: .percentChange, threshold: 5)
+        XCTAssertEqual(percent.formattedThreshold(currency: "GBP"), "5.0%")
+    }
+
+    func testWindowAlreadyOnScreenIsLeftExactlyWhereItIs() {
+        let screen = NSRect(x: 0, y: 0, width: 1728, height: 1080)
+        let nearEdge = NSRect(x: 4, y: 6, width: 1200, height: 800)
+        XCTAssertEqual(StockbarMainWindowController.frame(nearEdge, fittedTo: screen), nearEdge)
+    }
+
+    func testWindowOffScreenIsMovedBackAndOnlyShrunkWhenTooBig() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let offRight = NSRect(x: 1300, y: 100, width: 1100, height: 700)
+        let moved = StockbarMainWindowController.frame(offRight, fittedTo: screen)
+        XCTAssertEqual(moved.size, offRight.size)
+        XCTAssertTrue(screen.contains(moved))
+
+        let tooBig = NSRect(x: -200, y: -200, width: 2000, height: 1400)
+        let fitted = StockbarMainWindowController.frame(tooBig, fittedTo: screen)
+        XCTAssertEqual(fitted, screen)
+    }
+
+    func testTemplateTokenHelpListsExactlyTheAcceptedPlaceholders() {
+        XCTAssertEqual(Set(MenuBarDisplaySettings.orderedPlaceholders), MenuBarDisplaySettings.validPlaceholders)
+        XCTAssertEqual(MenuBarDisplaySettings.orderedPlaceholders.count, MenuBarDisplaySettings.validPlaceholders.count)
+    }
+
+    func testBackingUpAnEmptyPortfolioIsNotReportedAsAFailure() async {
+        let outcome = await BackupService.shared.performManualBackupReportingOutcome(trades: [])
+        XCTAssertEqual(outcome, .nothingToBackUp)
+        XCTAssertFalse(outcome.userMessage.localizedCaseInsensitiveContains("failed"))
+        XCTAssertTrue(BackupOutcome.failed.userMessage.localizedCaseInsensitiveContains("failed"))
     }
 }

@@ -34,13 +34,31 @@ enum HoldingsTableLayout {
 enum HoldingsCurrencyFormatter {
     static func signedAmount(_ amount: Double, currency: String) -> String {
         guard amount.isFinite else { return "-" }
-        let sign = amount < 0 ? "-" : "+"
-        return sign + formattedMagnitude(abs(amount), currency: currency)
+        let magnitude = formattedMagnitude(abs(amount), currency: currency)
+        // An amount that rounds to nothing is shown as plain zero: "+£0.00" and
+        // "-£0.00" both suggest a movement that is not there.
+        guard showsNonZeroDigit(magnitude) else { return magnitude }
+        return (amount < 0 ? "-" : "+") + magnitude
     }
 
+    /// The sign goes before the currency symbol: "-£5.00", never "£-5.00".
     static func amount(_ amount: Double, currency: String) -> String {
         guard amount.isFinite else { return "-" }
-        return formattedMagnitude(amount, currency: currency)
+        let magnitude = formattedMagnitude(abs(amount), currency: currency)
+        guard amount < 0, showsNonZeroDigit(magnitude) else { return magnitude }
+        return "-" + magnitude
+    }
+
+    /// False when the formatted figure is all zeros, as "£0.00" is.
+    static func showsNonZeroDigit(_ formatted: String) -> Bool {
+        formatted.contains { $0.isNumber && $0 != "0" }
+    }
+
+    /// The value to colour by: zero when the figure displays as zero, so a
+    /// loss of a fraction of a penny is not drawn in red beside "£0.00".
+    static func displayedSign(of amount: Double, currency: String) -> Double {
+        guard amount.isFinite else { return 0 }
+        return showsNonZeroDigit(formattedMagnitude(abs(amount), currency: currency)) ? amount : 0
     }
 
     static func compactAmount(_ amount: Double?, currency: String, includeSign: Bool = false) -> String {
@@ -66,7 +84,9 @@ enum HoldingsCurrencyFormatter {
         ).string(from: NSNumber(value: absoluteAmount)) ?? String(format: "%.\(fractionDigits)f", absoluteAmount)
 
         let sign: String
-        if displayAmount < 0 {
+        if !showsNonZeroDigit(formattedNumber) {
+            sign = ""
+        } else if displayAmount < 0 {
             sign = "-"
         } else {
             sign = includeSign ? "+" : ""
