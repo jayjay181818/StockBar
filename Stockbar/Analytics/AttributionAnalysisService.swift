@@ -288,10 +288,12 @@ actor AttributionAnalysisService {
 
         cumulative = startValue
 
-        // Top 10 contributors
+        // The ten largest moves in either direction, gains first. Taking the
+        // ten largest gains hid the biggest losses inside "Trades & Other".
         let topContributors = stockContributions
-            .sorted { $0.dollarContribution > $1.dollarContribution }
+            .sorted { abs($0.dollarContribution) > abs($1.dollarContribution) }
             .prefix(10)
+            .sorted { $0.dollarContribution > $1.dollarContribution }
 
         for contribution in topContributors {
             cumulative += contribution.dollarContribution
@@ -303,8 +305,8 @@ actor AttributionAnalysisService {
             ))
         }
 
-        // Reconcile to the ending value: deposits/withdrawals, FX moves, other holdings
-        // and contributors beyond the top 10 all land here.
+        // Reconcile to the ending value: deposits/withdrawals, FX moves and
+        // holdings outside the ten largest moves all land here.
         let residual = endValue - cumulative
         if abs(residual) > 0.005 {
             cumulative += residual

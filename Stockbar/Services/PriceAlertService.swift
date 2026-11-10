@@ -172,7 +172,32 @@ class PriceAlertService {
     }
 
     // Track last known prices to detect threshold crossings
-    @ObservationIgnored private var lastKnownPrices: [String: Double] = [:]
+    /// The last price each alerted symbol was checked at. Kept across launches
+    /// so a threshold crossed while the app was closed fires once, and one
+    /// that already fired does not fire again at every start.
+    @ObservationIgnored private var lastKnownPrices: [String: Double] =
+        PriceAlertService.storedLastKnownPrices()
+
+    static let lastKnownPricesKey = "priceAlertLastCheckedPrices"
+
+    private static func storedLastKnownPrices() -> [String: Double] {
+        let stored = StockbarRuntimeStorage.userDefaults.dictionary(forKey: lastKnownPricesKey) ?? [:]
+        return stored.compactMapValues { ($0 as? Double).flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
+    }
+
+    private func rememberPrice(_ price: Double, for symbol: String, hasAlerts: Bool) {
+        guard hasAlerts else {
+            if lastKnownPrices.removeValue(forKey: symbol) != nil { storeLastKnownPrices() }
+            return
+        }
+        guard lastKnownPrices[symbol] != price else { return }
+        lastKnownPrices[symbol] = price
+        storeLastKnownPrices()
+    }
+
+    private func storeLastKnownPrices() {
+        StockbarRuntimeStorage.userDefaults.set(lastKnownPrices, forKey: Self.lastKnownPricesKey)
+    }
 
     private init() {
         // Migrate from UserDefaults to Core Data if needed
@@ -285,7 +310,9 @@ class PriceAlertService {
     // MARK: - Price Monitoring
 
     func checkAlerts(symbol: String, currentPrice: Double, previousPrice: Double, currency: String) {
-        let symbolAlerts = getAlerts(for: symbol).filter { $0.isEnabled }
+        guard currentPrice.isFinite, currentPrice > 0 else { return }
+        let allSymbolAlerts = getAlerts(for: symbol)
+        let symbolAlerts = allSymbolAlerts.filter { $0.isEnabled }
 
         // Get last known price or use previous close
         let lastPrice = lastKnownPrices[symbol] ?? previousPrice
@@ -303,8 +330,7 @@ class PriceAlertService {
             updateLastTriggered(alertId: alert.id)
         }
 
-        // Update last known price
-        lastKnownPrices[symbol] = currentPrice
+        rememberPrice(currentPrice, for: symbol, hasAlerts: !allSymbolAlerts.isEmpty)
     }
 
     // MARK: - Notifications

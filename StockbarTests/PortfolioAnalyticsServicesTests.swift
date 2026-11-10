@@ -368,6 +368,39 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         XCTAssertEqual(aligned.returns["BBB"]?.last ?? .nan, 0.1, accuracy: 1e-9)
     }
 
+    func testAHoldingWithTooLittleSharedHistoryIsLeftOutInsteadOfBlankingTheRest() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        // Monday 5 January 2026 onwards, skipping weekends.
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 12)))
+        let weekdays = (0..<80).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+            .filter { !calendar.isDateInWeekend($0) }
+        func series(_ symbol: String, _ days: ArraySlice<Date>) -> [PriceSnapshot] {
+            days.enumerated().map {
+                PriceSnapshot(timestamp: $1, price: 100 + Double($0), previousClose: 100, symbol: symbol)
+            }
+        }
+        let history = [
+            "AAA": series("AAA", weekdays[0..<30]),
+            "BBB": series("BBB", weekdays[0..<30]),
+            "NEW": series("NEW", weekdays[25..<30]),
+            // Enough days of its own, but only five shared with the others.
+            "LATE": series("LATE", weekdays[25..<50])
+        ]
+
+        let all = CorrelationMatrixService.alignedDailyReturns(from: history, calendar: calendar)
+        XCTAssertEqual(all.commonDays, 5, "Without a minimum, the newest holding limits everyone")
+        XCTAssertEqual(all.excluded, [])
+
+        let aligned = CorrelationMatrixService.alignedDailyReturns(
+            from: history, calendar: calendar, minimumCommonDays: 20
+        )
+        XCTAssertEqual(aligned.excluded, ["LATE", "NEW"])
+        XCTAssertEqual(aligned.commonDays, 30)
+        XCTAssertEqual(Set(aligned.returns.keys), ["AAA", "BBB"])
+        XCTAssertEqual(aligned.returns["AAA"]?.count, 29)
+    }
+
     func testAnnualizedVolatilityRejectsTooShortSeries() {
         XCTAssertNil(CorrelationMatrixService.annualizedVolatility(of: [0.01]))
         XCTAssertEqual(

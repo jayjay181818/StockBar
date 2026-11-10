@@ -364,7 +364,10 @@ final class RiskMetricsServiceTests: XCTestCase {
         // One 10% fall in four periods: sqrt(0.01 / 4) = 5% a period.
         XCTAssertEqual(metrics.downsideDeviation, 0.05 * annual, accuracy: 1e-9)
         XCTAssertEqual(try XCTUnwrap(metrics.sharpeRatio), (0.05 - 0.04 / 252) / 0.1 * annual, accuracy: 1e-9)
-        XCTAssertEqual(try XCTUnwrap(metrics.sortinoRatio), annual, accuracy: 1e-9)
+        // Sortino clears the same hurdle as Sharpe: the risk-free rate per trading day.
+        let hurdle = 0.04 / 252
+        let shortfall = ((-0.10 - hurdle) * (-0.10 - hurdle) / 4).squareRoot()
+        XCTAssertEqual(try XCTUnwrap(metrics.sortinoRatio), (0.05 - hurdle) / shortfall * annual, accuracy: 1e-9)
         XCTAssertNil(metrics.beta, "no market series was given")
     }
 

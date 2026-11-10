@@ -1048,8 +1048,8 @@ class HistoricalDataManager {
         
         // MARK: - Advanced Analytics for Stocks
         
-        // Calculate Sharpe Ratio (assuming 2% risk-free rate annually)
-        let riskFreeRate = 0.02 / 252 // Daily risk-free rate
+        // Sharpe ratio, with the same risk-free rate as the Risk page.
+        let riskFreeRate = RiskMetricsService.annualRiskFreeRate / 252
         let excessReturns = dailyReturns.map { $0 - riskFreeRate }
         let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
         let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil

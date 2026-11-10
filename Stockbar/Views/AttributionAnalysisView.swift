@@ -226,6 +226,11 @@ struct AttributionAnalysisView: View {
             Text("Top Contributors")
                 .font(.headline)
 
+            if result.topContributors.isEmpty {
+                Text("No holding gained over this period.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             ForEach(result.topContributors.prefix(5)) { contribution in
                 contributionRow(contribution)
             }
