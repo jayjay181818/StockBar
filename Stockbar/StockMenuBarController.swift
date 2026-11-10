@@ -274,6 +274,9 @@ class StockMenuBarController: NSObject {
 
     @objc private func systemDidWake(_ notification: Notification) {
         refreshExternalDisplayState()
+        // Timers do not run during sleep, so prices can be hours old on wake.
+        // Not forced: quotes still fresh after a short nap are left alone.
+        Task { await data.refreshAllTrades() }
     }
 
     /// Re-reads the external display state and, only if it actually changed,

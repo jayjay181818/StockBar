@@ -823,7 +823,11 @@ struct PerformanceChartView: View {
                     ohlcCoverageLabel = nil
                 }
             }
-            await Logger.shared.error("Failed to load OHLC data: \(error)")
+            if error is CancellationError {
+                await Logger.shared.debug("OHLC load cancelled for \(symbol)")
+            } else {
+                await Logger.shared.warning("Failed to load OHLC data for \(symbol): \(error)")
+            }
         }
     }
 

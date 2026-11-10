@@ -104,6 +104,8 @@ class DataModel {
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
+    /// Outcome of the last quote refresh that reached the provider.
+    var quoteRefreshStatus = QuoteRefreshStatus()
     @ObservationIgnored private var refreshService: RefreshService!
     @ObservationIgnored private var portfolioCalculationService: PortfolioCalculationService!
     @ObservationIgnored private var historicalDataCoordinator: HistoricalDataCoordinator!

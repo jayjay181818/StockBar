@@ -64,6 +64,31 @@ struct PythonConfiguration: Sendable {
         return PythonConfiguration(interpreterPath: path, environment: environment)
     }
     
+    /// Variables of the app's own environment that the scripts may see: enough
+    /// to find files, resolve names and reach the network through a proxy.
+    /// Everything else, notably `PYTHONPATH`, `PYTHONHOME` and `PYTHONSTARTUP`,
+    /// stays out so nothing in the user's shell set-up can change what runs.
+    static let inheritedEnvironmentKeys: Set<String> = [
+        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TZ", "LANG", "LC_ALL", "LC_CTYPE",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        "FMP_API_KEY", "TWELVE_DATA_API_KEY", "STOCKBAR_DEBUG_LOGGING"
+    ]
+
+    /// The complete environment for a script process.
+    static func childEnvironment(
+        adding extra: [String: String],
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = base.filter { inheritedEnvironmentKeys.contains($0.key) }
+        // Packages installed with `pip install --user` must not shadow the pinned ones.
+        environment["PYTHONNOUSERSITE"] = "1"
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        extra.forEach { environment[$0.key] = $0.value }
+        return environment
+    }
+
     /// The script's quote cache must not outlive the user's refresh interval,
     /// otherwise a shorter interval only re-reads cached quotes.
     static func quoteCacheSeconds(forRefreshInterval interval: TimeInterval) -> TimeInterval {
@@ -115,9 +140,18 @@ struct PythonConfiguration: Sendable {
         process.standardError = pipe // Some pythons output version to stderr
         
         do {
-            try process.run()
-            process.waitUntilExit()
-            
+            // Waits on the exit callback, not `waitUntilExit`, which would hold a
+            // thread of the shared pool for as long as the interpreter takes.
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                process.terminationHandler = { _ in continuation.resume() }
+                do {
+                    try process.run()
+                } catch {
+                    process.terminationHandler = nil
+                    continuation.resume(throwing: error)
+                }
+            }
+
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             

@@ -104,7 +104,7 @@ final class PythonEnvironmentSetup {
             state = .succeeded
             // A rebuild keeps the same interpreter path, so retire workers
             // still running the previous environment.
-            await PythonWorkerPool.shared.stopIdleWorkers()
+            await PythonWorkerPool.shared.retireAllWorkers()
         } catch {
             let message = (error as? SetupError)?.message ?? error.localizedDescription
             await logger.error("Python environment setup failed: \(message)")
