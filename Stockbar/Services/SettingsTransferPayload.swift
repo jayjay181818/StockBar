@@ -185,7 +185,7 @@ enum SettingsTransferKeys {
     ]
 
     /// `DATA_SOURCE_PRIORITY` lives in ConfigurationManager's file, not defaults.
-    static let allowedDataSources: Set<String> = ["yfinance", "fmp", "twelvedata", "stooq"]
+    static let allowedDataSources: Set<String> = ["yfinance", "fmp", "twelvedata"]
 }
 
 struct SettingsTransferManifest: Codable, Equatable, Sendable {

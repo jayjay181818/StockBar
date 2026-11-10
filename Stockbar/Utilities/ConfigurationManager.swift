@@ -306,7 +306,7 @@ public final class ConfigurationManager: @unchecked Sendable {
         let sampleConfig: [String: Any] = [
             "FMP_API_KEY": "your_fmp_api_key_here",
             "TWELVE_DATA_API_KEY": "your_twelve_data_api_key_here",
-            "DATA_SOURCE_PRIORITY": ["yfinance", "fmp", "twelvedata", "stooq"],
+            "DATA_SOURCE_PRIORITY": ["yfinance", "fmp", "twelvedata"],
             "_comment": "Replace 'your_api_key_here' with your actual API keys. DATA_SOURCE_PRIORITY determines the order of fetch attempts."
         ]
 

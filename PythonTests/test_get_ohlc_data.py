@@ -61,7 +61,9 @@ class _FakeTicker:
         self._rows = rows
         self.fast_info = _FakeFastInfo(currency)
 
-    def history(self, period=None, interval=None):
+    def history(self, period=None, interval=None, auto_adjust=None):
+        # Candles must be unadjusted, like quotes and the line charts.
+        assert auto_adjust is False
         return _FakeHistory(self._rows)
 
 

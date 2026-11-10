@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 import os
 import json
@@ -13,6 +13,7 @@ import math
 import re
 import fcntl
 import tempfile
+import threading
 from contextlib import contextmanager
 
 try:
@@ -80,7 +81,6 @@ PREV_CLOSE_CACHE_MAX_AGE_SECONDS = 18 * 60 * 60
 # API Base URLs
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
-STOOQ_BASE_URL = "https://stooq.com/q/d/l"
 
 SECRET_REDACTION_PATTERNS = [
     (re.compile(r"(?i)([?&](?:apikey|api_key|access_token|token|key)=)(?!\[REDACTED\])[^&\s\"'<>)\]]+"), r"\1[REDACTED]"),
@@ -96,8 +96,47 @@ def sanitize_log_message(message):
         sanitized = pattern.sub(replacement, sanitized)
     return re.sub(r"\[REDACTED\]\]+", "[REDACTED]", sanitized)
 
+# Why a quote failed, per symbol, so the app can tell a throttled provider or a dead
+# connection from a ticker that has no data. Only provider-wide causes are recorded;
+# anything else is reported as NO_DATA.
+FAILURE_CAUSES = {}
+FAILURE_CONTEXT = threading.local()
+FAILURE_PATTERNS = (
+    ("RATE_LIMIT", re.compile(r"(?i)\b429\b|too many requests|rate.?limit")),
+    ("TIMEOUT", re.compile(r"(?i)timed? ?out")),
+    ("NETWORK_ERROR", re.compile(
+        r"(?i)connection|name resolution|nodename nor servname|network is unreachable|"
+        r"max retries|ssl|\b50[0234]\b|could not resolve"
+    )),
+)
+
+FAILURE_MESSAGES = {
+    "RATE_LIMIT": "The data provider is rate limiting requests ({symbol})",
+    "TIMEOUT": "The quote request for {symbol} timed out",
+    "NETWORK_ERROR": "The data provider could not be reached ({symbol})",
+    "NO_DATA": "No data received for {symbol}",
+}
+
+def classify_failure(message):
+    text = str(message)
+    for code, pattern in FAILURE_PATTERNS:
+        if pattern.search(text):
+            return code
+    return None
+
+def note_failure(message):
+    """Remember the first provider-wide cause logged while fetching the current symbol."""
+    symbol = getattr(FAILURE_CONTEXT, "symbol", None)
+    if symbol is None or symbol in FAILURE_CAUSES:
+        return
+    code = classify_failure(message)
+    if code is not None:
+        FAILURE_CAUSES[symbol] = code
+
 def log_error(message):
-    print(sanitize_log_message(message), file=sys.stderr)
+    sanitized = sanitize_log_message(message)
+    note_failure(sanitized)
+    print(sanitized, file=sys.stderr)
 
 def get_config():
     """Read the entire configuration file"""
@@ -272,7 +311,7 @@ def market_date_for_symbol(symbol):
             tz = pytz.timezone(tz_name)
         except Exception:
             tz = None
-    now = datetime.now(tz) if tz is not None else datetime.utcnow()
+    now = datetime.now(tz) if tz is not None else datetime.now(timezone.utc)
     return now.date().isoformat()
 
 def get_cached_prev_close(symbol):
@@ -524,110 +563,17 @@ def fetch_historical_data_twelvedata(symbol, start_date, end_date):
         log_error(f"Twelve Data fetch failed for {symbol}: {e}")
         return None
 
-# --- Stooq Fetcher ---
 
-def handle_stooq_symbol(symbol):
-    """Convert symbols for Stooq (e.g. AV.L -> AV.UK)"""
-    # Stooq uses .UK for LSE
-    upper = resolve_symbol_alias(symbol)
-    if LSE_SUFFIX_PATTERN.search(upper):
-        return LSE_SUFFIX_PATTERN.sub('.UK', upper)
-    # US stocks typically have .US suffix or just ticker, Stooq often needs .US for common ones
-    # but let's stick to LSE fallback focus for now.
-    return upper
+def previous_close_for_quote(completed_closes, session_started_today, showing_pre_market, fallback=None):
+    """Pick the close a quote's day change is measured against.
 
-def fetch_historical_data_stooq(symbol, start_date, end_date):
-    """Fetch historical data from Stooq (CSV)"""
-    stooq_symbol = handle_stooq_symbol(symbol)
-    
-    # Stooq date format: YYYYMMDD
-    d1 = start_date.replace('-', '')
-    d2 = end_date.replace('-', '')
-    
-    # Stooq URL format: https://stooq.com/q/d/l/?s=av.uk&d1=20230101&d2=20231231&i=d
-    url = f"{STOOQ_BASE_URL}/"
-    params = {
-        's': stooq_symbol,
-        'd1': d1,
-        'd2': d2,
-        'i': 'd' # daily
-    }
-    
-    print(f"Fetching historical data for {symbol} ({stooq_symbol}) from Stooq", file=sys.stderr)
-    
-    try:
-        csv_text = make_request(url, params)
-        if not csv_text or "No data" in csv_text: # Stooq sometimes returns HTML with "No data"
-             print(f"Stooq returned no data for {symbol}", file=sys.stderr)
-             return None
-             
-        # Parse CSV
-        # Date,Open,High,Low,Close,Volume
-        # 2023-10-27,400.00,405.00,398.00,402.00,123456
-        
-        historical_data = []
-        
-        # Use csv module
-        f = io.StringIO(csv_text)
-        reader = csv.DictReader(f)
-        
-        rows = list(reader)
-        # Stooq CSV is typically descending date (newest first). We want ascending.
-        rows.reverse()
-        
-        for row in rows:
-            try:
-                date_str = row.get('Date')
-                close_str = row.get('Close')
-                
-                if not date_str or not close_str:
-                    continue
-                    
-                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-                timestamp = int(date_obj.timestamp())
-                close_price = float(close_str)
-                
-                # Handle GBX (pence) vs GBP. Stooq usually returns in minor currency for UK?
-                # Actually Stooq usually uses major currency (GBP) for UK stocks? 
-                # Let's check AV.UK on Stooq... it shows e.g. 398.80. AV.L is ~400p. 
-                # Stooq AV.UK price ~400. So it is in pence (GBX).
-                # Our app expects GBP for LSE stocks in historical data?
-                # Let's check existing yfinance/fmp handling.
-                # yfinance: "if symbol.upper().endswith('.L'): close_price /= 100.0"
-                # fmp: "if api_symbol.endswith('.L'): close_price = close_price / 100.0"
-                # So we should divide by 100 for .L symbols if they come from Stooq as .UK
-                
-                if symbol.upper().endswith('.L') or symbol.upper().endswith('.LON'):
-                     close_price /= 100.0
-                
-                historical_data.append({
-                    'timestamp': timestamp,
-                    'symbol': symbol,
-                    'price': close_price,
-                    'previousClose': 0.0 # Placeholder
-                })
-            except Exception as e:
-                # Stooq sometimes has lines with "No data" or empty
-                continue
-                
-        if not historical_data:
-            return None
-            
-        # Fix previousClose
-        for i in range(len(historical_data)):
-            if i > 0:
-                historical_data[i]['previousClose'] = historical_data[i-1]['price']
-            else:
-                historical_data[i]['previousClose'] = historical_data[i]['price']
-                
-        print(f"Stooq retrieved {len(historical_data)} data points for {symbol}", file=sys.stderr)
-        return historical_data
-
-    except Exception as e:
-        log_error(f"Stooq fetch failed for {symbol}: {e}")
-        return None
-
-# --- Existing Fetchers (Refactored) ---
+    `completed_closes` are the closes of finished sessions, oldest first.
+    """
+    if not completed_closes:
+        return fallback
+    if not session_started_today and not showing_pre_market and len(completed_closes) > 1:
+        return completed_closes[-2]
+    return completed_closes[-1]
 
 def fetch_real_time_quote_yfinance(symbol):
     """Fetch real-time quote using yfinance with pre-market data and fallbacks."""
@@ -653,12 +599,17 @@ def fetch_real_time_quote_yfinance(symbol):
         today = exchange_today(daily_hist.index, symbol)
         complete_days = daily_hist[daily_hist.index.to_series().dt.date < today]
         
-        if not complete_days.empty:
-            previous_close = float(complete_days.iloc[-1]['Close'])
-            print(f"Using previous close from {complete_days.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
+        completed_closes = [
+            close for close in (finite_positive_number(raw) for raw in complete_days['Close'].tolist())
+            if close is not None
+        ]
+        session_started_today = len(complete_days) < len(daily_hist)
+        if completed_closes:
+            previous_close = completed_closes[-1]
         else:
-            previous_close = float(daily_hist.iloc[-1]['Close'])
-            print(f"Fallback: using most recent close from {daily_hist.index[-1].strftime('%Y-%m-%d')}: {previous_close}", file=sys.stderr)
+            previous_close = finite_positive_number(daily_hist.iloc[-1]['Close'])
+            if previous_close is None:
+                return None
 
         current_price = None
         regular_market_price = None  # Keep track of actual regular market price
@@ -778,6 +729,16 @@ def fetch_real_time_quote_yfinance(symbol):
             current_price = pre_market_price
         elif market_state == "POST" and post_market_price is not None:
             current_price = post_market_price
+
+        # With no bar for today (weekend, holiday, before the open) the regular price
+        # is the last completed close, so the close to compare it with is the one
+        # before. A pre-market price is still compared with the last completed close.
+        previous_close = previous_close_for_quote(
+            completed_closes,
+            session_started_today,
+            showing_pre_market=market_state == "PRE" and pre_market_price is not None,
+            fallback=previous_close
+        )
 
         normalized_currency, uses_pence = normalize_currency(currency, symbol)
         if uses_pence:
@@ -905,85 +866,12 @@ def fetch_real_time_quote_twelvedata(symbol):
         log_error(f"Twelve Data fetch failed for {symbol}: {e}")
         return None
 
-def fetch_real_time_quote_yahoo_api(symbol):
-    """Fetch real-time quote via Yahoo quote API (lightweight fallback)."""
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    try:
-        resolved_symbol = resolve_symbol_alias(symbol)
-        data = make_request(url, params={'symbols': resolved_symbol})
-        if not data or 'quoteResponse' not in data:
-            return None
-
-        results = data.get('quoteResponse', {}).get('result', [])
-        if not results:
-            return None
-
-        quote = results[0]
-        regular_market_price = quote.get('regularMarketPrice')
-        previous_close = quote.get('regularMarketPreviousClose')
-        market_state = quote.get('marketState')
-        regular_market_time = quote.get('regularMarketTime')
-        pre_market_price = quote.get('preMarketPrice')
-        post_market_price = quote.get('postMarketPrice')
-        pre_market_time = quote.get('preMarketTime')
-        post_market_time = quote.get('postMarketTime')
-
-        if regular_market_price is None or previous_close is None:
-            return None
-
-        normalized_currency, uses_pence = normalize_currency(quote.get('currency'), symbol)
-        if uses_pence:
-            regular_market_price /= 100.0
-            previous_close /= 100.0
-            if pre_market_price is not None:
-                pre_market_price /= 100.0
-            if post_market_price is not None:
-                post_market_price /= 100.0
-
-        current_price = regular_market_price
-        if market_state == "PRE" and pre_market_price is not None:
-            current_price = pre_market_price
-        elif market_state == "POST" and post_market_price is not None:
-            current_price = post_market_price
-
-        timestamp = regular_market_time if regular_market_time is not None else int(time.time())
-
-        return {
-            'symbol': symbol,
-            'price': current_price,
-            'regularMarketPrice': regular_market_price,
-            'previousClose': previous_close,
-            'preMarketPrice': pre_market_price,
-            'postMarketPrice': post_market_price,
-            'preMarketTime': pre_market_time,
-            'postMarketTime': post_market_time,
-            'marketState': market_state,
-            'timestamp': timestamp,
-            'currency': normalized_currency
-        }
-    except Exception as e:
-        log_error(f"Yahoo API fetch failed for {symbol}: {e}")
-        return None
-
 def needs_prev_close_backfill(symbol, current_price, previous_close, currency):
     try:
         if previous_close is None or not math.isfinite(float(previous_close)) or float(previous_close) <= 0:
             return True
     except Exception:
         return True
-
-    try:
-        price = float(current_price)
-    except Exception:
-        return False
-
-    if not math.isfinite(price) or price <= 0:
-        return False
-
-    currency_code = str(currency).upper() if currency else ""
-    if is_uk_symbol(symbol) or currency_code == "GBP":
-        epsilon = max(0.0001, price * 0.0001)
-        return abs(float(previous_close) - price) <= epsilon
 
     return False
 
@@ -1041,25 +929,6 @@ def fetch_previous_close_twelvedata(symbol):
         return prev_close
     except Exception as e:
         log_error(f"Twelve Data previous close fetch failed for {symbol}: {e}")
-        return None
-
-def fetch_previous_close_stooq(symbol):
-    try:
-        end_date = datetime.utcnow().date()
-        start_date = end_date - timedelta(days=14)
-        history_symbol = history_symbol_for_prev_close(symbol)
-        if history_symbol != symbol:
-            print(f"Prev close: mapping {symbol} -> {history_symbol} for Stooq history", file=sys.stderr)
-        data = fetch_historical_data_stooq(history_symbol, start_date.isoformat(), end_date.isoformat())
-        if not data:
-            return None
-        prev_close = data[-1].get('previousClose')
-        prev_close = float(prev_close) if prev_close is not None else None
-        if prev_close is None or not math.isfinite(prev_close) or prev_close <= 0:
-            return None
-        return prev_close
-    except Exception as e:
-        log_error(f"Stooq previous close fetch failed for {symbol}: {e}")
         return None
 
 def fetch_previous_close_yfinance(symbol):
@@ -1130,11 +999,6 @@ def fetch_previous_close_from_history(symbol):
     prev_close = fetch_previous_close_twelvedata(symbol)
     if prev_close is not None:
         return prev_close
-
-    if symbol.upper().endswith(('.L', '.LON')):
-        prev_close = fetch_previous_close_stooq(symbol)
-        if prev_close is not None:
-            return prev_close
 
     prev_close = fetch_previous_close_yfinance(symbol)
     return prev_close
@@ -1233,11 +1097,6 @@ def fetch_real_time_quote(symbol):
     if twelvedata_result is not None:
         return twelvedata_result
 
-    yahoo_result = fetch_real_time_quote_yahoo_api(symbol)
-    yahoo_result = validated_provider_quote(symbol, "Yahoo quote API", yahoo_result)
-    if yahoo_result is not None:
-        return yahoo_result
-
     fmp_result = fetch_real_time_quote_fmp(symbol)
     return validated_provider_quote(symbol, "FMP", fmp_result)
 
@@ -1256,6 +1115,8 @@ def yfinance_reported_currency(ticker):
             continue
     return None
 
+HOURLY_HISTORY_MAX_DAYS = 700
+
 def fetch_historical_data_yfinance(symbol, start_date, end_date):
     """Fetch historical data using yfinance"""
     if not YFINANCE_AVAILABLE:
@@ -1268,7 +1129,16 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             
-            hist = ticker.history(start=start_dt, end=end_dt + timedelta(days=1), prepost=True, auto_adjust=False, interval="1h")
+            # Yahoo serves hourly bars for roughly the last two years only; an older
+            # start date makes the whole request fail, so those ranges use daily bars.
+            hourly_available = (datetime.now() - start_dt).days <= HOURLY_HISTORY_MAX_DAYS
+            hist = ticker.history(
+                start=start_dt,
+                end=end_dt + timedelta(days=1),
+                prepost=hourly_available,
+                auto_adjust=False,
+                interval="1h" if hourly_available else "1d"
+            )
             
             if hist.empty:
                 if attempt < max_retries - 1:
@@ -1282,13 +1152,15 @@ def fetch_historical_data_yfinance(symbol, start_date, end_date):
             _, uses_pence = normalize_currency(yfinance_reported_currency(ticker), symbol)
             
             for date, row in hist.iterrows():
-                close_price_raw = float(row['Close'])
-                
+                close_price_raw = finite_positive_number(row['Close'])
+                if close_price_raw is None:
+                    continue
+
                 if prev_close_raw is not None:
                     previous_close_raw = prev_close_raw
                 else:
-                    previous_close_raw = float(row['Open'])
-                
+                    previous_close_raw = finite_positive_number(row['Open']) or close_price_raw
+
                 if uses_pence:
                     close_price = close_price_raw / 100.0
                     previous_close = previous_close_raw / 100.0
@@ -1399,7 +1271,7 @@ def fetch_historical_data(symbol, start_date, end_date):
             seen.add(s)
     
     # Append default sources if not present (fallbacks)
-    for source in ["yfinance", "fmp", "twelvedata", "stooq"]:
+    for source in ["yfinance", "fmp", "twelvedata"]:
         if source not in seen:
             valid_sources.append(source)
             seen.add(source)
@@ -1424,9 +1296,11 @@ def fetch_historical_data(symbol, start_date, end_date):
                 result = fetch_historical_data_fmp(fetch_symbol, start_date, end_date)
             elif source == "twelvedata":
                 result = fetch_historical_data_twelvedata(fetch_symbol, start_date, end_date)
-            elif source == "stooq":
-                result = fetch_historical_data_stooq(fetch_symbol, start_date, end_date)
-                
+            else:
+                # Unknown or retired provider names (for example "stooq") are skipped.
+                continue
+
+
             if result:
                 if fetch_symbol != symbol:
                     for entry in result:
@@ -1463,35 +1337,72 @@ def fetch_historical_data(symbol, start_date, end_date):
         
     return None
 
-def fetch_batch(symbols):
-    """Fetch multiple symbols using enhanced real-time API with pre/post market support"""
-    results = {}
-    
-    for symbol in symbols:
+SYMBOL_DEADLINE_SECONDS = 20.0
+REQUEST_SPACING_SECONDS = 1.0
+
+def fetch_quote_with_deadline(symbol, deadline_seconds):
+    """Fetch one quote on a worker thread and give up waiting after `deadline_seconds`.
+
+    A provider call that hangs must cost only its own symbol, not the whole batch.
+    The abandoned thread is a daemon: it ends with its own request timeout, and its
+    late result is discarded.
+    """
+    outcome = {}
+
+    def work():
+        FAILURE_CONTEXT.symbol = symbol
         try:
-            # Check cache first
-            cached = get_cached(symbol)
-            if cached:
-                results[symbol] = cached
-                continue
-                
-            # Fetch from API using enhanced method
-            quote_data = fetch_real_time_quote(symbol)
-            if is_valid_quote(quote_data):
-                # Return the enhanced quote data directly (JSON format)
-                set_cache(symbol, quote_data)
-                results[symbol] = quote_data
-            else:
-                print(f"Failed to fetch data for {symbol}", file=sys.stderr)
-                results[symbol] = None
-                
-            # Add delay to respect rate limits and reduce yfinance rate limiting
-            time.sleep(1.0)  # 1 second delay between requests to be more conservative
-            
+            outcome['quote'] = fetch_real_time_quote(symbol)
         except Exception as e:
             log_error(f"Error fetching {symbol}: {e}")
+        finally:
+            FAILURE_CONTEXT.symbol = None
+
+    thread = threading.Thread(target=work, name=f"quote-{symbol}", daemon=True)
+    thread.start()
+    thread.join(max(0.0, deadline_seconds))
+    if thread.is_alive():
+        FAILURE_CAUSES[symbol] = "TIMEOUT"
+        print(f"Quote for {symbol} exceeded {deadline_seconds:.0f}s; skipping it", file=sys.stderr)
+        return None
+    return outcome.get('quote')
+
+def fetch_batch(symbols, time_budget_seconds=None):
+    """Fetch quotes one symbol at a time, each with its own deadline.
+
+    `time_budget_seconds` bounds the whole batch: symbols that cannot start within
+    it are reported as timed out, so the caller still receives every other result.
+    """
+    results = {}
+    batch_deadline = (time.monotonic() + time_budget_seconds) if time_budget_seconds else None
+    fetched_any = False
+
+    for symbol in symbols:
+        cached = get_cached(symbol)
+        if cached:
+            results[symbol] = cached
+            continue
+
+        remaining = None if batch_deadline is None else batch_deadline - time.monotonic()
+        if remaining is not None and remaining <= 1.0:
+            FAILURE_CAUSES[symbol] = "TIMEOUT"
             results[symbol] = None
-    
+            continue
+
+        # Space out provider requests, but never wait after the last one.
+        if fetched_any:
+            time.sleep(REQUEST_SPACING_SECONDS)
+        fetched_any = True
+
+        deadline = SYMBOL_DEADLINE_SECONDS if remaining is None else min(SYMBOL_DEADLINE_SECONDS, remaining)
+        quote_data = fetch_quote_with_deadline(symbol, deadline)
+        if is_valid_quote(quote_data):
+            set_cache(symbol, quote_data)
+            results[symbol] = quote_data
+        else:
+            print(f"Failed to fetch data for {symbol}", file=sys.stderr)
+            results[symbol] = None
+
     return results
 
 def make_json_safe(value):
@@ -1641,6 +1552,8 @@ def main():
     parser.add_argument('--period', default='1mo', help='Period for OHLC data')
     parser.add_argument('--interval', default='1d', help='Interval for OHLC data')
     parser.add_argument('--test-key', help='Test API key for a specific service (fmp, twelvedata)')
+    parser.add_argument('--deadline-seconds', type=float, default=None,
+                        help='Time budget for a quote batch; symbols not reached in time report TIMEOUT')
 
     args = parser.parse_args()
 
@@ -1764,7 +1677,7 @@ def main():
 
         if symbols_to_fetch:
             try:
-                batch_results = fetch_batch(symbols_to_fetch)
+                batch_results = fetch_batch(symbols_to_fetch, time_budget_seconds=args.deadline_seconds)
                 for symbol, res in batch_results.items():
                     if res:
                         results[symbol] = res
@@ -1793,12 +1706,13 @@ def main():
                         'quote': result,
                     })
                 else:
+                    error_code = FAILURE_CAUSES.get(symbol, 'NO_DATA')
                     envelopes.append({
                         'symbol': symbol,
                         'success': False,
                         'error': {
-                            'error_code': 'NO_DATA',
-                            'message': f'No data received for {symbol}',
+                            'error_code': error_code,
+                            'message': FAILURE_MESSAGES[error_code].format(symbol=symbol),
                         },
                     })
             print_json(envelopes)
