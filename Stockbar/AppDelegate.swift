@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         _ = CoreDataStack.shared.persistentContainer
+        SettingsTransferService().removeLeftoverStagedFiles()
         dataModel = DataModel()
         setupMainMenu()
 

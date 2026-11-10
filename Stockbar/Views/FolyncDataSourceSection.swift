@@ -14,6 +14,7 @@ struct FolyncDataSourceSection: View {
     @State private var supplemental = FolyncSupplementalSettings.disabled
     @State private var isWorking = false
     @State private var confirmingDisable = false
+    @State private var confirmingTokenRemoval = false
     /// Per-holding menu-bar choices, read once. Decoding the stored JSON
     /// inside each row's binding ran it for every holding on every render.
     @State private var overlays: [String: FolyncHoldingOverlay] = [:]
@@ -93,6 +94,20 @@ struct FolyncDataSourceSection: View {
                     } message: {
                         Text("Stockbar stops showing Folync's holdings and figures and goes back to the holdings entered here. The saved address and token are kept, so you can activate it again.")
                     }
+                }
+                if hasStoredToken {
+                    Button("Remove Token…") { confirmingTokenRemoval = true }
+                        .disabled(isWorking)
+                        .confirmationDialog(
+                            "Remove the Folync token?",
+                            isPresented: $confirmingTokenRemoval,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Remove Token", role: .destructive) { removeToken() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Stockbar stops using Folync and deletes the token from the Keychain. The saved address is kept.")
+                        }
                 }
                 if isWorking {
                     ProgressView()
@@ -210,7 +225,12 @@ struct FolyncDataSourceSection: View {
     }
 
     private var hasUsableToken: Bool {
-        !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasStoredToken
+        !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || storedTokenAppliesToEndpoint
+    }
+
+    /// The stored token is only reused for the server it was saved for.
+    private var storedTokenAppliesToEndpoint: Bool {
+        hasStoredToken && dataModel.storedFolyncTokenApplies(to: endpointURL)
     }
 
     private var canSubmitConnectionRequest: Bool {
@@ -272,7 +292,8 @@ struct FolyncDataSourceSection: View {
     /// The Keychain check can wait on a macOS access prompt; don't claim the
     /// token is missing until it has answered.
     private var tokenPlaceholder: String {
-        if hasStoredToken { return "Stored in Keychain" }
+        if storedTokenAppliesToEndpoint { return "Stored in Keychain" }
+        if hasStoredToken { return "Enter the token for this server" }
         return isCheckingStoredToken ? "Checking Keychain…" : "Required"
     }
 
@@ -354,6 +375,21 @@ struct FolyncDataSourceSection: View {
                 token = ""
                 statusMessage = nil
                 accessibilityAnnouncer.announce("Folync is active.")
+            } catch {
+                showStatus(LogRedactor.redact(error.localizedDescription))
+            }
+        }
+    }
+
+    private func removeToken() {
+        isWorking = true
+        Task {
+            defer { isWorking = false }
+            do {
+                try await dataModel.removeStoredFolyncToken()
+                hasStoredToken = false
+                token = ""
+                showStatus("The Folync token has been removed.")
             } catch {
                 showStatus(LogRedactor.redact(error.localizedDescription))
             }
