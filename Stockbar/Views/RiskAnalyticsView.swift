@@ -636,12 +636,11 @@ struct RiskAnalyticsView: View {
 
     // MARK: - Helper Functions
 
+    /// The same money format as the holdings table and the attribution tab.
+    /// A value that is not known shows a dash, never "NaN" or an invented zero.
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = dataModel.preferredCurrency
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? "\(dataModel.preferredCurrency)\(String(format: "%.2f", value))"
+        guard value.isFinite else { return "—" }
+        return HoldingsCurrencyFormatter.amount(value, currency: dataModel.preferredCurrency)
     }
 
     private func formatDateTime(_ date: Date) -> String {

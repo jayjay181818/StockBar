@@ -6,12 +6,6 @@
 
 import Foundation
 
-// Helper function to format price with currency
-public func formatPrice(price: Double, currency: String?) -> String {
-    guard let currency = currency else { return String(format: "%.2f", price) }
-    return "\(currency) \(String(format: "%.2f", price))"
-}
-
 struct Trade: Codable, Equatable {
     var name: String
     var position: Position
