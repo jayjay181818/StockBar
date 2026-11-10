@@ -82,6 +82,9 @@ struct CoreDataStoreRecovery {
         }
 
         let backupDirectory = try makeBackupDirectory(prefix: "store-load-failure")
+        // The store is unchanged between failed launches, so every copy is the same data.
+        // Keep the newest few; the names sort by time.
+        pruneBackupDirectories(prefix: "store-load-failure", keeping: 3)
 
         let copiedFiles = try sourceFiles.map { sourceURL in
             let destinationURL = backupDirectory.appendingPathComponent(sourceURL.lastPathComponent)
@@ -104,6 +107,16 @@ struct CoreDataStoreRecovery {
         StockbarRuntimeStorage
             .bundleApplicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("StoreRecovery", isDirectory: true)
+    }
+
+    /// Removes all but the `keeping` newest directories with this prefix. Failures are ignored:
+    /// an extra copy left behind is harmless.
+    private func pruneBackupDirectories(prefix: String, keeping: Int) {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: recoveryRoot.path) else { return }
+        let matching = names.filter { $0.hasPrefix(prefix + "-") }.sorted()
+        for name in matching.dropLast(keeping) {
+            try? fileManager.removeItem(at: recoveryRoot.appendingPathComponent(name, isDirectory: true))
+        }
     }
 
     /// Creates a new, uniquely named directory under the recovery root.

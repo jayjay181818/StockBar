@@ -296,6 +296,11 @@ struct Trading212DataSourceSection: View {
             Text(statusMessage)
                 .font(.caption)
                 .foregroundColor(.secondary)
+            if let syncError = dataModel.trading212ScheduledSyncError {
+                Label("Automatic sync is failing: \(syncError)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
             if settings.accountType == .cfdUnsupported {
                 Text("Trading 212's current public API docs list Invest and Stocks ISA only; CFD is not supported.")
                     .font(.caption)
