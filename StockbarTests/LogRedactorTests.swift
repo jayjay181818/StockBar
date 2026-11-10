@@ -913,6 +913,26 @@ final class Trading212PreviewTests: XCTestCase {
 }
 
 final class Trading212BrokerLinkStoreTests: XCTestCase {
+    func testDamagedLinksFileIsReportedByNameAndLeftUntouched() async throws {
+        let fileURL = temporaryLinkStoreURL()
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let damaged = Data("{ not links".utf8)
+        try damaged.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = BrokerLinkStore(fileURL: fileURL)
+
+        do {
+            _ = try await store.loadSnapshot()
+            XCTFail("A damaged file must not read as an empty set of links")
+        } catch {
+            XCTAssertEqual(error as? BrokerLinkStoreError, .unreadableFile)
+            XCTAssertTrue(error.localizedDescription.contains("nothing was changed"))
+        }
+        XCTAssertEqual(try Data(contentsOf: fileURL), damaged)
+    }
+
     func testPersistsExactManualBrokerLinksWithoutRawAccountIdOrBrokerValues() async throws {
         // Given: A clean preview where the broker row exactly matches the existing manual holding.
         let fileURL = temporaryLinkStoreURL()
