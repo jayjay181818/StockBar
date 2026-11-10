@@ -2,6 +2,8 @@
 
 macOS AppKit/SwiftUI portfolio app with a Python market-data bridge. Personal working agreements belong in global guidance; this file adds project constraints.
 
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+
 ## Working efficiently
 - Read applicable directory `AGENTS.md` files before editing there. Read linked reference docs only for relevant tasks; do not load the whole documentation tree.
 - Use scoped searches and bounded output. Reuse instruction reads and valid check results unless inputs change. Keep complete logs on disk and report useful failures plus the log path.
