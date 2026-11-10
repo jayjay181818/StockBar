@@ -195,27 +195,31 @@ enum MenuChartDataBuilder {
             return points
         }
 
+        // Each bucket keeps its lowest and highest point, so a spike or dip is
+        // never thinned away; picking every nth point lost them.
         let lastIndex = points.count - 1
-        let step = Double(lastIndex) / Double(maxPoints - 1)
-        var sampled: [MenuChartDataPoint] = []
+        guard maxPoints >= 4 else { return [points[0], points[lastIndex]] }
+        let bucketCount = max(1, (maxPoints - 2) / 2)
+        let interior = lastIndex - 1
+        let bucketSize = max(1, Int((Double(interior) / Double(bucketCount)).rounded(.up)))
+
+        var sampled: [MenuChartDataPoint] = [points[0]]
         sampled.reserveCapacity(maxPoints)
-
-        for offset in 0..<maxPoints {
-            let rawIndex = Int((Double(offset) * step).rounded())
-            let index = min(rawIndex, lastIndex)
-            if sampled.last?.date != points[index].date {
-                sampled.append(points[index])
+        var start = 1
+        while start < lastIndex {
+            let end = min(start + bucketSize, lastIndex)
+            var low = start
+            var high = start
+            for index in start..<end {
+                if points[index].price < points[low].price { low = index }
+                if points[index].price > points[high].price { high = index }
             }
+            sampled.append(points[min(low, high)])
+            if low != high { sampled.append(points[max(low, high)]) }
+            start = end
         }
-
-        if sampled.first?.date != points.first?.date {
-            sampled.insert(points[0], at: 0)
-        }
-        if sampled.last?.date != points.last?.date {
-            sampled.append(points[lastIndex])
-        }
-
-        return sampled.count <= maxPoints ? sampled : Array(sampled.prefix(maxPoints - 1)) + [points[lastIndex]]
+        sampled.append(points[lastIndex])
+        return sampled
     }
 
     private static func bucketIndex(for date: Date, bucketSize: TimeInterval) -> Int {
@@ -445,6 +449,9 @@ private struct MenuPopoverFooterButtonStyle: ButtonStyle {
 
 struct MenuPopoverTimeRangePicker: View {
     @Binding var selectedRange: MenuChartTimeRange
+    /// The portfolio's shortest period runs from the previous close; a stock's
+    /// runs over the last 24 hours, so it is not called "Today".
+    var dayLabel = "Today"
     let onSelect: (MenuChartTimeRange) -> Void
 
     var body: some View {
@@ -456,7 +463,7 @@ struct MenuPopoverTimeRangePicker: View {
             }
         )) {
             ForEach(MenuChartTimeRange.allCases, id: \.self) { range in
-                Text(range == .day ? "Today" : range.description).tag(range)
+                Text(range == .day ? dayLabel : range.description).tag(range)
             }
         }
         .pickerStyle(.segmented)
@@ -578,10 +585,16 @@ struct MenuPopoverLineChart: View {
             let window = (points.first?.date ?? .distantPast)...(points.last?.date ?? .distantFuture)
             let primarySeries = MenuChartSeriesAlignment.percentSeries(points, window: window)
             let comparisonSeries = MenuChartSeriesAlignment.percentSeries(comparisonPoints, window: window)
-            let combinedValues = primarySeries.map { $0.value } + comparisonSeries.map { $0.value }
-            let minValue = combinedValues.min() ?? 0
-            let maxValue = combinedValues.max() ?? 0
-            let range = max(maxValue - minValue, 0.0001)
+            let combinedValues = (primarySeries.map { $0.value } + comparisonSeries.map { $0.value }).filter(\.isFinite)
+            let lowestValue = combinedValues.min() ?? 0
+            let highestValue = combinedValues.max() ?? 0
+            // A day that barely moved is drawn nearly flat: the scale never
+            // covers less than half a percent, or a 0.01% wobble filled the chart.
+            let minimumSpan = 0.005
+            let span = highestValue - lowestValue
+            let padding = max(0, (minimumSpan - span) / 2)
+            let minValue = lowestValue - padding
+            let range = max(span, minimumSpan)
             let bottomInset = size.height * 0.06
             let topInset = size.height * 0.1
             let usableHeight = max(size.height - topInset - bottomInset, 1)

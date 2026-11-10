@@ -167,9 +167,12 @@ struct StockbarMainView: View {
     }
 
     private var availableSymbols: [String] {
-        dataModel.realTimeTrades
+        // One entry per ticker: the same one held in two accounts would
+        // otherwise give two rows the same identity.
+        var seen = Set<String>()
+        return dataModel.realTimeTrades
             .map(\.trade.name)
-            .filter { !$0.isEmpty && !SymbolMetadata.isBenchmarkSymbol($0) }
+            .filter { !$0.isEmpty && !SymbolMetadata.isBenchmarkSymbol($0) && seen.insert($0).inserted }
     }
 }
 

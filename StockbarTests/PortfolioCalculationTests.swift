@@ -1099,6 +1099,10 @@ class PortfolioCalculationTests: XCTestCase {
         let coveredSubtotal = 8_765_432.10
         let missingSubtotal = 1_234_567.90
         let fullPortfolioValue = coveredSubtotal + missingSubtotal
+        // The covered holding was 100 lower earlier; the one with no history
+        // is carried at today's value rather than left out of the total.
+        let earlierCoveredPrice = coveredSubtotal - 100
+        let syntheticValue = earlierCoveredPrice + missingSubtotal
         let sampleDates = [
             now.addingTimeInterval(-20 * 60),
             now.addingTimeInterval(-16 * 60),
@@ -1113,8 +1117,8 @@ class PortfolioCalculationTests: XCTestCase {
         for sampleDate in sampleDates {
             manager.recordLivePriceSample(
                 symbol: coveredSymbol,
-                price: coveredSubtotal,
-                previousClose: coveredSubtotal,
+                price: earlierCoveredPrice,
+                previousClose: earlierCoveredPrice,
                 timestamp: sampleDate
             )
         }
@@ -1150,15 +1154,19 @@ class PortfolioCalculationTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            syntheticPoints.contains { abs($0.value - coveredSubtotal) < 0.0001 },
-            "The fixture must reproduce the misleading partial synthetic subtotal"
+            syntheticPoints.contains { abs($0.value - syntheticValue) < 0.0001 },
+            "The fixture must produce a synthetic point from position history"
+        )
+        XCTAssertFalse(
+            syntheticPoints.contains { abs($0.value - earlierCoveredPrice) < 0.0001 },
+            "A holding with no history must not be dropped from the synthetic total"
         )
         XCTAssertTrue(
             authoritativePoints.contains { abs($0.value - fullPortfolioValue) < 0.0001 },
             "Folync-authoritative charts must retain full portfolio samples"
         )
         XCTAssertFalse(
-            authoritativePoints.contains { abs($0.value - coveredSubtotal) < 0.0001 },
+            authoritativePoints.contains { abs($0.value - syntheticValue) < 0.0001 },
             "Folync-authoritative charts must not merge synthetic position history"
         )
     }

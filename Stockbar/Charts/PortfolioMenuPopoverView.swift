@@ -476,8 +476,10 @@ struct PortfolioMenuPopoverView: View {
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .padding(.bottom, 10)
-        .frame(width: 340)
+        .frame(width: 330)
         .fixedSize(horizontal: false, vertical: true)
+        // A readout left from before a reload would describe a point no longer drawn.
+        .onChange(of: viewModel.chartData) { _, _ in hoveredPoint = nil }
         .onAppear {
             viewModel.activate()
             refreshChartModel()

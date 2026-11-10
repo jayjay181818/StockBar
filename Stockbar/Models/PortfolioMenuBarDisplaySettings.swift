@@ -91,9 +91,13 @@ enum PortfolioMenuBarTitleFormatter {
         let decimals = max(0, min(settings.decimalPlaces, 4))
         let symbol = currencySymbol(for: settings.currencyCode)
         let value = "\(symbol)\(number(totalValue, decimals: decimals, locale: locale))"
-        let sign = dayGain < 0 ? "-" : "+"
-        let amount = "\(sign)\(symbol)\(number(abs(dayGain), decimals: decimals, locale: locale))"
-        let percent = signedPercent(dayGainPercent, locale: locale)
+        // A change that prints as zero carries no sign: "+£0.00" and "-0.00%" say nothing.
+        let shownGain = MenuBarFormattingService.roundedForDisplay(dayGain, decimalPlaces: decimals)
+        let sign = shownGain < 0 ? "-" : (shownGain > 0 ? "+" : "")
+        let amount = "\(sign)\(symbol)\(number(abs(shownGain), decimals: decimals, locale: locale))"
+        let percent = signedPercent(
+            MenuBarFormattingService.roundedForDisplay(dayGainPercent, decimalPlaces: 2), locale: locale
+        )
 
         switch settings.dayGainFormat {
         case .both:
@@ -132,7 +136,7 @@ enum PortfolioMenuBarTitleFormatter {
         formatter.numberStyle = .decimal
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
-        formatter.positivePrefix = "+"
+        formatter.positivePrefix = value == 0 ? "" : "+"
         let text = formatter.string(from: NSNumber(value: value)) ?? String(format: "%+.2f", value)
         return text + "%"
     }

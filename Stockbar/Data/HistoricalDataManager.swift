@@ -1351,15 +1351,27 @@ class HistoricalDataManager {
     }
     
     /// Gets performance metrics for an individual stock symbol
-    func getStockPerformanceMetrics(for symbol: String, timeRange: ChartTimeRange) -> PerformanceMetrics? {
+    /// `customFrom` and `customTo` (exclusive) bound a Custom range; without
+    /// them a Custom range fell back to the last 30 days.
+    func getStockPerformanceMetrics(
+        for symbol: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> PerformanceMetrics? {
         let stockSnapshots = aliasAwarePriceSnapshots(
             for: symbol,
-            folyncSeriesKeys: folyncLineSeriesKeys(for: symbol, timeRange: timeRange, customFrom: nil, customTo: nil)
+            folyncSeriesKeys: folyncLineSeriesKeys(
+                for: symbol, timeRange: timeRange, customFrom: customFrom, customTo: customTo
+            )
         )
         guard !stockSnapshots.isEmpty else { return nil }
         
-        let startDate = timeRange.startDate(from: Date())
-        let relevantSnapshots = stockSnapshots.filter { $0.timestamp >= startDate }.sorted { $0.timestamp < $1.timestamp }
+        let startDate = customFrom ?? timeRange.startDate(from: Date())
+        let endDate = customTo ?? .distantFuture
+        let relevantSnapshots = stockSnapshots
+            .filter { $0.timestamp >= startDate && $0.timestamp < endDate }
+            .sorted { $0.timestamp < $1.timestamp }
         
         guard let firstSnapshot = relevantSnapshots.first,
               let lastSnapshot = relevantSnapshots.last else {
@@ -2912,8 +2924,13 @@ class HistoricalDataManager {
             var syntheticValue = 0.0
 
             for position in positions {
+                // A position with no price at this time is carried at today's
+                // value. Leaving it out made the total up to 30% too small,
+                // which the chart then drew as a jump to the current value.
+                let carried = position.currentValueInPreferredCurrency
                 guard let snapshots = snapshotsBySymbol[position.symbol],
                       let snapshot = latestSnapshot(in: snapshots, atOrBefore: candidateDate, tolerance: tolerance) else {
+                    if carried.isFinite, carried > 0 { syntheticValue += carried }
                     continue
                 }
 
@@ -2922,22 +2939,21 @@ class HistoricalDataManager {
                     currentPrice: position.currentPrice,
                     symbol: position.symbol
                 )
-                guard price.isFinite, price > 0 else {
-                    continue
-                }
-
-                let positionValue = convertPortfolioMenuValue(
-                    amount: price * position.units,
-                    from: position.currency,
-                    to: preferredCurrency,
-                    converter: converter
-                )
+                let positionValue = price.isFinite && price > 0
+                    ? convertPortfolioMenuValue(
+                        amount: price * position.units,
+                        from: position.currency,
+                        to: preferredCurrency,
+                        converter: converter
+                    )
+                    : Double.nan
                 guard positionValue.isFinite, positionValue > 0 else {
+                    if carried.isFinite, carried > 0 { syntheticValue += carried }
                     continue
                 }
 
                 coveredPositionCount += 1
-                coveredCurrentValue += position.currentValueInPreferredCurrency
+                coveredCurrentValue += carried
                 syntheticValue += positionValue
             }
 

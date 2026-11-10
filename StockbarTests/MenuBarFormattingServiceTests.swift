@@ -414,6 +414,67 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Should contain some form of up indicator
     }
 
+    func testMinimalModePrintsTheArrowOnce() async {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .minimal
+        settings.arrowStyle = .simple
+        for before in [true, false] {
+            settings.showArrowBeforeSymbol = before
+            let result = await service.formatStockTitle(
+                symbol: "NVDA", price: 450, change: 10, changePct: 2.27,
+                currency: "USD", settings: settings, useColorCoding: false
+            )
+            XCTAssertEqual(result.string, "NVDA \(settings.arrowStyle.upArrow())")
+        }
+    }
+
+    /// The whole title, character for character, for the layouts people use.
+    func testExactTitlesAcrossModesAndCurrencies() async {
+        func title(
+            _ mode: MenuBarDisplaySettings.DisplayMode,
+            _ format: MenuBarDisplaySettings.ChangeFormat,
+            price: Double = 450, change: Double = -10, pct: Double = -2.17,
+            dayPL: Double = 0, currency: String = "USD"
+        ) async -> String {
+            var settings = MenuBarDisplaySettings()
+            settings.displayMode = mode
+            settings.changeFormat = format
+            settings.arrowStyle = .none
+            settings.decimalPlaces = 2
+            return await service.formatStockTitle(
+                symbol: "NVDA", price: price, change: change, changePct: pct, dayPL: dayPL,
+                currency: currency, settings: settings, useColorCoding: false
+            ).string
+        }
+
+        let compactPercent = await title(.compact, .percentage)
+        XCTAssertEqual(compactPercent, "NVDA -2.17%")
+        let compactBoth = await title(.compact, .both)
+        XCTAssertEqual(compactBoth, "NVDA -$10.00 (-2.17%)")
+        let expandedPounds = await title(.expanded, .dollar, price: 12.5, change: 0.25, pct: 2.04, currency: "GBP")
+        XCTAssertEqual(expandedPounds, "NVDA £12.50 +£0.25")
+        let positionPL = await title(.expanded, .positionPLPct, dayPL: -250, currency: "USD")
+        XCTAssertEqual(positionPL, "NVDA $450.00 -$250.00 (-2.17%)")
+        let noPrice = await title(.priceAndPercentage, .percentage, price: .nan, change: .nan, pct: .nan)
+        XCTAssertEqual(noPrice, "NVDA — —")
+    }
+
+    func testChangeTooSmallToShowIsNeutral() async {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .compact
+        settings.changeFormat = .percentage
+        settings.arrowStyle = .simple
+        settings.decimalPlaces = 2
+        let result = await service.formatStockTitle(
+            symbol: "NVDA", price: 450, change: 0.001, changePct: 0.0004,
+            currency: "USD", settings: settings, useColorCoding: true
+        )
+        XCTAssertEqual(result.string, "NVDA 0.00%")
+        XCTAssertEqual(
+            result.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, NSColor.labelColor
+        )
+    }
+
     func testMinimalMode_WithNegativeChange() async throws {
         // Given: Minimal mode with down arrow
         var settings = MenuBarDisplaySettings()
@@ -912,6 +973,25 @@ final class PortfolioMenuBarTitleFormatterTests: XCTestCase {
             PortfolioMenuBarTitleFormatter.title(totalValue: 10_234.56, dayGain: 123.45, dayGainPercent: 1.21, settings: settings, locale: locale),
             "£10,235 +1.21%"
         )
+    }
+
+    func testChangeThatPrintsAsZeroCarriesNoSign() {
+        let settings = PortfolioMenuBarDisplaySettings(isEnabled: true, currencyCode: "GBP", dayGainFormat: .both, decimalPlaces: 2)
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 100, dayGain: 0.004, dayGainPercent: 0.004, settings: settings, locale: locale),
+            "£100.00 £0.00 (0.00%)"
+        )
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 100, dayGain: -0.004, dayGainPercent: -0.004, settings: settings, locale: locale),
+            "£100.00 £0.00 (0.00%)"
+        )
+    }
+
+    func testRoundedForDisplayTreatsTinyAndMissingValuesAsZero() {
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.004, decimalPlaces: 2), 0)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.004, decimalPlaces: 2).sign, .plus)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.006, decimalPlaces: 2), -0.01)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(.nan, decimalPlaces: 2), 0)
     }
 
     func testSettingsPreviewUsesTheSameFormatter() {
