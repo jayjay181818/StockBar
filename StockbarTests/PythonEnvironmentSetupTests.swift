@@ -7,14 +7,16 @@ import XCTest
 final class PythonEnvironmentSetupTests: XCTestCase {
     private var directory: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
+        try await super.setUp()
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PythonEnvironmentSetupTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: directory)
+        try await super.tearDown()
     }
 
     private func makeSetup(script: String?, liveRequestsAllowed: Bool = true) throws -> PythonEnvironmentSetup {

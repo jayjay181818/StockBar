@@ -192,3 +192,10 @@ codex-images/
 # Folync/Stockbar compatibility notes (private)
 /stockbarintegrationchangelog.md
 /README_Folync.md
+
+# Stockbar local data that must never be committed: API keys, exported
+# settings (encrypted, but still personal) and test or coverage results.
+.stockbar_config.json
+*.stockbarexport
+*.xcresult
+default.profraw

@@ -26,17 +26,17 @@ Version 2.3.2 is a critical stability release that resolves a crash issue affect
 
 **Resolution**: Implemented comprehensive memory safety improvements:
 
-1. **Weak Reference Captures** ([StockStatusBar.swift:148-178](Stockbar/Stockbar/StockStatusBar.swift#L148-L178))
+1. **Weak Reference Captures** (`StockStatusBar.swift:148-178`)
    - Added `weak realTimeTrade` capture in all Combine subscription closures
    - Prevents retain cycles between controllers and data objects
    - Graceful handling of deallocated objects with guard statements
 
-2. **Proper Cleanup** ([StockStatusBar.swift:137-141](Stockbar/Stockbar/StockStatusBar.swift#L137-L141))
+2. **Proper Cleanup** (`StockStatusBar.swift:137-141`)
    - Added `deinit` method to `StockStatusItemController`
    - Removes all cancellables to prevent memory leaks
    - Ensures proper resource cleanup on deallocation
 
-3. **Defensive Programming** ([StockStatusBar.swift:182-183](Stockbar/Stockbar/StockStatusBar.swift#L182-L183))
+3. **Defensive Programming** (`StockStatusBar.swift:182-183`)
    - Added nil check in `updateDisplay()` method
    - Prevents crashes from calls after deallocation
    - Improves overall stability

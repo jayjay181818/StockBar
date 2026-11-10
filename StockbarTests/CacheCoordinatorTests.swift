@@ -341,9 +341,10 @@ class CacheCoordinatorTests: XCTestCase {
 
         let stats = await cacheCoordinator.getCacheStatistics()
 
-        // Verify stats structure (exact values depend on implementation)
-        XCTAssertNotNil(stats)
-        // Could test for specific counts if statistics method is available
+        XCTAssertEqual(stats.totalCached, 2, "Two symbols have fetched successfully")
+        XCTAssertEqual(stats.freshCount, 1, "AAPL was fetched just now")
+        XCTAssertEqual(stats.freshCount + stats.staleCount + stats.expiredCount, stats.totalCached)
+        XCTAssertEqual(stats.failedCount, 1, "TSLA failed")
     }
 
     // MARK: - Edge Cases

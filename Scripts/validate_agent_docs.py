@@ -50,8 +50,36 @@ def validate(root):
     return errors, warnings, len(instructions), total
 
 
+def version_errors(root):
+    """The version is written in the project, the README and the release notes.
+
+    A release that updates only some of them ships an app whose About box,
+    README and notes disagree.
+    """
+    project = (root / 'Stockbar.xcodeproj/project.pbxproj').read_text(encoding='utf-8')
+    marketing = set(re.findall(r'MARKETING_VERSION = ([0-9.]+);', project))
+    builds = set(re.findall(r'CURRENT_PROJECT_VERSION = ([0-9]+);', project))
+    errors = []
+    if len(marketing) != 1:
+        return [f'project.pbxproj: MARKETING_VERSION differs between configurations: {sorted(marketing)}']
+    if len(builds) != 1:
+        errors.append(f'project.pbxproj: CURRENT_PROJECT_VERSION differs between configurations: {sorted(builds)}')
+    version = marketing.pop()
+    readme = (root / 'README.md').read_text(encoding='utf-8')
+    footer = re.search(r'Last updated: [^·<]*· Version ([0-9.]+)', readme)
+    if not footer or footer.group(1) != version:
+        found = footer.group(1) if footer else 'none'
+        errors.append(f'README.md: footer version is {found}, project is {version}')
+    if not re.search(rf'^### .*Version {re.escape(version)}\b', readme, flags=re.M):
+        errors.append(f'README.md: no release-history entry for version {version}')
+    if not (root / f'Changelogs/release_notes_v{version}.md').exists():
+        errors.append(f'Changelogs/release_notes_v{version}.md is missing')
+    return errors
+
+
 def main():
     errors, warnings, count, total = validate(ROOT)
+    errors += version_errors(ROOT)
     for warning in warnings:
         print(f'WARNING: {warning}')
     for error in errors:

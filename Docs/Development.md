@@ -20,7 +20,8 @@ Run from the repository root. [script/develop.sh](../script/develop.sh) is share
 | `bash script/develop.sh python-tests` | Compile Python syntax with bytecode outside Resources; run offline unit tests |
 | `bash script/develop.sh checks` | SwiftLint, entitlements, Sendable allowlist, code invariants and documentation validation |
 | `bash script/develop.sh docs-check` | Local documentation links, duplicate instruction names and advisory size limits |
-| `bash script/develop.sh analyze` | Xcode static analysis |
+| `bash script/develop.sh build-release` | Release build with signing disabled; CI runs it so the released configuration is always compiled |
+| `bash script/develop.sh coverage` | Full XCTest run with code coverage; prints overall line coverage and the largest files with the least |
 | `bash script/develop.sh acceptance /path/to/manifest.json` | Existing isolated Folync acceptance harness |
 | `bash script/develop.sh run` | Normal signed build and explicit launch |
 
@@ -30,7 +31,7 @@ Run the smallest affected checks first. Broaden for changes to shared behavior o
 
 ## Runtime and test isolation
 
-The build/test commands do not launch the normal app deliberately, but XCTest may launch its configured host. Tests must inject isolated defaults, temporary/in-memory databases and stub providers. `StockbarRuntimeStorage.userDefaults` returns standard defaults outside acceptance; the wrapper itself is not proof of isolation. Set runtime configuration before its first access or use injected dependencies. Existing suite isolation must be checked before claiming a test run cannot affect user data.
+The build/test commands do not launch the normal app deliberately, but XCTest may launch its configured host. Tests must inject isolated defaults, temporary/in-memory databases and stub providers. Under XCTest, `StockbarRuntimeStorage` creates its own temporary root and defaults suite for the process (`xctest-…`) and removes them at exit, so the suite does not read or write the real app's defaults, files or Keychain items. Outside XCTest and acceptance it returns standard defaults. State set through it still carries from one test to the next within a run, so a test that changes a default restores it or uses an injected store.
 
 The acceptance harness requires an existing manifest below the operating-system temporary directory, a mode-0600 token file beside it, and a loopback HTTP endpoint. The Focused tests desktop action requires `STOCKBAR_TEST_FILTER=StockbarTests/ClassName[/methodName]`; use the terminal command when selecting an ad hoc filter. Use `STOCKBAR_ACCEPTANCE_MANIFEST` for the desktop action or pass a manifest path on the command line. It builds a distinct acceptance bundle, disables live providers, isolates storage, and retains preflight/bootstrap evidence. It remains attached while its app runs; the log identifies the PID and evidence root. Startup is only a smoke check: verify the requested behavior before claiming acceptance. Never include tokens in reports.
 
@@ -42,7 +43,7 @@ The app source folder is synchronized into Xcode. New app Swift files compile au
 
 ## Branches, releases and dependencies
 
-Work on a branch and open a pull request into `testing`; do not push to `testing` or `main` directly. CI runs on every pull request to either branch. To release, bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the project, add `Changelogs/release_notes_vX.Y.Z.md`, update the README version and release history, then tag `vX.Y.Z` (annotated) on the merge commit in `testing`. Publish a GitHub release for the tag with the release notes as its body, and bring `main` up to date with a pull request from `testing`.
+Work on a branch and open a pull request into `testing`; do not push to `testing` or `main` directly. CI runs on every pull request to either branch. To release, run `bash script/release.sh X.Y.Z` on a branch: it sets `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in the project and the version line at the foot of the README, and stops if `Changelogs/release_notes_vX.Y.Z.md` or the README release-history entry is missing. `checks` fails when those places disagree. After the pull request is merged, tag `vX.Y.Z` (annotated) on the merge commit in `testing`. Publish a GitHub release for the tag with the release notes as its body, and bring `main` up to date with a pull request from `testing`.
 
 [Dependabot](../.github/dependabot.yml) opens weekly, grouped pull requests into `testing` for GitHub Actions and the pinned Python helper packages. The pins target Stockbar's own environment (Python 3.13; 3.10 is the minimum). The launch-time check reads `name==version` pins and understands only plain `python_version` markers (see `PythonRequirements.swift`). CI runs the Python tests on 3.13; check they pass before merging any helper update. `setup_python_env.sh` downloads a pinned uv when no uv or Python 3.10+ is installed; to update it, change `UV_VERSION` and both `UV_SHA256_*` values together from the release's `.sha256` files, and never remove the checksum check. `Scripts/tests/test_setup_python_env.py` covers the download offline.
 

@@ -164,7 +164,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 | Source | Provides | Credentials |
 |---|---|---|
 | **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider | None |
-| **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in the Keychain |
+| **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in a local settings file only your account can read |
 | **Trading 212** | Read-only linked broker positions, value and P/L | API Key + Secret in the Keychain |
 | **Folync** (self-hosted) | Authoritative portfolio, plus optional history, candles, benchmarks and FX | Client token in the Keychain |
 
@@ -173,7 +173,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 ## 🔒 Privacy and security
 
 - Portfolio data is stored locally (Core Data and Application Support). Market-data requests send ticker symbols (with an API key where the provider needs one) to the providers you configure.
-- Trading 212, Folync, FMP and Twelve Data credentials live in the macOS Keychain. Credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
+- Trading 212 and Folync credentials live in the macOS Keychain. FMP and Twelve Data API keys are kept in a settings file in Application Support that only your account can read, because the Python helper has to read them. Credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
 - Trading 212 access is read-only. Stockbar never places orders, so don't enable *Orders - Execute*.
 - The `uv` download Stockbar's Python setup uses is pinned and checked against a built-in SHA-256.
 
@@ -195,7 +195,7 @@ StockBar uses a hybrid Swift + Python architecture:
 
 - **Swift/AppKit/SwiftUI**: Main app windows, settings, menu bar controllers, portfolio state, Trading 212 provider, broker sync, analytics, diagnostics, and persistence orchestration.
 - **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
-- **Keychain**: Trading 212 credentials, the Folync client token and market-data API keys.
+- **Keychain**: Trading 212 credentials and the Folync client token. Market-data API keys are in a local settings file (see Storage).
 - **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches when the corresponding Folync category is disabled, unavailable with fallback enabled, or the symbol is local-only.
 - **MarketDataProvider path**: yfinance, FMP, and Twelve Data for quotes, watchlists, and history.
 - **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
@@ -291,7 +291,8 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 
 #### Storage
 - **UserDefaults**: non-secret preferences and settings.
-- **Keychain**: Trading 212 API Key/API Secret, the Folync client token and FMP/Twelve Data keys.
+- **Keychain**: Trading 212 API Key/API Secret and the Folync client token.
+- **Settings file** (`.stockbar_config.json`, readable only by your account): FMP and Twelve Data keys and the provider order.
 - **Core Data**: portfolio trades, trading info, historical data, portfolio snapshots.
 - **Broker links**: local broker-link records keyed by broker account and instrument identity.
 - **Folync supplemental cache**: separate atomic Application Support files keyed by endpoint fingerprint, scope, resource, identity, and range. ETag, payload, and receipt time are stored; bearer tokens are never cached.
@@ -348,6 +349,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 
 ```bash
 bash script/develop.sh build          # Debug build, signing disabled, no launch
+bash script/develop.sh build-release  # The same for the Release configuration
 bash script/develop.sh test           # Full XCTest suite
 bash script/develop.sh python-tests   # Offline Python helper tests
 bash script/develop.sh checks         # SwiftLint, entitlements, invariants, docs
@@ -358,14 +360,14 @@ bash script/develop.sh run            # Signed build and launch
 See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rules, the acceptance harness, and the release and dependency-update process.
 
 **Contributing**
-- Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build, test and analyze gates on every PR.
+- Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build and test gates, and a Release build, on every PR.
 - Releases are tagged `vX.Y.Z` on the merged commit.
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- 564 XCTest tests plus offline Python tests run in CI.
+- More than 600 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
