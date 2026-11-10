@@ -162,7 +162,7 @@ No. There is no account, telemetry or analytics. Holdings stay on your Mac.
 
 ### What network connections does it make?
 
-- **Market data** through the Python script: Yahoo Finance (yfinance), plus FMP, Twelve Data and Stooq if configured. Only ticker symbols (and your API key for FMP/Twelve Data) are sent.
+- **Market data** through the Python script: Yahoo Finance (yfinance), plus FMP and Twelve Data if configured. Only ticker symbols (and your API key for FMP/Twelve Data) are sent.
 - **Exchange rates** from exchangerate-api.com.
 - **Trading 212** (read-only) and **your Folync instance**, only if you connect them.
 

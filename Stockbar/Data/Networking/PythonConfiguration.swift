@@ -56,7 +56,9 @@ struct PythonConfiguration: Sendable {
         // than the home directory; the script migrates a legacy file once.
         environment["STOCKBAR_CACHE_FILE"] = StockbarRuntimeStorage.cacheDirectory()
             .appendingPathComponent("quote_cache.json").path
-        let refreshInterval = defaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300
+        let refreshInterval = RefreshService.clampedRefreshInterval(
+            defaults.object(forKey: "refreshInterval") as? TimeInterval
+        )
         environment["STOCKBAR_QUOTE_CACHE_SECONDS"] = String(Int(quoteCacheSeconds(forRefreshInterval: refreshInterval)))
         
         return PythonConfiguration(interpreterPath: path, environment: environment)

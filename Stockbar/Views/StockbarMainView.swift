@@ -1109,7 +1109,12 @@ private struct StockbarDataHealthView: View {
     private func pricesAreStale(now: Date) -> Bool {
         let freshness = priceFreshness
         guard freshness.missingCount == 0, let lastPriceUpdate else { return true }
-        return now.timeIntervalSince(lastPriceUpdate) > max(dataModel.refreshInterval * 2, 600)
+        // Shut exchanges are polled slowly, so their quotes are allowed to be older.
+        let anyExchangeClosed = pricedTrades.contains {
+            RefreshService.isExchangeClosed(for: $0.trade.name, at: now) == true
+        }
+        let closedAllowance = anyExchangeClosed ? RefreshService.closedMarketFreshness * 2 : 0
+        return now.timeIntervalSince(lastPriceUpdate) > max(dataModel.refreshInterval * 2, 600, closedAllowance)
     }
 
     private var refreshIntervalText: String {
