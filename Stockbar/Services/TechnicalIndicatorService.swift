@@ -266,45 +266,4 @@ class TechnicalIndicatorService {
     }
 
     // MARK: - Volatility Indicators
-
-    /// Calculate Average True Range (ATR)
-    /// - Parameters:
-    ///   - data: OHLC data points
-    ///   - period: Number of periods for ATR calculation (default: 14)
-    /// - Returns: Array of (date, ATR) tuples
-    func calculateATR(data: [OHLCDataPoint], period: Int = 14) -> [(Date, Double)] {
-        guard data.count > period else { return [] }
-
-        var trueRanges: [Double] = []
-
-        // Calculate true range for each period
-        for i in 1..<data.count {
-            let high = data[i].high
-            let low = data[i].low
-            let prevClose = data[i - 1].close
-
-            let tr1 = high - low
-            let tr2 = abs(high - prevClose)
-            let tr3 = abs(low - prevClose)
-
-            let trueRange = max(tr1, tr2, tr3)
-            trueRanges.append(trueRange)
-        }
-
-        guard trueRanges.count >= period else { return [] }
-
-        var result: [(Date, Double)] = []
-
-        // Calculate initial ATR (simple average)
-        var atr = trueRanges[0..<period].reduce(0, +) / Double(period)
-        result.append((data[period].timestamp, atr))
-
-        // Calculate smoothed ATR for remaining periods
-        for i in period..<trueRanges.count {
-            atr = (atr * Double(period - 1) + trueRanges[i]) / Double(period)
-            result.append((data[i + 1].timestamp, atr))
-        }
-
-        return result
-    }
 }

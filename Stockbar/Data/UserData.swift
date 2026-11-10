@@ -61,16 +61,6 @@ class RealTimeTrade: Identifiable {
     }
 }
 
-func logToFile(_ message: String) {
-    Task {
-        await Logger.shared.debug(message)
-    }
-}
-
-func emptyTrades(size: Int) -> [Trade] {
-    return [Trade].init(repeating: Trade(name: "", position: Position(unitSize: "1", positionAvgCost: "", currency: nil, costCurrency: nil)), count: size)
-}
-
 func emptyRealTimeTrade() -> RealTimeTrade {
     return RealTimeTrade(trade: Trade(name: "",
                                     position: Position(unitSize: "1",

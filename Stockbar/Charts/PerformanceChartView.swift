@@ -66,7 +66,6 @@ struct PerformanceChartView: View {
     @State private var ohlcRequestGeneration: Int = 0
 
     // Interaction features (v2.3.1)
-    @StateObject private var interactionManager = ChartInteractionManager()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -328,48 +327,6 @@ struct PerformanceChartView: View {
             .frame(maxWidth: 340)
             Spacer()
         }
-    }
-
-    private func chartTypeChip(for type: ChartType, label: String) -> some View {
-        let isSelected = type == selectedChartType
-
-        return Button {
-            withAnimation(StockbarMotion.animation(.easeInOut(duration: 0.15), reduceMotion: reduceMotion)) {
-                selectedChartType = type
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if case .individualStock = type {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                Text(label)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 28)
-            .background(buttonBackground(for: isSelected))
-            .overlay(
-                Capsule()
-                    .stroke(buttonBorderColor(isSelected: isSelected), lineWidth: isSelected ? 1.5 : 1)
-            )
-            .foregroundColor(isSelected ? Color.accentColor : Color.primary)
-            .clipShape(Capsule())
-        }
-        .buttonStyle(PlainButtonStyle())
-        .accessibilityLabel("Show \(label) chart")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    }
-
-    private func buttonBackground(for isSelected: Bool) -> some View {
-        Capsule()
-            .fill(isSelected ? Color.accentColor.opacity(0.12) : StockbarPalette.panelFill)
-    }
-
-    private func buttonBorderColor(isSelected: Bool) -> Color {
-        if isSelected { return Color.accentColor }
-        return Color.primary.opacity(0.25)
     }
     
     // MARK: - Progress Indicator Views
@@ -2067,28 +2024,7 @@ struct PerformanceChartView: View {
         }
     }
     
-    /// Gets change information for a data point relative to the previous point
-    private func getChangeInfo(for dataPoint: ChartDataPoint) -> (absoluteChange: Double, percentChange: Double)? {
-        guard let currentIndex = displayableChartData.firstIndex(where: { $0.id == dataPoint.id }),
-              currentIndex > 0 else { return nil }
-        
-        let previousPoint = displayableChartData[currentIndex - 1]
-        let absoluteChange = dataPoint.value - previousPoint.value
-        let percentChange = previousPoint.value != 0 ? (absoluteChange / previousPoint.value) * 100 : 0
-        
-        return (absoluteChange, percentChange)
-    }
     
-    /// Gets position information for a data point within the dataset
-    private func getPositionInfo(for dataPoint: ChartDataPoint) -> (rank: Int, total: Int, percentile: Double)? {
-        let sortedByValue = displayableChartData.sorted { $0.value > $1.value }
-        guard let rank = sortedByValue.firstIndex(where: { $0.id == dataPoint.id }) else { return nil }
-        
-        let total = sortedByValue.count
-        let percentile = total > 1 ? (1.0 - Double(rank) / Double(total - 1)) * 100 : 100
-        
-        return (rank + 1, total, percentile)
-    }
     
     /// Sets up keyboard shortcuts for chart interactions
     private func setupKeyboardShortcuts() {

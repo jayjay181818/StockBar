@@ -118,12 +118,6 @@ class BackgroundCalculationManager {
         }
     }
     
-    /// Updates data points count
-    func updateDataPointsCount(_ count: Int) {
-        Task { @MainActor in
-            self.dataPointsCount = count
-        }
-    }
     
     /// Completes the calculation
     func completeCalculation() {
@@ -182,10 +176,6 @@ class BackgroundCalculationManager {
         }
     }
     
-    /// Sets the current task for cancellation support
-    func setCurrentTask(_ task: Task<Void, Never>) {
-        currentTask = task
-    }
     
     /// Gets formatted time remaining string
     var formattedTimeRemaining: String {
