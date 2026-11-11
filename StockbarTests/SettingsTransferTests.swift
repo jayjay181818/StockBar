@@ -534,7 +534,14 @@ private final class TransferSide {
         self.recoveryRoot = recoveryRoot
         self.store = store
         service = SettingsTransferService(dependencies: SettingsTransferDependencies(
-            defaults: { UserDefaults(suiteName: suite) ?? .standard },
+            // No fallback to the standard domain: a test that reached it
+            // would rewrite the real settings of whoever runs the tests.
+            defaults: {
+                guard let isolated = UserDefaults(suiteName: suite) else {
+                    preconditionFailure("The test defaults suite could not be opened")
+                }
+                return isolated
+            },
             configuration: configuration,
             trading212Credentials: trading212,
             folyncCredentials: folync,
