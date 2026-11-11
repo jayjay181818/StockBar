@@ -25,8 +25,8 @@ Everything is local:
 | Holdings and preferences | UserDefaults (`com.stockbar`) and Core Data |
 | Price and portfolio history | `~/Library/Application Support/Stockbar/StockbarDataModel.sqlite` |
 | Backups | `~/Library/Application Support/Stockbar/Backups/portfolio_backup_*.json` |
-| Market-data API keys and provider order | `~/Library/Application Support/com.stockbar/.stockbar_config.json` (readable only by your account) |
-| Trading 212 and Folync credentials | Keychain |
+| Provider order | `~/Library/Application Support/com.stockbar/.stockbar_config.json` (readable only by your account) |
+| Market-data API keys, Trading 212 and Folync credentials | Keychain |
 | Quote cache | `~/Library/Caches/stockbar-cache/quote_cache.json` |
 | Logs | `~/Library/Logs/com.stockbar/stockbar.log` |
 
@@ -152,7 +152,7 @@ rm -rf ~/Library/Application\ Support/Stockbar ~/Library/Application\ Support/co
 rm -rf ~/Library/Caches/stockbar-cache ~/Library/Logs/com.stockbar
 ```
 
-Before uninstalling, clear Trading 212 credentials from Settings → Connections. Other saved credentials, including any Folync token, can be removed in Keychain Access.
+Before uninstalling, clear Trading 212 credentials and remove the market-data API keys from Settings → Connections. Other saved credentials, including any Folync token, can be removed in Keychain Access.
 
 ## Privacy and security
 

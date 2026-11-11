@@ -164,7 +164,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 | Source | Provides | Credentials |
 |---|---|---|
 | **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider | None |
-| **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in a local settings file only your account can read |
+| **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in the Keychain |
 | **Trading 212** | Read-only linked broker positions, value and P/L | API Key + Secret in the Keychain |
 | **Folync** (self-hosted) | Authoritative portfolio, plus optional history, candles, benchmarks and FX | Client token in the Keychain |
 
@@ -173,7 +173,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 ## 🔒 Privacy and security
 
 - Portfolio data is stored locally (Core Data and Application Support). Market-data requests send ticker symbols (with an API key where the provider needs one) to the providers you configure.
-- Trading 212 and Folync credentials live in the macOS Keychain. FMP and Twelve Data API keys are kept in a settings file in Application Support that only your account can read, because the Python helper has to read them. Credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
+- Trading 212 and Folync credentials and the FMP and Twelve Data API keys live in the macOS Keychain. The Python helper is handed the two API keys through its environment for each run; keys an earlier version left in the settings file are moved to the Keychain the first time they are needed. Trading 212 and Folync credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
 - Trading 212 access is read-only. Stockbar never places orders, so don't enable *Orders - Execute*.
 - The `uv` download Stockbar's Python setup uses is pinned and checked against a built-in SHA-256.
 
@@ -195,7 +195,7 @@ StockBar uses a hybrid Swift + Python architecture:
 
 - **Swift/AppKit/SwiftUI**: Main app windows, settings, menu bar controllers, portfolio state, Trading 212 provider, broker sync, analytics, diagnostics, and persistence orchestration.
 - **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
-- **Keychain**: Trading 212 credentials and the Folync client token. Market-data API keys are in a local settings file (see Storage).
+- **Keychain**: Trading 212 credentials, the Folync client token and the FMP and Twelve Data API keys.
 - **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches when the corresponding Folync category is disabled, unavailable with fallback enabled, or the symbol is local-only.
 - **MarketDataProvider path**: yfinance, FMP, and Twelve Data for quotes, watchlists, and history.
 - **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
@@ -291,8 +291,8 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 
 #### Storage
 - **UserDefaults**: non-secret preferences and settings.
-- **Keychain**: Trading 212 API Key/API Secret and the Folync client token.
-- **Settings file** (`.stockbar_config.json`, readable only by your account): FMP and Twelve Data keys and the provider order.
+- **Keychain**: Trading 212 API Key/API Secret, the Folync client token and the FMP and Twelve Data API keys.
+- **Settings file** (`.stockbar_config.json`, readable only by your account): the provider order.
 - **Core Data**: portfolio trades, trading info, historical data, portfolio snapshots.
 - **Broker links**: local broker-link records keyed by broker account and instrument identity.
 - **Folync supplemental cache**: separate atomic Application Support files keyed by endpoint fingerprint, scope, resource, identity, and range. ETag, payload, and receipt time are stored; bearer tokens are never cached.
