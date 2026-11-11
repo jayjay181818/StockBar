@@ -899,9 +899,6 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     }
     
     private func buildMenuMetrics(trade: Trade, data: TradingData) -> MenuPopoverMetrics {
-        let displayCandidate = data.displayPrice.isFinite && data.displayPrice > 0 ? data.displayPrice : nil
-        let currentCandidate = data.currentPrice.isFinite && data.currentPrice > 0 ? data.currentPrice : nil
-        let safeDisplay = displayCandidate ?? currentCandidate ?? 0
         let safeUnits = data.units.isFinite ? data.units : 0
         let safeAvgCost = data.avgCost.isFinite ? data.avgCost : 0
         let changeSummary = rollingDayChangeSummary(trade: trade, data: data)

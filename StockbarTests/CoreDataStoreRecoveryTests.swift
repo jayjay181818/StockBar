@@ -288,13 +288,16 @@ final class HistoricalStoreCompactionTests: XCTestCase {
         container.loadPersistentStores { _, error in loadError = error }
         XCTAssertNil(loadError)
         let context = container.newBackgroundContext()
+        // Built here so the block below does not capture the test case.
+        let prices = [price("AAA", daysAgo: 60, hour: 9, price: 1), price("AAA", daysAgo: 60, hour: 16, price: 2),
+                      price("AAA", daysAgo: 5, hour: 9, price: 3), price("GONE", daysAgo: 200, hour: 9)]
+        let portfolios = [portfolio(daysAgo: 120, hour: 9), portfolio(daysAgo: 120, hour: 16)]
 
         try context.performAndWait {
-            for snapshot in [price("AAA", daysAgo: 60, hour: 9, price: 1), price("AAA", daysAgo: 60, hour: 16, price: 2),
-                             price("AAA", daysAgo: 5, hour: 9, price: 3), price("GONE", daysAgo: 200, hour: 9)] {
+            for snapshot in prices {
                 _ = PriceSnapshotEntity.fromPriceSnapshot(snapshot, in: context)
             }
-            for snapshot in [portfolio(daysAgo: 120, hour: 9), portfolio(daysAgo: 120, hour: 16)] {
+            for snapshot in portfolios {
                 _ = PortfolioSnapshotEntity.fromHistoricalPortfolioSnapshot(snapshot, in: context)
             }
             try context.save()
