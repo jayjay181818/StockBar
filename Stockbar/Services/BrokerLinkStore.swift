@@ -2,11 +2,16 @@ import Foundation
 
 enum BrokerLinkStoreError: Error, LocalizedError, Equatable {
     case previewNotReady(String)
+    /// The links file exists but cannot be read as links.
+    case unreadableFile
 
     var errorDescription: String? {
         switch self {
         case .previewNotReady(let reason):
             return reason
+        case .unreadableFile:
+            return "The Trading 212 links file is damaged, so sync is paused and nothing was changed. "
+                + "Restore a backup, or run Preview Import and link the holdings again."
         }
     }
 }
@@ -146,7 +151,11 @@ actor BrokerLinkStore {
         let data = try Data(contentsOf: fileURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(BrokerLinkStoreSnapshot.self, from: data)
+        do {
+            return try decoder.decode(BrokerLinkStoreSnapshot.self, from: data)
+        } catch {
+            throw BrokerLinkStoreError.unreadableFile
+        }
     }
 
     func replaceSnapshot(_ snapshot: BrokerLinkStoreSnapshot) throws {

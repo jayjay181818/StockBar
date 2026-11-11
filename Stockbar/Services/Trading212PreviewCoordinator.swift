@@ -311,7 +311,7 @@ struct Trading212PreviewCoordinator {
         let summary = try await summaryRequest
         let positions = try await positionsRequest
         let instruments = includeMetadata
-            ? await fetchInstruments(credentials: credentials, environment: settings.environment)
+            ? try await fetchInstruments(credentials: credentials, environment: settings.environment)
             : []
         let account = BrokerAccountIdentity.preview(
             broker: "Trading212",
@@ -339,10 +339,13 @@ struct Trading212PreviewCoordinator {
     private func fetchInstruments(
         credentials: Trading212AuthConfiguration,
         environment: Trading212Environment
-    ) async -> [Trading212InstrumentMetadata] {
+    ) async throws -> [Trading212InstrumentMetadata] {
         do {
             return try await provider.instruments(credentials: credentials, environment: environment)
-        } catch Trading212ProviderError.forbidden, Trading212ProviderError.unauthorized {
+        } catch let error as Trading212ProviderError {
+            // Metadata is optional, but "slow down" applies to the whole
+            // account: pass it on so the scheduler waits as asked.
+            if case .rateLimited = error { throw error }
             return []
         } catch {
             return []

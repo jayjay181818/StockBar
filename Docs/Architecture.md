@@ -36,7 +36,7 @@ Three sources coexist and must stay non-destructive to each other:
 ### Python bridge
 - `NetworkService` protocol → `PythonNetworkService`; process spawning isolated in `PythonProcessRunner`; interpreter/env in `PythonConfiguration` (the `pythonInterpreterPath` default, else Stockbar's own `python-env` in Application Support, even before it exists; there is no system-Python fallback). `PythonEnvironmentSetup` builds that environment by running the bundled `setup_python_env.sh` from Settings → Advanced → Python or the missing-package alert; `script/setup_python_env.sh` runs the same script from a checkout.
 - `PythonWorkerPool` keeps up to two `stockbar_worker.py` processes running so `get_stock_data.py` and `get_ohlc_data.py` requests skip interpreter start-up and package imports. The worker runs the script in place with fresh globals and returns its stdout, stderr and exit code, so the script contract below is unchanged. When every worker is busy, or a worker fails, the request runs as its own process. Workers are replaced when the interpreter or environment changes, stopped after a timeout or cancellation, and exit after 15 idle minutes or when the app quits.
-- **Contract: JSON on stdout, human logs on stderr only.** Quotes use `get_stock_data.py --json <symbols…>`; also `--historical`, `--ohlc`, `--batch-ohlc`, `--test-key`. Errors come back as a JSON envelope with `error: true` and `error_code`. (This is JSON parsing, not the old stdout regex.)
+- **Contract: JSON on stdout, human logs on stderr only.** Quotes use `get_stock_data.py --json <symbols…>`; also `--historical` and `--test-key`. Candles come from `get_ohlc_data.py`. Errors come back as a JSON envelope with `error: true` and `error_code`. (This is JSON parsing, not the old stdout regex.)
 - Timeout values and batch sizing live in `Stockbar/Data/Networking/NetworkService.swift`; inspect the relevant operation when changing fetch behavior.
 - Failed fetches return a placeholder `StockFetchResult` with `.nan` prices rather than throwing, so metadata survives.
 - `PythonConfiguration.validateSymbol/sanitizeSymbol` restrict symbols to `A-Z0-9.^=-` to prevent argument injection — route new symbol paths through them.
@@ -46,15 +46,15 @@ Three sources coexist and must stay non-destructive to each other:
 ### UI layer
 - **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over ten sections — Overview, Holdings, Alerts, Charts, Risk, Allocation, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
 - **Menu bar**: `StockMenuBarController` + `StockStatusBar`, one `NSStatusItem` per visible symbol, Combine-driven; also handles external-display polling for status-item visibility.
-- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `VolumeChartView`, `MenuPriceChartView`, `SparklineView`.
+- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `MenuPriceChartView`.
 
 ### Persistence
 | Store | Location | Contents |
 |---|---|---|
 | UserDefaults | `com.stockbar` (via `StockbarRuntimeStorage.userDefaults`) | Trades, preferences, cache timestamps |
 | Core Data | `<App Support>/Stockbar/StockbarDataModel.sqlite` | Historical prices, OHLC, snapshots — model selected by `Stockbar/Data/StockbarDataModel.xcdatamodeld/.xccurrentversion`; data migration flags in `DataMigrationService`; `CoreDataStoreRecovery` handles corrupt stores |
-| Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | FMP + Twelve Data keys, `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path) |
-| Keychain | `com.stockbar.folync`, Trading 212 service | Persistent broker/Folync credentials; acceptance fixtures use a separate restricted token file |
+| Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path); FMP + Twelve Data keys an earlier version wrote here are moved to the Keychain on first use |
+| Keychain | `com.stockbar.folync`, Trading 212 service, `com.stockbar.marketdata` | Persistent broker/Folync credentials and the FMP + Twelve Data keys (`MarketDataKeyStore`, passed to the Python scripts as environment variables per run); acceptance fixtures use a separate restricted token file |
 
 Settings export/import (`SettingsTransferService`) seals an allowlist of defaults (`SettingsTransferKeys`), the config-file keys and Keychain credentials, and for Everything a Core Data copy, into one AES-GCM `.stockbarexport` file (`SettingsTransferContainer`). Imports validate everything first, snapshot the current state, and roll back on failure. `CoreDataStoreTransfer` copies and replaces stores through `replacePersistentStore`, and keeps the live store read-only until relaunch.
 

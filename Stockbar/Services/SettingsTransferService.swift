@@ -32,6 +32,10 @@ struct SettingsTransferDependencies: Sendable {
     var storeHost: (any SettingsTransferStoreHost)?
     var appInfo: SettingsTransferAppInfo
     var now: @Sendable () -> Date = { Date() }
+    /// Largest export file an import reads. The file, its decrypted contents
+    /// and the database inside are each held in memory, so a file far beyond
+    /// any real portfolio is refused before it is read.
+    var maximumImportBytes: Int64 = 1 << 30
 
     static var live: SettingsTransferDependencies {
         SettingsTransferDependencies(
@@ -130,8 +134,10 @@ final class SettingsTransferService: Sendable {
         let configuration: ConfigurationTransferValues
         do {
             configuration = try dependencies.configuration.exportableValues()
+        } catch is MarketDataKeyStoreError {
+            throw SettingsTransferError.credentialUnreadable("market-data API keys")
         } catch {
-            throw SettingsTransferError.credentialUnreadable("market-data API key file")
+            throw SettingsTransferError.backupFailed("Stockbar couldn't read its market-data settings file.")
         }
         let credentials = try readCredentials(fmp: configuration.fmpAPIKey, twelveData: configuration.twelveDataAPIKey)
         let database = type == .everything ? try readDatabase() : nil
@@ -190,14 +196,24 @@ final class SettingsTransferService: Sendable {
                 throw SettingsTransferError.credentialUnreadable("Trading 212 credentials (\(environment.displayName))")
             }
         }
-        if dependencies.folyncCredentials.hasToken() {
+        let folync = dependencies.folyncCredentials
+        if folync.hasToken() {
+            let baseURL = currentFolyncBaseURL()
+            folync.recordServerIfMissing(baseURL)
             do {
-                credentials.folyncClientToken = try dependencies.folyncCredentials.load()
+                credentials.folyncClientToken = try folync.load(for: baseURL)
+            } catch FolyncCredentialStoreError.savedForAnotherServer {
+                // Left out: an import pairs the token with the exported
+                // address, and this token belongs to a different server.
             } catch {
                 throw SettingsTransferError.credentialUnreadable("Folync client token")
             }
         }
         return credentials
+    }
+
+    private func currentFolyncBaseURL() -> String {
+        FolyncSettingsStore(defaults: defaults).load().baseURL
     }
 
     private func readDatabase() throws -> SettingsTransferDatabase {
@@ -226,13 +242,13 @@ final class SettingsTransferService: Sendable {
     /// asking for a password.
     @concurrent
     func checkImportFile(at source: URL) async throws {
-        try SettingsTransferContainer.validateHeader(try Data(contentsOf: source))
+        try SettingsTransferContainer.validateHeader(try readImportFile(at: source))
     }
 
     /// Decrypts and validates everything without changing anything.
     @concurrent
     func prepareImport(from source: URL, password: String) async throws -> PreparedSettingsImport {
-        let data = try Data(contentsOf: source)
+        let data = try readImportFile(at: source)
         var plaintext = try SettingsTransferContainer.open(data, password: password)
         defer { plaintext.zeroBytes() }
         let payload = try SettingsTransferPayload.decode(plaintext)
@@ -240,7 +256,13 @@ final class SettingsTransferService: Sendable {
         guard (payload.manifest.exportType == .everything) == (payload.database != nil) else {
             throw SettingsTransferError.unsupportedContents("its contents don't match its type.")
         }
-        let settings = try Self.validated(payload.settings, allowed: SettingsTransferKeys.settingsKeys)
+        var settings = try Self.validated(payload.settings, allowed: SettingsTransferKeys.settingsKeys)
+        var keepsDestructiveOptionsOff = false
+        for key in SettingsTransferKeys.destructiveOptionKeys
+        where settings.values[key]?.readsAsTrue == true && !defaults.bool(forKey: key) {
+            settings.values[key] = .bool(false)
+            keepsDestructiveOptionsOff = true
+        }
         let credentials = try Self.validated(payload.credentials)
         let priority = Self.validated(priority: payload.dataSourcePriority)
 
@@ -280,6 +302,7 @@ final class SettingsTransferService: Sendable {
             manifest: payload.manifest,
             settingsCount: settings.values.count,
             ignoredSettingsCount: settings.ignored,
+            keepsDestructiveOptionsOff: keepsDestructiveOptionsOff,
             includesDataSourcePriority: priority != nil,
             credentialNames: credentials.names,
             database: summary
@@ -313,7 +336,14 @@ final class SettingsTransferService: Sendable {
             guard kind.accepts(value) else {
                 throw SettingsTransferError.unsupportedContents("a setting has an unexpected type.")
             }
-            kept[key] = value
+            guard let range = SettingsTransferKeys.numberRanges[key] else {
+                kept[key] = value
+                continue
+            }
+            guard let limited = value.limited(to: range) else {
+                throw SettingsTransferError.unsupportedContents("a setting is not a usable number.")
+            }
+            kept[key] = limited
         }
         return (kept, ignored)
     }
@@ -443,8 +473,11 @@ final class SettingsTransferService: Sendable {
                 environment: environment
             )
         }
+        // Runs after the settings are written, so the token is stored for the
+        // imported Folync address. A file that changes the address without
+        // bringing a token leaves the existing token tied to its old server.
         if let token = credentials.folyncClientToken {
-            try dependencies.folyncCredentials.save(token: token)
+            try dependencies.folyncCredentials.save(token: token, for: currentFolyncBaseURL())
         }
     }
 
@@ -457,7 +490,8 @@ final class SettingsTransferService: Sendable {
         var trading212: [Trading212Environment: Trading212AuthConfiguration?] = [:]
         /// Outer nil: not in the file. Inner nil: no token before.
         var folyncToken: String??
-        var configurationFile: Data?
+        var folyncTokenServer: String?
+        var configuration: ConfigurationRollbackState?
         var brokerLinks: Data?
         var includesDatabase = false
         var restoreStoreFrom: URL?
@@ -477,7 +511,13 @@ final class SettingsTransferService: Sendable {
         }
         try captureCredentials(for: prepared.credentials, into: &state)
         do {
-            state.configurationFile = try dependencies.configuration.configurationFileContents()
+            state.configuration = try dependencies.configuration.rollbackState()
+        } catch is MarketDataKeyStoreError {
+            throw SettingsTransferError.credentialUnreadable("current market-data API keys")
+        } catch {
+            throw SettingsTransferError.backupFailed("Stockbar couldn't read the current settings files.")
+        }
+        do {
             if prepared.includesDatabase {
                 state.includesDatabase = true
                 let url = dependencies.brokerLinksURL
@@ -491,6 +531,9 @@ final class SettingsTransferService: Sendable {
 
     /// Current values of the Keychain credentials the file will replace.
     private func captureCredentials(for imported: SettingsTransferCredentials, into state: inout RollbackState) throws {
+        // A token from an earlier version has no server recorded. Record the
+        // address in use now, before the import can replace it.
+        dependencies.folyncCredentials.recordServerIfMissing(currentFolyncBaseURL())
         let trading212 = dependencies.trading212Credentials
         for environment in Trading212Environment.allCases where imported.trading212[environment.rawValue] != nil {
             guard trading212.hasCredentials(environment: environment) else {
@@ -510,6 +553,7 @@ final class SettingsTransferService: Sendable {
         }
         do {
             state.folyncToken = .some(try dependencies.folyncCredentials.load())
+            state.folyncTokenServer = try dependencies.folyncCredentials.savedServer()
         } catch {
             throw SettingsTransferError.credentialUnreadable("current Folync client token")
         }
@@ -526,10 +570,12 @@ final class SettingsTransferService: Sendable {
             }
         }
         complete = restoreCredentials(state) && complete
-        do {
-            try dependencies.configuration.restoreConfigurationFile(state.configurationFile)
-        } catch {
-            complete = false
+        if let configuration = state.configuration {
+            do {
+                try dependencies.configuration.restore(configuration)
+            } catch {
+                complete = false
+            }
         }
         if state.includesDatabase {
             do {
@@ -564,7 +610,7 @@ final class SettingsTransferService: Sendable {
         if let previous = state.folyncToken {
             do {
                 if let previous {
-                    try dependencies.folyncCredentials.save(token: previous)
+                    try dependencies.folyncCredentials.save(token: previous, server: state.folyncTokenServer)
                 } else {
                     try dependencies.folyncCredentials.delete()
                 }
@@ -576,6 +622,19 @@ final class SettingsTransferService: Sendable {
     }
 
     // MARK: - Files
+
+    /// Removes database copies left behind when Stockbar quit or crashed in
+    /// the middle of an export or import. Called once at launch, before either
+    /// can start.
+    func removeLeftoverStagedFiles() {
+        let fileManager = FileManager.default
+        guard let leftovers = try? fileManager.contentsOfDirectory(
+            at: dependencies.stagingRoot, includingPropertiesForKeys: nil
+        ) else { return }
+        for url in leftovers {
+            try? fileManager.removeItem(at: url)
+        }
+    }
 
     private func makeStagingDirectory() throws -> URL {
         let directory = dependencies.stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -599,5 +658,15 @@ final class SettingsTransferService: Sendable {
 
     private static func fileSize(of url: URL) -> Int64 {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    /// The export file's bytes, refused when it is larger than an import can hold in memory.
+    private func readImportFile(at source: URL) throws -> Data {
+        let limit = dependencies.maximumImportBytes
+        guard Self.fileSize(of: source) <= limit else {
+            let size = ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)
+            throw SettingsTransferError.unsupportedContents("the file is larger than \(size), the most Stockbar can import.")
+        }
+        return try Data(contentsOf: source, options: .mappedIfSafe)
     }
 }

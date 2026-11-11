@@ -23,7 +23,7 @@ enum FolyncConnectionState: Equatable {
         case .stale(let asOf, let reasons):
             return "Stale\(asOf.map { " as of \($0)" } ?? ""): \(reasons.joined(separator: ", "))"
         case .rebuilding(_, let reasons): return "Folync is rebuilding: \(reasons.joined(separator: ", "))"
-        case .offlineCached(let message): return "Offline — showing last Folync data. \(message)"
+        case .offlineCached(let message): return "Showing the last Folync data. \(message)"
         case .unauthorized: return "Folync access token was rejected."
         case .rateLimited(let retryAfter):
             return FolyncPortfolioSourceError.rateLimited(retryAfter: retryAfter).errorDescription
@@ -42,9 +42,12 @@ struct FolyncSessionDependencies {
     var supplementalCoordinator: FolyncSupplementalCoordinator
     var urlSession: URLSession
     var providerPolicy: StockbarProviderAccessPolicy
+    /// The stored token, if it was saved for the server in the saved settings.
     var loadToken: @Sendable () async -> String?
-    var saveToken: @Sendable (String) throws -> Void
+    /// Stores a token for the server at the given base URL.
+    var saveToken: @Sendable (_ token: String, _ baseURL: String) throws -> Void
     var hasToken: @Sendable () async -> Bool
+    var deleteToken: @Sendable () async throws -> Void = {}
     /// How long the first token read may take before the status says Stockbar
     /// is waiting for Keychain access.
     var keychainWaitNoticeDelay: TimeInterval = 2
@@ -58,15 +61,22 @@ struct FolyncSessionDependencies {
         providerPolicy: .current,
         loadToken: {
             await Task.detached(priority: .userInitiated) {
-                try? FolyncCredentialStore.shared.load()
+                let baseURL = FolyncSettingsStore.shared.load().baseURL
+                FolyncCredentialStore.shared.recordServerIfMissing(baseURL)
+                return try? FolyncCredentialStore.shared.load(for: baseURL)
             }.value
         },
-        saveToken: { token in
-            try FolyncCredentialStore.shared.save(token: token)
+        saveToken: { token, baseURL in
+            try FolyncCredentialStore.shared.save(token: token, for: baseURL)
         },
         hasToken: {
             await Task.detached(priority: .userInitiated) {
                 FolyncCredentialStore.shared.hasToken()
+            }.value
+        },
+        deleteToken: {
+            try await Task.detached(priority: .userInitiated) {
+                try FolyncCredentialStore.shared.delete()
             }.value
         }
     )
@@ -94,10 +104,35 @@ extension DataModel {
         await folyncSessionDependencies.hasToken()
     }
 
-    private func resolveFolyncToken(_ candidate: String) async throws -> (token: String, isNewToken: Bool) {
+    /// Whether the stored token belongs to the server at `baseURL`. The token is
+    /// kept for the server in the saved settings.
+    func storedFolyncTokenApplies(to baseURL: URL?) -> Bool {
+        guard let baseURL, let requested = FolyncCredentialStore.server(of: baseURL.absoluteString) else {
+            return false
+        }
+        let savedBaseURL = folyncSessionDependencies.settingsStore.load().baseURL
+        return requested == FolyncCredentialStore.server(of: savedBaseURL)
+    }
+
+    /// Stops using Folync and deletes the token from the Keychain.
+    func removeStoredFolyncToken() async throws {
+        deactivateFolyncPortfolio()
+        try await folyncSessionDependencies.deleteToken()
+    }
+
+    /// A typed token is always used. The stored one is only reused for the
+    /// server it was saved for, so pointing Stockbar at a new server with the
+    /// token field left blank never sends the existing token there.
+    private func resolveFolyncToken(
+        _ candidate: String,
+        baseURL: URL
+    ) async throws -> (token: String, isNewToken: Bool) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             return (trimmed, true)
+        }
+        guard storedFolyncTokenApplies(to: baseURL) else {
+            throw FolyncPortfolioSourceError.missingToken
         }
         if let stored = await folyncSessionDependencies.loadToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
            !stored.isEmpty {
@@ -113,7 +148,7 @@ extension DataModel {
             folyncConnectionState = previousState
             folyncCapabilities = previousCapabilities
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -131,7 +166,7 @@ extension DataModel {
             folyncConnectionState = previousState
             folyncCapabilities = previousCapabilities
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -153,7 +188,7 @@ extension DataModel {
                 folyncConnectionState = previousState
             }
         }
-        let resolved = try await resolveFolyncToken(token)
+        let resolved = try await resolveFolyncToken(token, baseURL: baseURL)
         let deps = folyncSessionDependencies
         let source = try FolyncPortfolioSource(
             baseURL: baseURL,
@@ -171,7 +206,7 @@ extension DataModel {
         }
         let capabilities = try? await source.fetchCapabilities()
         if resolved.isNewToken {
-            try deps.saveToken(resolved.token)
+            try deps.saveToken(resolved.token, baseURL.absoluteString)
         }
         // A successful hot reconfiguration establishes a new cache/overlay
         // identity. Remove only in-memory overlays from the previous endpoint
@@ -292,6 +327,16 @@ extension DataModel {
                     self.scheduleFolyncCheck(at: backoff, isCatchUp: false)
                     return
                 }
+                // No network at all: a poll can only fail, so wait for the
+                // next minute instead. A Folync on this Mac is still asked.
+                if !ConnectivityMonitor.shared.isConnected,
+                   let url = URL(string: self.folyncSessionDependencies.settingsStore.load().baseURL),
+                   !FolyncRefreshSchedule.isLoopback(url) {
+                    self.scheduleFolyncCheck(
+                        at: FolyncRefreshSchedule.nextRegularCheck(after: Date()), isCatchUp: false
+                    )
+                    return
+                }
                 await self.refreshFolyncPortfolio(allowCatchUp: !isCatchUp)
             }
         }
@@ -334,8 +379,6 @@ extension DataModel {
             let startedAt = Date()
             let token = await deps.loadToken()
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
-            await Logger.shared.info("Folync poll started at \(startedAt.ISO8601Format())")
-            guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             var succeeded = false
             if let token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 succeeded = await refreshFolyncPortfolio(
@@ -346,6 +389,7 @@ extension DataModel {
                 )
             } else {
                 markFolyncRefreshFailure(FolyncPortfolioSourceError.missingToken)
+                noteFolyncPollFailure(FolyncPortfolioSourceError.missingToken)
             }
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return }
             let completedAt = Date()
@@ -359,10 +403,36 @@ extension DataModel {
             let next = catchUp ? completedAt.addingTimeInterval(FolyncRefreshSchedule.catchUpDelay)
                 : max(regular, folyncBackoffUntil ?? regular)
             scheduleFolyncCheck(at: next, isCatchUp: catchUp)
-            await Logger.shared.info("Folync poll completed: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp), backoff=\(isFolyncBackingOff)")
+            await logFolyncPollOutcome(succeeded: succeeded, next: next)
+            await Logger.shared.debug("Folync poll: success=\(succeeded), providerSync=\(providerSyncAt?.ISO8601Format() ?? "unknown"), next=\(next.ISO8601Format()), catchUp=\(catchUp), backoff=\(isFolyncBackingOff)")
         }
         folyncRefreshTask = task
         await task.value
+    }
+
+    private func noteFolyncPollFailure(_ error: Error) {
+        folyncConsecutivePollFailures += 1
+        folyncLastPollFailureCategory = FolyncRefreshSchedule.failureCategory(error)
+    }
+
+    /// One line when polling starts to fail and one when it works again. A
+    /// pair of lines for every poll was more than half of the log.
+    private func logFolyncPollOutcome(succeeded: Bool, next: Date) async {
+        if succeeded {
+            let failures = folyncConsecutivePollFailures
+            folyncConsecutivePollFailures = 0
+            folyncLastPollFailureCategory = nil
+            if failures > 0 {
+                await Logger.shared.info("Folync poll recovered after \(failures) failed poll\(failures == 1 ? "" : "s")")
+            }
+            return
+        }
+        let category = folyncLastPollFailureCategory ?? "other"
+        if folyncConsecutivePollFailures == 1 {
+            await Logger.shared.warning("Folync poll failed (\(category)); next try \(next.ISO8601Format())")
+        } else {
+            await Logger.shared.debug("Folync poll failed again (\(category)), \(folyncConsecutivePollFailures) in a row; next try \(next.ISO8601Format())")
+        }
     }
 
     private func refreshFolyncPortfolio(
@@ -372,12 +442,16 @@ extension DataModel {
         generation: UUID
     ) async -> Bool {
         let deps = folyncSessionDependencies
-        folyncConnectionState = .connecting
+        // With data on screen the status keeps saying how fresh it is; showing
+        // "Connecting…" for a moment every minute only made it flicker.
+        if folyncPortfolioSnapshot == nil {
+            folyncConnectionState = .connecting
+        }
         if folyncETag == nil {
             if let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
-                applyFolyncSnapshot(cached.snapshot)
+                applyFolyncSnapshot(cached.snapshot, evaluatingAlerts: false)
             } else {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
@@ -421,21 +495,28 @@ extension DataModel {
                let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
-                applyFolyncSnapshot(cached.snapshot)
+                applyFolyncSnapshot(cached.snapshot, evaluatingAlerts: false)
             } else {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
             markFolyncRefreshFailure(error)
+            noteFolyncPollFailure(error)
             let now = Date()
             let backoff = await deps.supplementalCoordinator.recordBackoff(after: error, at: now)
                 ?? FolyncRefreshSchedule.backoff(after: error, at: now)
+                ?? FolyncRefreshSchedule.repeatedFailureBackoff(
+                    consecutiveFailures: folyncConsecutivePollFailures, at: now
+                )
             guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             folyncBackoffUntil = backoff
             return false
         }
     }
 
-    func applyFolyncSnapshot(_ snapshot: FolyncPortfolioSnapshot) {
+    /// `evaluatingAlerts` is false for a snapshot read back from disk: its
+    /// prices are as old as the last run, and an alert on them would announce
+    /// a crossing that may no longer hold.
+    func applyFolyncSnapshot(_ snapshot: FolyncPortfolioSnapshot, evaluatingAlerts: Bool = true) {
         if legacyPortfolioTrades == nil {
             legacyPortfolioTrades = realTimeTrades
         }
@@ -452,7 +533,9 @@ extension DataModel {
             preserving: legacyPortfolioTrades ?? [],
             overlays: folyncSessionDependencies.overlayStore.load()
         )
-        evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
+        if evaluatingAlerts {
+            evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
+        }
     }
 
     func updateFolyncSupplementalSettings(_ supplemental: FolyncSupplementalSettings) async {
@@ -666,6 +749,8 @@ extension DataModel {
         folyncLastCheckedAt = nil
         folyncNextCheckAt = nil
         folyncBackoffUntil = nil
+        folyncConsecutivePollFailures = 0
+        folyncLastPollFailureCategory = nil
         restoreFolyncBenchmarkOverlays()
         currencyConverter.deactivateFolyncOverlay()
         folyncRefreshTimer?.invalidate()
@@ -691,7 +776,7 @@ extension DataModel {
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         Task { await deps.supplementalCoordinator.clearInMemoryState() }
         if persistSetting {
-            restartTrading212LinkedSyncScheduler()
+            restartTrading212LinkedSyncScheduler(keepBackoff: true)
         }
     }
 

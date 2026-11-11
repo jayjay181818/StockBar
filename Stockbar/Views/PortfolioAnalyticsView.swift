@@ -19,10 +19,15 @@ struct PortfolioAnalyticsView: View {
     @State private var sectorAllocations: [SectorAnalysisService.SectorAllocation] = []
     @State private var diversificationAnalysis: SectorAnalysisService.DiversificationAnalysis?
     @State private var topCorrelations: [CorrelationMatrixService.CorrelationPair] = []
+    /// Holdings left out of the correlation for too little shared history.
+    @State private var correlationExcluded: [String] = []
     @State private var bottomCorrelations: [CorrelationMatrixService.CorrelationPair] = []
     @State private var showAttributionSheet = false
     @State private var analyticsCurrency = "USD"
     @State private var analyticsCoverage = 0
+    /// Holdings that should have been valued; more than `analyticsCoverage`
+    /// when a price or exchange rate is missing.
+    @State private var analyticsEligible = 0
     @State private var completeDayCoverage = false
     @State private var analyticsRevision = 0
     /// Bumped by portfolio updates; the debounced `.task(id:)` below reacts to it.
@@ -110,6 +115,8 @@ struct PortfolioAnalyticsView: View {
         }
         .sheet(isPresented: $showAttributionSheet) {
             AttributionAnalysisView(dataModel: dataModel)
+                .padding(.top, 16)
+                .frame(minWidth: 720, idealWidth: 860, minHeight: 560, idealHeight: 680)
         }
         // One task for every trigger. SwiftUI cancels the previous run when the id changes, and the
         // sleep debounces bursts of price updates. The first calculation runs immediately, and
@@ -156,10 +163,20 @@ struct PortfolioAnalyticsView: View {
                 .font(.headline)
 
             if sectorAllocations.isEmpty {
-                Text("No sector data available")
+                Text(analyticsEligible > 0
+                     ? "Sector allocation needs a price and exchange rate for at least one holding."
+                     : "No sector data available")
                     .foregroundColor(.secondary)
                     .padding()
             } else {
+                if analyticsCoverage < analyticsEligible {
+                    Label(
+                        "Based on \(analyticsCoverage) of \(analyticsEligible) holdings. The rest have no price or exchange rate yet, so the percentages are of the valued part only.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
                 // Pie Chart
                 Chart(sectorAllocations) { allocation in
                     SectorMark(
@@ -195,7 +212,8 @@ struct PortfolioAnalyticsView: View {
                             Spacer()
 
                             VStack(alignment: .trailing, spacing: 2) {
-                                Text("\(analyticsCurrency) \(allocation.totalValue, specifier: "%.2f")")
+                                Text(HoldingsCurrencyFormatter.amount(allocation.totalValue, currency: analyticsCurrency))
+                                    .monospacedDigit()
                                     .font(.subheadline)
                                     .fontWeight(.medium)
 
@@ -215,7 +233,7 @@ struct PortfolioAnalyticsView: View {
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
-                        .background(Color.gray.opacity(0.05))
+                        .background(StockbarPalette.faintFill)
                         .cornerRadius(6)
                     }
                 }
@@ -291,7 +309,7 @@ struct PortfolioAnalyticsView: View {
                         }
                     }
                     .padding()
-                    .background(Color.gray.opacity(0.05))
+                    .background(StockbarPalette.faintFill)
                     .cornerRadius(8)
                 }
             } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
@@ -310,18 +328,24 @@ struct PortfolioAnalyticsView: View {
 
     private var correlationMatrixSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Correlation Matrix")
+            Text("Correlation Summary")
                 .font(.headline)
 
             if let matrix = correlationMatrix {
                 // Correlation Summary
-                Text("Correlation matrix calculated for \(matrix.symbols.count) symbols")
+                Text("Calculated across \(matrix.symbols.count) holdings")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
                 Text("Based on the last \(selectedTimeRange.correlationLookbackDays) days of shared price history.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                if !correlationExcluded.isEmpty {
+                    Text("Left out for having too little shared price history: \(correlationExcluded.joined(separator: ", ")).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
 
                 if let metrics = diversificationMetrics {
                     HStack(spacing: 20) {
@@ -464,7 +488,7 @@ struct PortfolioAnalyticsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
-        .background(Color.gray.opacity(0.05))
+        .background(StockbarPalette.faintFill)
         .cornerRadius(8)
     }
 
@@ -585,7 +609,10 @@ struct PortfolioAnalyticsView: View {
 
         await MainActor.run {
             guard self.analyticsRevision == revision else { return }
-            self.sectorAllocations = completeCoverage ? sectors : []
+            // Show what could be valued and say what is missing, rather than
+            // blanking the whole section because one holding has no price yet.
+            self.sectorAllocations = sectors
+            self.analyticsEligible = eligibleCount
             self.diversificationAnalysis = completeCoverage ? diversification : nil
             self.analyticsCurrency = preferredCurrency
             self.analyticsCoverage = covered
@@ -600,7 +627,9 @@ struct PortfolioAnalyticsView: View {
             .map { $0.trade.name }
 
         let historicalData = fetchHistoricalDataForCorrelation(symbols: symbols)
-        let aligned = CorrelationMatrixService.alignedDailyReturns(from: historicalData)
+        let aligned = CorrelationMatrixService.alignedDailyReturns(
+            from: historicalData, minimumCommonDays: Self.minimumCorrelationDays
+        )
         guard aligned.commonDays >= Self.minimumCorrelationDays, aligned.returns.count > 1 else {
             await MainActor.run {
                 guard self.analyticsRevision == revision else { return }
@@ -608,6 +637,7 @@ struct PortfolioAnalyticsView: View {
                 self.diversificationMetrics = nil
                 self.topCorrelations = []
                 self.bottomCorrelations = []
+                self.correlationExcluded = []
             }
             return
         }
@@ -636,6 +666,7 @@ struct PortfolioAnalyticsView: View {
             self.diversificationMetrics = metrics
             self.topCorrelations = top
             self.bottomCorrelations = bottom
+            self.correlationExcluded = aligned.excluded
         }
     }
 
@@ -689,59 +720,12 @@ struct PortfolioAnalyticsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            // Attribution summary cards - clickable
-            HStack(spacing: 12) {
-                Button(action: {
-                    showAttributionSheet = true
-                }) {
-                    summaryCard(
-                        title: "Top Contributor",
-                        value: "View Analysis",
-                        color: .green
-                    )
-                }
-                .buttonStyle(.plain)
-
-                Button(action: {
-                    showAttributionSheet = true
-                }) {
-                    summaryCard(
-                        title: "Sector Attribution",
-                        value: "View Breakdown",
-                        color: .blue
-                    )
-                }
-                .buttonStyle(.plain)
-
-                Button(action: {
-                    showAttributionSheet = true
-                }) {
-                    summaryCard(
-                        title: "TWR vs MWR",
-                        value: "Compare Returns",
-                        color: .orange
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func summaryCard(title: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+            // Says what the sheet holds. Three "cards" stood here before, each
+            // looking like a figure but showing none and opening the same sheet.
+            Text("Includes top contributors, sector attribution, and time-weighted against money-weighted return.")
                 .font(.caption)
                 .foregroundColor(.secondary)
-
-            Text(value)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(color)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(8)
     }
 }
 

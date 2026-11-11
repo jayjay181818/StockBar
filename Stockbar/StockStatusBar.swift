@@ -38,23 +38,6 @@ struct TradingData {
         }
     }
     
-    func marketStateIndicator(useEmoji: Bool) -> String {
-        if useEmoji {
-            switch marketState {
-            case "PRE": return "🔆"      // Bright sun for pre-market
-            case "POST": return "🌙"     // Moon for after-hours
-            case "CLOSED": return "🔒"   // Lock for closed
-            default: return ""
-            }
-        } else {
-            switch marketState {
-            case "PRE": return "PRE"
-            case "POST": return "AH"
-            case "CLOSED": return "CLOSED"
-            default: return ""
-            }
-        }
-    }
 }
 
 enum StatusItemAccessibility {
@@ -75,6 +58,40 @@ enum StatusButtonClickPolicy {
         guard let buttonWindow else { return false }
         if let eventWindow { return eventWindow === buttonWindow }
         return buttonWindow.frame.contains(mouseLocation)
+    }
+}
+
+/// The ways a status-item popover closes besides a click elsewhere.
+@MainActor
+enum PopoverDismissal {
+    static func isEscape(_ event: NSEvent) -> Bool {
+        event.keyCode == 53 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+    }
+
+    /// A popover left open on another Space would be stranded there.
+    static func observeSpaceChange(_ handler: @escaping @MainActor () -> Void) -> NSObjectProtocol {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { handler() }
+        }
+    }
+
+    static func stopObserving(_ observer: inout NSObjectProtocol?) {
+        if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        observer = nil
+    }
+}
+
+/// Decides when a menu-bar price is old enough to be marked as such.
+enum MenuBarStaleness {
+    /// Quotes are refetched at least every `refreshInterval`, or every half
+    /// hour while the market is closed, so a healthy price is never much older
+    /// than that. Beyond two and a half times it, refreshes are failing.
+    static func isStale(lastUpdate: Date?, now: Date, refreshInterval: TimeInterval) -> Bool {
+        guard let lastUpdate else { return false }
+        let expected = max(refreshInterval, RefreshService.closedMarketFreshness)
+        return now.timeIntervalSince(lastUpdate) > expected * 2.5
     }
 }
 
@@ -143,6 +160,8 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private var portfolioActions = PortfolioMenuActions.noop
     private var popoverGlobalMonitor: Any?
     private var popoverLocalMonitor: Any?
+    private var popoverSpaceObserver: NSObjectProtocol?
+    private var stalenessTimer: Timer?
     private let mainPopoverSize = NSSize(width: 330, height: 410)
 
     // MARK: - Initialization
@@ -168,6 +187,14 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         let statusItemVisible = mainStatusItem?.isVisible ?? false
         let hasButton = mainStatusItem?.button != nil
         Task { await Logger.shared.debug("🔧 MENU BAR: Main status item created, visible: \(statusItemVisible), button: \(hasButton)") }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.symbolStatusItems.forEach { $0.refreshStaleness() }
+            }
+        }
+        timer.tolerance = 20
+        stalenessTimer = timer
 
         MenuBarContentUpdates.effectiveContentPublisher(dataModel.tradeContentPublisher)
             .receive(on: DispatchQueue.main)
@@ -228,18 +255,12 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         portfolioActions = PortfolioMenuActions(refresh: refresh, preferences: preferences, quit: quit, openApp: openApp)
     }
     
-    func removeAllSymbolItems() {
-        for controller in symbolStatusItems {
-            NSStatusBar.system.removeStatusItem(controller.item)
-        }
-        symbolStatusItems.removeAll()
-        symbolItemByKey.removeAll()
-    }
     
     func syncSymbolItems(with realTimeTrades: [RealTimeTrade], dataModel: DataModel, isVisible: Bool = true) {
         let desiredKeys = Set(realTimeTrades.map { symbolItemKey(for: $0) })
 
         for (key, controller) in symbolItemByKey where !desiredKeys.contains(key) {
+            controller.tearDown()
             NSStatusBar.system.removeStatusItem(controller.item)
             symbolItemByKey[key] = nil
         }
@@ -254,11 +275,11 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             guard seenKeys.insert(key).inserted else { continue }
             if let existing = symbolItemByKey[key] {
                 existing.update(realTimeTrade: trade)
-                existing.item.isVisible = isVisible
+                existing.setVisible(isVisible)
                 orderedControllers.append(existing)
             } else {
                 let controller = StockStatusItemController(realTimeTrade: trade, dataModel: dataModel)
-                controller.item.isVisible = isVisible
+                controller.setVisible(isVisible)
                 symbolItemByKey[key] = controller
                 orderedControllers.append(controller)
             }
@@ -268,11 +289,6 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         logSymbolItemState()
     }
     
-    func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
-        let controller = StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel)
-        symbolStatusItems.append(controller)
-        symbolItemByKey[symbolItemKey(for: realTimeTrade)] = controller
-    }
 
     private func symbolItemKey(for realTimeTrade: RealTimeTrade) -> String {
         (realTimeTrade.sourceIdentity ?? realTimeTrade.trade.name)
@@ -304,16 +320,12 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         }
     }
     
-    func mainItem() -> NSStatusItem? {
-        mainStatusItem
-    }
     
     private func updateMainStatusItem(with trades: [RealTimeTrade]) {
         guard let button = mainStatusItem?.button else { return }
         let settings = dataModel.portfolioMenuBarDisplaySettings
         guard settings.isEnabled else {
-            button.title = "Stockbar"
-            button.attributedTitle = NSAttributedString(string: "Stockbar")
+            showPlaceholderTitle(on: button)
             return
         }
 
@@ -327,8 +339,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             range: .day,
             chartChange: chartChange
         ) else {
-            button.title = "Stockbar"
-            button.attributedTitle = NSAttributedString(string: "Stockbar")
+            showPlaceholderTitle(on: button)
             return
         }
         let dayGain = dayChange.value
@@ -342,25 +353,37 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
 
         // Honour the colour-coding preference; an unchanged day is neutral.
         let dayColor: NSColor
-        if !dataModel.showColorCoding || dayGain == 0 || !dayGain.isFinite {
+        let shownDayGain = MenuBarFormattingService.roundedForDisplay(
+            dayGain, decimalPlaces: max(0, min(settings.decimalPlaces, 4))
+        )
+        if !dataModel.showColorCoding || shownDayGain == 0 {
             dayColor = .labelColor
         } else {
-            dayColor = dayGain > 0 ? .systemGreen : .systemRed
+            dayColor = shownDayGain > 0 ? .systemGreen : .systemRed
         }
 
-        Task { await Logger.shared.debug("🔧 PORTFOLIO: Updating main status item - dayGain: \(dayGain), combined: \(combined)") }
-
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.menuBarFont(ofSize: 0),
+            .font: MenuBarFormattingService.titleFont,
             .foregroundColor: dayColor
         ]
 
         let attributed = NSAttributedString(string: combined, attributes: attributes)
         button.toolTip = "Portfolio value and today's change (\(summary.currency)). Click for details."
         // Colour must not be the only signal for direction.
-        button.setAccessibilityLabel("Portfolio \(combined), today \(StatusItemAccessibility.direction(of: dayGain))")
+        button.setAccessibilityLabel("Portfolio \(combined), today \(StatusItemAccessibility.direction(of: shownDayGain))")
         button.attributedTitle = attributed
         button.attributedAlternateTitle = attributed
+    }
+
+    /// The plain "Stockbar" title. The tooltip, alternate title and accessibility
+    /// label are reset too, or they would keep announcing the last portfolio
+    /// value after the user turned the display off.
+    private func showPlaceholderTitle(on button: NSStatusBarButton) {
+        button.title = "Stockbar"
+        button.attributedTitle = NSAttributedString(string: "Stockbar")
+        button.attributedAlternateTitle = NSAttributedString(string: "Stockbar")
+        button.toolTip = "Stockbar. Click for details."
+        button.setAccessibilityLabel("Stockbar")
     }
 
     private func rollingPortfolioDayChange(
@@ -380,6 +403,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             range: range,
             now: now
         )
+        // The popover applies the same test. With only an hour or two of
+        // history the change would cover that hour, not the day, so the title
+        // falls back to the previous-close figure as the popover does.
+        guard PortfolioMenuChartDataBuilder.coversRange(chartPoints, range: range, now: now) else { return nil }
         return PortfolioMenuChartDataBuilder.rangeChange(for: chartPoints)
     }
 
@@ -434,16 +461,28 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             self.stopMainPopoverEventMonitors()
         }
         
-        popoverLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        popoverLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self, self.mainPopover?.isShown == true,
                   let popoverWindow = self.mainPopover?.contentViewController?.view.window else {
                 return event
+            }
+            if event.type == .keyDown {
+                guard PopoverDismissal.isEscape(event) else { return event }
+                self.mainPopover?.performClose(nil)
+                self.stopMainPopoverEventMonitors()
+                return nil
             }
             if event.window != popoverWindow, !self.isMainStatusButtonEvent(event) {
                 self.mainPopover?.performClose(nil)
                 self.stopMainPopoverEventMonitors()
             }
             return event
+        }
+
+        popoverSpaceObserver = PopoverDismissal.observeSpaceChange { [weak self] in
+            guard let self, self.mainPopover?.isShown == true else { return }
+            self.mainPopover?.performClose(nil)
+            self.stopMainPopoverEventMonitors()
         }
     }
 
@@ -464,6 +503,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             NSEvent.removeMonitor(monitor)
             popoverLocalMonitor = nil
         }
+        PopoverDismissal.stopObserving(&popoverSpaceObserver)
     }
 
     private func actionsForCurrentPortfolioPopover() -> PortfolioMenuActions {
@@ -537,10 +577,18 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
     private var detailPopover: NSPopover?
     private var popoverGlobalMonitor: Any?
     private var popoverLocalMonitor: Any?
+    private var popoverSpaceObserver: NSObjectProtocol?
     private let popoverSize = NSSize(width: 330, height: 410)
     private let formattingService = MenuBarFormattingService()
     private var titleUpdateCounter = 0
     private var suspensionNotice: String?
+    /// When the price on the title was fetched, and the tooltip and spoken
+    /// label that go with it while it is current.
+    private var titlePriceDate: Date?
+    private var displayUpdatePending = false
+    private var displayUpdateSkipped = false
+    private var currentToolTip = ""
+    private var currentAccessibilityLabel = ""
     
     // MARK: - Initialization
     init(realTimeTrade: RealTimeTrade, dataModel: DataModel) {
@@ -571,6 +619,14 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
     deinit {}
 
+    /// Closes the popover and drops the event monitors and subscriptions of an
+    /// item that is being removed; otherwise they outlive it.
+    func tearDown() {
+        detailPopover?.performClose(nil)
+        stopPopoverEventMonitors()
+        cancellables.removeAll()
+    }
+
     private static func autosaveName(for symbol: String) -> String {
         let stableSymbol = symbol
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -581,7 +637,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
     func update(realTimeTrade: RealTimeTrade) {
         guard self.realTimeTrade !== realTimeTrade else {
-            updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+            scheduleDisplayUpdate()
             return
         }
 
@@ -591,7 +647,32 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         // ticker-only fallback makes variable-width status items visibly shift
         // until the asynchronous formatting task completes.
         setupDataBinding(for: realTimeTrade)
-        updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+        scheduleDisplayUpdate()
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard item.isVisible != visible else { return }
+        item.isVisible = visible
+        // A hidden item skips its updates; catch up when it is shown again.
+        if visible, displayUpdateSkipped { scheduleDisplayUpdate() }
+    }
+
+    /// One refresh changes the quote, the stored history and the trade list,
+    /// each of which asked for its own redraw. They now share one, made after
+    /// all three have landed.
+    private func scheduleDisplayUpdate() {
+        guard !displayUpdatePending else { return }
+        displayUpdatePending = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.displayUpdatePending = false
+            guard self.item.isVisible || self.detailPopover?.isShown == true else {
+                self.displayUpdateSkipped = true
+                return
+            }
+            self.displayUpdateSkipped = false
+            self.updateDisplay(trade: self.realTimeTrade.trade, trading: self.realTimeTrade.realTimeInfo)
+        }
     }
     
     // MARK: - Private Methods
@@ -602,7 +683,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             string: fallbackTitle,
             attributes: [
                 .foregroundColor: NSColor.labelColor,
-                .font: NSFont.menuBarFont(ofSize: 0)
+                .font: MenuBarFormattingService.titleFont
             ]
         )
         item.button?.setButtonType(.momentaryPushIn)
@@ -621,17 +702,17 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         ObservationPublisher.values(dataModel, \.showColorCoding)
             .dropFirst()
             .sink { [weak self, weak realTimeTrade] _ in
-                guard let self, let realTimeTrade else { return }
-                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                guard let self, realTimeTrade != nil else { return }
+                self.scheduleDisplayUpdate()
             }
             .store(in: &cancellables)
 
         // Listen to changes in trading info
         ObservationPublisher.values(realTimeTrade, \.realTimeInfo)
             .dropFirst()
-            .sink { [weak self, weak realTimeTrade] trading in
-                guard let self = self, let realTimeTrade = realTimeTrade else { return }
-                self.updateDisplay(trade: realTimeTrade.trade, trading: trading)
+            .sink { [weak self, weak realTimeTrade] _ in
+                guard let self, realTimeTrade != nil else { return }
+                self.scheduleDisplayUpdate()
             }
             .store(in: &cancellables)
 
@@ -639,9 +720,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         ObservationPublisher.values(dataModel, \.showMarketIndicators)
             .dropFirst()
             .sink { [weak self, weak realTimeTrade] _ in
-                guard let self = self, let realTimeTrade = realTimeTrade else { return }
-                // Re-update display when setting changes
-                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                guard let self, realTimeTrade != nil else { return }
+                self.scheduleDisplayUpdate()
             }
             .store(in: &cancellables)
 
@@ -649,9 +729,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         ObservationPublisher.values(dataModel, \.menuBarDisplaySettings)
             .dropFirst()
             .sink { [weak self, weak realTimeTrade] _ in
-                guard let self = self, let realTimeTrade = realTimeTrade else { return }
-                // Re-update display when formatting settings change
-                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                guard let self, realTimeTrade != nil else { return }
+                self.scheduleDisplayUpdate()
             }
             .store(in: &cancellables)
 
@@ -660,8 +739,8 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             .dropFirst()
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self, weak realTimeTrade] _ in
-                guard let self, let realTimeTrade else { return }
-                self.updateDisplay(trade: realTimeTrade.trade, trading: realTimeTrade.realTimeInfo)
+                guard let self, realTimeTrade != nil else { return }
+                self.scheduleDisplayUpdate()
             }
             .store(in: &cancellables)
     }
@@ -721,7 +800,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         let updateId = titleUpdateCounter
 
         Task { @MainActor in
-            let formatted = await formattingService.formatStockTitle(
+            let formatted = formattingService.formatStockTitle(
                 symbol: displaySymbol,
                 price: safeDisplay,
                 change: changeSummary.change,
@@ -734,45 +813,70 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
             guard updateId == titleUpdateCounter else { return }
 
-            if item.button?.attributedTitle != formatted {
-                if trade.isWatchlistOnly {
-                    let watchlistPrefix = NSAttributedString(
-                        string: "👁 ",
-                        attributes: [
-                            .foregroundColor: NSColor.secondaryLabelColor,
-                            .font: NSFont.menuBarFont(ofSize: 0)
-                        ]
-                    )
-                    let combined = NSMutableAttributedString()
-                    combined.append(watchlistPrefix)
-                    combined.append(formatted)
-                    item.button?.attributedTitle = combined
-                } else {
-                    item.button?.attributedTitle = formatted
-                }
+            // Compare the finished title, prefix included, so an unchanged
+            // watchlist item is not redrawn on every refresh.
+            let title: NSAttributedString
+            if trade.isWatchlistOnly {
+                let combined = NSMutableAttributedString(
+                    string: "👁 ",
+                    attributes: [
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                        .font: MenuBarFormattingService.titleFont
+                    ]
+                )
+                combined.append(formatted)
+                title = combined
+            } else {
+                title = formatted
+            }
+            if item.button?.attributedTitle != title {
+                item.button?.attributedTitle = title
             }
 
             item.button?.alternateTitle = displaySymbol
             let kind = trade.isWatchlistOnly ? "Watchlist" : "Holding"
-            item.button?.toolTip = "\(displaySymbol) — \(kind). Click for details."
-            item.button?.setAccessibilityLabel(
+            currentToolTip = "\(displaySymbol) — \(kind). Click for details."
+            currentAccessibilityLabel =
                 "\(displaySymbol), \(kind.lowercased()): \(formatted.string), \(StatusItemAccessibility.direction(of: changeSummary.change))"
-            )
+            titlePriceDate = data.lastUpdateTime.flatMap { $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil }
+            refreshStaleness()
         }
+    }
+
+    /// Dims a title whose price has stopped updating and says how old it is,
+    /// so yesterday's price is not read as the current one. Called on every
+    /// title update and once a minute, since a failing refresh sends no update.
+    func refreshStaleness(now: Date = Date()) {
+        guard let button = item.button else { return }
+        let stale = MenuBarStaleness.isStale(
+            lastUpdate: titlePriceDate, now: now, refreshInterval: dataModel.refreshInterval
+        )
+        let alpha: CGFloat = stale ? 0.55 : 1
+        if button.alphaValue != alpha { button.alphaValue = alpha }
+
+        var toolTip = currentToolTip
+        var label = currentAccessibilityLabel
+        if stale, let titlePriceDate {
+            let age = titlePriceDate.formatted(.relative(presentation: .named))
+            toolTip += " Price last updated \(age)."
+            label += ", price last updated \(age)"
+        }
+        if button.toolTip != toolTip { button.toolTip = toolTip }
+        if button.accessibilityLabel() != label { button.setAccessibilityLabel(label) }
     }
     
     private func buildMenuMetrics(trade: Trade, data: TradingData) -> MenuPopoverMetrics {
-        let displayCandidate = data.displayPrice.isFinite && data.displayPrice > 0 ? data.displayPrice : nil
-        let currentCandidate = data.currentPrice.isFinite && data.currentPrice > 0 ? data.currentPrice : nil
-        let safeDisplay = displayCandidate ?? currentCandidate ?? 0
         let safeUnits = data.units.isFinite ? data.units : 0
         let safeAvgCost = data.avgCost.isFinite ? data.avgCost : 0
         let changeSummary = rollingDayChangeSummary(trade: trade, data: data)
 
-        let marketValue = safeDisplay * safeUnits
-        let positionCost = safeAvgCost * safeUnits
-        let totalPL = marketValue - positionCost
-        let totalPLPct = positionCost > 0 ? (totalPL / positionCost) * 100 : Double.nan
+        // The same figures as the Holdings table: Folync's or the broker's own
+        // when the position is linked, a local calculation otherwise.
+        let positionValue = dataModel.calculatePositionValue(for: realTimeTrade)
+        let profitLoss = dataModel.calculatePositionProfitLoss(for: realTimeTrade)
+        let marketValue = positionValue.amount
+        let totalPL = profitLoss.totalAmount
+        let totalPLPct = profitLoss.totalPercent
 
         let updatedText = MenuPopoverFormatter.updatedText(from: [data.lastUpdateTime])
 
@@ -780,7 +884,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
 
         return MenuPopoverMetrics(
             exchangeName: exchangeName,
-            marketValue: safeDisplay > 0 ? marketValue : nil,
+            marketValue: marketValue.isFinite ? marketValue : nil,
             totalPnL: totalPL.isFinite ? totalPL : nil,
             totalPnLPercent: totalPLPct.isFinite ? totalPLPct : nil,
             dayPnL: changeSummary.positionPnL.isFinite ? changeSummary.positionPnL : nil,
@@ -790,6 +894,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             units: safeUnits,
             avgCost: safeAvgCost,
             currency: data.currency,
+            valueCurrency: positionValue.currency.isEmpty ? nil : positionValue.currency,
             updatedText: updatedText,
             canEditUnits: canEditUnits(for: realTimeTrade),
             suspensionNotice: suspensionNotice
@@ -949,8 +1054,14 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             }
         }
 
-        popoverLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        popoverLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
+            if event.type == .keyDown {
+                guard PopoverDismissal.isEscape(event), self.detailPopover?.isShown == true else { return event }
+                self.detailPopover?.performClose(nil)
+                self.stopPopoverEventMonitors()
+                return nil
+            }
             if let popoverWindow = self.detailPopover?.contentViewController?.view.window,
                event.window == popoverWindow {
                 return event
@@ -964,6 +1075,12 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
                 self.stopPopoverEventMonitors()
             }
             return event
+        }
+
+        popoverSpaceObserver = PopoverDismissal.observeSpaceChange { [weak self] in
+            guard let self, self.detailPopover?.isShown == true else { return }
+            self.detailPopover?.performClose(nil)
+            self.stopPopoverEventMonitors()
         }
     }
 
@@ -984,6 +1101,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             NSEvent.removeMonitor(monitor)
             popoverLocalMonitor = nil
         }
+        PopoverDismissal.stopObserving(&popoverSpaceObserver)
     }
 
     // MARK: - Actions

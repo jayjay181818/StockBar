@@ -11,13 +11,13 @@ class CacheCoordinatorTests: XCTestCase {
         // CacheCoordinator now persists across launches, so each test needs its
         // own defaults suite or state would leak between tests and from the
         // developer's real app data.
-        suiteName = "CacheCoordinatorTests-\(UUID().uuidString)"
+        suiteName = TestDefaultsSuite.makeName("CacheCoordinatorTests-")
         cacheCoordinator = CacheCoordinator(defaults: Self.makeDefaults(suiteName: suiteName))
     }
 
     override func tearDown() {
         cacheCoordinator = nil
-        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
         suiteName = nil
         super.tearDown()
     }
@@ -341,9 +341,10 @@ class CacheCoordinatorTests: XCTestCase {
 
         let stats = await cacheCoordinator.getCacheStatistics()
 
-        // Verify stats structure (exact values depend on implementation)
-        XCTAssertNotNil(stats)
-        // Could test for specific counts if statistics method is available
+        XCTAssertEqual(stats.totalCached, 2, "Two symbols have fetched successfully")
+        XCTAssertEqual(stats.freshCount, 1, "AAPL was fetched just now")
+        XCTAssertEqual(stats.freshCount + stats.staleCount + stats.expiredCount, stats.totalCached)
+        XCTAssertEqual(stats.failedCount, 1, "TSLA failed")
     }
 
     // MARK: - Edge Cases
@@ -511,6 +512,119 @@ class CacheCoordinatorTests: XCTestCase {
         XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 60), 54, accuracy: 0.001)
         XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 3_600), 300, accuracy: 0.001)
     }
+
+    func testRefreshIntervalIsClampedToTheSupportedRange() {
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(nil), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(0), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(-60), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(1), 300, "a stored boolean reads as 1")
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(.nan), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(.infinity), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(5), 60)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(900), 900)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(86_400), 3_600)
+    }
+
+    func testProviderBackoffGrowsAndClearsOnSuccess() async {
+        let now = Date()
+
+        let idle = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let first = await cacheCoordinator.recordProviderFailure(at: now)
+        let second = await cacheCoordinator.recordProviderFailure(at: now)
+        for _ in 0..<10 { await cacheCoordinator.recordProviderFailure(at: now) }
+        let capped = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let expired = await cacheCoordinator.providerBackoffRemaining(at: now.addingTimeInterval(601))
+        await cacheCoordinator.recordProviderSuccess()
+        let cleared = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let restarted = await cacheCoordinator.recordProviderFailure(at: now)
+
+        XCTAssertNil(idle)
+        XCTAssertEqual(first, 60)
+        XCTAssertEqual(second, 120)
+        XCTAssertEqual(capped, 600)
+        XCTAssertNil(expired)
+        XCTAssertNil(cleared)
+        XCTAssertEqual(restarted, 60)
+    }
+
+    func testProviderFailureDoesNotSuspendSymbols() async {
+        let now = Date()
+        for _ in 0..<10 { await cacheCoordinator.recordProviderFailure(at: now) }
+
+        let suspended = await cacheCoordinator.isSuspended(symbol: "AAPL", at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
+
+        XCTAssertFalse(suspended)
+        guard case .neverFetched = status else {
+            return XCTFail("Expected no per-symbol state, got \(status.description)")
+        }
+    }
+
+    func testFailuresAreSortedIntoSymbolAndProviderFaults() {
+        // One bad ticker among working ones is that ticker's fault.
+        var outcome = RefreshService.classifyFailures([.noData], anySucceeded: true)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertTrue(outcome.countsAgainstSymbols)
+
+        // A lone ticker with no data is still its own fault.
+        outcome = RefreshService.classifyFailures([.noData], anySucceeded: false)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertTrue(outcome.countsAgainstSymbols)
+
+        // A lone throttled ticker backs the provider off.
+        outcome = RefreshService.classifyFailures([.rateLimited], anySucceeded: false)
+        XCTAssertTrue(outcome.providerFailed)
+
+        // Everything failing together is never counted against the symbols.
+        outcome = RefreshService.classifyFailures([.noData, .noData, .timedOut], anySucceeded: false)
+        XCTAssertTrue(outcome.providerFailed)
+        XCTAssertFalse(outcome.countsAgainstSymbols)
+
+        outcome = RefreshService.classifyFailures([], anySucceeded: false)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertFalse(outcome.countsAgainstSymbols)
+    }
+
+    func testUnknownErrorCodesAreTreatedAsNoData() {
+        XCTAssertEqual(QuoteFailure(errorCode: "RATE_LIMIT"), .rateLimited)
+        XCTAssertEqual(QuoteFailure(errorCode: "TIMEOUT"), .timedOut)
+        XCTAssertEqual(QuoteFailure(errorCode: "NETWORK_ERROR"), .network)
+        XCTAssertEqual(QuoteFailure(errorCode: "SOMETHING_NEW"), .noData)
+        XCTAssertEqual(QuoteFailure(errorCode: nil), .noData)
+        XCTAssertFalse(QuoteFailure.noData.isProviderWide)
+        XCTAssertTrue(QuoteFailure.timedOut.isProviderWide)
+    }
+
+    func testClosedExchangesArePolledSlowly() throws {
+        func date(_ text: String) throws -> Date {
+            try XCTUnwrap(ISO8601DateFormatter().date(from: text))
+        }
+        let saturday = try date("2026-11-07T15:00:00Z")
+        let tuesdayLondonMorning = try date("2026-11-10T09:00:00Z")   // 04:00 New York, 09:00 London
+        let tuesdayUSAfternoon = try date("2026-11-10T19:00:00Z")     // 14:00 New York, 19:00 London
+        let tuesdayNight = try date("2026-11-11T03:00:00Z")           // 22:00 New York, 03:00 London
+
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: saturday), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: saturday), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: tuesdayLondonMorning), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: tuesdayLondonMorning), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: tuesdayUSAfternoon), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: tuesdayUSAfternoon), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "^GSPC", at: tuesdayNight), true)
+
+        // Hours are not known for these, so they always poll at the full rate.
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "BTC-USD", at: saturday))
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "EURUSD=X", at: saturday))
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "SAP.DE", at: saturday))
+
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "AAPL", at: saturday), 1_800)
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "BTC-USD", at: saturday), 270)
+        XCTAssertEqual(
+            RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "AAPL", at: tuesdayUSAfternoon),
+            270
+        )
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 3_600, symbol: "AAPL", at: saturday), 3_240)
+    }
 }
 
 private extension CacheStatus {
@@ -522,5 +636,104 @@ private extension CacheStatus {
     var isNeverFetched: Bool {
         if case .neverFetched = self { return true }
         return false
+    }
+}
+
+final class RefreshStatusAndEnvironmentTests: XCTestCase {
+    private let time = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testFailedPassIsReportedWithoutLosingTheLastSuccess() {
+        var status = QuoteRefreshStatus()
+        XCTAssertNil(status.problemSummary)
+        XCTAssertFalse(status.lastAttemptFailed)
+
+        status.record(attempted: 3, failures: [], at: time)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertNil(status.problemSummary)
+
+        let later = time.addingTimeInterval(300)
+        status.record(attempted: 3, failures: [.rateLimited, .rateLimited, .noData], at: later)
+        XCTAssertTrue(status.lastAttemptFailed)
+        XCTAssertEqual(status.lastAttempt, later)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertEqual(status.problemSummary, "Last refresh failed: the provider is limiting requests")
+    }
+
+    func testPartFailedPassCountsTheSymbolsLeftBehind() {
+        var status = QuoteRefreshStatus()
+        status.record(attempted: 4, failures: [.noData], at: time)
+        XCTAssertFalse(status.lastAttemptFailed)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertEqual(status.problemSummary, "1 of 4 not refreshed: the provider returned no price")
+    }
+
+    func testPassThatAskedForNothingChangesNothing() {
+        var status = QuoteRefreshStatus()
+        status.record(attempted: 0, failures: [], at: time)
+        XCTAssertNil(status.lastAttempt)
+    }
+
+    func testSetupProblemIsNewOnceAndClearsOnTheNextRealAttempt() {
+        var status = QuoteRefreshStatus()
+        XCTAssertTrue(status.recordSetupProblem("Python is not set up", attempted: 2, at: time))
+        XCTAssertFalse(status.recordSetupProblem("Python is not set up", attempted: 2, at: time))
+        XCTAssertTrue(status.lastAttemptFailed)
+        XCTAssertEqual(status.problemSummary, "Python is not set up")
+
+        status.record(attempted: 2, failures: [], at: time)
+        XCTAssertNil(status.problemSummary)
+    }
+
+    func testScriptEnvironmentDropsEverythingNotNeeded() {
+        let environment = PythonConfiguration.childEnvironment(
+            adding: ["STOCKBAR_CACHE_FILE": "/cache/quote_cache.json"],
+            base: [
+                "PATH": "/usr/bin",
+                "HOME": "/Users/example",
+                "HTTPS_PROXY": "http://proxy.example:8080",
+                "PYTHONPATH": "/somewhere/else",
+                "PYTHONSTARTUP": "/somewhere/start.py",
+                "DYLD_INSERT_LIBRARIES": "/somewhere/lib.dylib",
+                "AWS_SECRET_ACCESS_KEY": "not-for-scripts"
+            ]
+        )
+        XCTAssertEqual(environment, [
+            "PATH": "/usr/bin",
+            "HOME": "/Users/example",
+            "HTTPS_PROXY": "http://proxy.example:8080",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "STOCKBAR_CACHE_FILE": "/cache/quote_cache.json"
+        ])
+    }
+
+    func testCandlesFetchedAfterTheCloseStayUsableUntilTheOpen() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        func newYork(_ day: Int, _ hour: Int) throws -> Date {
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: day, hour: hour)))
+        }
+        // Friday 24 July 2026 21:00 to Sunday: shut throughout.
+        XCTAssertTrue(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(24, 21), to: try newYork(26, 12)))
+        // Monday 03:00 to Monday 21:00 spans a whole session.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(27, 3), to: try newYork(27, 21)))
+        // Fetched while open.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(24, 12), to: try newYork(24, 21)))
+        // Unknown exchange hours never qualify.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "BTC-USD", from: try newYork(25, 1), to: try newYork(25, 2)))
+
+        let friday = try newYork(24, 15)
+        let sunday = try newYork(26, 12)
+        let candles = (0..<5).map { index in
+            OHLCSnapshot(
+                symbol: "AAPL",
+                timestamp: friday.addingTimeInterval(Double(index - 4) * 86_400),
+                open: 1, high: 2, low: 1, close: 2, volume: 10, interval: "1d"
+            )
+        }
+        XCTAssertFalse(OHLCCachePolicy.isUsable(snapshots: candles, period: "5d", interval: "1d", now: sunday))
+        XCTAssertTrue(OHLCCachePolicy.isUsable(
+            snapshots: candles, period: "5d", interval: "1d", now: sunday, fetchedSinceClose: true
+        ))
     }
 }

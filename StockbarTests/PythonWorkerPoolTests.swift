@@ -18,6 +18,7 @@ final class PythonWorkerPoolTests: XCTestCase {
         import json, os, sys, time
         args = sys.argv[1:]
         if args[:1] == ["--sleep"]:
+            open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "started"), "w").close()
             time.sleep(float(args[1]))
         if args[:1] == ["--fail"]:
             print("bad things", file=sys.stderr)
@@ -61,6 +62,17 @@ final class PythonWorkerPoolTests: XCTestCase {
         let result = try await runner.run(arguments: [scriptURL.path] + arguments, timeoutSeconds: timeout, logContext: "worker test")
         let line = (String(bytes: result.stdout, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return (try JSONDecoder().decode(Output.self, from: Data(line.utf8)), result)
+    }
+
+    /// Waits for the `--sleep` script to report that it is running, rather
+    /// than sleeping for a fixed time and hoping it has started.
+    private func waitUntilSleepStarted() async throws {
+        let marker = directory.appendingPathComponent("started")
+        for _ in 0..<200 {
+            if FileManager.default.fileExists(atPath: marker.path) { return }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTFail("The slow script never started")
     }
 
     private func waitUntilGone(_ pid: Int32) async throws -> Bool {
@@ -136,7 +148,7 @@ final class PythonWorkerPoolTests: XCTestCase {
         let task = Task {
             try await runner.run(arguments: [scriptPath, "--sleep", "30"], timeoutSeconds: 60, logContext: "worker test")
         }
-        try await Task.sleep(nanoseconds: 300_000_000)
+        try await waitUntilSleepStarted()
         task.cancel()
 
         do {
@@ -167,7 +179,7 @@ final class PythonWorkerPoolTests: XCTestCase {
         let slow = Task {
             try await runner.run(arguments: [scriptPath, "--sleep", "1"], timeoutSeconds: 20, logContext: "worker test")
         }
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitUntilSleepStarted()
 
         let (meanwhile, _) = try await run(runner, ["--json", "AAPL"])
 

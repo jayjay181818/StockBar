@@ -7,16 +7,6 @@ import Observation
 import Security
 
 extension String {
-    func appendToFile(url: URL) throws {
-        if FileManager.default.fileExists(atPath: url.path) {
-            let fileHandle = try FileHandle(forWritingTo: url)
-            fileHandle.seekToEndOfFile()
-            fileHandle.write(self.data(using: .utf8)!)
-            fileHandle.closeFile()
-        } else {
-            try self.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
 }
 // Removed OSLog import to avoid name clashes with our custom Logger
 
@@ -27,10 +17,7 @@ class DataModel {
 
     // MARK: - Properties
 
-    // --- SWITCHED SERVICE ---
-    // Use the Python script-based service implementation
-    private let networkService: NetworkService = PythonNetworkService()
-    // ------------------------
+    private let networkService: NetworkService = PythonNetworkService.shared
 
     internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
@@ -52,6 +39,8 @@ class DataModel {
     @ObservationIgnored private var trading212BrokerSyncTimer: Timer?
     @ObservationIgnored private var trading212ScheduledFailureCount = 0
     @ObservationIgnored private var trading212NextScheduledAttempt = Date.distantPast
+    /// Why the last scheduled Trading 212 sync failed, for the Connections tab; nil once one succeeds.
+    private(set) var trading212ScheduledSyncError: String?
     /// Identifies the current scheduled cycle, so a cancelled older cycle
     /// cannot clear the handle of a newer one.
     @ObservationIgnored private var trading212BrokerSyncGeneration = 0
@@ -85,6 +74,11 @@ class DataModel {
     @ObservationIgnored var folyncETag: String?
     /// Set after a rejected token or rate limit; automatic polls wait until then.
     @ObservationIgnored var folyncBackoffUntil: Date?
+    /// Failed polls in a row; drives the slower retry and the one-line log on
+    /// the first failure and on recovery.
+    @ObservationIgnored var folyncConsecutivePollFailures = 0
+    @ObservationIgnored private var didLogStaleTrading212Valuation = false
+    @ObservationIgnored var folyncLastPollFailureCategory: String?
 
     var isFolyncPortfolioActive: Bool { folyncPortfolioSnapshot != nil }
 
@@ -102,10 +96,11 @@ class DataModel {
 
     // MARK: - Service Layer
     internal let cacheCoordinator = CacheCoordinator()  // Internal for UI access to suspension state
+    /// Outcome of the last quote refresh that reached the provider.
+    var quoteRefreshStatus = QuoteRefreshStatus()
     @ObservationIgnored private var refreshService: RefreshService!
     @ObservationIgnored private var portfolioCalculationService: PortfolioCalculationService!
     @ObservationIgnored private var historicalDataCoordinator: HistoricalDataCoordinator!
-    private let chartAnnotationService = ChartAnnotationService.shared
     
     var realTimeTrades: [RealTimeTrade] = [] {
         didSet { realTimeTradesRevision &+= 1 }
@@ -170,8 +165,16 @@ class DataModel {
 
     private let logger = Logger.shared
 
-    var refreshInterval: TimeInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
+    /// Seconds between automatic quote refreshes, always within the supported range.
+    var refreshInterval: TimeInterval = RefreshService.clampedRefreshInterval(
+        StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval
+    ) {
         didSet {
+            let clamped = RefreshService.clampedRefreshInterval(refreshInterval)
+            guard clamped == refreshInterval else {
+                refreshInterval = clamped
+                return
+            }
             StockbarRuntimeStorage.userDefaults.set(refreshInterval, forKey: "refreshInterval")
             // Update RefreshService interval when changed
             Task { @MainActor in
@@ -189,6 +192,9 @@ class DataModel {
     @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
     @ObservationIgnored private var isMemoryOptimizationEnabled = true
     @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    /// False when the model was created without runtime services (tests, previews), where
+    /// no stored portfolio is loaded and so no load has to finish before saving.
+    @ObservationIgnored private var requiresInitialTradeLoad = true
     @ObservationIgnored private var mayStartRuntimeSchedulers = false
     /// Set while a settings import runs and until relaunch; cleared only when
     /// a failed import is rolled back.
@@ -207,9 +213,6 @@ class DataModel {
         currencyConverter: CurrencyConverter = .shared,
         startRuntimeServices: Bool = true
     ) {
-        // Ensure network service uses the correct implementation
-        // self.networkService = PythonNetworkService() // Already done in property declaration
-
         self.currencyConverter = currencyConverter
         // Pure calculation service: create it up front so totals never fall
         // back to a placeholder $0.00 while runtime services start.
@@ -221,6 +224,7 @@ class DataModel {
         // Initialize realTimeTrades first - will be loaded async after init
         self.realTimeTrades = []
         self.isInitialPortfolioSourceResolved = !startRuntimeServices
+        self.requiresInitialTradeLoad = startRuntimeServices
         
         // Note: All data loading now happens asynchronously via loadTradesAsync()
         // including migration of cost currency and trading info currency
@@ -269,7 +273,7 @@ class DataModel {
             markInitialPortfolioSourceResolved()
             await MainActor.run {
                 if !self.isFolyncPortfolioActive {
-                    self.restartTrading212LinkedSyncScheduler()
+                    self.restartTrading212LinkedSyncScheduler(keepBackoff: true)
                 }
             }
         }
@@ -323,7 +327,10 @@ class DataModel {
 
         // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
         Task { @MainActor in
-            guard await waitForInitialTradeLoad(), mayStartRuntimeSchedulers else { return }
+            // The wait returns as soon as the load finishes. The default 15 s
+            // was too short for a launch that migrates the store, and missing
+            // it meant no gap checks or scheduled backfills until the next launch.
+            guard await waitForInitialTradeLoad(timeout: 600), mayStartRuntimeSchedulers else { return }
             BackfillScheduler.shared.start(dataModel: self)
         }
     }
@@ -541,23 +548,6 @@ class DataModel {
         return legacyTrades
     }
     
-    /// Load trading info asynchronously from Core Data
-    private func loadTradingInfoAsync(for trades: [RealTimeTrade]) async {
-        do {
-            await logger.info("📊 Loading trading info from Core Data")
-            let tradingInfoDict = try await tradeDataService.loadAllTradingInfo()
-            
-            // Apply trading info to trades
-            for trade in trades {
-                if let savedInfo = tradingInfoDict[trade.trade.name] {
-                    trade.realTimeInfo = savedInfo
-                    await logger.debug("Restored trading info for \(trade.trade.name) from Core Data")
-                }
-            }
-        } catch {
-            await logger.error("❌ Failed to load trading info from Core Data: \(error)")
-        }
-    }
     
     internal func saveTradingInfo() {
         // Folync display rows must not overwrite the local price cache.
@@ -659,11 +649,6 @@ class DataModel {
         await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: true)
     }
     
-    /// Adds historical snapshots to the data manager
-    @MainActor
-    private func addHistoricalSnapshots(_ snapshots: [PriceSnapshot], for symbol: String) async {
-        historicalDataManager.addImportedSnapshots(snapshots, for: symbol)
-    }
     
     /// Manually triggers a 5-year chunked historical data backfill for all symbols - delegates to HistoricalDataCoordinator
     public func triggerFullHistoricalBackfill() async {
@@ -681,58 +666,8 @@ class DataModel {
         return historicalDataCoordinator.getHistoricalDataStatus()
     }
     
-    /// Triggers comprehensive 5-year portfolio value calculation in monthly chunks
-    public func calculate5YearPortfolioValues() async {
-        await logger.info("🚀 MANUAL TRIGGER: Starting 5-year portfolio value calculation")
-        await historicalDataManager.calculate5YearHistoricalPortfolioValues(using: self)
-        await logger.info("🏁 MANUAL TRIGGER: Completed 5-year portfolio value calculation")
-    }
     
-    /// Checks if portfolio value calculation is needed and triggers it automatically
-    private func checkAndCalculatePortfolioValues() async {
-        await logger.info("🔍 STARTUP: Checking if portfolio value calculation is needed")
-        
-        // Check if we have sufficient historical price data but no portfolio value data
-        let totalPriceSnapshots = historicalDataManager.priceSnapshots.values.map { $0.count }.reduce(0, +)
-        let portfolioValueCount = historicalDataManager.cachedHistoricalPortfolioValues.count
-        
-        await logger.info("🔍 STARTUP: Found \(totalPriceSnapshots) price snapshots and \(portfolioValueCount) portfolio value points")
-        
-        // If we have lots of price data but no portfolio values, trigger calculation
-        if totalPriceSnapshots > 100 && portfolioValueCount < 50 {
-            await logger.info("🚀 STARTUP: Sufficient price data available, triggering automatic 5-year portfolio value calculation")
-            await historicalDataManager.calculate5YearHistoricalPortfolioValues(using: self)
-            await logger.info("🏁 STARTUP: Automatic portfolio value calculation completed")
-        } else {
-            await logger.info("ℹ️ STARTUP: Portfolio value calculation not needed - sufficient data already exists")
-        }
-    }
     
-    /// Tests the API connection with a simple request
-    func testAPIConnection() async throws -> Bool {
-        await logger.info("Testing API connection (default AAPL fetch)")
-        
-        do {
-            // Test with a simple quote request for Apple stock
-            let result = try await networkService.fetchQuote(for: "AAPL")
-            
-            // Check if we got valid data back
-            let isValid = !result.regularMarketPrice.isNaN && 
-                         !result.regularMarketPreviousClose.isNaN && 
-                         result.regularMarketPrice > 0
-            
-            if isValid {
-                await logger.info("API test successful - received valid data for AAPL")
-            } else {
-                await logger.warning("API test returned invalid data - price: \(result.regularMarketPrice)")
-            }
-            
-            return isValid
-        } catch {
-            await logger.error("API test failed: \(error.localizedDescription)")
-            throw error
-        }
-    }
     
     /// Verifies a specific API key for a service
     func verifyAPIKey(service: String) async throws -> Bool {
@@ -740,28 +675,6 @@ class DataModel {
         return try await networkService.verifyAPIKey(service: service)
     }
     
-    /// Clears bad historical data for specific symbols
-    @MainActor
-    public func clearHistoricalDataForSymbol(_ symbol: String) async {
-        historicalDataManager.clearDataForSymbol(symbol)
-        await logger.info("Cleared bad historical data for \(symbol)")
-    }
-
-    /// Clears bad historical data for multiple symbols
-    @MainActor
-    public func clearHistoricalDataForSymbols(_ symbols: [String]) async {
-        historicalDataManager.clearDataForSymbols(symbols)
-        await logger.info("Cleared bad historical data for \(symbols.count) symbols")
-    }
-    
-    /// Manually triggers retroactive portfolio calculation
-    public func triggerRetroactivePortfolioCalculation(force: Bool = false) {
-        Task {
-            await logger.info("🔄 MANUAL: Starting retroactive portfolio calculation (force: \(force))")
-            await historicalDataManager.calculateRetroactivePortfolioHistory(using: self, force: force)
-            await logger.info("🔄 MANUAL: Retroactive portfolio calculation completed")
-        }
-    }
 
     /// Triggers retroactive portfolio calculation for a specific number of days
     /// This will calculate portfolio values retroactively from existing historical data
@@ -779,13 +692,24 @@ class DataModel {
         await performRefreshAllTrades()
     }
 
-    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true) {
+    /// While Folync supplies the portfolio the rows on screen are Folync's. A
+    /// Trading 212 sync planned against them would find every linked holding
+    /// missing and drop its link.
+    static let trading212SkippedForFolyncReason = "Folync is the portfolio source; Trading 212 sync is paused."
+
+    /// `keepBackoff` is for restarts Stockbar makes itself (launch, a finished
+    /// import, switching back from Folync). They must not cut short a wait
+    /// Trading 212 asked for; only a change the user saves starts afresh.
+    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true, keepBackoff: Bool = false) {
         trading212BrokerSyncTimer?.invalidate()
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
-        trading212NextScheduledAttempt = .distantPast
-        trading212ScheduledFailureCount = 0
+        if !keepBackoff {
+            trading212NextScheduledAttempt = .distantPast
+            trading212ScheduledFailureCount = 0
+            trading212ScheduledSyncError = nil
+        }
 
         guard !isFolyncPortfolioActive, !isBackgroundWorkPausedForImport else { return }
 
@@ -833,9 +757,6 @@ class DataModel {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
-        // A restart begins a fresh schedule instead of inheriting old backoff.
-        trading212NextScheduledAttempt = .distantPast
-        trading212ScheduledFailureCount = 0
     }
 
     private func runTrading212ScheduledCycle(reason: String) {
@@ -869,10 +790,31 @@ class DataModel {
                 }
                 self.trading212ScheduledFailureCount = 0
                 self.trading212NextScheduledAttempt = .distantPast
+                self.trading212ScheduledSyncError = nil
             } catch {
                 // Cancellation (suspend or restart) is not a provider failure.
                 if error is CancellationError || Task.isCancelled { return }
                 self.trading212ScheduledFailureCount += 1
+                self.trading212ScheduledSyncError = LogRedactor.redact(error.localizedDescription)
+                // Rejected credentials will not start working on their own. Stop until the
+                // scheduler is restarted, which saving new credentials does.
+                // A damaged links file does not mend itself either; retrying
+                // every cycle only repeats the same error in the log.
+                if error as? BrokerLinkStoreError == .unreadableFile {
+                    self.trading212NextScheduledAttempt = .distantFuture
+                    await Logger.shared.error(
+                        "Trading 212 scheduled cycle \(reason) stopped: the links file is damaged. Automatic sync is paused until Trading 212 settings are saved again."
+                    )
+                    return
+                }
+                if let providerError = error as? Trading212ProviderError,
+                   providerError == .unauthorized || providerError == .forbidden {
+                    self.trading212NextScheduledAttempt = .distantFuture
+                    await Logger.shared.warning(
+                        "Trading 212 scheduled cycle \(reason) was rejected; automatic sync is paused until the credentials are saved again: \(LogRedactor.redact(error.localizedDescription))"
+                    )
+                    return
+                }
                 let retryAfter: TimeInterval?
                 if case let Trading212ProviderError.rateLimited(value) = error {
                     retryAfter = value
@@ -904,6 +846,15 @@ class DataModel {
                 missingCount: 0,
                 brokerOnlyCount: 0,
                 skippedReason: "Trading 212 sync is already running."
+            )
+        }
+        guard !isFolyncPortfolioActive else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
             )
         }
         isTrading212BrokerSyncInProgress = true
@@ -957,6 +908,16 @@ class DataModel {
             includeMetadata: false,
             useCache: false
         )
+        // Folync may have taken over while the request was in flight.
+        guard !isFolyncPortfolioActive else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
         if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
             links = try await trading212BrokerLinkStore.loadSnapshot()
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
@@ -1014,6 +975,16 @@ class DataModel {
             )
         }
 
+        guard !isFolyncPortfolioActive else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
         isTrading212HoldingReconciliationInProgress = true
         defer { isTrading212HoldingReconciliationInProgress = false }
 
@@ -1074,6 +1045,17 @@ class DataModel {
             )
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
         }
+        // Folync may have taken over while the requests were in flight.
+        guard !isFolyncPortfolioActive else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
         let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
 
         guard !preview.rows.isEmpty || linkedPositionsForAccount.isEmpty else {
@@ -1083,7 +1065,7 @@ class DataModel {
                 deletedCount: 0,
                 missingCount: linkedPositionsForAccount.count,
                 brokerOnlyCount: 0,
-                skippedReason: "Trading 212 returned no positions for an account with linked holdings. StockBar did not delete anything; run Preview Import to review."
+                skippedReason: "Trading 212 returned no positions for an account with linked holdings. Stockbar did not delete anything; run Preview Import to review."
             )
             await logger.warning("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
             return result
@@ -1191,7 +1173,7 @@ class DataModel {
             linkedAt: importedAt
         )
         persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
-        restartTrading212LinkedSyncScheduler(runImmediately: false)
+        restartTrading212LinkedSyncScheduler(runImmediately: false, keepBackoff: true)
 
         let result = Trading212BrokerOnlyImportResult(
             importedCount: plan.records.count,
@@ -1451,6 +1433,17 @@ class DataModel {
     }
 
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
+    /// Where the displayed totals come from, decided the same way as
+    /// `calculateDisplayPortfolioSummary` but without valuing every holding.
+    /// For labels that only need the source name.
+    var displayValuationSource: PortfolioValuationSource {
+        if let total = folyncPortfolioSnapshot?.totalValue.value, total.isFinite {
+            return .folyncProvided
+        }
+        guard portfolioCalculationService != nil else { return .localCalculationFallback }
+        return freshTrading212BrokerValuationSnapshot() != nil ? .brokerProvided : .localCalculationFallback
+    }
+
     func calculateDisplayPortfolioSummary(preferredCurrency overrideCurrency: String? = nil) -> DisplayPortfolioSummary {
         if let snapshot = folyncPortfolioSnapshot,
            let totalValue = snapshot.totalValue.value,
@@ -1594,12 +1587,17 @@ class DataModel {
 
         let maxAge = max(TimeInterval(settings.syncIntervalSeconds * 4), 120)
         guard snapshot.isFresh(now: now, maxAge: maxAge) else {
-            Task {
-                await Logger.shared.debug("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+            // Read on every redraw, so say it once per stale spell.
+            if !didLogStaleTrading212Valuation {
+                didLogStaleTrading212Valuation = true
+                Task {
+                    await Logger.shared.info("Trading 212 broker valuation snapshot is stale; using local portfolio calculation fallback.")
+                }
             }
             return nil
         }
 
+        didLogStaleTrading212Valuation = false
         return snapshot
     }
 
@@ -1645,17 +1643,10 @@ class DataModel {
             await restartFolyncPortfolioScheduler(runImmediately: false)
         }
         if !isFolyncPortfolioActive {
-            restartTrading212LinkedSyncScheduler(runImmediately: false)
+            restartTrading212LinkedSyncScheduler(runImmediately: false, keepBackoff: true)
         }
         if mayStartRuntimeSchedulers {
             BackfillScheduler.shared.start(dataModel: self)
-        }
-    }
-
-    func stopStaggeredRefresh() {
-        // Delegate to RefreshService
-        Task { @MainActor in
-            refreshService?.stopRefreshTimer()
         }
     }
 
@@ -1672,6 +1663,12 @@ class DataModel {
 
     func persistPortfolioAfterUserEdit(allowEmptyPortfolio: Bool = false) {
         guard !isFolyncPortfolioActive else { return }
+        // Every save replaces the whole stored portfolio. Before the stored one has been read,
+        // the list in memory is empty, so saving it would wipe the holdings on disk.
+        guard hasCompletedInitialTradeLoad || !requiresInitialTradeLoad else {
+            Task { await logger.debug("Skipping portfolio save until initial load completes") }
+            return
+        }
         ensureBenchmarkTracking()
 
         let validTrades = realTimeTrades.filter { trade in
@@ -1795,7 +1792,7 @@ class DataModel {
         let tradeModels = tradesToSave.map { $0.trade }
 
         guard !tradeModels.isEmpty || allowEmptyPortfolio else {
-            Task { await logger.warning("Skipped Core Data save because only benchmark/internal rows were present") }
+            Task { await logger.debug("Skipped Core Data save because only benchmark/internal rows were present") }
             return
         }
         
@@ -2033,13 +2030,11 @@ extension RealTimeTrade {
             Task { await Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)") }
 
             if retainOnFailure {
-                // Don't update the price data, but DO update the timestamp to show when we last tried
-                // Keep existing currentPrice, previousClose, prevClosePrice, currency
+                // Keep the existing price, previous close, currency and both timestamps. The price
+                // shown is still the last one fetched, so "updated" must keep saying when that was;
+                // stamping a failed attempt as fresh would present a stale price as current.
                 Task { await Logger.shared.info("Retaining last successful data for \(result.symbol)") }
 
-                // CRITICAL: Update timestamp and metadata even on failure so UI shows fresh "last updated" time
-                updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-                updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
                 updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? updatedInfo.exchangeTimezoneName
                 updatedInfo.shortName = result.shortName ?? updatedInfo.shortName
 
@@ -2116,8 +2111,18 @@ extension RealTimeTrade {
         // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
         updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
         updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-        updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
-        updatedInfo.shortName = result.shortName ?? self.trade.name
+        // A provider that omits these (the FMP fallback does) must not replace
+        // a known time zone with GMT or a known name with the ticker.
+        if let zone = result.exchangeTimezoneName, !zone.isEmpty {
+            updatedInfo.exchangeTimezoneName = zone
+        } else if updatedInfo.exchangeTimezoneName.isEmpty {
+            updatedInfo.exchangeTimezoneName = "GMT"
+        }
+        if let name = result.shortName, !name.isEmpty {
+            updatedInfo.shortName = name
+        } else if updatedInfo.shortName.isEmpty {
+            updatedInfo.shortName = self.trade.name
+        }
 
         // Market state handling: if result provides a state, use it; otherwise infer from current time
         if let newMarketState = result.marketState?.rawValue {
@@ -2134,7 +2139,7 @@ extension RealTimeTrade {
         if isFetchFailure && retainOnFailure {
             Task { await logger.info("Retained old data for \(self.trade.name): Price \(updatedInfo.currentPrice) Currency: \(updatedInfo.currency ?? "N/A") (fetch failed)") }
         } else {
-            Task { await logger.info("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
+            Task { await logger.debug("Updated trade \(self.trade.name): Price \(updatedInfo.currentPrice) PrevClose: \(String(describing: updatedInfo.previousClose)) prevClosePrice: \(updatedInfo.prevClosePrice) Currency: \(updatedInfo.currency ?? "N/A") originalRegularPrice: \(regularPrice) originalDisplayPrice: \(displayPrice) originalPrevClose: \(prevClose) originalCurrency: \(result.currency ?? "nil")") }
         }
 
         return !isFetchFailure // Return true if successful, false if failed

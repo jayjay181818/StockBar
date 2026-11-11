@@ -186,6 +186,11 @@ struct MenuBarDisplaySettings: Codable, Equatable {
         "{dayPL}"
     ]
 
+    /// The placeholders in the order they are offered to the user. Kept beside
+    /// `validPlaceholders` so the help text cannot drift from what is accepted.
+    static let orderedPlaceholders = ["{symbol}", "{price}", "{change}", "{changePct}", "{dayPL}", "{currency}", "{arrow}"]
+    static var templateTokenList: String { orderedPlaceholders.joined(separator: " ") }
+
     /// Validates a custom template string
     /// - Parameter template: The template string to validate
     /// - Returns: Tuple of (isValid, errorMessage)

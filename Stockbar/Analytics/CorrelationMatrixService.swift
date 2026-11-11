@@ -316,36 +316,25 @@ actor CorrelationMatrixService {
         return returns
     }
 
-    /// Extract return series from historical data
-    func extractReturnSeries(
-        from snapshots: [String: [PriceSnapshot]]
-    ) async -> [String: [Double]] {
-        var returnSeries: [String: [Double]] = [:]
-
-        for (symbol, prices) in snapshots {
-            let priceValues = prices.sorted { $0.timestamp < $1.timestamp }.map { $0.price }
-            let returns = calculateReturns(prices: priceValues)
-
-            if !returns.isEmpty {
-                returnSeries[symbol] = returns
-            }
-        }
-
-        return returnSeries
-    }
-
     /// Builds date-aligned daily return series. Each symbol contributes its
     /// last valid price per calendar day; only days present for every symbol
     /// are used, so return `i` covers the same interval for all series.
     /// Pearson correlation is meaningless for series paired by index alone.
+    ///
+    /// With `minimumCommonDays`, holdings are left out one at a time (the one
+    /// whose absence adds the most shared days first) until the rest share at
+    /// least that many days, and are named in `excluded`. One newly added
+    /// holding then no longer blanks the correlation for all the others.
     nonisolated static func alignedDailyReturns(
         from snapshots: [String: [PriceSnapshot]],
-        calendar: Calendar = .current
-    ) -> (returns: [String: [Double]], commonDays: Int) {
+        calendar: Calendar = .current,
+        minimumCommonDays: Int? = nil
+    ) -> (returns: [String: [Double]], commonDays: Int, excluded: [String]) {
         var dailyPrices: [String: [Date: Double]] = [:]
         for (symbol, prices) in snapshots {
             var byDay: [Date: (timestamp: Date, price: Double)] = [:]
-            for snapshot in prices where snapshot.price.isFinite && snapshot.price > 0 {
+            for snapshot in prices
+            where snapshot.price.isFinite && snapshot.price > 0 && !calendar.isDateInWeekend(snapshot.timestamp) {
                 let day = calendar.startOfDay(for: snapshot.timestamp)
                 if let existing = byDay[day], existing.timestamp > snapshot.timestamp { continue }
                 byDay[day] = (snapshot.timestamp, snapshot.price)
@@ -355,21 +344,45 @@ actor CorrelationMatrixService {
             }
         }
 
-        guard dailyPrices.count > 1 else { return ([:], 0) }
-        var commonDaySet: Set<Date>?
-        for prices in dailyPrices.values {
-            let days = Set(prices.keys)
-            commonDaySet = commonDaySet.map { $0.intersection(days) } ?? days
+        func sharedDays(_ symbols: some Sequence<String>) -> Set<Date> {
+            var shared: Set<Date>?
+            for symbol in symbols {
+                let days = Set(dailyPrices[symbol]?.keys.map { $0 } ?? [])
+                shared = shared.map { $0.intersection(days) } ?? days
+            }
+            return shared ?? []
         }
-        let commonDays = (commonDaySet ?? []).sorted()
-        guard commonDays.count > 2 else { return ([:], commonDays.count) }
+
+        var excluded: [String] = []
+        if let minimumCommonDays {
+            var kept = Set(dailyPrices.keys)
+            // A holding with too few days of its own can never qualify.
+            for symbol in kept.sorted() where (dailyPrices[symbol]?.count ?? 0) < minimumCommonDays {
+                kept.remove(symbol)
+                excluded.append(symbol)
+            }
+            while kept.count > 2, sharedDays(kept).count < minimumCommonDays {
+                // Sorted so the same holding is chosen on every run.
+                guard let drop = kept.sorted().max(by: {
+                    sharedDays(kept.subtracting([$0])).count < sharedDays(kept.subtracting([$1])).count
+                }) else { break }
+                kept.remove(drop)
+                excluded.append(drop)
+            }
+            dailyPrices = dailyPrices.filter { kept.contains($0.key) }
+            excluded.sort()
+        }
+
+        guard dailyPrices.count > 1 else { return ([:], 0, excluded) }
+        let commonDays = sharedDays(dailyPrices.keys).sorted()
+        guard commonDays.count > 2 else { return ([:], commonDays.count, excluded) }
 
         var returns: [String: [Double]] = [:]
         for (symbol, prices) in dailyPrices {
             let series = commonDays.compactMap { prices[$0] }
             returns[symbol] = zip(series, series.dropFirst()).map { ($1 - $0) / $0 }
         }
-        return (returns, commonDays.count)
+        return (returns, commonDays.count, excluded)
     }
 
     /// Annualised volatility (252 trading days) of a daily return series.

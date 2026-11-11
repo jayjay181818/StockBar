@@ -47,6 +47,7 @@ actor PythonWorkerPool {
     private let logger = Logger.shared
     private var idleWorkers: [(worker: PythonWorker, lastUsed: ContinuousClock.Instant)] = []
     private var busyCount = 0
+    private var generation = 0
     private var reaper: Task<Void, Never>?
     /// A setup whose worker failed is skipped for `failureBackoff`, so a broken
     /// interpreter or worker script does not double the cost of every request.
@@ -72,6 +73,7 @@ actor PythonWorkerPool {
     ) async throws -> PythonProcessResult? {
         let key = PythonWorker.Key(config: config, workerPath: request.workerPath)
         guard let worker = try checkOut(key) else { return nil }
+        let startedGeneration = generation
         do {
             let result = try await worker.send(
                 script: request.script,
@@ -79,7 +81,14 @@ actor PythonWorkerPool {
                 timeoutSeconds: timeoutSeconds,
                 logContext: logContext
             )
-            checkIn(worker)
+            if startedGeneration == generation {
+                checkIn(worker)
+            } else {
+                // The environment was rebuilt while this request ran; the worker
+                // still has the old packages loaded.
+                busyCount -= 1
+                worker.stop()
+            }
             return result
         } catch {
             busyCount -= 1
@@ -91,6 +100,13 @@ actor PythonWorkerPool {
 
     /// Live worker processes, idle or busy (tests).
     var workerCount: Int { idleWorkers.count + busyCount }
+
+    /// Stops idle workers now and busy ones as they finish, after the Python
+    /// environment was rebuilt.
+    func retireAllWorkers() {
+        generation += 1
+        stopIdleWorkers()
+    }
 
     /// Stops every idle worker (tests and shutdown).
     func stopIdleWorkers() {
@@ -193,9 +209,7 @@ final class PythonWorker: @unchecked Sendable {
 
         process.executableURL = URL(fileURLWithPath: key.interpreterPath)
         process.arguments = [key.workerPath]
-        var environment = ProcessInfo.processInfo.environment
-        key.environment.forEach { environment[$0.key] = $0.value }
-        process.environment = environment
+        process.environment = PythonConfiguration.childEnvironment(adding: key.environment)
 
         let requests = Pipe()
         let replies = Pipe()

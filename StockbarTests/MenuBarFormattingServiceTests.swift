@@ -46,19 +46,12 @@ private extension NSColor {
     }
 }
 
+@MainActor
 final class MenuBarFormattingServiceTests: XCTestCase {
 
-    var service: MenuBarFormattingService!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        service = MenuBarFormattingService()
-    }
-
-    override func tearDown() async throws {
-        service = nil
-        try await super.tearDown()
-    }
+    // XCTest makes one instance of the class per test, so each test gets a
+    // formatter with an empty cache.
+    private let service = MenuBarFormattingService()
 
     func testMenuBarSymbolPresentationUsesTickerInsteadOfFolyncDisplayLabel() {
         XCTAssertEqual(MenuBarSymbolPresentation.title(for: " CARD.L "), "CARD.L")
@@ -186,9 +179,9 @@ final class MenuBarFormattingServiceTests: XCTestCase {
     }
 
     func testMenuBarVisibilityPolicy_PersistsExternalDisplayRequirement() {
-        let suiteName = "MenuBarVisibilityPolicyTests.\(UUID().uuidString)"
+        let suiteName = TestDefaultsSuite.makeName("MenuBarVisibilityPolicyTests.")
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaultsSuite.remove(suiteName)
 
         XCTAssertFalse(MenuBarVisibilityPolicy.loadRequireExternalDisplay(defaults: defaults))
 
@@ -215,7 +208,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -238,7 +231,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -285,7 +278,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndPercentage
 
         // When: A positive stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -305,7 +298,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndShareChange
 
         // When: A positive stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -325,7 +318,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndShareChange
 
         // When: A negative stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -347,7 +340,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "GOOGL",
             price: 140.75,
             change: 3.25,
@@ -373,7 +366,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "MSFT",
             price: 425.00,
             change: 5.00,
@@ -398,7 +391,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format stock title (positive change)
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "NVDA",
             price: 450.00,
             change: 10.00,
@@ -414,6 +407,67 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         // Should contain some form of up indicator
     }
 
+    func testMinimalModePrintsTheArrowOnce() async {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .minimal
+        settings.arrowStyle = .simple
+        for before in [true, false] {
+            settings.showArrowBeforeSymbol = before
+            let result = service.formatStockTitle(
+                symbol: "NVDA", price: 450, change: 10, changePct: 2.27,
+                currency: "USD", settings: settings, useColorCoding: false
+            )
+            XCTAssertEqual(result.string, "NVDA \(settings.arrowStyle.upArrow())")
+        }
+    }
+
+    /// The whole title, character for character, for the layouts people use.
+    func testExactTitlesAcrossModesAndCurrencies() async {
+        func title(
+            _ mode: MenuBarDisplaySettings.DisplayMode,
+            _ format: MenuBarDisplaySettings.ChangeFormat,
+            price: Double = 450, change: Double = -10, pct: Double = -2.17,
+            dayPL: Double = 0, currency: String = "USD"
+        ) async -> String {
+            var settings = MenuBarDisplaySettings()
+            settings.displayMode = mode
+            settings.changeFormat = format
+            settings.arrowStyle = .none
+            settings.decimalPlaces = 2
+            return service.formatStockTitle(
+                symbol: "NVDA", price: price, change: change, changePct: pct, dayPL: dayPL,
+                currency: currency, settings: settings, useColorCoding: false
+            ).string
+        }
+
+        let compactPercent = await title(.compact, .percentage)
+        XCTAssertEqual(compactPercent, "NVDA -2.17%")
+        let compactBoth = await title(.compact, .both)
+        XCTAssertEqual(compactBoth, "NVDA -$10.00 (-2.17%)")
+        let expandedPounds = await title(.expanded, .dollar, price: 12.5, change: 0.25, pct: 2.04, currency: "GBP")
+        XCTAssertEqual(expandedPounds, "NVDA £12.50 +£0.25")
+        let positionPL = await title(.expanded, .positionPLPct, dayPL: -250, currency: "USD")
+        XCTAssertEqual(positionPL, "NVDA $450.00 -$250.00 (-2.17%)")
+        let noPrice = await title(.priceAndPercentage, .percentage, price: .nan, change: .nan, pct: .nan)
+        XCTAssertEqual(noPrice, "NVDA — —")
+    }
+
+    func testChangeTooSmallToShowIsNeutral() async {
+        var settings = MenuBarDisplaySettings()
+        settings.displayMode = .compact
+        settings.changeFormat = .percentage
+        settings.arrowStyle = .simple
+        settings.decimalPlaces = 2
+        let result = service.formatStockTitle(
+            symbol: "NVDA", price: 450, change: 0.001, changePct: 0.0004,
+            currency: "USD", settings: settings, useColorCoding: true
+        )
+        XCTAssertEqual(result.string, "NVDA 0.00%")
+        XCTAssertEqual(
+            result.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, NSColor.labelColor
+        )
+    }
+
     func testMinimalMode_WithNegativeChange() async throws {
         // Given: Minimal mode with down arrow
         var settings = MenuBarDisplaySettings()
@@ -422,7 +476,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format stock title (negative change)
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AMD",
             price: 120.00,
             change: -5.00,
@@ -447,7 +501,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -472,7 +526,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: 10.50,
@@ -498,7 +552,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -520,7 +574,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .dollar
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -542,7 +596,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .both
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -568,7 +622,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 0
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -591,7 +645,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 4
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23456,
             change: 4.29123,
@@ -614,15 +668,15 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndPercentage
 
         for change in [2.0, -2.0] {
-            let plain = await service.formatStockTitle(
+            let plain = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: false
             )
-            let colored = await service.formatStockTitle(
+            let colored = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: true
             )
-            let plainAgain = await service.formatStockTitle(
+            let plainAgain = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: false
             )
@@ -641,7 +695,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format with color coding enabled
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -674,7 +728,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format with color coding enabled
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -709,7 +763,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format same stock twice
-        let result1 = await service.formatStockTitle(
+        let result1 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -719,7 +773,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
             useColorCoding: false
         )
 
-        let result2 = await service.formatStockTitle(
+        let result2 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -738,7 +792,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         var settings1 = MenuBarDisplaySettings()
         settings1.displayMode = .compact
 
-        let result1 = await service.formatStockTitle(
+        let result1 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -752,7 +806,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         var settings2 = MenuBarDisplaySettings()
         settings2.displayMode = .expanded
 
-        let result2 = await service.formatStockTitle(
+        let result2 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -776,7 +830,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format with positive change
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -795,7 +849,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .compact
         settings.arrowStyle = .simple
 
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL", price: 175.23, change: 0, changePct: 0,
             currency: "USD", settings: settings, useColorCoding: true)
 
@@ -816,7 +870,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .expanded
 
         for missing in [Double.nan, 0, -1] {
-            let result = await service.formatStockTitle(
+            let result = service.formatStockTitle(
                 symbol: "AAPL", price: missing, change: .nan, changePct: .nan,
                 currency: "USD", settings: settings, useColorCoding: false)
             XCTAssertTrue(result.string.contains("—"), "price \(missing) must render as a dash: \(result.string)")
@@ -833,7 +887,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.showCurrency = true
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -855,7 +909,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.showCurrency = true
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "VOD.L",
             price: 75.50,
             change: 2.50,
@@ -914,6 +968,25 @@ final class PortfolioMenuBarTitleFormatterTests: XCTestCase {
         )
     }
 
+    func testChangeThatPrintsAsZeroCarriesNoSign() {
+        let settings = PortfolioMenuBarDisplaySettings(isEnabled: true, currencyCode: "GBP", dayGainFormat: .both, decimalPlaces: 2)
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 100, dayGain: 0.004, dayGainPercent: 0.004, settings: settings, locale: locale),
+            "£100.00 £0.00 (0.00%)"
+        )
+        XCTAssertEqual(
+            PortfolioMenuBarTitleFormatter.title(totalValue: 100, dayGain: -0.004, dayGainPercent: -0.004, settings: settings, locale: locale),
+            "£100.00 £0.00 (0.00%)"
+        )
+    }
+
+    func testRoundedForDisplayTreatsTinyAndMissingValuesAsZero() {
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.004, decimalPlaces: 2), 0)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.004, decimalPlaces: 2).sign, .plus)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(-0.006, decimalPlaces: 2), -0.01)
+        XCTAssertEqual(MenuBarFormattingService.roundedForDisplay(.nan, decimalPlaces: 2), 0)
+    }
+
     func testSettingsPreviewUsesTheSameFormatter() {
         let settings = PortfolioMenuBarDisplaySettings(isEnabled: true, currencyCode: "USD", dayGainFormat: .both, decimalPlaces: 2)
         XCTAssertEqual(settings.samplePreview(locale: Locale(identifier: "en_US")), "$10,234.56 +$123.45 (+1.21%)")
@@ -969,7 +1042,7 @@ final class BackupPreviewFormatTests: XCTestCase {
     func testCostKeepsSubPennyPrecisionAndMissingIsADash() {
         XCTAssertEqual(BackupPreviewFormat.cost(12.5, currency: "GBP", locale: locale), "GBP 12.50")
         XCTAssertEqual(BackupPreviewFormat.cost(0.0123, currency: "USD", locale: locale), "USD 0.0123")
-        XCTAssertEqual(BackupPreviewFormat.cost(10, currency: nil, locale: locale), "USD 10.00")
+        XCTAssertEqual(BackupPreviewFormat.cost(10, currency: nil, locale: locale), "10.00")
         XCTAssertEqual(BackupPreviewFormat.cost(.nan, currency: "USD", locale: locale), "—")
     }
 }
@@ -1025,5 +1098,67 @@ final class HoldingsAndStatusViewHelperTests: XCTestCase {
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.failure), "Verification failed")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.none), "Not verified")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.verifying), "Verifying")
+    }
+}
+
+/// Main-window and settings fixes from the audit.
+@MainActor
+final class MainWindowAuditFixTests: XCTestCase {
+    func testZeroAmountsCarryNoSignAndNegativesPutTheSignFirst() {
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(0, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(-0.001, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(0.004, currency: "USD"), "$0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(5, currency: "GBP"), "+£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.signedAmount(-5, currency: "GBP"), "-£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(-5, currency: "GBP"), "-£5.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(-0.001, currency: "GBP"), "£0.00")
+        XCTAssertEqual(HoldingsCurrencyFormatter.compactAmount(-0.001, currency: "GBP", includeSign: true), "£0.00")
+    }
+
+    func testAmountThatDisplaysAsZeroIsNotColouredAsAGainOrLoss() {
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: -0.001, currency: "GBP"), 0)
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: 0.004, currency: "GBP"), 0)
+        XCTAssertLessThan(HoldingsCurrencyFormatter.displayedSign(of: -0.02, currency: "GBP"), 0)
+        XCTAssertGreaterThan(HoldingsCurrencyFormatter.displayedSign(of: 12, currency: "GBP"), 0)
+        XCTAssertEqual(HoldingsCurrencyFormatter.displayedSign(of: .nan, currency: "GBP"), 0)
+    }
+
+    func testAlertMoneyMatchesTheHoldingsTableAndNeverGuessesACurrency() {
+        let alert = PriceAlert(symbol: "AAPL", condition: .above, threshold: 150)
+        XCTAssertEqual(alert.formattedThreshold(currency: "GBP"), "£150.00")
+        XCTAssertEqual(alert.formattedThreshold(currency: "USD"), "$150.00")
+        XCTAssertEqual(alert.formattedThreshold(currency: ""), "150.00")
+        let percent = PriceAlert(symbol: "AAPL", condition: .percentChange, threshold: 5)
+        XCTAssertEqual(percent.formattedThreshold(currency: "GBP"), "5.0%")
+    }
+
+    func testWindowAlreadyOnScreenIsLeftExactlyWhereItIs() {
+        let screen = NSRect(x: 0, y: 0, width: 1728, height: 1080)
+        let nearEdge = NSRect(x: 4, y: 6, width: 1200, height: 800)
+        XCTAssertEqual(StockbarMainWindowController.frame(nearEdge, fittedTo: screen), nearEdge)
+    }
+
+    func testWindowOffScreenIsMovedBackAndOnlyShrunkWhenTooBig() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let offRight = NSRect(x: 1300, y: 100, width: 1100, height: 700)
+        let moved = StockbarMainWindowController.frame(offRight, fittedTo: screen)
+        XCTAssertEqual(moved.size, offRight.size)
+        XCTAssertTrue(screen.contains(moved))
+
+        let tooBig = NSRect(x: -200, y: -200, width: 2000, height: 1400)
+        let fitted = StockbarMainWindowController.frame(tooBig, fittedTo: screen)
+        XCTAssertEqual(fitted, screen)
+    }
+
+    func testTemplateTokenHelpListsExactlyTheAcceptedPlaceholders() {
+        XCTAssertEqual(Set(MenuBarDisplaySettings.orderedPlaceholders), MenuBarDisplaySettings.validPlaceholders)
+        XCTAssertEqual(MenuBarDisplaySettings.orderedPlaceholders.count, MenuBarDisplaySettings.validPlaceholders.count)
+    }
+
+    func testBackingUpAnEmptyPortfolioIsNotReportedAsAFailure() async {
+        let outcome = await BackupService.shared.performManualBackupReportingOutcome(trades: [])
+        XCTAssertEqual(outcome, .nothingToBackUp)
+        XCTAssertFalse(outcome.userMessage.localizedCaseInsensitiveContains("failed"))
+        XCTAssertTrue(BackupOutcome.failed.userMessage.localizedCaseInsensitiveContains("failed"))
     }
 }

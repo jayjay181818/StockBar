@@ -1,21 +1,37 @@
 import Foundation
 
-/// Manages storage of configuration data like API keys
-/// Uses local app support JSON storage for non-broker market-data settings.
+/// Market-data settings: the FMP and Twelve Data API keys, kept in the
+/// Keychain, and the provider order, kept in a JSON file in Application
+/// Support that the Python helper also reads.
+///
+/// Key calls can wait on a Keychain prompt, so make them off the main actor.
+/// They use their own lock, never taken while the file lock is held, so a
+/// pending prompt does not hold up the file settings.
 public final class ConfigurationManager: @unchecked Sendable {
     public static let shared = ConfigurationManager()
     private let fileManager = FileManager.default
+    /// Guards the configuration file.
     private let lock = NSRecursiveLock()
+    /// Guards Keychain access, the key cache and the move out of the file.
+    private let keyLock = NSRecursiveLock()
     /// Set only for isolated tests; production uses Application Support.
     private let directoryOverride: URL?
+    private let keyStore: MarketDataKeyStore
+    /// Keys read this session, so each Python run does not ask the Keychain.
+    /// A missing entry has not been read; a nil value means none is stored.
+    private var cachedKeys: [MarketDataAPIKey: String?] = [:]
+    private var fileKeysMoved = false
+    private var fileMoveFailureLogged = false
 
     private init() {
         directoryOverride = nil
+        keyStore = .shared
     }
 
-    /// A manager whose file lives in `directory`. For isolated tests.
-    init(directory: URL) {
+    /// A manager whose file lives in `directory` and whose keys use `keyStore`. For isolated tests.
+    init(directory: URL, keyStore: MarketDataKeyStore) {
         directoryOverride = directory
+        self.keyStore = keyStore
     }
 
     /// Gets the configuration file URL in Stockbar's Application Support directory.
@@ -35,8 +51,9 @@ public final class ConfigurationManager: @unchecked Sendable {
             Task { await Logger.shared.error("Failed to create configuration directory: \(error.localizedDescription)") }
         }
 
-        if StockbarRuntimeStorage.acceptance.isEnabled || directoryOverride != nil { return nil }
-        return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stockbar_config.json")
+        // No fallback to a dot-file in the home folder: settings would be split
+        // between two places and the second is never backed up or cleaned.
+        return nil
     }
 
     // MARK: - Generic Helper
@@ -102,9 +119,9 @@ public final class ConfigurationManager: @unchecked Sendable {
         }
     }
 
-    /// This file holds FMP and Twelve Data API keys in plaintext — it has to stay
-    /// readable by the Python subprocess, so the Keychain is not an option — but
-    /// it should not inherit a world-readable umask.
+    /// The file holds no keys now, but earlier versions wrote them here and a
+    /// file not yet moved may still have them. Either way it should not
+    /// inherit a world-readable umask.
     private func restrictPermissions(of url: URL) {
         do {
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -148,48 +165,121 @@ public final class ConfigurationManager: @unchecked Sendable {
         }
     }
     
-    // MARK: - FMP API Key
+    // MARK: - API Keys
 
-    /// Gets the FMP API key from configuration file
-    public func getFMPAPIKey() -> String? {
-        return getConfig()["FMP_API_KEY"] as? String
-    }
+    /// Gets the FMP API key, or nil when none is stored or the Keychain can't be read.
+    public func getFMPAPIKey() -> String? { apiKey(.fmp) }
 
-    /// Sets the FMP API key in configuration file
-    public func setFMPAPIKey(_ apiKey: String) {
-        updateConfig { config in
-            config["FMP_API_KEY"] = apiKey
+    public func setFMPAPIKey(_ apiKey: String) throws { try setAPIKey(apiKey, for: .fmp) }
+
+    public func removeFMPAPIKey() throws { try removeAPIKey(.fmp) }
+
+    /// Gets the Twelve Data API key, or nil when none is stored or the Keychain can't be read.
+    public func getTwelveDataAPIKey() -> String? { apiKey(.twelveData) }
+
+    public func setTwelveDataAPIKey(_ apiKey: String) throws { try setAPIKey(apiKey, for: .twelveData) }
+
+    public func removeTwelveDataAPIKey() throws { try removeAPIKey(.twelveData) }
+
+    func apiKey(_ key: MarketDataAPIKey) -> String? {
+        do {
+            return try storedAPIKey(key)
+        } catch {
+            Task { await Logger.shared.error("Could not read the \(key.configName) from the Keychain: \(error.localizedDescription)") }
+            return nil
         }
     }
 
-    /// Removes the FMP API key from configuration file
-    public func removeFMPAPIKey() {
-        updateConfig { config in
-            config.removeValue(forKey: "FMP_API_KEY")
-        }
-    }
-    
-    // MARK: - Twelve Data API Key
-    
-    /// Gets the Twelve Data API key from configuration file
-    public func getTwelveDataAPIKey() -> String? {
-        return getConfig()["TWELVE_DATA_API_KEY"] as? String
+    func setAPIKey(_ value: String, for key: MarketDataAPIKey) throws {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        moveFileKeysToKeychainIfNeeded()
+        try keyStore.save(value, for: key)
+        cachedKeys[key] = .some(value)
+        dropUnmovedFileKey(key)
     }
 
-    /// Sets the Twelve Data API key in configuration file
-    public func setTwelveDataAPIKey(_ apiKey: String) {
-        updateConfig { config in
-            config["TWELVE_DATA_API_KEY"] = apiKey
-        }
+    func removeAPIKey(_ key: MarketDataAPIKey) throws {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        moveFileKeysToKeychainIfNeeded()
+        try keyStore.delete(key)
+        cachedKeys[key] = .some(nil)
+        dropUnmovedFileKey(key)
     }
-    
-    /// Removes the Twelve Data API key from configuration file
-    public func removeTwelveDataAPIKey() {
-        updateConfig { config in
-            config.removeValue(forKey: "TWELVE_DATA_API_KEY")
-        }
+
+    /// The stored key, after moving any key earlier versions left in the file.
+    /// While that move keeps failing, the key still in the file is the one in use.
+    func storedAPIKey(_ key: MarketDataAPIKey) throws -> String? {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        moveFileKeysToKeychainIfNeeded()
+        if let cached = cachedKeys[key] { return cached }
+        if !fileKeysMoved, let fileValue = fileKeyValue(key, in: getConfig()) { return fileValue }
+        let value = try keyStore.load(key)
+        cachedKeys[key] = .some(value)
+        return value
     }
-    
+
+    private func fileKeyValue(_ key: MarketDataAPIKey, in config: [String: Any]) -> String? {
+        guard let value = (config[key.configName] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty, value != key.placeholder else { return nil }
+        return value
+    }
+
+    /// After a key was saved or removed while the move out of the file is
+    /// still failing, the file's old copy must not come back on the next try.
+    /// Caller holds `keyLock`.
+    private func dropUnmovedFileKey(_ key: MarketDataAPIKey) {
+        guard !fileKeysMoved, getConfig()[key.configName] != nil else { return }
+        updateConfig { $0.removeValue(forKey: key.configName) }
+    }
+
+    /// Environment variables carrying the stored keys to the Python helper.
+    /// A key that can't be read is left out, so the helper skips that provider.
+    func scriptEnvironmentKeys() -> [String: String] {
+        var environment: [String: String] = [:]
+        for key in MarketDataAPIKey.allCases {
+            if let value = apiKey(key)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                environment[key.configName] = value
+            }
+        }
+        return environment
+    }
+
+    /// Earlier versions kept the keys in the configuration file. Moves them
+    /// to the Keychain and then removes them from the file. A key in the file
+    /// replaces one in the Keychain: it can only have been written by an
+    /// earlier version or by hand since. Nothing is removed from the file
+    /// unless every key in it was stored. Caller holds `keyLock`.
+    private func moveFileKeysToKeychainIfNeeded() {
+        guard !fileKeysMoved else { return }
+        let config = getConfig()
+        let namesInFile = MarketDataAPIKey.allCases.filter { config[$0.configName] != nil }
+        guard !namesInFile.isEmpty else {
+            fileKeysMoved = true
+            return
+        }
+        do {
+            for key in namesInFile {
+                guard let value = fileKeyValue(key, in: config) else { continue }
+                try keyStore.save(value, for: key)
+                cachedKeys[key] = .some(value)
+            }
+        } catch {
+            if !fileMoveFailureLogged {
+                fileMoveFailureLogged = true
+                Task { await Logger.shared.error("Could not move the market-data API keys to the Keychain; they stay in the configuration file for now: \(error.localizedDescription)") }
+            }
+            return
+        }
+        updateConfig { config in
+            for key in namesInFile { config.removeValue(forKey: key.configName) }
+        }
+        fileKeysMoved = true
+        Task { await Logger.shared.info("Moved the market-data API keys from the configuration file to the Keychain") }
+    }
+
     // MARK: - Data Source Priority
     
     /// Gets the data source priority list
@@ -207,62 +297,86 @@ public final class ConfigurationManager: @unchecked Sendable {
     // MARK: - Settings Transfer
 
     /// Values a settings export carries. Throws when the file exists but
-    /// cannot be read, rather than exporting nothing. Placeholder sample keys
-    /// are left out.
+    /// cannot be read, or a key can't be read from the Keychain, rather than
+    /// exporting nothing. Placeholder sample keys are left out.
     func exportableValues() throws -> ConfigurationTransferValues {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let config = try readConfigForTransfer() else {
-            return ConfigurationTransferValues(fmpAPIKey: nil, twelveDataAPIKey: nil, dataSourcePriority: nil)
-        }
-        func key(_ name: String, placeholder: String) -> String? {
-            guard let value = (config[name] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !value.isEmpty, value != placeholder else { return nil }
+        func key(_ key: MarketDataAPIKey) throws -> String? {
+            guard let value = try storedAPIKey(key)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty, value != key.placeholder else { return nil }
             return value
         }
+        let fmp = try key(.fmp)
+        let twelveData = try key(.twelveData)
+        lock.lock()
+        defer { lock.unlock() }
+        let config = try readConfigForTransfer()
         return ConfigurationTransferValues(
-            fmpAPIKey: key("FMP_API_KEY", placeholder: "your_fmp_api_key_here"),
-            twelveDataAPIKey: key("TWELVE_DATA_API_KEY", placeholder: "your_twelve_data_api_key_here"),
-            dataSourcePriority: config["DATA_SOURCE_PRIORITY"] as? [String]
+            fmpAPIKey: fmp,
+            twelveDataAPIKey: twelveData,
+            dataSourcePriority: config?["DATA_SOURCE_PRIORITY"] as? [String]
         )
     }
 
-    /// The file's exact bytes, or nil when there is none, so an import can put it back unchanged.
-    func configurationFileContents() throws -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
-        return try Data(contentsOf: url)
-    }
-
-    /// Restores bytes from `configurationFileContents()`; nil removes the file.
-    func restoreConfigurationFile(_ contents: Data?) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
-        guard let contents else {
-            if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
-            return
+    /// Everything an import may change, so it can be put back unchanged:
+    /// the file's exact bytes (nil when there is none) and the stored keys.
+    func rollbackState() throws -> ConfigurationRollbackState {
+        var keys: [MarketDataAPIKey: String] = [:]
+        for key in MarketDataAPIKey.allCases {
+            if let value = try storedAPIKey(key) { keys[key] = value }
         }
-        try contents.write(to: url, options: .atomic)
-        restrictPermissions(of: url)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+        let file = fileManager.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        return ConfigurationRollbackState(file: file, keys: keys)
     }
 
-    /// Applies imported values in one write and throws instead of logging, so
-    /// an import can roll back. Nil API keys are left as they are; a nil
-    /// priority removes the setting so the default order applies.
+    /// Puts back a `rollbackState()`. Tries every part and throws the first failure.
+    func restore(_ state: ConfigurationRollbackState) throws {
+        var firstError: Error?
+        keyLock.lock()
+        for key in MarketDataAPIKey.allCases {
+            do {
+                if let value = state.keys[key] {
+                    try keyStore.save(value, for: key)
+                } else {
+                    try keyStore.delete(key)
+                }
+                cachedKeys[key] = .some(state.keys[key])
+            } catch {
+                cachedKeys.removeValue(forKey: key)
+                firstError = firstError ?? error
+            }
+        }
+        keyLock.unlock()
+        do {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
+            if let contents = state.file {
+                try contents.write(to: url, options: .atomic)
+                restrictPermissions(of: url)
+            } else if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+        } catch {
+            firstError = firstError ?? error
+        }
+        if let firstError { throw firstError }
+    }
+
+    /// Applies imported values and throws instead of logging, so an import
+    /// can roll back. Nil API keys are left as they are; a nil priority
+    /// removes the setting so the default order applies.
     func applyImportedValues(fmpAPIKey: String?, twelveDataAPIKey: String?, dataSourcePriority: [String]?) throws {
+        if let fmpAPIKey { try setAPIKey(fmpAPIKey, for: .fmp) }
+        if let twelveDataAPIKey { try setAPIKey(twelveDataAPIKey, for: .twelveData) }
         lock.lock()
         defer { lock.unlock() }
         guard let url = getConfigFileURL() else { throw CocoaError(.fileNoSuchFile) }
         let existing = try readConfigForTransfer()
-        guard existing != nil || fmpAPIKey != nil || twelveDataAPIKey != nil || dataSourcePriority != nil else {
-            return
-        }
+        guard existing != nil || dataSourcePriority != nil else { return }
         var config = existing ?? [:]
-        if let fmpAPIKey { config["FMP_API_KEY"] = fmpAPIKey }
-        if let twelveDataAPIKey { config["TWELVE_DATA_API_KEY"] = twelveDataAPIKey }
         if let dataSourcePriority {
             config["DATA_SOURCE_PRIORITY"] = dataSourcePriority
         } else {
@@ -289,30 +403,6 @@ public final class ConfigurationManager: @unchecked Sendable {
     public func getConfigFilePath() -> String? {
         return getConfigFileURL()?.path
     }
-
-    /// Checks if the configuration file exists
-    public func configFileExists() -> Bool {
-        guard let configFileURL = getConfigFileURL() else { return false }
-        return fileManager.fileExists(atPath: configFileURL.path)
-    }
-
-    /// Creates a sample configuration file with instructions
-    public func createSampleConfigFile() {
-        guard let configFileURL = getConfigFileURL() else {
-            Task { await Logger.shared.error("Failed to get configuration file URL") }
-            return
-        }
-
-        let sampleConfig: [String: Any] = [
-            "FMP_API_KEY": "your_fmp_api_key_here",
-            "TWELVE_DATA_API_KEY": "your_twelve_data_api_key_here",
-            "DATA_SOURCE_PRIORITY": ["yfinance", "fmp", "twelvedata", "stooq"],
-            "_comment": "Replace 'your_api_key_here' with your actual API keys. DATA_SOURCE_PRIORITY determines the order of fetch attempts."
-        ]
-
-        saveConfig(sampleConfig)
-        Task { await Logger.shared.info("Sample configuration file created at: \(configFileURL.path)") }
-    }
 }
 
 /// Market-data values carried by a settings export.
@@ -320,4 +410,10 @@ struct ConfigurationTransferValues: Equatable, Sendable {
     let fmpAPIKey: String?
     let twelveDataAPIKey: String?
     let dataSourcePriority: [String]?
+}
+
+/// What `ConfigurationManager.restore(_:)` puts back after a failed import.
+struct ConfigurationRollbackState: Sendable {
+    let file: Data?
+    let keys: [MarketDataAPIKey: String]
 }

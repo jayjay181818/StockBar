@@ -41,7 +41,10 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.isEnabled)
         XCTAssertEqual(runtime.runID, "xctest-4242-run-0001")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
-        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.xctest-4242-run-0001")
+        XCTAssertEqual(
+            runtime.defaultsSuiteName,
+            try runtime.root.unwrap().appendingPathComponent("Preferences/com.stockbar.acceptance.xctest-4242-run-0001").path
+        )
         XCTAssertEqual(
             runtime.folyncKeychainService,
             "com.stockbar.folync.acceptance.xctest-4242-run-0001"
@@ -129,7 +132,10 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(try runtime.coreDataStoreURL.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.folyncSnapshotCacheRoot.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.folyncSupplementalCacheRoot.unwrap().isDescendant(of: root))
-        XCTAssertEqual(runtime.defaultsSuiteName, "com.stockbar.acceptance.\(runID)")
+        XCTAssertEqual(
+            runtime.defaultsSuiteName,
+            root.standardizedFileURL.appendingPathComponent("Preferences/com.stockbar.acceptance.\(runID)").path
+        )
     }
 
     func testCacheManagerUsesAnExplicitAcceptanceCacheRoot() throws {
@@ -137,9 +143,36 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         let manager = CacheManager(cacheRoot: cacheRoot)
 
         XCTAssertTrue(manager.diskCacheDirectory.isDescendant(of: root))
-        XCTAssertTrue(manager.archiveCacheDirectory.isDescendant(of: root))
         XCTAssertTrue(FileManager.default.fileExists(atPath: manager.diskCacheDirectory.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: manager.archiveCacheDirectory.path))
+    }
+
+    func testCacheManagerKeepsValuesAcrossInstancesAndReadsFilesFromEarlierVersions() throws {
+        let cacheRoot = root.appendingPathComponent("Caches/stockbar-cache-values", isDirectory: true)
+        let first = CacheManager(cacheRoot: cacheRoot)
+        first.store(["AAPL": 3], forKey: "counts")
+        first.flush()
+
+        // A new instance has nothing in memory, so this reads the file.
+        let second = CacheManager(cacheRoot: cacheRoot)
+        XCTAssertEqual(second.retrieve([String: Int].self, forKey: "counts"), ["AAPL": 3])
+        XCTAssertNil(second.retrieve([String: Int].self, forKey: "missing"))
+
+        // The layout the tiered cache wrote: the value as base64 JSON in `data`.
+        let legacy = """
+        {"key":"old","data":"\(Data("[1,2]".utf8).base64EncodedString())","timestamp":0,"size":5,        "compressionLevel":"light","accessCount":4,"lastAccessed":0}
+        """
+        try Data(legacy.utf8).write(to: second.diskCacheDirectory.appendingPathComponent("old.cache"))
+        XCTAssertEqual(second.retrieve([Int].self, forKey: "old"), [1, 2])
+
+        second.remove(forKey: "counts")
+        second.flush()
+        XCTAssertNil(CacheManager(cacheRoot: cacheRoot).retrieve([String: Int].self, forKey: "counts"))
+
+        // An unreadable file is removed, not left to fail on every launch.
+        let broken = second.diskCacheDirectory.appendingPathComponent("broken.cache")
+        try Data("not json".utf8).write(to: broken)
+        XCTAssertNil(second.retrieve([Int].self, forKey: "broken"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: broken.path))
     }
 
     func testAcceptanceRuntimeRequiresCompleteEnvironment() {

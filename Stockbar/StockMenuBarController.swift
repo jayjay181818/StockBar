@@ -182,7 +182,8 @@ class StockMenuBarController: NSObject {
     // MARK: - Actions
     
     private func quitApp() {
-        NSApp.terminate(self)
+        // Reached from main-actor tasks (popover buttons); terminating inside one would hang.
+        StockbarRelauncher.quitAfterCurrentWork()
     }
     
     /// The main window, created on demand, for attaching sheets.
@@ -273,6 +274,9 @@ class StockMenuBarController: NSObject {
 
     @objc private func systemDidWake(_ notification: Notification) {
         refreshExternalDisplayState()
+        // Timers do not run during sleep, so prices can be hours old on wake.
+        // Not forced: quotes still fresh after a short nap are left alone.
+        Task { await data.refreshAllTrades() }
     }
 
     /// Re-reads the external display state and, only if it actually changed,

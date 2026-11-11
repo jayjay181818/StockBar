@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Logging levels for the application
 public enum LogLevel: String, Sendable {
@@ -34,11 +35,19 @@ public actor Logger {
     private let dateFormatter: DateFormatter
     private let logFileURL: URL?
     private var logCounter = 0
-    
+    /// Kept open between writes; reopening the file for every line was most
+    /// of the cost of logging. Dropped whenever the file is rotated or cleared.
+    private var writeHandle: FileHandle?
+    private var didWriteSessionHeader = false
+    /// Rotate once the current file passes this size.
+    static let maximumLogFileBytes: Int64 = 10_000_000
+    private let rotationLimit: Int64
+    static let logFileNames = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
+
     private init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
-        dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        rotationLimit = Self.maximumLogFileBytes
+        dateFormatter = Self.makeTimestampFormatter()
         if Self.isRunningUnderXCTest {
             logFileURL = nil
         } else {
@@ -50,12 +59,43 @@ public actor Logger {
         }
     }
 
-    public static var isDebugLoggingEnabled: Bool {
-        let environmentValue = ProcessInfo.processInfo.environment["STOCKBAR_DEBUG_LOGGING"]?.lowercased()
-        return environmentValue == "1" ||
-            environmentValue == "true" ||
-            StockbarRuntimeStorage.userDefaults.bool(forKey: "stockbar.debugLoggingEnabled")
+    /// A logger writing to `fileURL`, for tests of rotation and tail reading.
+    init(fileURL: URL, rotateAboveBytes: Int64 = Logger.maximumLogFileBytes, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        rotationLimit = rotateAboveBytes
+        dateFormatter = Self.makeTimestampFormatter()
+        logFileURL = fileURL
+        didWriteSessionHeader = true
     }
+
+    /// Local time with its UTC offset, so lines from either side of a clock
+    /// change or another time zone still sort and compare correctly.
+    private static func makeTimestampFormatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSZ"
+        return formatter
+    }
+
+    /// The setting is read for every debug call that is not made, thousands
+    /// of times a minute, so the answer is kept for a few seconds.
+    private static let debugFlagCache = DebugFlagCache()
+
+    public static var isDebugLoggingEnabled: Bool {
+        debugFlagCache.value {
+            let environmentValue = ProcessInfo.processInfo.environment["STOCKBAR_DEBUG_LOGGING"]?.lowercased()
+            return environmentValue == "1" ||
+                environmentValue == "true" ||
+                StockbarRuntimeStorage.userDefaults.bool(forKey: "stockbar.debugLoggingEnabled")
+        }
+    }
+
+    /// Lines go to standard output only when asked for. Printing every line
+    /// in Debug builds doubled the work and flooded the Xcode console.
+    private static let echoesToStandardOutput: Bool = {
+        let value = ProcessInfo.processInfo.environment["STOCKBAR_LOG_STDOUT"]?.lowercased()
+        return value == "1" || value == "true"
+    }()
     
     /// Logs a message with the specified level.
     ///
@@ -78,7 +118,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(level) else { return }
         let text = message()
-        await write(level, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(level, text, at: date, file: file, function: function, line: line)
     }
 
     /// Fire-and-forget logging for synchronous code. The level check and
@@ -95,23 +136,62 @@ public actor Logger {
     ) {
         guard Self.shouldLog(level) else { return }
         let text = message()
-        Task { await self.write(level, text, file: file, function: function, line: line) }
+        let date = Date()
+        Task { await self.write(level, text, at: date, file: file, function: function, line: line) }
     }
 
-    private func write(_ level: LogLevel, _ message: String, file: String, function: String, line: Int) {
-        let timestamp = dateFormatter.string(from: Date())
+    /// `date` is when the caller logged, not when the actor got round to
+    /// writing: stamped on arrival, lines from different tasks could appear
+    /// in the file in a different order from their times.
+    private func write(
+        _ level: LogLevel,
+        _ message: String,
+        at date: Date = Date(),
+        file: String,
+        function: String,
+        line: Int
+    ) {
+        writeSessionHeaderIfNeeded()
+        let timestamp = dateFormatter.string(from: date)
         let filename = (file as NSString).lastPathComponent
-        let safeMessage = LogRedactor.redact(message)
+        let safeMessage = Self.singleLine(LogRedactor.redact(message))
 
         let logMessage = "\(timestamp) \(level.emoji) [\(level.rawValue.uppercased())] [\(filename):\(line)] \(function): \(safeMessage)"
 
-        // Print to console in debug
-        #if DEBUG
-        print(logMessage)
-        #endif
+        if Self.echoesToStandardOutput {
+            print(logMessage)
+        }
 
         // Write to file
         writeToLogFile(logMessage)
+    }
+
+    /// One record, one line. A message with line breaks in it (a Python
+    /// traceback, say) used to become several lines with no timestamp or
+    /// level, which every reader of the log then miscounted.
+    static func singleLine(_ message: String) -> String {
+        guard message.contains(where: \.isNewline) else { return message }
+        return message
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ⏎ ")
+    }
+
+    /// The first line of each run: which build this is and what it runs on.
+    private func writeSessionHeaderIfNeeded() {
+        guard !didWriteSessionHeader else { return }
+        didWriteSessionHeader = true
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let system = ProcessInfo.processInfo.operatingSystemVersionString
+        let debug = Self.isDebugLoggingEnabled ? "on" : "off"
+        writeToLogFile(
+            "\(dateFormatter.string(from: Date())) ℹ️ [INFO] [Logger.swift] session: "
+                + "==== Stockbar \(version) (\(build)) started · macOS \(system) · "
+                + "pid \(ProcessInfo.processInfo.processIdentifier) · debug logging \(debug) ===="
+        )
     }
 
     private static func shouldLog(_ level: LogLevel) -> Bool {
@@ -128,32 +208,35 @@ public actor Logger {
         guard let data = messageWithNewline.data(using: .utf8) else { return }
 
         do {
-            if fileManager.fileExists(atPath: logFileURL.path) {
-                let fileHandle = try FileHandle(forWritingTo: logFileURL)
-                defer { try? fileHandle.close() }
-
-                try fileHandle.seekToEnd()
-                try fileHandle.write(contentsOf: data)
-            } else {
-                try data.write(to: logFileURL, options: .atomic)
+            if writeHandle == nil {
+                if !fileManager.fileExists(atPath: logFileURL.path) {
+                    fileManager.createFile(atPath: logFileURL.path, contents: nil)
+                }
+                let handle = try FileHandle(forWritingTo: logFileURL)
+                try handle.seekToEnd()
+                writeHandle = handle
             }
+            try writeHandle?.write(contentsOf: data)
 
             // Check if log file needs compacting after writing
             compactLogFileIfNeeded()
         } catch {
-            // Avoid crashing the app if the file system rejects the write
+            // Avoid crashing the app if the file system rejects the write.
+            // Reopen next time: the file may have been moved or deleted.
+            closeWriteHandle()
             #if DEBUG
             print("Logger failed to persist log entry: \(error.localizedDescription)")
             #endif
         }
     }
+
+    private func closeWriteHandle() {
+        try? writeHandle?.close()
+        writeHandle = nil
+    }
     
     private func getLogFileURL() -> URL? {
         return logFileURL
-    }
-
-    private func getLogDirectoryURL() -> URL? {
-        Self.resolveLogDirectoryURL(fileManager: fileManager)
     }
 
     private static func resolveLogDirectoryURL(fileManager: FileManager) -> URL? {
@@ -206,7 +289,7 @@ public actor Logger {
         let markerURL = baseURL.appendingPathComponent(".redaction-repair-v\(persistedRepairVersion)")
         guard !fileManager.fileExists(atPath: markerURL.path) else { return }
 
-        for fileName in ["stockbar.log", "stockbar.1.log", "stockbar.2.log"] {
+        for fileName in Self.logFileNames {
             let fileURL = baseURL.appendingPathComponent(fileName)
             guard fileManager.fileExists(atPath: fileURL.path) else { continue }
             guard (try? streamRepairLog(at: fileURL, fileManager: fileManager)) != nil else { return }
@@ -229,22 +312,45 @@ public actor Logger {
                 try? output.close()
             }
 
-            var pending = Data()
-            while true {
-                let chunk = try input.read(upToCount: 64 * 1024) ?? Data()
-                if chunk.isEmpty { break }
-                pending.append(chunk)
-
-                while let newline = pending.firstRange(of: Data([0x0A])) {
-                    let lineData = pending.subdata(in: pending.startIndex..<newline.lowerBound)
-                    pending.removeSubrange(pending.startIndex...newline.lowerBound)
-                    let repaired = LogRedactor.redact(String(decoding: lineData, as: UTF8.self)) + "\n"
+            // Each chunk is cut at its last line break and handled as a whole,
+            // inside its own autorelease pool. Removing one line at a time
+            // from the front of the buffer copied the rest of it every time,
+            // and temporary strings piled up until the loop ended: one repair
+            // was seen to reach 936 MB.
+            var carry = Data()
+            let newline = UInt8(0x0A)
+            // A "line" longer than this has no line breaks worth waiting for.
+            let longestLine = 4 * 1024 * 1024
+            var reachedEnd = false
+            while !reachedEnd {
+                try autoreleasepool {
+                    let chunk = try input.read(upToCount: 256 * 1024) ?? Data()
+                    if chunk.isEmpty {
+                        reachedEnd = true
+                        return
+                    }
+                    carry.append(chunk)
+                    let cut: Data.Index
+                    if let lastBreak = carry.lastIndex(of: newline) {
+                        cut = carry.index(after: lastBreak)
+                    } else if carry.count > longestLine {
+                        cut = carry.endIndex
+                    } else {
+                        return
+                    }
+                    let complete = carry[carry.startIndex..<cut]
+                    let rest = Data(carry[cut...])
+                    let repaired = String(decoding: complete, as: UTF8.self)
+                        .split(separator: "\n", omittingEmptySubsequences: false)
+                        .map { LogRedactor.redact(String($0)) }
+                        .joined(separator: "\n")
                     try output.write(contentsOf: Data(repaired.utf8))
+                    carry = rest
                 }
             }
 
-            if !pending.isEmpty {
-                let repaired = LogRedactor.redact(String(decoding: pending, as: UTF8.self))
+            if !carry.isEmpty {
+                let repaired = LogRedactor.redact(String(decoding: carry, as: UTF8.self))
                 try output.write(contentsOf: Data(repaired.utf8))
             }
             try output.synchronize()
@@ -265,7 +371,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(.debug) else { return }
         let text = message()
-        await write(.debug, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(.debug, text, at: date, file: file, function: function, line: line)
     }
 
     public func info(
@@ -277,7 +384,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(.info) else { return }
         let text = message()
-        await write(.info, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(.info, text, at: date, file: file, function: function, line: line)
     }
 
     public func warning(
@@ -289,7 +397,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(.warning) else { return }
         let text = message()
-        await write(.warning, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(.warning, text, at: date, file: file, function: function, line: line)
     }
 
     public func error(
@@ -301,7 +410,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(.error) else { return }
         let text = message()
-        await write(.error, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(.error, text, at: date, file: file, function: function, line: line)
     }
 
     public func critical(
@@ -313,7 +423,8 @@ public actor Logger {
     ) async {
         guard Self.shouldLog(.error) else { return }
         let text = message()
-        await write(.error, text, file: file, function: function, line: line)
+        let date = Date()
+        await write(.error, text, at: date, file: file, function: function, line: line)
     }
     
     /// Gets recent log entries from the log file
@@ -337,60 +448,98 @@ public actor Logger {
         return getTailLogsFromLargeFile(fileURL: logFileURL, maxLines: max(0, maxLines), redacted: redacted)
     }
     
-    /// Efficiently reads the last N lines from a large log file
+    /// Reads the last `maxLines` lines of a file.
+    ///
+    /// Walks back from the end counting line breaks in the raw bytes, then
+    /// decodes and redacts what it found once. The old version decoded and
+    /// redacted everything read so far again after each 8 KB step, so 2,000
+    /// lines cost seconds of the logger's time.
     private func getTailLogsFromLargeFile(fileURL: URL, maxLines: Int, redacted: Bool = true) -> [String] {
+        guard maxLines > 0 else { return [] }
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             defer { try? fileHandle.close() }
-            
+
             let fileSize = try fileHandle.seekToEnd()
-            let chunkSize = min(8192, Int(fileSize)) // Read 8KB chunks
-            var buffer = Data()
-            var lines: [String] = []
-            var position = Int64(fileSize)
-            
-            // Read backwards in chunks until we have enough lines
-            while lines.count < maxLines && position > 0 {
-                let readSize = min(chunkSize, Int(position))
-                position = max(0, position - Int64(readSize))
-                
-                try fileHandle.seek(toOffset: UInt64(position))
-                let chunk = fileHandle.readData(ofLength: readSize)
-                
-                // Prepend chunk to buffer
-                buffer = chunk + buffer
-                
-                // Split into lines and check if we have enough
-                let content = String(data: buffer, encoding: .utf8) ?? ""
-                let newLines = content.components(separatedBy: .newlines)
-                    .filter { !$0.isEmpty }
-                    .map { line in
-                        let safeLine = redacted ? LogRedactor.redact(line) : line
-                        if safeLine.count > 1000 {
-                            return String(safeLine.prefix(1000)) + " ... [truncated]"
-                        }
-                        return safeLine
-                    }
-                
-                lines = newLines
-                
-                // If we have enough lines or reached the beginning, stop
-                if lines.count >= maxLines || position == 0 {
-                    break
-                }
+            let chunkSize: UInt64 = 64 * 1024
+            var chunks: [Data] = []
+            var newlineCount = 0
+            var position = fileSize
+
+            // One more line break than lines wanted, so the first line kept is whole.
+            while position > 0 && newlineCount <= maxLines {
+                let readSize = min(chunkSize, position)
+                position -= readSize
+                try fileHandle.seek(toOffset: position)
+                let chunk = try fileHandle.read(upToCount: Int(readSize)) ?? Data()
+                newlineCount += chunk.reduce(into: 0) { count, byte in if byte == 0x0A { count += 1 } }
+                chunks.append(chunk)
             }
-            
-            // Return the last maxLines
-            return Array(lines.suffix(maxLines))
+
+            var buffer = Data()
+            for chunk in chunks.reversed() { buffer.append(chunk) }
+            var lines = String(decoding: buffer, as: UTF8.self)
+                .split(whereSeparator: \.isNewline)
+            // Not at the start of the file: the first piece is the tail of a line.
+            if position > 0, !lines.isEmpty { lines.removeFirst() }
+
+            return lines.suffix(maxLines).map { line in
+                let text = String(line)
+                let safeLine = redacted ? LogRedactor.redact(text) : text
+                if safeLine.count > 1000 {
+                    return String(safeLine.prefix(1000)) + " ... [truncated]"
+                }
+                return safeLine
+            }
         } catch {
             return ["Error reading large log file: \(error.localizedDescription)"]
         }
     }
-    
+
+    /// The path of each log file that exists, oldest first.
+    public func existingLogFileURLs() -> [URL] {
+        guard let baseURL = getLogFileURL()?.deletingLastPathComponent() else { return [] }
+        return Self.logFileNames.reversed()
+            .map { baseURL.appendingPathComponent($0) }
+            .filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    /// Writes every log file, oldest first, into one file at `destination`.
+    /// Copied in pieces, so a full set of logs is never held in memory.
+    public func exportAllLogs(to destination: URL) throws {
+        let sources = existingLogFileURLs()
+        let temporaryURL = destination
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).export-\(UUID().uuidString)")
+        fileManager.createFile(atPath: temporaryURL.path, contents: nil)
+        do {
+            let output = try FileHandle(forWritingTo: temporaryURL)
+            defer { try? output.close() }
+            for source in sources {
+                let input = try FileHandle(forReadingFrom: source)
+                defer { try? input.close() }
+                try output.write(contentsOf: Data("==== \(source.lastPathComponent) ====\n".utf8))
+                while let chunk = try input.read(upToCount: 256 * 1024), !chunk.isEmpty {
+                    try output.write(contentsOf: chunk)
+                }
+            }
+            try output.synchronize()
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
+        }
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: temporaryURL)
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: destination)
+        }
+    }
+
     /// Clears the log file
     public func clearLogs() {
         guard let logFileURL = getLogFileURL() else { return }
         
+        closeWriteHandle()
         do {
             if fileManager.fileExists(atPath: logFileURL.path) {
                 try fileManager.removeItem(at: logFileURL)
@@ -405,29 +554,29 @@ public actor Logger {
         return getLogFileURL()?.path
     }
     
-    /// Rotates the log file if it exceeds maximum size (10MB)
+    /// Rotates the log file once it passes `maximumLogFileBytes`.
     private func compactLogFileIfNeeded() {
-        guard let logFileURL = getLogFileURL(),
-              fileManager.fileExists(atPath: logFileURL.path) else { return }
+        guard let logFileURL = getLogFileURL() else { return }
 
         // Only check every 50 log entries to avoid performance impact
         logCounter += 1
         guard logCounter % 50 == 0 else { return }
 
+        // Deleted or moved by something else: stop writing to the old file.
+        guard fileManager.fileExists(atPath: logFileURL.path) else {
+            closeWriteHandle()
+            return
+        }
+
         do {
             let fileAttributes = try fileManager.attributesOfItem(atPath: logFileURL.path)
             if let fileSize = fileAttributes[.size] as? Int64 {
-                // Rotate if file is larger than 10MB
-                if fileSize > 10_000_000 {
+                // By size only. Rotating after every 10,000 lines as well cut
+                // files off at about 2 MB and threw history away early.
+                if fileSize > rotationLimit {
                     rotateLogFiles(currentLogURL: logFileURL)
                     logCounter = 0
-                    return
                 }
-            }
-
-            if logCounter >= 10_000 {
-                rotateLogFiles(currentLogURL: logFileURL)
-                logCounter = 0
             }
         } catch {
             // Silent failure to avoid logging loops
@@ -439,6 +588,7 @@ public actor Logger {
     /// stockbar.1.log -> stockbar.2.log
     /// stockbar.2.log -> deleted
     private func rotateLogFiles(currentLogURL: URL) {
+        closeWriteHandle()
         do {
             let baseURL = currentLogURL.deletingLastPathComponent()
             let baseFileName = "stockbar"
@@ -472,8 +622,9 @@ public actor Logger {
     /// Clears all log files (current and rotated)
     public func clearAllLogs() {
         guard let baseURL = getLogFileURL()?.deletingLastPathComponent() else { return }
+        closeWriteHandle()
 
-        let logFiles = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
+        let logFiles = Self.logFileNames
 
         for logFile in logFiles {
             let fileURL = baseURL.appendingPathComponent(logFile)
@@ -489,23 +640,25 @@ public actor Logger {
             try? message.write(to: newLogURL, atomically: true, encoding: .utf8)
         }
     }
+}
 
-    /// Gets total size of all log files in MB
-    public nonisolated func getTotalLogSize() -> Double {
-        guard let baseURL = Self.resolveLogDirectoryURL(fileManager: .default) else { return 0 }
+/// Remembers the debug-logging setting for a few seconds at a time.
+private final class DebugFlagCache: Sendable {
+    private struct State {
+        var cached = false
+        var readAt = Date.distantPast
+    }
 
-        let logFiles = ["stockbar.log", "stockbar.1.log", "stockbar.2.log"]
-        var totalSize: Int64 = 0
+    private let state = Mutex(State())
 
-        for logFile in logFiles {
-            let fileURL = baseURL.appendingPathComponent(logFile)
-            if FileManager.default.fileExists(atPath: fileURL.path),
-               let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-               let fileSize = attributes[.size] as? Int64 {
-                totalSize += fileSize
+    func value(_ read: () -> Bool) -> Bool {
+        state.withLock { state in
+            let now = Date()
+            if now.timeIntervalSince(state.readAt) > 5 {
+                state.cached = read()
+                state.readAt = now
             }
+            return state.cached
         }
-
-        return Double(totalSize) / 1_000_000.0 // Convert to MB
     }
 }

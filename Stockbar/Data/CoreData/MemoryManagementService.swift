@@ -62,34 +62,23 @@ actor MemoryManagementService {
         lastUsagePressureLevel = .normal
     }
     
-    /// Gets current memory usage statistics
-    func getMemoryStats() -> MemoryStats {
-        let usage = getCurrentMemoryUsage()
-        let cacheMemory = calculateCacheMemoryUsage()
-        
-        return MemoryStats(
-            currentUsage: usage,
-            cacheUsage: cacheMemory,
-            warningThreshold: memoryWarningThreshold,
-            criticalThreshold: memoryCriticalThreshold,
-            emergencyThreshold: memoryEmergencyThreshold,
-            cacheSize: chartDataMemoryCache.count,
-            maxCacheSize: maxCacheSize
-        )
-    }
     
     /// Performs intelligent memory cleanup based on current usage
     func performMemoryCleanup(forced: Bool = false) async {
         let currentUsage = getCurrentMemoryUsage()
         
-        Task { await logger.info("🧹 Memory cleanup - Current usage: \(String(format: "%.1f", currentUsage))MB") }
-        
         if forced || currentUsage > memoryWarningThreshold {
             await performCacheCleanup(dropAll: forced || currentUsage > memoryCriticalThreshold)
-            
+
             let newUsage = getCurrentMemoryUsage()
             let saved = max(0, currentUsage - newUsage)
-            Task { await logger.info("🧹 Memory cleanup completed - Freed \(String(format: "%.1f", saved))MB") }
+            // Worth an info line only when it freed something to speak of.
+            let summary = "🧹 Memory cleanup: \(String(format: "%.1f", currentUsage))MB before, freed \(String(format: "%.1f", saved))MB"
+            if saved >= 1 {
+                Task { await logger.info(summary) }
+            } else {
+                Task { await logger.debug(summary) }
+            }
         }
     }
     
@@ -120,77 +109,9 @@ actor MemoryManagementService {
         Task { await logger.debug("📊 Chart data memory optimization completed - \(chartDataMemoryCache.count) items cached") }
     }
     
-    /// Caches chart data with intelligent memory management
-    func cacheChartData(_ data: [ChartDataPoint], forKey key: String, priority: CachePriority = .normal) async {
-        // Check if we should cache based on memory pressure
-        let currentUsage = getCurrentMemoryUsage()
-        
-        if currentUsage > memoryCriticalThreshold && priority != .high {
-            Task { await logger.debug("📊 Skipping cache due to memory pressure") }
-            return
-        }
-        
-        // Estimate memory usage for this data
-        let estimatedSize = estimateDataSize(data)
-        
-        // Make room if necessary
-        await makeRoomForData(estimatedSize: estimatedSize)
-        
-        // Cache the data
-        chartDataMemoryCache[key] = MemoryCachedData(
-            data: data,
-            timestamp: Date(),
-            lastAccessed: Date(),
-            estimatedSize: estimatedSize,
-            priority: priority
-        )
-        
-        Task { await logger.debug("📊 Cached \(data.count) chart points (\(String(format: "%.1f", estimatedSize))KB) for key: \(key)") }
-    }
     
-    /// Retrieves cached chart data with access tracking
-    func getCachedChartData(forKey key: String) -> [ChartDataPoint]? {
-        guard var cachedData = chartDataMemoryCache[key] else {
-            return nil
-        }
-        
-        if cachedData.isExpired() {
-            chartDataMemoryCache.removeValue(forKey: key)
-            return nil
-        }
-        
-        // Update access time for LRU
-        cachedData.lastAccessed = Date()
-        chartDataMemoryCache[key] = cachedData
-        
-        return cachedData.data
-    }
     
-    /// Configures memory management settings
-    func configureMemorySettings(
-        maxCacheSize: Int? = nil,
-        warningThreshold: Double? = nil,
-        criticalThreshold: Double? = nil
-    ) {
-        if let maxSize = maxCacheSize {
-            self.maxCacheSize = max(10, min(maxSize, 200))
-        }
-        
-        if let warning = warningThreshold {
-            self.memoryWarningThreshold = max(50, min(warning, 300))
-        }
-        
-        if let critical = criticalThreshold {
-            self.memoryCriticalThreshold = max(100, min(critical, 400))
-        }
-        
-        Task { await logger.info("🧹 Memory settings updated - Cache: \(self.maxCacheSize), Warning: \(String(format: "%.0f", self.memoryWarningThreshold))MB") }
-    }
     
-    /// Gets memory usage history for analysis
-    func getMemoryUsageHistory() -> [MemoryUsageSnapshot] {
-        return memoryUsageHistory
-    }
     
     // MARK: - Private Implementation
     
@@ -280,15 +201,30 @@ actor MemoryManagementService {
             lastSystemPressureLevel = level
         }
 
+        // The system raises a warning when any app is short of memory. Most
+        // of the time that is not Stockbar, and emptying its small caches
+        // freed nothing while making the next chart slower. Act on a warning
+        // only when Stockbar itself is large; always act when it is critical.
+        guard Self.shouldEvictCaches(
+            systemPressureIsCritical: critical,
+            ownUsageMB: getCurrentMemoryUsage(),
+            ownUsageLimitMB: memoryWarningThreshold
+        ) else { return }
+
         await performMemoryCleanup(forced: true)
         CacheManager.shared.clearMemoryCache()
-        await OptimizedChartDataService.shared.clearCache()
         await HistoricalDataManager.shared.evictMemoryCachesForPressure(critical: critical)
     }
     
+    nonisolated static func shouldEvictCaches(
+        systemPressureIsCritical: Bool,
+        ownUsageMB: Double,
+        ownUsageLimitMB: Double
+    ) -> Bool {
+        systemPressureIsCritical || ownUsageMB > ownUsageLimitMB
+    }
+
     private func performCacheCleanup(dropAll: Bool = false) async {
-        Task { await logger.debug("🧹 Performing cache cleanup") }
-        
         let currentUsage = getCurrentMemoryUsage()
         
         // More aggressive cleanup under memory pressure
@@ -307,33 +243,6 @@ actor MemoryManagementService {
         chartDataMemoryCache = chartDataMemoryCache.filter { !$0.value.isExpired(at: now) }
     }
     
-    private func makeRoomForData(estimatedSize: Double) async {
-        let currentUsage = getCurrentMemoryUsage()
-        let availableMemory = memoryCriticalThreshold - currentUsage
-        
-        if estimatedSize > availableMemory * 1024 { // Convert MB to KB
-            // Need to free up space
-            let targetToRemove = estimatedSize - (availableMemory * 1024)
-            var removedSize: Double = 0
-            
-            // Sort by priority and access time
-            let sortedEntries = chartDataMemoryCache.sorted { entry1, entry2 in
-                if entry1.value.priority != entry2.value.priority {
-                    return entry1.value.priority.rawValue < entry2.value.priority.rawValue
-                }
-                return entry1.value.lastAccessed < entry2.value.lastAccessed
-            }
-            
-            for (key, value) in sortedEntries {
-                if removedSize >= targetToRemove { break }
-                
-                chartDataMemoryCache.removeValue(forKey: key)
-                removedSize += value.estimatedSize
-            }
-            
-            Task { await logger.debug("📊 Freed \(String(format: "%.1f", removedSize))KB to make room for new data") }
-        }
-    }
     
     private func getCurrentMemoryUsage() -> Double {
         var info = mach_task_basic_info()
@@ -356,15 +265,6 @@ actor MemoryManagementService {
         return chartDataMemoryCache.values.reduce(0) { $0 + $1.estimatedSize } / 1024.0 // Convert to MB
     }
     
-    private func estimateDataSize(_ data: [ChartDataPoint]) -> Double {
-        // Rough estimate: 
-        // - Date: 8 bytes
-        // - Double (value): 8 bytes  
-        // - Optional String (symbol): ~20 bytes average
-        // - Object overhead: ~16 bytes
-        let bytesPerPoint = 52.0
-        return Double(data.count) * bytesPerPoint / 1024.0 // Convert to KB
-    }
 }
 
 // MARK: - Supporting Types

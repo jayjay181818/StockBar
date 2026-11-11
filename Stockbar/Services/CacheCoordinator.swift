@@ -11,7 +11,15 @@ import Foundation
 /// Coordinates caching strategy for stock price data with exponential backoff and circuit breaker
 actor CacheCoordinator {
     // MARK: - Cache Configuration
-    let cacheInterval: TimeInterval = 900  // 15 minutes for successful fetches
+    /// How long a quote counts as fresh. The refresh service keeps this in step
+    /// with the user's refresh interval, so the status shown for a symbol and the
+    /// decision to refetch it use the same figure.
+    private(set) var cacheInterval: TimeInterval = 900
+
+    func setFreshnessInterval(_ interval: TimeInterval) {
+        guard interval.isFinite, interval > 0 else { return }
+        cacheInterval = interval
+    }
     private let maxCacheAge: TimeInterval = 3600  // 1 hour before forcing refresh
 
     // Exponential backoff retry intervals
@@ -26,6 +34,36 @@ actor CacheCoordinator {
     private var lastFailedFetch: [String: Date] = [:]
     private var consecutiveFailures: [String: Int] = [:]  // Track consecutive failures per symbol
     private var suspendedSymbols: [String: Date] = [:]  // Circuit breaker: suspended symbols
+
+    // MARK: - Provider back-off
+    //
+    // When a whole refresh pass fails, or the provider reports throttling or a dead
+    // connection, the fault is not any one symbol's. Counting it per symbol tripped
+    // every circuit breaker together and stopped all quotes for an hour, so those
+    // failures share one short back-off instead. It is deliberately not persisted.
+    private let providerBackoffSteps: [TimeInterval] = [60, 120, 300, 600]
+    private var providerFailureCount = 0
+    private var providerBackoffUntil: Date?
+
+    /// Records a provider-wide failure and returns how long refreshes should wait.
+    @discardableResult
+    func recordProviderFailure(at time: Date) -> TimeInterval {
+        providerFailureCount += 1
+        let wait = providerBackoffSteps[min(providerFailureCount, providerBackoffSteps.count) - 1]
+        providerBackoffUntil = time.addingTimeInterval(wait)
+        return wait
+    }
+
+    func recordProviderSuccess() {
+        providerFailureCount = 0
+        providerBackoffUntil = nil
+    }
+
+    /// Seconds left before automatic refreshes may try the provider again, or nil.
+    func providerBackoffRemaining(at time: Date) -> TimeInterval? {
+        guard let until = providerBackoffUntil, until > time else { return nil }
+        return until.timeIntervalSince(time)
+    }
 
     // MARK: - Persistence
     //
@@ -109,11 +147,6 @@ actor CacheCoordinator {
         persist()
     }
 
-    /// Gets the last successful fetch time for a symbol
-    func getLastSuccessfulFetch(for symbol: String) -> Date? {
-        return lastSuccessfulFetch[symbol]
-    }
-
     /// Gets the last failed fetch time for a symbol
     func getLastFailedFetch(for symbol: String) -> Date? {
         return lastFailedFetch[symbol]
@@ -184,16 +217,6 @@ actor CacheCoordinator {
         persist()
     }
 
-    /// Checks if symbol is currently cached
-    func isCached(symbol: String, at time: Date) -> Bool {
-        guard let lastSuccess = lastSuccessfulFetch[symbol] else {
-            return false
-        }
-
-        let timeSinceSuccess = time.timeIntervalSince(lastSuccess)
-        return timeSinceSuccess < cacheInterval
-    }
-
     /// Gets cache status for a symbol.
     ///
     /// This is a **pure query**. It must not mutate cache or breaker state:
@@ -258,11 +281,6 @@ actor CacheCoordinator {
         consecutiveFailures.removeAll()
         suspendedSymbols.removeAll()
         persist()
-    }
-
-    /// Gets all cached symbols
-    func getCachedSymbols() -> Set<String> {
-        return Set(lastSuccessfulFetch.keys)
     }
 
     /// Gets cache statistics

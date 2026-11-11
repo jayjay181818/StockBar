@@ -112,3 +112,46 @@ extension TradingInfoEntity {
         self.lastModified = Date()
     }
 }
+
+// MARK: - Change detection
+//
+// Core Data writes a row whenever a property is assigned, even to the value it
+// already holds. These comparisons let a save skip rows that have not changed.
+
+extension TradeEntity {
+    func matches(_ trade: Trade) -> Bool {
+        name == trade.name
+            && unitSize == trade.position.unitSizeString
+            && positionAvgCost == trade.position.positionAvgCostString
+            && currency == trade.position.currency
+            && costCurrency == trade.position.costCurrency
+            && isWatchlistOnly == trade.isWatchlistOnly
+            && showInMenuBar == trade.showInMenuBar
+    }
+}
+
+extension TradingInfoEntity {
+    func matches(_ info: TradingInfo) -> Bool {
+        func same(_ stored: Double, _ value: Double?) -> Bool {
+            let value = value ?? .nan
+            return stored == value || (stored.isNaN && value.isNaN)
+        }
+        return same(currentPrice, info.currentPrice)
+            && same(previousClose, info.previousClose)
+            && lastUpdateTime == Int64(info.lastUpdateTime ?? 0)
+            && same(prevClosePrice, info.prevClosePrice)
+            && currency == info.currency
+            && regularMarketTime == Int64(info.regularMarketTime)
+            && exchangeTimezoneName == info.exchangeTimezoneName
+            && shortName == info.shortName
+            && same(preMarketPrice, info.preMarketPrice)
+            && same(preMarketChange, info.preMarketChange)
+            && same(preMarketChangePercent, info.preMarketChangePercent)
+            && preMarketTime == Int64(info.preMarketTime ?? 0)
+            && same(postMarketPrice, info.postMarketPrice)
+            && same(postMarketChange, info.postMarketChange)
+            && same(postMarketChangePercent, info.postMarketChangePercent)
+            && postMarketTime == Int64(info.postMarketTime ?? 0)
+            && marketState == info.marketState
+    }
+}

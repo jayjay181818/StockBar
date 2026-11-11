@@ -26,6 +26,7 @@ enum StockbarAcceptanceRuntimeError: Error, Equatable, LocalizedError {
 struct StockbarAcceptanceRuntime: Sendable {
     static let productionFolyncKeychainService = "com.stockbar.folync"
     static let productionTrading212KeychainService = "com.stockbar.trading212"
+    static let productionMarketDataKeychainService = "com.stockbar.marketdata"
     static let markerName = ".stockbar-acceptance-run"
 
     let root: URL?
@@ -42,6 +43,12 @@ struct StockbarAcceptanceRuntime: Sendable {
         return "\(Self.productionTrading212KeychainService).acceptance.\(runID)"
     }
 
+    /// The FMP and Twelve Data keys, kept apart for acceptance and XCTest runs the same way.
+    var marketDataKeychainService: String {
+        guard let runID else { return Self.productionMarketDataKeychainService }
+        return "\(Self.productionMarketDataKeychainService).acceptance.\(runID)"
+    }
+
     var applicationSupportRoot: URL? {
         root?.appendingPathComponent("Application Support/Stockbar", isDirectory: true)
     }
@@ -54,8 +61,16 @@ struct StockbarAcceptanceRuntime: Sendable {
         root?.appendingPathComponent("Caches/stockbar-cache", isDirectory: true)
     }
 
+    /// An isolated run keeps its defaults inside its own root: a suite named by
+    /// an absolute path is stored at that path. A named suite would live in
+    /// ~/Library/Preferences, where macOS keeps an empty file after the domain
+    /// is removed and cfprefsd can write it back after it is deleted.
     var defaultsSuiteName: String? {
-        runID.map { "com.stockbar.acceptance.\($0)" }
+        guard let runID else { return nil }
+        let domain = "com.stockbar.acceptance.\(runID)"
+        guard let root else { return domain }
+        return root.appendingPathComponent("Preferences", isDirectory: true)
+            .appendingPathComponent(domain).path
     }
 
     var coreDataStoreURL: URL? {
@@ -83,17 +98,18 @@ struct StockbarAcceptanceRuntime: Sendable {
     }
 
     /// Removes everything an automatic XCTest run created: temporary root, defaults
-    /// suite, and its Folync and Trading 212 Keychain items. Never touches
+    /// suite, and its Folync, Trading 212 and market-data Keychain items. Never touches
     /// explicit acceptance runs.
     func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
         guard isAutomaticXCTestIsolation else { return }
-        if let root { try? fileManager.removeItem(at: root) }
         if let defaultsSuiteName { UserDefaults.standard.removePersistentDomain(forName: defaultsSuiteName) }
+        if let root { try? fileManager.removeItem(at: root) }
         try? FolyncCredentialStore(service: folyncKeychainService).delete()
         let trading212Store = Trading212CredentialStore(service: trading212KeychainService)
         for environment in Trading212Environment.allCases {
             try? trading212Store.delete(environment: environment)
         }
+        try? MarketDataKeyStore(service: marketDataKeychainService).deleteAll()
     }
 
     nonisolated(unsafe) private static var runtimePendingCleanup: Self?
@@ -227,17 +243,26 @@ public enum StockbarRuntimeStorage {
         return defaults
     }
 
+    /// Where the folder normally is, for the rare case the system lookup
+    /// returns nothing. The temporary directory used before is emptied by
+    /// macOS, which would have silently discarded the portfolio.
+    private static func libraryFallback(_ name: String, fileManager: FileManager) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+    }
+
     static func stockbarApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.applicationSupportRoot { return directory }
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Application Support", fileManager: fileManager)
         return applicationSupport.appendingPathComponent("Stockbar", isDirectory: true)
     }
 
     static func bundleApplicationSupportDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.bundleApplicationSupportRoot { return directory }
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Application Support", fileManager: fileManager)
         let bundleIdentifier = Bundle.main.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 }
             ?? "com.stockbar"
         return applicationSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
@@ -246,7 +271,7 @@ public enum StockbarRuntimeStorage {
     static func cacheDirectory(fileManager: FileManager = .default) -> URL {
         if let directory = acceptance.cacheRoot { return directory }
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+            ?? libraryFallback("Caches", fileManager: fileManager)
         return caches.appendingPathComponent("stockbar-cache", isDirectory: true)
     }
 }

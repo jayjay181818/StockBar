@@ -13,6 +13,11 @@ struct FolyncDataSourceSection: View {
     @State private var preview: FolyncPortfolioSnapshot?
     @State private var supplemental = FolyncSupplementalSettings.disabled
     @State private var isWorking = false
+    @State private var confirmingDisable = false
+    @State private var confirmingTokenRemoval = false
+    /// Per-holding menu-bar choices, read once. Decoding the stored JSON
+    /// inside each row's binding ran it for every holding on every render.
+    @State private var overlays: [String: FolyncHoldingOverlay] = [:]
     @State private var statusMessage: String?
     @State private var manualRefreshInProgress = false
     @State private var announcementPolicy = FolyncStatusAnnouncementPolicy()
@@ -39,11 +44,14 @@ struct FolyncDataSourceSection: View {
                     Text("HTTPS URL:")
                     TextField("https://folync.example.com", text: $endpoint)
                         .textFieldStyle(.roundedBorder)
+                        // Otherwise VoiceOver reads the example address as the field's name.
+                        .accessibilityLabel("Folync HTTPS URL")
                 }
                 GridRow {
                     Text("Client token:")
                     SecureField(tokenPlaceholder, text: $token)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Folync client token")
                 }
                 if !portfolios.isEmpty {
                     GridRow {
@@ -69,11 +77,37 @@ struct FolyncDataSourceSection: View {
                 if dataModel.isFolyncEnabled {
                     Button("Refresh Now") { refreshNow() }
                     .disabled(isWorking)
-                    Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync") {
-                        dataModel.deactivateFolyncPortfolio()
-                        showStatus("Folync has been disabled.")
+                    Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio…" : "Disable Folync…") {
+                        confirmingDisable = true
                     }
                     .disabled(isWorking)
+                    .confirmationDialog(
+                        dataModel.isFolyncPortfolioActive ? "Switch back to the local portfolio?" : "Disable Folync?",
+                        isPresented: $confirmingDisable,
+                        titleVisibility: .visible
+                    ) {
+                        Button(dataModel.isFolyncPortfolioActive ? "Use Local Portfolio" : "Disable Folync", role: .destructive) {
+                            dataModel.deactivateFolyncPortfolio()
+                            showStatus("Folync has been disabled.")
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Stockbar stops showing Folync's holdings and figures and goes back to the holdings entered here. The saved address and token are kept, so you can activate it again.")
+                    }
+                }
+                if hasStoredToken {
+                    Button("Remove Token…") { confirmingTokenRemoval = true }
+                        .disabled(isWorking)
+                        .confirmationDialog(
+                            "Remove the Folync token?",
+                            isPresented: $confirmingTokenRemoval,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Remove Token", role: .destructive) { removeToken() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Stockbar stops using Folync and deletes the token from the Keychain. The saved address is kept.")
+                        }
                 }
                 if isWorking {
                     ProgressView()
@@ -172,6 +206,7 @@ struct FolyncDataSourceSection: View {
         }
         .stockbarCard()
         .onAppear(perform: loadStoredSettings)
+        .onAppear { overlays = dataModel.folyncSessionDependencies.overlayStore.load() }
         .onChange(of: selectedScope) { _, _ in preview = nil }
         .onChange(of: dataModel.folyncConnectionState) { _, newState in
             // Background checks only; a manual refresh announces its own result.
@@ -190,7 +225,12 @@ struct FolyncDataSourceSection: View {
     }
 
     private var hasUsableToken: Bool {
-        !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasStoredToken
+        !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || storedTokenAppliesToEndpoint
+    }
+
+    /// The stored token is only reused for the server it was saved for.
+    private var storedTokenAppliesToEndpoint: Bool {
+        hasStoredToken && dataModel.storedFolyncTokenApplies(to: endpointURL)
     }
 
     private var canSubmitConnectionRequest: Bool {
@@ -252,7 +292,8 @@ struct FolyncDataSourceSection: View {
     /// The Keychain check can wait on a macOS access prompt; don't claim the
     /// token is missing until it has answered.
     private var tokenPlaceholder: String {
-        if hasStoredToken { return "Stored in Keychain" }
+        if storedTokenAppliesToEndpoint { return "Stored in Keychain" }
+        if hasStoredToken { return "Enter the token for this server" }
         return isCheckingStoredToken ? "Checking Keychain…" : "Required"
     }
 
@@ -334,6 +375,21 @@ struct FolyncDataSourceSection: View {
                 token = ""
                 statusMessage = nil
                 accessibilityAnnouncer.announce("Folync is active.")
+            } catch {
+                showStatus(LogRedactor.redact(error.localizedDescription))
+            }
+        }
+    }
+
+    private func removeToken() {
+        isWorking = true
+        Task {
+            defer { isWorking = false }
+            do {
+                try await dataModel.removeStoredFolyncToken()
+                hasStoredToken = false
+                token = ""
+                showStatus("The Folync token has been removed.")
             } catch {
                 showStatus(LogRedactor.redact(error.localizedDescription))
             }
@@ -422,9 +478,12 @@ struct FolyncDataSourceSection: View {
         Binding(
             get: {
                 let key = holding.overlayKey(scopeID: dataModel.folyncPortfolioSnapshot?.scope.id ?? selectedScope)
-                return dataModel.folyncSessionDependencies.overlayStore.load()[key]?.showInMenuBar ?? true
+                return overlays[key]?.showInMenuBar ?? true
             },
-            set: { dataModel.setFolyncHoldingVisibleInMenuBar($0, holding: holding) }
+            set: {
+                dataModel.setFolyncHoldingVisibleInMenuBar($0, holding: holding)
+                overlays = dataModel.folyncSessionDependencies.overlayStore.load()
+            }
         )
     }
 

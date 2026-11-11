@@ -34,7 +34,7 @@ struct DataSourcesSettingsView: View {
     @State private var alertMessage: String = ""
     
     // Default priorities including all supported sources
-    private let allSources = ["yfinance", "fmp", "twelvedata", "stooq"]
+    private let allSources = ["yfinance", "fmp", "twelvedata"]
     
     private let configManager = ConfigurationManager.shared
     
@@ -50,7 +50,9 @@ struct DataSourcesSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Financial Modeling Prep:")
-                                .frame(width: 160, alignment: .leading)
+                                // Grows with larger text instead of truncating.
+                                .frame(minWidth: 160, alignment: .leading)
+                                .fixedSize()
                             
                             Group {
                                 if showFmpKey {
@@ -104,7 +106,9 @@ struct DataSourcesSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Twelve Data:")
-                                .frame(width: 160, alignment: .leading)
+                                // Grows with larger text instead of truncating.
+                                .frame(minWidth: 160, alignment: .leading)
+                                .fixedSize()
                             
                             Group {
                                 if showTwelveDataKey {
@@ -184,7 +188,9 @@ struct DataSourcesSettingsView: View {
                         }
                     }
                     
-                    Text("Drag to reorder. The app will attempt to fetch data from sources in this order.")
+                    Text(isEditingPriority
+                         ? "Drag to reorder. Stockbar tries each source in this order until one answers."
+                         : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -248,24 +254,56 @@ struct DataSourcesSettingsView: View {
     }
 
     private func removeKey(service: String) {
-        switch service {
-        case "fmp":
-            configManager.removeFMPAPIKey()
-            fmpApiKey = ""
-            fmpStatus = .none
-        case "twelvedata":
-            configManager.removeTwelveDataAPIKey()
-            twelveDataApiKey = ""
-            twelveDataStatus = .none
-        default:
-            return
+        guard let key = Self.apiKey(for: service) else { return }
+        let manager = configManager
+        Task {
+            do {
+                // The Keychain can wait on a prompt, so not on the main actor.
+                try await Task.detached { try manager.removeAPIKey(key) }.value
+            } catch {
+                showKeychainFailure("Stockbar couldn't remove the \(sourceName(for: service)) key from the Keychain.", error)
+                return
+            }
+            setKeyField("", for: key)
+            setStatus(.none, for: key)
+            setHasStoredKey(false, for: key)
+            Self.storeVerification(nil, for: service)
         }
-        refreshStoredKeyFlags()
     }
 
-    private func refreshStoredKeyFlags() {
-        hasStoredFmpKey = !(configManager.getFMPAPIKey() ?? "").isEmpty
-        hasStoredTwelveDataKey = !(configManager.getTwelveDataAPIKey() ?? "").isEmpty
+    private static func apiKey(for service: String) -> MarketDataAPIKey? {
+        switch service {
+        case "fmp": return .fmp
+        case "twelvedata": return .twelveData
+        default: return nil
+        }
+    }
+
+    private func setKeyField(_ value: String, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: fmpApiKey = value
+        case .twelveData: twelveDataApiKey = value
+        }
+    }
+
+    private func setStatus(_ status: VerificationStatus, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: fmpStatus = status
+        case .twelveData: twelveDataStatus = status
+        }
+    }
+
+    private func setHasStoredKey(_ stored: Bool, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: hasStoredFmpKey = stored
+        case .twelveData: hasStoredTwelveDataKey = stored
+        }
+    }
+
+    private func showKeychainFailure(_ message: String, _ error: Error) {
+        alertTitle = "Keychain Error"
+        alertMessage = "\(message) \(error.localizedDescription)"
+        showingAlert = true
     }
     
     private func statusIndicator(for status: VerificationStatus) -> some View {
@@ -314,10 +352,6 @@ struct DataSourcesSettingsView: View {
                 Text("(Recommended Primary)")
                     .font(.caption)
                     .foregroundColor(.green)
-            } else if source == "stooq" {
-                Text("(No Key Required)")
-                    .font(.caption)
-                    .foregroundColor(.blue)
             }
         }
     }
@@ -327,20 +361,17 @@ struct DataSourcesSettingsView: View {
         case "yfinance": return "Yahoo Finance (yfinance)"
         case "fmp": return "Financial Modeling Prep"
         case "twelvedata": return "Twelve Data"
-        case "stooq": return "Stooq"
         default: return source
         }
     }
     
     private func loadSettings() {
-        fmpApiKey = configManager.getFMPAPIKey() ?? ""
-        twelveDataApiKey = configManager.getTwelveDataAPIKey() ?? ""
-        refreshStoredKeyFlags()
-        
+        loadStoredKeys()
+
         let savedPriority = configManager.getDataSourcePriority()
         if let saved = savedPriority, !saved.isEmpty {
             // Ensure all known sources are present (in case new ones added)
-            var merged = saved
+            var merged = saved.filter { allSources.contains($0) }
             for source in allSources {
                 if !merged.contains(source) {
                     merged.append(source)
@@ -352,32 +383,76 @@ struct DataSourcesSettingsView: View {
         }
     }
     
+    /// Reads the keys off the main actor, because the Keychain can wait on a prompt.
+    private func loadStoredKeys() {
+        let manager = configManager
+        Task {
+            let stored = await Task.detached {
+                (fmp: manager.getFMPAPIKey() ?? "", twelveData: manager.getTwelveDataAPIKey() ?? "")
+            }.value
+            // Anything typed while the Keychain was being read stays.
+            if fmpApiKey.isEmpty { fmpApiKey = stored.fmp }
+            if twelveDataApiKey.isEmpty { twelveDataApiKey = stored.twelveData }
+            hasStoredFmpKey = !stored.fmp.isEmpty
+            hasStoredTwelveDataKey = !stored.twelveData.isEmpty
+            // Show the last test result for a stored key, rather than "Not
+            // verified" every time the tab is opened.
+            if fmpStatus == .none, hasStoredFmpKey, let result = Self.storedVerification(for: "fmp") {
+                fmpStatus = result ? .success : .failure
+            }
+            if twelveDataStatus == .none, hasStoredTwelveDataKey, let result = Self.storedVerification(for: "twelvedata") {
+                twelveDataStatus = result ? .success : .failure
+            }
+        }
+    }
+
     private func movePriority(from source: IndexSet, to destination: Int) {
         dataSourcePriority.move(fromOffsets: source, toOffset: destination)
         configManager.setDataSourcePriority(dataSourcePriority)
     }
     
+    // Only whether the last test passed is remembered, never the key itself.
+    private static func verificationDefaultsKey(_ service: String) -> String { "dataSourceKeyVerified.\(service)" }
+
+    private static func storedVerification(for service: String) -> Bool? {
+        StockbarRuntimeStorage.userDefaults.object(forKey: verificationDefaultsKey(service)) as? Bool
+    }
+
+    private static func storeVerification(_ passed: Bool?, for service: String) {
+        let defaults = StockbarRuntimeStorage.userDefaults
+        if let passed {
+            defaults.set(passed, forKey: verificationDefaultsKey(service))
+        } else {
+            defaults.removeObject(forKey: verificationDefaultsKey(service))
+        }
+    }
+
     private func saveAndTestKey(service: String, key: String) {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else { return }
+        guard !trimmedKey.isEmpty, let apiKey = Self.apiKey(for: service) else { return }
         
-        // Save first
-        if service == "fmp" {
-            configManager.setFMPAPIKey(trimmedKey)
-            fmpStatus = .verifying
-        } else if service == "twelvedata" {
-            configManager.setTwelveDataAPIKey(trimmedKey)
-            twelveDataStatus = .verifying
-        }
-        
-        refreshStoredKeyFlags()
+        // A new key has not been tested yet, whatever the old one's result was.
+        Self.storeVerification(nil, for: service)
+        setStatus(.verifying, for: apiKey)
 
-        // Test
+        let manager = configManager
         Task {
+            // Save first, off the main actor: the Keychain can wait on a prompt.
+            do {
+                try await Task.detached { try manager.setAPIKey(trimmedKey, for: apiKey) }.value
+            } catch {
+                setStatus(.failure, for: apiKey)
+                showKeychainFailure("Stockbar couldn't save the \(sourceName(for: service)) key to the Keychain.", error)
+                return
+            }
+            setHasStoredKey(true, for: apiKey)
+
+            // Test
             do {
                 let isValid = try await dataModel.verifyAPIKey(service: service)
                 
                 await MainActor.run {
+                    Self.storeVerification(isValid, for: service)
                     if service == "fmp" {
                         fmpStatus = isValid ? .success : .failure
                     } else if service == "twelvedata" {

@@ -75,7 +75,9 @@ public final class CurrencyConverter: @unchecked Sendable {
     
     // Currency history tracking (keep last 30 days)
     @ObservationIgnored private var rateHistory: [CurrencyRateSnapshot] = []
-    private let maxHistoryDays: Int = 30
+    /// Only the newest saved rates are ever read back (as a fallback when a
+    /// live fetch fails). Thirty days of them was 145 KB of preferences.
+    private let maxHistorySnapshots = 10
     private let significantChangeThreshold: Double = 0.02 // 2% change threshold for alerts
     
     // Alert tracking to prevent spam
@@ -347,9 +349,14 @@ public final class CurrencyConverter: @unchecked Sendable {
         }
         Task { await Logger.shared.info("💱 [CurrencyConverter] Fetching exchange rates from legacy API...") }
 
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
-            guard let data = data,
-                  let response = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data) else {
+        URLSession.shared.dataTask(with: url) { [weak self] data, urlResponse, _ in
+            // An error page can be valid JSON, and a zero or negative rate would
+            // turn every converted value into nonsense or infinity.
+            let succeeded = (urlResponse as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            guard succeeded, let data = data,
+                  let decoded = try? JSONDecoder().decode(ExchangeRateResponse.self, from: data),
+                  case let usable = decoded.rates.filter({ $0.value.isFinite && $0.value > 0 }),
+                  !usable.isEmpty else {
                 Task { await Logger.shared.warning("💱 [CurrencyConverter] ❌ Failed to fetch exchange rates, using fallback rates") }
                 Task { @MainActor [weak self] in
                     self?.finishFailedLegacyRefresh()
@@ -358,13 +365,13 @@ public final class CurrencyConverter: @unchecked Sendable {
             }
 
             Task { @MainActor [weak self] in
-                self?.finishSuccessfulLegacyRefresh(rates: response.rates)
+                self?.finishSuccessfulLegacyRefresh(rates: usable)
 
                 Task {
                     await Logger.shared.info("💱 [CurrencyConverter] ✅ Successfully fetched exchange rates:")
-                    await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(response.rates["GBP"] ?? 0.0)")
-                    await Logger.shared.info("💱 [CurrencyConverter] USD to EUR: \(response.rates["EUR"] ?? 0.0)")
-                    if let gbpRate = response.rates["GBP"] {
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to GBP: \(usable["GBP"] ?? 0.0)")
+                    await Logger.shared.info("💱 [CurrencyConverter] USD to EUR: \(usable["EUR"] ?? 0.0)")
+                    if let gbpRate = usable["GBP"] {
                         let gbpToUsd = 1.0 / gbpRate
                         await Logger.shared.debug("💱 [CurrencyConverter] GBP to USD: \(gbpToUsd) (£1 = $\(String(format: "%.4f", gbpToUsd)))")
                     }
@@ -379,9 +386,7 @@ public final class CurrencyConverter: @unchecked Sendable {
         let snapshot = CurrencyRateSnapshot(timestamp: Date(), rates: rates, baseCurrency: "USD")
         rateHistory.append(snapshot)
         
-        // Trim old history (keep only last 30 days)
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -maxHistoryDays, to: Date()) ?? Date()
-        rateHistory = rateHistory.filter { $0.timestamp >= cutoffDate }
+        rateHistory = Array(rateHistory.sorted { $0.timestamp < $1.timestamp }.suffix(maxHistorySnapshots))
         
         saveRateHistory()
         let snapshotCount = rateHistory.count
@@ -420,30 +425,6 @@ public final class CurrencyConverter: @unchecked Sendable {
             await Logger.shared.warning("💱 [CurrencyConverter] Using latest saved historical exchange rates after live fetch failed.")
         }
         return true
-    }
-    
-    // Get historical rate for a specific currency pair
-    public func getRateHistory(from: String, to: String, days: Int = 30) -> [(date: Date, rate: Double)] {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-        
-        return rateHistory
-            .filter { $0.timestamp >= cutoffDate }
-            .compactMap { snapshot -> (Date, Double)? in
-                let rate: Double
-                if from == "USD" {
-                    guard let targetRate = snapshot.rates[to] else { return nil }
-                    rate = targetRate
-                } else if to == "USD" {
-                    guard let sourceRate = snapshot.rates[from] else { return nil }
-                    rate = 1.0 / sourceRate
-                } else {
-                    guard let sourceRate = snapshot.rates[from],
-                          let targetRate = snapshot.rates[to] else { return nil }
-                    rate = targetRate / sourceRate
-                }
-                return (snapshot.timestamp, rate)
-            }
-            .sorted { $0.date < $1.date }
     }
     
     // MARK: - Significant Change Detection

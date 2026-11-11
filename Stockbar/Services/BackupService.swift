@@ -74,37 +74,48 @@ class BackupService {
             return true
         }
 
-        return await performBackup(trades: trades, automatic: true)
+        return await performBackup(trades: trades, automatic: true) != .failed
     }
 
     /// Performs manual backup
     func performManualBackup(trades: [RealTimeTrade]) async -> Bool {
+        return await performBackup(trades: trades, automatic: false) == .saved
+    }
+
+    /// Manual backup that tells an empty portfolio apart from a failed write,
+    /// so the app does not report "failed" when there was nothing to save.
+    func performManualBackupReportingOutcome(trades: [RealTimeTrade]) async -> BackupOutcome {
         return await performBackup(trades: trades, automatic: false)
     }
 
     /// Safety backup taken just before a restore. Its retention cleanup never
     /// deletes `keeping`, the backup about to be restored.
+    /// True when the current portfolio is safe: copied, or with nothing in it to copy.
     func performPreRestoreBackup(trades: [RealTimeTrade], keeping restoreURL: URL) async -> Bool {
-        return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
+        return await performBackup(trades: trades, automatic: false, keeping: restoreURL) != .failed
     }
 
     /// Backup taken before a settings import replaces the portfolio database.
     func performPreImportBackup(trades: [RealTimeTrade]) async -> Bool {
-        return await performBackup(trades: trades, automatic: false)
+        return await performBackup(trades: trades, automatic: false) != .failed
     }
 
     /// Core backup implementation
-    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
+    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> BackupOutcome {
         do {
             let backupDir = try getBackupDirectory()
 
             // Generate filename with today's date
+            // A fixed locale: a non-Gregorian system calendar would otherwise
+            // change the year in the name and the order the files sort in.
             let dateFormatter = DateFormatter()
+            dateFormatter.locale = Locale(identifier: "en_US_POSIX")
             dateFormatter.dateFormat = "yyyy-MM-dd"
             let dateString = dateFormatter.string(from: Date())
 
             // Add time suffix for manual backups (allow multiple per day)
             let timeFormatter = DateFormatter()
+            timeFormatter.locale = Locale(identifier: "en_US_POSIX")
             timeFormatter.dateFormat = "HHmmss"
             let timeString = automatic ? "" : "_\(timeFormatter.string(from: Date()))"
 
@@ -124,9 +135,9 @@ class BackupService {
                 if nonEmptyTrades.isEmpty {
                     await logger.debug("Backup skipped because no portfolio rows were present")
                 } else {
-                    await logger.warning("Backup skipped because only internal benchmark rows were present")
+                    await logger.debug("Backup skipped because only internal benchmark rows were present")
                 }
-                return false
+                return .nothingToBackUp
             }
 
             // Encode to JSON
@@ -136,7 +147,8 @@ class BackupService {
             encoder.nonConformingFloatEncodingStrategy = PortfolioExportData.nonFiniteEncoding
 
             let jsonData = try encoder.encode(exportData)
-            try jsonData.write(to: backupURL)
+            // Atomic, so a crash mid-write cannot leave a truncated backup in place of a good one.
+            try jsonData.write(to: backupURL, options: .atomic)
 
             // Update last backup date
             lastBackupDate = Date()
@@ -145,10 +157,10 @@ class BackupService {
             try await cleanupOldBackups(keeping: keptURL)
 
             await logger.info("Backup successful: \(filename)")
-            return true
+            return .saved
         } catch {
             await logger.error("Backup failed: \(error.localizedDescription)")
-            return false
+            return .failed
         }
     }
 
@@ -255,21 +267,6 @@ class BackupService {
             .filter { $0.created < cutoff && $0.url.standardizedFileURL != keptURL?.standardizedFileURL }
             .map(\.url)
     }
-
-    /// Deletes a specific backup file
-    func deleteBackup(backupURL: URL) throws {
-        try fileManager.removeItem(at: backupURL)
-        Task { await logger.info("Deleted backup: \(backupURL.lastPathComponent)") }
-    }
-
-    /// Deletes all backup files
-    func deleteAllBackups() throws {
-        let backups = listAvailableBackups()
-        for backup in backups {
-            try deleteBackup(backupURL: backup.url)
-        }
-        Task { await logger.info("Deleted all \(backups.count) backup(s)")  }
-    }
 }
 
 enum BackupRestoreError: LocalizedError {
@@ -305,5 +302,22 @@ struct BackupInfo: Identifiable {
 
     var formattedSize: String {
         ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+}
+
+/// What a backup attempt did.
+enum BackupOutcome: Equatable, Sendable {
+    case saved
+    /// No holdings to save: not an error, and no file was written.
+    case nothingToBackUp
+    case failed
+
+    /// The line shown to the user after "Back Up Now".
+    var userMessage: String {
+        switch self {
+        case .saved: return "Backup completed."
+        case .nothingToBackUp: return "Nothing to back up yet. Add a holding first."
+        case .failed: return "Backup failed. See Diagnostics for details."
+        }
     }
 }

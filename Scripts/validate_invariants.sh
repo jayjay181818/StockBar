@@ -76,6 +76,15 @@ if [[ -n "$trapping_dictionaries" ]]; then
   echo "$trapping_dictionaries"
 fi
 
+# 8. Test files are not picked up automatically. One that is not in the test
+#    target compiles nowhere and its tests silently never run.
+for test_file in StockbarTests/*.swift; do
+  name="$(basename "$test_file")"
+  if ! rg -q -F "$name in Sources" Stockbar.xcodeproj/project.pbxproj; then
+    fail "$test_file is not a member of the StockbarTests target; its tests would never run"
+  fi
+done
+
 if [[ "$status" -eq 0 ]]; then
   echo "Invariant validation passed"
 fi

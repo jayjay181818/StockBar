@@ -243,9 +243,11 @@ class HistoricalDataCoordinator {
             let expectedBusinessDays = max(1, daysInRange * 5 / 7)
             
             let coverageRatio = Double(uniqueDays.count) / Double(expectedBusinessDays)
-            let coverageThreshold = isBenchmark ? benchmarkCoverageThreshold : 0.10
+            // 10% let ten months of data count as five years covered, so older history was never
+            // fetched. The per-year pass below skips years that are already complete.
+            let coverageThreshold = isBenchmark ? benchmarkCoverageThreshold : 0.80
 
-            // If we have less than 10% coverage over 5 years, trigger backfill (lowered from 50% for better detection)
+            // Below the threshold over the coverage window, trigger the per-year backfill
             if coverageRatio < coverageThreshold {
                 symbolsNeedingBackfill.append(symbol)
                 await logger.info("📊 COMPREHENSIVE: \(symbol) needs \(coverageLabel) backfill - only \(uniqueDays.count)/\(expectedBusinessDays) days (\(String(format: "%.1f", coverageRatio * 100))% coverage)")
@@ -408,11 +410,11 @@ class HistoricalDataCoordinator {
                 break
             }
             if outcome == .rateLimited {
-                await logger.warning("⏹️ CHUNKED BACKFILL: Rate limited; deferring remaining chunks for \(symbol)")
+                await logger.debug("⏹️ CHUNKED BACKFILL: Rate limited; deferring remaining chunks for \(symbol)")
                 break
             }
             if outcome == .failed {
-                await logger.warning("⏹️ CHUNKED BACKFILL: Fetch failed; deferring remaining chunks for \(symbol)")
+                await logger.debug("⏹️ CHUNKED BACKFILL: Fetch failed; deferring remaining chunks for \(symbol)")
                 break
             }
             
@@ -492,6 +494,16 @@ class HistoricalDataCoordinator {
             if case let .noData(details) = error,
                let message = details?.lowercased(),
                message.contains("no historical data available") {
+                // The helper reports rate limits and outages with the same message, and the
+                // boundary is permanent. Record it only when it cannot be one of those: the chunk
+                // ends well in the past and nothing older is already stored for the symbol.
+                let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+                let hasOlderData = (historicalDataManager.priceSnapshots[symbol] ?? [])
+                    .contains { $0.timestamp < endDate }
+                guard endDate < cutoff, !hasOlderData else {
+                    await logger.warning("⚠️ CHUNKED BACKFILL: No data received for \(symbol) chunk \(yearOffset); not treated as the start of its history")
+                    return .noData
+                }
                 historicalDataManager.recordEarliestAvailableDate(endDate, for: symbol)
                 await logger.warning("⛔️ CHUNKED BACKFILL: \(symbol) reported no historical data prior to \(dateFormatter.string(from: endDate))")
                 return .earliestDataBoundary
@@ -501,11 +513,9 @@ class HistoricalDataCoordinator {
                 return .rateLimited
             }
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
-            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
             return .failed
         } catch {
             await logger.error("❌ CHUNKED BACKFILL: Failed to fetch chunk \(yearOffset) for \(symbol): \(error.localizedDescription)")
-            await logger.error("❌ CHUNKED BACKFILL ERROR for \(symbol) chunk \(yearOffset) at \(Date()): \(error.localizedDescription)")
             return .failed
         }
     }

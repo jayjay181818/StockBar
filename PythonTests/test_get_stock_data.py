@@ -46,14 +46,11 @@ class StockDataContractTests(unittest.TestCase):
         self.assertEqual(self.module.handle_twelvedata_symbol("LLOY.L"), ("LLOY", "LSE"))
         self.assertEqual(self.module.handle_lse_symbol("ABC.LON"), "ABC.L")
         self.assertEqual(self.module.handle_lse_symbol("A.LSE.L"), "A.LSE.L")
-        self.assertEqual(self.module.handle_stooq_symbol("ABC.LON"), "ABC.UK")
-        self.assertEqual(self.module.handle_stooq_symbol("LLOY.L"), "LLOY.UK")
 
     def test_configured_alias_is_resolved_by_provider_symbol_helpers(self):
         self.module.SYMBOL_ALIASES["MYUK"] = "REAL.L"
         self.assertEqual(self.module.handle_lse_symbol("myuk"), "REAL.L")
         self.assertEqual(self.module.handle_twelvedata_symbol("MYUK"), ("REAL", "LSE"))
-        self.assertEqual(self.module.handle_stooq_symbol("MYUK"), "REAL.UK")
 
     def test_market_state_prefers_reported_state(self):
         from datetime import datetime
@@ -161,10 +158,6 @@ class StockDataContractTests(unittest.TestCase):
                 "fetch_real_time_quote_twelvedata",
                 return_value=valid_twelve_data,
             ))
-            yahoo_fetch = stack.enter_context(mock.patch.object(
-                self.module,
-                "fetch_real_time_quote_yahoo_api",
-            ))
             fmp_fetch = stack.enter_context(mock.patch.object(
                 self.module,
                 "fetch_real_time_quote_fmp",
@@ -172,7 +165,6 @@ class StockDataContractTests(unittest.TestCase):
             result = self.module.fetch_real_time_quote("^GSPC")
 
         self.assertEqual(result, valid_twelve_data)
-        yahoo_fetch.assert_not_called()
         fmp_fetch.assert_not_called()
 
     def test_cache_updates_survive_concurrent_processes(self):
@@ -198,8 +190,6 @@ class StockDataContractTests(unittest.TestCase):
         self.assertEqual({f"SYM{index}" for index in range(8)}, set(cache))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class _FakeHistory:
@@ -297,7 +287,7 @@ class ExchangeDateTests(unittest.TestCase):
             self.assertEqual(self.module.exchange_today(index, "VOD.L").isoformat(), "2026-11-14")
 
 
-class OHLCFetchTests(unittest.TestCase):
+class PreviousCloseTests(unittest.TestCase):
     def setUp(self):
         self.temp_directory = tempfile.TemporaryDirectory()
         self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
@@ -305,32 +295,465 @@ class OHLCFetchTests(unittest.TestCase):
     def tearDown(self):
         self.temp_directory.cleanup()
 
-    def ohlc(self, symbol, currency, rows):
-        fake_yf = mock.Mock()
-        fake_yf.Ticker.return_value = _FakeTicker(rows, currency)
-        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
-                mock.patch.object(self.module, "yf", fake_yf, create=True):
-            return self.module.fetch_ohlc_data_yfinance(symbol)
+    def test_open_session_compares_with_the_last_completed_close(self):
+        pick = self.module.previous_close_for_quote
+        self.assertEqual(pick([98.0, 100.0], True, False), 100.0)
+
+    def test_weekend_and_before_the_open_compare_with_the_close_before(self):
+        # The regular price is then the last completed close itself.
+        pick = self.module.previous_close_for_quote
+        self.assertEqual(pick([98.0, 100.0], False, False), 98.0)
+
+    def test_pre_market_price_compares_with_the_last_completed_close(self):
+        pick = self.module.previous_close_for_quote
+        self.assertEqual(pick([98.0, 100.0], False, True), 100.0)
+
+    def test_short_history_falls_back(self):
+        pick = self.module.previous_close_for_quote
+        self.assertEqual(pick([100.0], False, False), 100.0)
+        self.assertEqual(pick([], False, False, fallback=7.0), 7.0)
+
+    def test_only_a_missing_previous_close_needs_a_history_lookup(self):
+        needs = self.module.needs_prev_close_backfill
+        self.assertFalse(needs("VOD.L", 1.0, 1.0, "GBP"))
+        self.assertTrue(needs("VOD.L", 1.0, None, "GBP"))
+        self.assertTrue(needs("AAPL", 1.0, float("nan"), "USD"))
+
+
+class QuoteBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+        self.module.REQUEST_SPACING_SECONDS = 0
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
 
     @staticmethod
-    def bar(hour, price, volume):
-        from datetime import datetime as real_datetime, timezone
+    def quote(symbol):
+        return {"symbol": symbol, "price": 10.0, "previousClose": 9.0, "timestamp": 1_800_000_000}
 
-        return (
-            real_datetime(2026, 11, 3, hour, tzinfo=timezone.utc),
-            {"Open": price, "High": price, "Low": price, "Close": price, "Volume": volume},
+    def test_a_hung_symbol_costs_only_itself(self):
+        import threading
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def fetch(symbol):
+            if symbol == "SLOW":
+                release.wait(5)
+                return None
+            return self.quote(symbol)
+
+        self.module.SYMBOL_DEADLINE_SECONDS = 0.05
+        with mock.patch.object(self.module, "fetch_real_time_quote", side_effect=fetch):
+            results = self.module.fetch_batch(["AAA", "SLOW", "BBB"])
+
+        self.assertEqual(results["AAA"]["price"], 10.0)
+        self.assertEqual(results["BBB"]["price"], 10.0)
+        self.assertIsNone(results["SLOW"])
+        self.assertEqual(self.module.FAILURE_CAUSES, {"SLOW": "TIMEOUT"})
+
+    def test_an_exhausted_budget_reports_the_rest_as_timed_out(self):
+        with mock.patch.object(self.module, "fetch_real_time_quote", side_effect=self.quote) as fetch:
+            results = self.module.fetch_batch(["AAA", "BBB"], time_budget_seconds=0.5)
+
+        fetch.assert_not_called()
+        self.assertEqual(results, {"AAA": None, "BBB": None})
+        self.assertEqual(self.module.FAILURE_CAUSES, {"AAA": "TIMEOUT", "BBB": "TIMEOUT"})
+
+    def test_a_logged_provider_failure_becomes_the_symbol_error_code(self):
+        def fetch(symbol):
+            if symbol == "LIMITED":
+                self.module.log_error("yfinance fetch failed for LIMITED: Too Many Requests. Rate limited.")
+            elif symbol == "OFFLINE":
+                self.module.log_error("Request failed via requests: Max retries exceeded")
+            return None
+
+        with mock.patch.object(self.module, "fetch_real_time_quote", side_effect=fetch):
+            self.module.fetch_batch(["LIMITED", "OFFLINE", "UNKNOWN"])
+
+        self.assertEqual(self.module.FAILURE_CAUSES, {"LIMITED": "RATE_LIMIT", "OFFLINE": "NETWORK_ERROR"})
+
+    def test_failures_logged_outside_a_fetch_are_not_attributed(self):
+        self.module.log_error("HTTP Error 429")
+        self.assertEqual(self.module.FAILURE_CAUSES, {})
+
+    def test_retired_providers_in_the_priority_list_are_skipped(self):
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = ["stooq", "yfinance"]
+        history = [{"symbol": "AAPL", "price": 1.0}]
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "fetch_historical_data_yfinance", return_value=history):
+            self.assertEqual(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"), history)
+
+
+class ProviderHousekeepingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.cache_path = os.path.join(self.temp_directory.name, "cache.json")
+        self.module = load_module(self.cache_path)
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def test_exchange_time_zone_follows_the_suffix(self):
+        zone = self.module.market_timezone_name
+        self.assertEqual(zone("VOD.L"), "Europe/London")
+        self.assertEqual(zone("SAP.DE"), "Europe/Berlin")
+        self.assertEqual(zone("7203.T"), "Asia/Tokyo")
+        self.assertEqual(zone("shop.to"), "America/Toronto")
+        self.assertEqual(zone("AAPL"), "America/New_York")
+        self.assertEqual(zone("BRK.B"), "America/New_York")
+        self.assertEqual(zone("^GSPC"), "America/New_York")
+
+    def test_clock_state_uses_each_exchange_s_hours(self):
+        from datetime import datetime
+        state = self.module.clock_market_state
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 7, 30)), "PRE")
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 16, 29)), "REGULAR")
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 17, 30)), "CLOSED")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 9, 29)), "PRE")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 9, 30)), "REGULAR")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 19, 59)), "POST")
+        self.assertEqual(state("SAP.DE", datetime(2026, 7, 22, 8, 59)), "CLOSED")
+        self.assertEqual(state("SAP.DE", datetime(2026, 7, 22, 12, 0)), "REGULAR")
+
+    def test_trading_currency_never_uses_the_accounts_currency(self):
+        class Ticker:
+            history_metadata = {"currency": "GBp"}
+
+        class NoMetadata:
+            @property
+            def history_metadata(self):
+                raise RuntimeError("no chart")
+
+        currency = self.module.trading_currency
+        self.assertEqual(currency(Ticker(), {"currency": "EUR", "financialCurrency": "USD"}), "EUR")
+        self.assertEqual(currency(Ticker(), {"financialCurrency": "USD"}), "GBp")
+        self.assertIsNone(currency(NoMetadata(), {"financialCurrency": "USD"}))
+
+    def test_old_cache_entries_are_pruned(self):
+        now = 1_800_000_000
+        week = self.module.CACHE_ENTRY_MAX_AGE_SECONDS
+        day = self.module.PREV_CLOSE_CACHE_MAX_AGE_SECONDS
+        cache = {
+            "OLD": {"timestamp": now - week - 1, "result": {}},
+            "NEW": {"timestamp": now - 60, "result": {}},
+            "BROKEN": "not an entry",
+            self.module.PREV_CLOSE_CACHE_KEY: {
+                "OLD": {"timestamp": now - day - 1, "value": 1.0},
+                "NEW": {"timestamp": now - 60, "value": 1.0},
+            },
+            self.module.PROVIDER_COOLDOWN_KEY: {"twelvedata": now + 30},
+        }
+        self.assertEqual(self.module.prune_cache(cache, now=now), 3)
+        self.assertEqual(
+            sorted(cache),
+            sorted(["NEW", self.module.PREV_CLOSE_CACHE_KEY, self.module.PROVIDER_COOLDOWN_KEY]),
         )
+        self.assertEqual(list(cache[self.module.PREV_CLOSE_CACHE_KEY]), ["NEW"])
 
-    def test_missing_volume_is_zero_and_does_not_fail_the_fetch(self):
-        data = self.ohlc("^FTSE", None, [self.bar(10, 8000.0, float("nan")), self.bar(11, 8010.0, 1500.0)])
-        self.assertEqual([(point["close"], point["volume"]) for point in data], [(8000.0, 0), (8010.0, 1500)])
+    def test_twelve_data_pauses_after_its_allowance_is_used_up(self):
+        calls = []
 
-    def test_rows_with_a_missing_price_are_skipped(self):
-        data = self.ohlc("AAPL", "USD", [self.bar(10, 200.0, 10.0), self.bar(11, float("nan"), 10.0)])
-        self.assertEqual([point["close"] for point in data], [200.0])
-        self.assertIsNone(self.ohlc("AAPL", "USD", [self.bar(10, float("nan"), 10.0)]))
+        def refused(url, params):
+            calls.append(url)
+            return {"code": 429, "status": "error", "message": "out of credits"}
 
-    def test_london_bars_are_scaled_by_reported_currency(self):
-        self.assertEqual(self.ohlc("VOD.L", "GBp", [self.bar(10, 1000.0, 5.0)])[0]["close"], 10.0)
-        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["close"], 600.0)
-        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["volume"], 5)
+        with mock.patch.object(self.module, "make_request", refused):
+            self.assertIsNone(self.module.twelvedata_request("https://example.invalid/quote", {}))
+            self.assertIsNone(self.module.twelvedata_request("https://example.invalid/quote", {}))
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(self.module.provider_cooldown_remaining("twelvedata"), 0)
+
+        later = self.module.time.time() + self.module.TWELVE_DATA_COOLDOWN_SECONDS + 1
+        self.assertEqual(self.module.provider_cooldown_remaining("twelvedata", now=later), 0)
+
+    def test_twelve_data_passes_other_answers_through(self):
+        with mock.patch.object(self.module, "make_request", lambda url, params: {"close": "1.0"}):
+            self.assertEqual(self.module.twelvedata_request("https://example.invalid/quote", {}), {"close": "1.0"})
+        self.assertEqual(self.module.provider_cooldown_remaining("twelvedata"), 0)
+
+
+class FallbackChainTests(unittest.TestCase):
+    """Which provider is asked, in what order, and what happens when one fails."""
+
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.cache_path = os.path.join(self.temp_directory.name, "cache.json")
+        self.module = load_module(self.cache_path)
+        self.module.CONFIG.pop("DATA_SOURCE_PRIORITY", None)
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def patched_history(self, yfinance=None, fmp=None, twelvedata=None):
+        """Replaces the three history providers; a value may be an exception to raise."""
+        asked = []
+
+        def provider(name, answer):
+            def fetch(symbol, start, end):
+                asked.append(name)
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            return fetch
+
+        stack = ExitStack()
+        stack.enter_context(mock.patch.object(self.module, "YFINANCE_AVAILABLE", True))
+        stack.enter_context(mock.patch.object(
+            self.module, "fetch_historical_data_yfinance", provider("yfinance", yfinance)))
+        stack.enter_context(mock.patch.object(
+            self.module, "fetch_historical_data_fmp", provider("fmp", fmp)))
+        stack.enter_context(mock.patch.object(
+            self.module, "fetch_historical_data_twelvedata", provider("twelvedata", twelvedata)))
+        return stack, asked
+
+    def test_priority_defaults_and_accepts_a_list_or_json_text(self):
+        self.assertEqual(self.module.get_fetch_priority("AAPL"), ["yfinance", "fmp"])
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = ["fmp", "yfinance"]
+        self.assertEqual(self.module.get_fetch_priority("AAPL"), ["fmp", "yfinance"])
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = '["twelvedata", "fmp"]'
+        self.assertEqual(self.module.get_fetch_priority("AAPL"), ["twelvedata", "fmp"])
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = "fmp"
+        self.assertEqual(self.module.get_fetch_priority("AAPL"), ["fmp"])
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = 7
+        self.assertEqual(self.module.get_fetch_priority("AAPL"), ["yfinance", "fmp"])
+
+    def test_history_stops_at_the_first_provider_with_data(self):
+        history = [{"symbol": "AAPL", "price": 1.0}]
+        stack, asked = self.patched_history(yfinance=history, fmp=[{"symbol": "AAPL", "price": 9.0}])
+        with stack:
+            self.assertEqual(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"), history)
+        self.assertEqual(asked, ["yfinance"])
+
+    def test_history_falls_through_empty_and_failing_providers_in_order(self):
+        history = [{"symbol": "AAPL", "price": 3.0}]
+        stack, asked = self.patched_history(
+            yfinance=[], fmp=RuntimeError("HTTP Error 403: Forbidden"), twelvedata=history)
+        with stack:
+            self.assertEqual(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"), history)
+        self.assertEqual(asked, ["yfinance", "fmp", "twelvedata"])
+
+    def test_history_follows_the_configured_order_and_adds_the_rest_once(self):
+        self.module.CONFIG["DATA_SOURCE_PRIORITY"] = ["FMP", "fmp", "twelvedata"]
+        stack, asked = self.patched_history()
+        with stack:
+            self.assertIsNone(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"))
+        self.assertEqual(asked, ["fmp", "twelvedata", "yfinance"])
+
+    def test_history_skips_yfinance_when_it_is_not_installed(self):
+        history = [{"symbol": "AAPL", "price": 2.0}]
+        stack, asked = self.patched_history(yfinance=[{"symbol": "AAPL", "price": 1.0}], fmp=history)
+        with stack, mock.patch.object(self.module, "YFINANCE_AVAILABLE", False):
+            self.assertEqual(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"), history)
+        self.assertEqual(asked, ["fmp"])
+
+    def test_history_for_an_alias_is_fetched_by_the_alias_and_returned_under_the_name_asked_for(self):
+        seen = []
+
+        def yfinance(symbol, start, end):
+            seen.append(symbol)
+            return [{"symbol": symbol, "price": 1.0}]
+
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "resolve_symbol_alias", lambda symbol: "REAL.L"), \
+                mock.patch.object(self.module, "fetch_historical_data_yfinance", yfinance):
+            result = self.module.fetch_historical_data("ALIAS", "2026-01-01", "2026-01-31")
+        self.assertEqual(seen, ["REAL.L"])
+        self.assertEqual(result, [{"symbol": "ALIAS", "price": 1.0}])
+
+    def quote(self, price):
+        return {"symbol": "AAPL", "price": price, "previousClose": price - 1,
+                "timestamp": 1_800_000_000, "currency": "USD"}
+
+    def test_quotes_try_yfinance_then_twelve_data_then_fmp(self):
+        asked = []
+
+        def provider(name, answer):
+            def fetch(symbol):
+                asked.append(name)
+                return answer
+            return fetch
+
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "fetch_real_time_quote_yfinance", provider("yfinance", None)), \
+                mock.patch.object(self.module, "fetch_real_time_quote_twelvedata",
+                                  provider("twelvedata", {"symbol": "AAPL", "price": float("nan")})), \
+                mock.patch.object(self.module, "fetch_real_time_quote_fmp", provider("fmp", self.quote(10.0))):
+            result = self.module.fetch_real_time_quote("AAPL")
+        self.assertEqual(asked, ["yfinance", "twelvedata", "fmp"])
+        self.assertEqual(result["price"], 10.0)
+
+    def test_fmp_quote_in_pence_is_converted_once_and_bad_prices_are_refused(self):
+        answer = [{"price": 1250.0, "previousClose": 1240.0, "timestamp": 1_800_000_000, "currency": "GBp"}]
+        with mock.patch.object(self.module, "make_fmp_request", return_value=answer):
+            quote = self.module.fetch_real_time_quote_fmp("VOD.L")
+        self.assertEqual((quote["price"], quote["previousClose"], quote["currency"]), (12.5, 12.4, "GBP"))
+
+        for bad in ([], None, [{"price": 0, "previousClose": 5}], [{"price": 5, "previousClose": 0}]):
+            with mock.patch.object(self.module, "make_fmp_request", return_value=bad):
+                self.assertIsNone(self.module.fetch_real_time_quote_fmp("AAPL"))
+
+    def test_twelve_data_quote_needs_a_key_and_both_prices(self):
+        with mock.patch.object(self.module, "TWELVE_DATA_API_KEY", ""):
+            self.assertIsNone(self.module.fetch_real_time_quote_twelvedata("AAPL"))
+
+        with mock.patch.object(self.module, "TWELVE_DATA_API_KEY", "k"):
+            with mock.patch.object(self.module, "twelvedata_request", return_value={
+                    "close": "101.5", "previous_close": "100", "timestamp": "1800000000", "currency": "USD"}):
+                quote = self.module.fetch_real_time_quote_twelvedata("AAPL")
+            self.assertEqual((quote["price"], quote["previousClose"], quote["timestamp"]),
+                             (101.5, 100.0, 1_800_000_000))
+
+            for bad in (None, {"status": "error", "message": "no"}, {"close": "1.0"}, {"close": "x", "previous_close": "1"}):
+                with mock.patch.object(self.module, "twelvedata_request", return_value=bad):
+                    self.assertIsNone(self.module.fetch_real_time_quote_twelvedata("AAPL"))
+
+
+class CommandLineTests(unittest.TestCase):
+    """What each way of calling the script prints, with the providers replaced."""
+
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.cache_path = os.path.join(self.temp_directory.name, "cache.json")
+        self.module = load_module(self.cache_path)
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def run_main(self, *arguments):
+        """Runs main() and returns (exit code or None, parsed stdout or raw text)."""
+        import contextlib
+        import io
+        output = io.StringIO()
+        code = None
+        with mock.patch.object(sys, "argv", ["get_stock_data.py", *arguments]), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                self.module.main()
+            except SystemExit as exit_request:
+                code = exit_request.code
+        text = output.getvalue().strip()
+        try:
+            return code, json.loads(text)
+        except ValueError:
+            return code, text
+
+    def quote(self, symbol, price=10.0):
+        return {"symbol": symbol, "price": price, "previousClose": price - 1,
+                "timestamp": 1_800_000_000, "currency": "USD"}
+
+    def test_no_symbol_is_an_invalid_request(self):
+        code, printed = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(printed["error_code"], "INVALID_REQUEST")
+
+    def test_historical_needs_a_symbol_and_both_dates(self):
+        code, printed = self.run_main("--historical", "AAPL", "--start-date", "2026-01-01")
+        self.assertEqual(code, 1)
+        self.assertEqual(printed["error_code"], "INVALID_REQUEST")
+
+    def test_historical_prints_the_data_or_no_data(self):
+        history = [{"symbol": "AAPL", "price": 1.0, "timestamp": 1}]
+        with mock.patch.object(self.module, "fetch_historical_data", return_value=history):
+            code, printed = self.run_main("--historical", "AAPL", "--start-date", "2026-01-01", "--end-date", "2026-01-31")
+        self.assertIsNone(code)
+        self.assertEqual(printed, history)
+
+        with mock.patch.object(self.module, "fetch_historical_data", return_value=None):
+            code, printed = self.run_main("--historical", "AAPL", "--start-date", "2026-01-01", "--end-date", "2026-01-31")
+        self.assertIsNone(code)
+        self.assertEqual((printed["error_code"], printed["symbol"]), ("NO_DATA", "AAPL"))
+
+    def test_historical_failures_are_named_by_cause(self):
+        cases = {
+            "connection timeout": "TIMEOUT",
+            "Rate limit reached": "RATE_LIMIT",
+            "HTTP Error 403: Forbidden": "API_KEY_RESTRICTED",
+            "socket closed": "NETWORK_ERROR",
+        }
+        for message, expected in cases.items():
+            with mock.patch.object(self.module, "fetch_historical_data", side_effect=RuntimeError(message)):
+                code, printed = self.run_main(
+                    "--historical", "AAPL", "--start-date", "2026-01-01", "--end-date", "2026-01-31")
+            self.assertEqual(code, 1, message)
+            self.assertEqual(printed["error_code"], expected, message)
+        self.assertEqual(printed.get("retry_after"), None)
+
+    def test_json_mode_reports_every_symbol_in_the_order_asked(self):
+        def batch(symbols, time_budget_seconds=None):
+            self.assertEqual(time_budget_seconds, 12.0)
+            return {"AAPL": self.quote("AAPL"), "NOPE": None}
+
+        with mock.patch.object(self.module, "fetch_batch", batch):
+            code, printed = self.run_main("--json", "--deadline-seconds", "12", "nope", "aapl")
+        self.assertIsNone(code)
+        self.assertEqual([entry["symbol"] for entry in printed], ["NOPE", "AAPL"])
+        self.assertEqual([entry["success"] for entry in printed], [False, True])
+        self.assertEqual(printed[0]["error"]["error_code"], "NO_DATA")
+        self.assertEqual(printed[1]["quote"]["price"], 10.0)
+
+    def test_cached_quotes_are_not_fetched_again(self):
+        self.module.set_cache("AAPL", self.quote("AAPL", price=42.0))
+
+        def batch(symbols, time_budget_seconds=None):
+            self.assertEqual(symbols, ["MSFT"])
+            return {"MSFT": self.quote("MSFT", price=7.0)}
+
+        with mock.patch.object(self.module, "fetch_batch", batch):
+            code, printed = self.run_main("--json", "AAPL", "MSFT")
+        self.assertIsNone(code)
+        self.assertEqual([entry["quote"]["price"] for entry in printed], [42.0, 7.0])
+
+    def test_single_symbol_text_mode_and_its_no_data_error(self):
+        with mock.patch.object(self.module, "fetch_batch", return_value={"AAPL": self.quote("AAPL")}):
+            code, printed = self.run_main("AAPL")
+        self.assertIsNone(code)
+        self.assertIn("AAPL @ ", printed)
+        self.assertIn("Close: 10.00, PrevClose: 9.00", printed)
+
+        with mock.patch.object(self.module, "fetch_batch", return_value={"AAPL": None}), \
+                mock.patch.object(self.module, "fetch_single", return_value=None):
+            code, printed = self.run_main("AAPL")
+        self.assertEqual(printed["error_code"], "NO_DATA")
+
+    def test_key_check_reports_success_failure_and_unknown_services(self):
+        with mock.patch.object(self.module, "fetch_real_time_quote_fmp", return_value=self.quote("AAPL")):
+            code, printed = self.run_main("--test-key", "FMP")
+        self.assertEqual((code, printed["success"]), (0, True))
+
+        with mock.patch.object(self.module, "fetch_real_time_quote_fmp", return_value=None):
+            code, printed = self.run_main("--test-key", "fmp")
+        self.assertEqual((code, printed["success"]), (0, False))
+
+        with mock.patch.object(self.module, "fetch_historical_data_twelvedata", return_value=[{"price": 1.0}]):
+            code, printed = self.run_main("--test-key", "twelvedata")
+        self.assertEqual((code, printed["success"]), (0, True))
+
+        with mock.patch.object(self.module, "fetch_real_time_quote_fmp", side_effect=RuntimeError("boom")):
+            code, printed = self.run_main("--test-key", "fmp")
+        self.assertEqual((code, printed["success"]), (0, False))
+        self.assertIn("boom", printed["message"])
+
+        code, printed = self.run_main("--test-key", "other")
+        self.assertEqual((code, printed["success"]), (0, False))
+        self.assertIn("Unknown service", printed["message"])
+
+    def test_errors_are_redacted_and_carry_the_optional_fields(self):
+        import contextlib
+        import io
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.module.output_error("RATE_LIMIT", "failed url=https://x.invalid/q?apikey=abc123secret", symbol="AAPL", retry_after=60)
+        printed = json.loads(output.getvalue())
+        self.assertNotIn("abc123secret", printed["message"])
+        self.assertEqual((printed["error"], printed["symbol"], printed["retry_after"]), (True, "AAPL", 60))
+
+    def test_non_finite_numbers_never_reach_the_output(self):
+        value = {"a": float("nan"), "b": [float("inf"), 1.5], "c": (2.0,)}
+        self.assertEqual(self.module.make_json_safe(value), {"a": None, "b": [None, 1.5], "c": [2.0]})
+
+
+if __name__ == "__main__":
+    unittest.main()

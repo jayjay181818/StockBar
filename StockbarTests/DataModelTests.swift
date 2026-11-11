@@ -44,28 +44,23 @@ class DataModelTests: XCTestCase {
         )
     }
     
-    func testRefreshCadenceCalculation() {
-        // Test that refresh interval affects cadence properly
-        let originalInterval = dataModel.refreshInterval
-        
-        // Set to 5 minutes (300 seconds)
+    func testRefreshIntervalIsClampedToTheSupportedRange() {
         dataModel.refreshInterval = 300
         XCTAssertEqual(dataModel.refreshInterval, 300)
-        
-        // Set to 15 minutes (900 seconds)
-        dataModel.refreshInterval = 900
-        XCTAssertEqual(dataModel.refreshInterval, 900)
-        
-        // Restore original interval
-        dataModel.refreshInterval = originalInterval
+
+        // Out-of-range values are pulled back, in the model and in what is stored.
+        let range = RefreshService.refreshIntervalRange
+        dataModel.refreshInterval = range.upperBound * 10
+        XCTAssertEqual(dataModel.refreshInterval, range.upperBound)
+        XCTAssertEqual(
+            StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval,
+            range.upperBound
+        )
+
+        dataModel.refreshInterval = range.lowerBound / 2 + 1
+        XCTAssertEqual(dataModel.refreshInterval, range.lowerBound)
     }
-    
-    func testStockDataHandling() {
-        // Test basic stock data structures
-        let trades = dataModel.realTimeTrades
-        XCTAssertGreaterThanOrEqual(trades.count, 0)
-    }
-    
+
     func testUserDefaultsPersistence() {
         // Test that intervals are persisted to UserDefaults
         let testRefreshInterval: TimeInterval = 420 // 7 minutes

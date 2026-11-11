@@ -26,6 +26,14 @@ enum StockbarPalette {
         return value > 0 ? .green : .red
     }
 
+    /// The fill of the older analytics panels and sheet headers. Named here so
+    /// those views stop spelling out system colours one by one.
+    static let panelFill = Color(NSColor.controlBackgroundColor)
+    static let sheetHeaderFill = Color(NSColor.controlBackgroundColor).opacity(0.5)
+    /// A quiet grey behind small tiles and inactive chips.
+    static let subtleFill = Color.gray.opacity(0.1)
+    static let faintFill = Color.gray.opacity(0.05)
+
     static let cardFill = Color.primary.opacity(0.035)
     static let cardStroke = Color.primary.opacity(0.08)
     static let hoverFill = Color.primary.opacity(0.06)

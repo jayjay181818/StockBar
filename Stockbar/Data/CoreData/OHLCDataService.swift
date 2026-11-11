@@ -29,32 +29,6 @@ actor OHLCDataService {
 
     // MARK: - Public Methods
 
-    /// Save a single OHLC snapshot, updating the stored candle when one already
-    /// exists for the same symbol, interval and timestamp.
-    func saveSnapshot(
-        symbol: String,
-        timestamp: Date,
-        open: Double,
-        high: Double,
-        low: Double,
-        close: Double,
-        volume: Int64,
-        interval: String? = nil
-    ) async throws {
-        try await saveSnapshots([
-            OHLCSnapshot(
-                symbol: symbol,
-                timestamp: timestamp,
-                open: open,
-                high: high,
-                low: low,
-                close: close,
-                volume: volume,
-                interval: interval
-            )
-        ])
-    }
-
     /// Upsert multiple OHLC snapshots (batch operation).
     ///
     /// A candle is identified by symbol + interval + timestamp. Existing rows are
@@ -123,7 +97,7 @@ actor OHLCDataService {
         startDate: Date?,
         endDate: Date?
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -146,7 +120,7 @@ actor OHLCDataService {
         startDate: Date? = nil,
         endDate: Date? = nil
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -199,7 +173,7 @@ actor OHLCDataService {
         from startDate: Date,
         to endDate: Date
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -228,34 +202,6 @@ actor OHLCDataService {
         }
     }
 
-    /// Fetch the most recent OHLC snapshot for a symbol
-    func fetchLatestSnapshot(symbol: String) async throws -> OHLCSnapshot? {
-        let context = coreDataStack.viewContext
-
-        return try await context.perform {
-            let request = OHLCSnapshotEntity.fetchRequest()
-            request.predicate = NSPredicate(format: "symbol == %@", symbol)
-            request.sortDescriptors = [
-                NSSortDescriptor(key: "timestamp", ascending: false)
-            ]
-            request.fetchLimit = 1
-
-            guard let entity = try context.fetch(request).first else {
-                return nil
-            }
-
-            return OHLCSnapshot(
-                symbol: entity.symbol ?? "",
-                timestamp: entity.timestamp ?? Date(),
-                open: entity.openPrice,
-                high: entity.highPrice,
-                low: entity.lowPrice,
-                close: entity.closePrice,
-                volume: entity.volume
-            )
-        }
-    }
-
     /// Delete all OHLC snapshots for a symbol
     func deleteSnapshots(symbol: String) async throws {
         let context = coreDataStack.newBackgroundContext()
@@ -270,34 +216,6 @@ actor OHLCDataService {
             }
 
             try context.save()
-        }
-    }
-
-    /// Delete OHLC snapshots older than a specified date
-    func deleteSnapshotsOlderThan(date: Date) async throws {
-        let context = coreDataStack.newBackgroundContext()
-
-        try await context.perform {
-            let request = OHLCSnapshotEntity.fetchRequest()
-            request.predicate = NSPredicate(format: "timestamp < %@", date as NSDate)
-
-            let entities = try context.fetch(request)
-            for entity in entities {
-                context.delete(entity)
-            }
-
-            try context.save()
-        }
-    }
-
-    /// Get count of OHLC snapshots for a symbol
-    func getSnapshotCount(symbol: String) async throws -> Int {
-        let context = coreDataStack.viewContext
-
-        return try await context.perform {
-            let request = OHLCSnapshotEntity.fetchRequest()
-            request.predicate = NSPredicate(format: "symbol == %@", symbol)
-            return try context.count(for: request)
         }
     }
 
@@ -351,20 +269,15 @@ actor OHLCDataService {
     ) throws {
         let request = OHLCSnapshotEntity.fetchRequest()
         request.predicate = NSPredicate(format: "symbol == %@", symbol)
-        request.sortDescriptors = [
-            NSSortDescriptor(key: "timestamp", ascending: false)
-        ]
+        // Counting is one indexed query; loading every row after each save was not.
+        guard try context.count(for: request) > maxSnapshotsPerSymbol else { return }
 
-        let entities = try context.fetch(request)
-
-        // Delete excess snapshots (keep newest)
-        if entities.count > maxSnapshotsPerSymbol {
-            let entitiesToDelete = entities.dropFirst(maxSnapshotsPerSymbol)
-            for entity in entitiesToDelete {
-                context.delete(entity)
-            }
-            try context.save()
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+        request.fetchOffset = maxSnapshotsPerSymbol
+        for entity in try context.fetch(request) {
+            context.delete(entity)
         }
+        try context.save()
     }
 }
 

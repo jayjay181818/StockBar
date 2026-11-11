@@ -95,24 +95,18 @@ struct PriceAlert: Codable, Identifiable {
         }
     }
     
-    func portfolioMilestoneConditionMet(currentValue: Double, previousValue: Double) -> Bool {
-        guard isEnabled, alertType == .portfolioMilestone else { return false }
-        
-        switch condition {
-        case .above:
-            return currentValue > threshold && previousValue <= threshold
-        case .below:
-            return currentValue < threshold && previousValue >= threshold
-        case .percentChange:
-            let change = abs((currentValue - previousValue) / previousValue * 100)
-            return change >= abs(threshold)
-        }
+
+    /// One way of writing money across the Alerts page and its notifications,
+    /// matching the Holdings table ("£150.00"). An unknown currency prints the
+    /// bare number rather than guessing at dollars.
+    static func money(_ amount: Double, currency: String) -> String {
+        HoldingsCurrencyFormatter.amount(amount, currency: currency)
     }
 
     func formattedThreshold(currency: String) -> String {
         switch condition {
         case .above, .below:
-            return String(format: "%.2f %@", threshold, currency)
+            return Self.money(threshold, currency: currency)
         case .percentChange:
             return String(format: "%.1f%%", abs(threshold))
         }
@@ -126,7 +120,18 @@ class PriceAlertService {
     static let shared = PriceAlertService()
 
     private(set) var alerts: [PriceAlert] = []
-    
+
+    /// True when macOS will not show this app's notifications, so an alert
+    /// whose condition is met reaches nobody. The Alerts page says so.
+    private(set) var notificationsDenied = false
+
+    /// Re-reads the notification permission; it can change in System Settings
+    /// at any time.
+    func refreshNotificationPermission() async {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        notificationsDenied = status == .denied
+    }
+
     private let coreDataStack = CoreDataStack.shared
 
     /// Read-only view context. All **writes** go through `performBackgroundWrite`
@@ -167,8 +172,32 @@ class PriceAlertService {
     }
 
     // Track last known prices to detect threshold crossings
-    @ObservationIgnored private var lastKnownPrices: [String: Double] = [:]
-    @ObservationIgnored private var lastKnownPortfolioValue: Double = 0.0
+    /// The last price each alerted symbol was checked at. Kept across launches
+    /// so a threshold crossed while the app was closed fires once, and one
+    /// that already fired does not fire again at every start.
+    @ObservationIgnored private var lastKnownPrices: [String: Double] =
+        PriceAlertService.storedLastKnownPrices()
+
+    static let lastKnownPricesKey = "priceAlertLastCheckedPrices"
+
+    private static func storedLastKnownPrices() -> [String: Double] {
+        let stored = StockbarRuntimeStorage.userDefaults.dictionary(forKey: lastKnownPricesKey) ?? [:]
+        return stored.compactMapValues { ($0 as? Double).flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
+    }
+
+    private func rememberPrice(_ price: Double, for symbol: String, hasAlerts: Bool) {
+        guard hasAlerts else {
+            if lastKnownPrices.removeValue(forKey: symbol) != nil { storeLastKnownPrices() }
+            return
+        }
+        guard lastKnownPrices[symbol] != price else { return }
+        lastKnownPrices[symbol] = price
+        storeLastKnownPrices()
+    }
+
+    private func storeLastKnownPrices() {
+        StockbarRuntimeStorage.userDefaults.set(lastKnownPrices, forKey: Self.lastKnownPricesKey)
+    }
 
     private init() {
         // Migrate from UserDefaults to Core Data if needed
@@ -219,6 +248,35 @@ class PriceAlertService {
         }
     }
 
+    /// Changes an alert's condition or level in place, keeping its identity,
+    /// creation date and paused state. The last-fired time is cleared: it
+    /// belonged to the old condition.
+    func updateAlert(id: UUID, condition: AlertCondition, threshold: Double) {
+        guard let index = alerts.firstIndex(where: { $0.id == id }) else { return }
+        let existing = alerts[index]
+
+        performBackgroundWrite("updateAlert") { context in
+            guard let alertEntity = try Self.alertEntity(id: id, in: context) else { return }
+            alertEntity.condition = condition.rawValue
+            alertEntity.threshold = threshold
+            alertEntity.lastTriggered = nil
+        }
+
+        alerts[index] = PriceAlert(
+            id: existing.id,
+            symbol: existing.symbol,
+            alertType: existing.alertType,
+            condition: condition,
+            threshold: threshold,
+            isEnabled: existing.isEnabled,
+            createdAt: existing.createdAt,
+            lastTriggered: nil
+        )
+        Task {
+            await Logger.shared.info("Updated price alert")
+        }
+    }
+
     func toggleAlert(id: UUID) {
         guard let index = alerts.firstIndex(where: { $0.id == id }) else { return }
 
@@ -248,14 +306,13 @@ class PriceAlertService {
         alerts.filter { $0.symbol == symbol }
     }
     
-    func getPortfolioMilestoneAlerts() -> [PriceAlert] {
-        alerts.filter { $0.alertType == .portfolioMilestone }
-    }
 
     // MARK: - Price Monitoring
 
     func checkAlerts(symbol: String, currentPrice: Double, previousPrice: Double, currency: String) {
-        let symbolAlerts = getAlerts(for: symbol).filter { $0.isEnabled }
+        guard currentPrice.isFinite, currentPrice > 0 else { return }
+        let allSymbolAlerts = getAlerts(for: symbol)
+        let symbolAlerts = allSymbolAlerts.filter { $0.isEnabled }
 
         // Get last known price or use previous close
         let lastPrice = lastKnownPrices[symbol] ?? previousPrice
@@ -273,8 +330,7 @@ class PriceAlertService {
             updateLastTriggered(alertId: alert.id)
         }
 
-        // Update last known price
-        lastKnownPrices[symbol] = currentPrice
+        rememberPrice(currentPrice, for: symbol, hasAlerts: !allSymbolAlerts.isEmpty)
     }
 
     // MARK: - Notifications
@@ -283,8 +339,10 @@ class PriceAlertService {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .notDetermined else {
-                if settings.authorizationStatus == .denied {
-                    Task {
+                let denied = settings.authorizationStatus == .denied
+                Task { @MainActor in
+                    PriceAlertService.shared.notificationsDenied = denied
+                    if denied {
                         await Logger.shared.debug("Price alerts are disabled because notification permission was denied")
                     }
                 }
@@ -306,6 +364,8 @@ class PriceAlertService {
                     Task {
                         await Logger.shared.info("Notification permissions granted")
                     }
+                } else {
+                    Task { @MainActor in PriceAlertService.shared.notificationsDenied = true }
                 }
             }
         }
@@ -318,11 +378,11 @@ class PriceAlertService {
         let message: String
         switch alert.condition {
         case .above:
-            message = "Price rose above \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentPrice, currency))"
+            message = "Price rose above \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentPrice, currency: currency))"
         case .below:
-            message = "Price fell below \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentPrice, currency))"
+            message = "Price fell below \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentPrice, currency: currency))"
         case .percentChange:
-            message = "Price changed by \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentPrice, currency))"
+            message = "Price changed by \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentPrice, currency: currency))"
         }
 
         content.body = message
@@ -457,59 +517,5 @@ class PriceAlertService {
     
     // MARK: - Portfolio Milestone Checking
     
-    func checkPortfolioMilestones(currentValue: Double, previousValue: Double, currency: String) {
-        let portfolioAlerts = alerts.filter { $0.alertType == .portfolioMilestone && $0.isEnabled }
-        
-        for alert in portfolioAlerts {
-            if alert.portfolioMilestoneConditionMet(currentValue: currentValue, previousValue: lastKnownPortfolioValue) {
-                // Check cooldown period (15 minutes) to avoid spam
-                if let lastTriggered = alert.lastTriggered,
-                   Date().timeIntervalSince(lastTriggered) < 900 {
-                    continue
-                }
-                
-                sendPortfolioMilestoneNotification(for: alert, currentValue: currentValue, currency: currency)
-                updateLastTriggered(alertId: alert.id)
-            }
-        }
-        
-        // Update last known portfolio value
-        lastKnownPortfolioValue = currentValue
-    }
     
-    private func sendPortfolioMilestoneNotification(for alert: PriceAlert, currentValue: Double, currency: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "📊 Portfolio Milestone Alert"
-        
-        let message: String
-        switch alert.condition {
-        case .above:
-            message = "Portfolio value rose above \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentValue, currency))"
-        case .below:
-            message = "Portfolio value fell below \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentValue, currency))"
-        case .percentChange:
-            message = "Portfolio value changed by \(alert.formattedThreshold(currency: currency)). Current: \(String(format: "%.2f %@", currentValue, currency))"
-        }
-        
-        content.body = message
-        content.sound = .default
-        
-        let request = UNNotificationRequest(
-            identifier: alert.id.uuidString,
-            content: content,
-            trigger: nil
-        )
-        
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                Task {
-                    await Logger.shared.error("Failed to send portfolio milestone notification: \(error.localizedDescription)")
-                }
-            } else {
-                Task {
-                    await Logger.shared.info("📊 Portfolio milestone notification sent: \(message)")
-                }
-            }
-        }
-    }
 }

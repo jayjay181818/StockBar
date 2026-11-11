@@ -14,8 +14,12 @@ struct AttributionAnalysisView: View {
     @State private var selectedTimeRange: ChartTimeRange = .month
     @State private var attributionResult: AttributionAnalysisResult?
     @State private var isLoading: Bool = false
+    /// Counts loads so a superseded one (Refresh pressed twice, or a range change) is ignored.
+    @State private var requestGeneration = 0
     @State private var errorMessage: String?
-    @State private var showDetailedView: Bool = false
+    /// True when `errorMessage` only says there is not enough history yet:
+    /// that is the normal state of a new install, not a fault.
+    @State private var messageIsNotice = false
     @Environment(\.dismiss) private var dismiss
 
     let dataModel: DataModel?
@@ -58,15 +62,10 @@ struct AttributionAnalysisView: View {
                 emptyStateView
             }
         }
-        .onAppear {
-            Task {
-                await loadAttributionData()
-            }
-        }
-        .onChange(of: selectedTimeRange) { _, _ in
-            Task {
-                await loadAttributionData()
-            }
+        // One task per range: choosing another range cancels the load in
+        // flight, so a slow answer for the old range cannot land on the new one.
+        .task(id: selectedTimeRange) {
+            await loadAttributionData()
         }
     }
 
@@ -164,7 +163,7 @@ struct AttributionAnalysisView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(Color.gray.opacity(0.1))
+        .background(StockbarPalette.subtleFill)
         .cornerRadius(8)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
@@ -216,7 +215,7 @@ struct AttributionAnalysisView: View {
                 .padding(.top, 4)
         }
         .padding()
-        .background(Color.gray.opacity(0.1))
+        .background(StockbarPalette.subtleFill)
         .cornerRadius(8)
     }
 
@@ -227,6 +226,11 @@ struct AttributionAnalysisView: View {
             Text("Top Contributors")
                 .font(.headline)
 
+            if result.topContributors.isEmpty {
+                Text("No holding gained over this period.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             ForEach(result.topContributors.prefix(5)) { contribution in
                 contributionRow(contribution)
             }
@@ -242,7 +246,7 @@ struct AttributionAnalysisView: View {
             }
         }
         .padding()
-        .background(Color.gray.opacity(0.1))
+        .background(StockbarPalette.subtleFill)
         .cornerRadius(8)
     }
 
@@ -285,7 +289,7 @@ struct AttributionAnalysisView: View {
             }
         }
         .padding()
-        .background(Color.gray.opacity(0.1))
+        .background(StockbarPalette.subtleFill)
         .cornerRadius(8)
     }
 
@@ -360,7 +364,7 @@ struct AttributionAnalysisView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color.gray.opacity(0.1))
+        .background(StockbarPalette.subtleFill)
         .cornerRadius(8)
     }
 
@@ -387,9 +391,10 @@ struct AttributionAnalysisView: View {
 
     private func errorView(_ message: String) -> some View {
         VStack {
-            Image(systemName: "exclamationmark.triangle")
+            Image(systemName: messageIsNotice ? "clock" : "exclamationmark.triangle")
                 .font(.largeTitle)
-                .foregroundColor(.orange)
+                .foregroundColor(messageIsNotice ? .secondary : .orange)
+                .accessibilityHidden(true)
             Text(message)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -414,6 +419,8 @@ struct AttributionAnalysisView: View {
     // MARK: - Data Loading
 
     private func loadAttributionData() async {
+        requestGeneration += 1
+        let generation = requestGeneration
         isLoading = true
         errorMessage = nil
 
@@ -422,12 +429,24 @@ struct AttributionAnalysisView: View {
         let startDate = Date(timeIntervalSince1970: endDate.timeIntervalSince1970 - selectedTimeRange.timeInterval)
 
         // Fetch historical portfolio snapshots from Core Data (has actual position data)
-        let historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
+        var historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
+
+        // Each snapshot was recorded in the currency preferred at the time. Bring them all into
+        // today's currency so a USD start is never compared with a GBP end.
+        if let dataModel {
+            let converter = dataModel.currencyConverter
+            historicalSnapshots = RiskMetricsService.normalizingSnapshotCurrencies(
+                historicalSnapshots, to: dataModel.preferredCurrency,
+                convert: { converter.convert(amount: $0, from: $1, to: $2) }
+            ).snapshots
+        }
 
         // Check if we have enough data
         guard historicalSnapshots.count >= 2 else {
             await MainActor.run {
-                self.errorMessage = "Insufficient historical data. Please allow the app to collect data over time."
+                guard generation == requestGeneration else { return }
+                self.messageIsNotice = true
+                self.errorMessage = "Not enough history yet. Attribution needs portfolio values from at least two points in this range."
                 self.isLoading = false
             }
             return
@@ -442,10 +461,12 @@ struct AttributionAnalysisView: View {
         )
 
         await MainActor.run {
+            guard generation == requestGeneration else { return }
             if let result = result {
                 self.attributionResult = result
                 self.errorMessage = nil
             } else {
+                self.messageIsNotice = false
                 self.errorMessage = "Unable to calculate attribution. Please try a different time range."
             }
             self.isLoading = false

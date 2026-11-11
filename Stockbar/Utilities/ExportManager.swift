@@ -149,7 +149,9 @@ final class ExportManager {
                 chartImage: chartImage,
                 filterNotes: filterNotes
             )
-            
+            // An empty file must not be reported as a finished export.
+            guard !pdfData.isEmpty else { throw CocoaError(.fileWriteUnknown) }
+
             try pdfData.write(to: url)
             Task { await logger.info("Successfully exported PDF to \(url.lastPathComponent)") }
             showExportNotification(fileName: url.lastPathComponent, success: true)
@@ -168,16 +170,26 @@ final class ExportManager {
         filterNotes: [String]
     ) -> Data {
         let pdfData = NSMutableData()
-        let pageSize = CGSize(width: 612, height: 792) // US Letter size
+        // The layout below is drawn for US Letter; on another paper size it is
+        // kept at the top of the page and centred across it.
+        let layoutSize = CGSize(width: 612, height: 792)
+        let paper = NSPrintInfo.shared.paperSize
+        let pageSize = paper.width >= 500 && paper.height >= 700 ? paper : layoutSize
         
         guard let consumer = CGDataConsumer(data: pdfData) else {
             return Data()
         }
         
         var mediaBox = CGRect(origin: .zero, size: pageSize)
-        let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil)!
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            return Data()
+        }
         
         context.beginPDFPage(nil)
+        context.translateBy(
+            x: (pageSize.width - layoutSize.width) / 2,
+            y: pageSize.height - layoutSize.height
+        )
         
         // Draw title
         let title = "\(chartType.title) - \(timeRange.description)"
@@ -230,27 +242,27 @@ final class ExportManager {
     }
     
     private func generateCSVHeader(chartType: ChartType, timeRange: ChartTimeRange, metrics: PerformanceMetrics?, filterNotes: [String]) -> String {
-        var header = "# Stockbar Export Report\n"
-        header += "# Chart Type: \(chartType.title)\n"
-        header += "# Time Range: \(timeRange.description)\n"
-        header += "# Generated: \(CSVExportFormatter.isoDate(Date()))\n"
+        var header = CSVExportFormatter.comment("Stockbar Export Report")
+        header += CSVExportFormatter.comment("Chart Type: \(chartType.title)")
+        header += CSVExportFormatter.comment("Time Range: \(timeRange.description)")
+        header += CSVExportFormatter.comment("Generated: \(CSVExportFormatter.isoDate(Date()))")
         for note in filterNotes {
-            header += "# Filter: \(note)\n"
+            header += CSVExportFormatter.comment("Filter: \(note)")
         }
         
         if let metrics = metrics {
-            header += "# \n"
-            header += "# Performance Summary:\n"
-            header += "# Total Return: \(metrics.formattedTotalReturn)\n"
-            header += "# Total Return %: \(metrics.formattedTotalReturnPercent)\n"
-            header += "# Volatility: \(metrics.formattedVolatility)\n"
-            header += "# Sharpe Ratio: \(metrics.formattedSharpeRatio)\n"
-            header += "# Max Drawdown: \(metrics.formattedMaxDrawdown)\n"
-            header += "# Win Rate: \(metrics.formattedWinRate)\n"
-            header += "# Annualized Return: \(metrics.formattedAnnualizedReturn)\n"
+            header += CSVExportFormatter.comment("")
+            header += CSVExportFormatter.comment("Performance Summary:")
+            header += CSVExportFormatter.comment("Total Return: \(metrics.formattedTotalReturn)")
+            header += CSVExportFormatter.comment("Total Return %: \(metrics.formattedTotalReturnPercent)")
+            header += CSVExportFormatter.comment("Volatility: \(metrics.formattedVolatility)")
+            header += CSVExportFormatter.comment("Sharpe Ratio: \(metrics.formattedSharpeRatio)")
+            header += CSVExportFormatter.comment("Max Drawdown: \(metrics.formattedMaxDrawdown)")
+            header += CSVExportFormatter.comment("Win Rate: \(metrics.formattedWinRate)")
+            header += CSVExportFormatter.comment("Annualized Return: \(metrics.formattedAnnualizedReturn)")
         }
         
-        header += "# \n"
+        header += CSVExportFormatter.comment("")
         header += CSVExportFormatter.row(["Date", "Value"])
         
         return header
@@ -394,6 +406,13 @@ enum CSVExportFormatter {
         return "\"" + cell.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
+    /// A "# …" note above the data, written as one quoted cell on one line, so
+    /// a comma or line break in it cannot spill into other cells or rows.
+    static func comment(_ note: String) -> String {
+        let oneLine = note.components(separatedBy: .newlines).joined(separator: " ")
+        return row([oneLine.isEmpty ? "#" : "# " + oneLine])
+    }
+
     /// One CRLF-terminated record of raw text cells (each passes through `text`).
     static func row(_ fields: [String]) -> String {
         fields.map(text).joined(separator: ",") + "\r\n"
@@ -424,7 +443,8 @@ enum CSVExportFormatter {
                 if let position = snapshot.portfolioComposition[symbol] {
                     cells += [number(position.units), number(position.priceAtDate), number(position.valueAtDate)]
                 } else {
-                    cells += ["0", "0", "0"]
+                    // Not held on this date: empty, not a holding of zero units at a zero price.
+                    cells += ["", "", ""]
                 }
             }
             csv += cells.joined(separator: ",") + "\r\n"

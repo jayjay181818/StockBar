@@ -4,17 +4,9 @@ import XCTest
 @MainActor
 final class RiskMetricsServiceTests: XCTestCase {
 
-    var service: RiskMetricsService!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        service = RiskMetricsService.shared
-    }
-
-    override func tearDown() async throws {
-        service = nil
-        try await super.tearDown()
-    }
+    // A property, not async setUp and tearDown: on a main-actor test class
+    // those two hops cost about 0.2 s for every test.
+    private var service: RiskMetricsService { .shared }
 
     // MARK: - Value at Risk (VaR) Tests
 
@@ -35,12 +27,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             portfolioValue: portfolioValue
         )
 
-        // Then: Should return reasonable VaR
-        XCTAssertNotNil(var95)
-        if let var95 = var95 {
-            XCTAssertGreaterThan(var95, 0, "VaR should be positive")
-            XCTAssertLessThan(var95, 1000, "VaR should be reasonable for 10k portfolio")
-        }
+        // Then: the 5th percentile of 20 returns is the second worst, -3%.
+        XCTAssertEqual(try XCTUnwrap(var95), 300, accuracy: 0.0001)
     }
 
     func testVaR_IsZeroNotALossWhenThePercentileReturnIsAGain() async throws {
@@ -104,12 +92,10 @@ final class RiskMetricsServiceTests: XCTestCase {
         let var95 = await service.calculateVaR(returns: returns, confidenceLevel: 0.95, portfolioValue: portfolioValue)
         let var99 = await service.calculateVaR(returns: returns, confidenceLevel: 0.99, portfolioValue: portfolioValue)
 
-        // Then: VaR99 should be higher than VaR95
-        XCTAssertNotNil(var95)
-        XCTAssertNotNil(var99)
-        if let var95 = var95, let var99 = var99 {
-            XCTAssertGreaterThan(var99, var95, "99% VaR should be higher than 95% VaR")
-        }
+        // Then: of 100 returns the 95% level lands on the -10% day and the
+        // 99% level on a -20% day.
+        XCTAssertEqual(try XCTUnwrap(var95), 1_000, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(var99), 2_000, accuracy: 0.0001)
     }
 
     func testVaR_WithEmptyReturns() async throws {
@@ -154,13 +140,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             periodsPerYear: 252
         )
 
-        // Then: Should have very high Sharpe ratio (low volatility, high return)
-        XCTAssertNotNil(sharpe)
-        if let sharpe = sharpe {
-            // With zero volatility and high returns, Sharpe should be extremely high
-            // (In practice, this won't happen, but tests the calculation)
-            XCTAssertGreaterThan(sharpe, 0, "Sharpe ratio should be positive for positive returns")
-        }
+        // Then: mean 1%, sample deviation 0.2% x sqrt(252/251), worked out by hand.
+        XCTAssertEqual(try XCTUnwrap(sharpe), 78.586208, accuracy: 0.00001)
     }
 
     func testSharpeRatio_WithMixedReturns() async throws {
@@ -179,12 +160,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             periodsPerYear: 252
         )
 
-        // Then: Should return a reasonable value
-        XCTAssertNotNil(sharpe)
-        if let sharpe = sharpe {
-            XCTAssertGreaterThan(sharpe, -5, "Sharpe ratio should be reasonable")
-            XCTAssertLessThan(sharpe, 10, "Sharpe ratio should be reasonable")
-        }
+        // Then: the figure worked out independently of the service.
+        XCTAssertEqual(try XCTUnwrap(sharpe), 6.051574, accuracy: 0.00001)
     }
 
     func testSharpeRatio_WithNegativeReturns() async throws {
@@ -199,11 +176,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             periodsPerYear: 252
         )
 
-        // Then: Should be negative
-        XCTAssertNotNil(sharpe)
-        if let sharpe = sharpe {
-            XCTAssertLessThan(sharpe, 0, "Sharpe ratio should be negative for negative returns")
-        }
+        // Then: mean -1% less the daily risk-free rate, over the same deviation.
+        XCTAssertEqual(try XCTUnwrap(sharpe), -80.472277, accuracy: 0.00001)
     }
 
     func testSharpeRatio_WithInsufficientData() async throws {
@@ -234,12 +208,9 @@ final class RiskMetricsServiceTests: XCTestCase {
             periodsPerYear: 252
         )
 
-        // Then: Should return reasonable value
-        XCTAssertNotNil(sortino)
-        if let sortino = sortino {
-            XCTAssertGreaterThan(sortino, -10, "Sortino ratio should be reasonable")
-            XCTAssertLessThan(sortino, 30, "Sortino ratio should be reasonable (full-sample downside deviation)")
-        }
+        // Then: mean 1.5% over a downside deviation of sqrt(0.0014 / 10),
+        // every period in the divisor.
+        XCTAssertEqual(try XCTUnwrap(sortino), 20.124612, accuracy: 0.00001)
     }
 
     func testSortinoRatio_WithOnlyPositiveReturns() async throws {
@@ -266,11 +237,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             marketReturns: marketReturns
         )
 
-        // Then: Beta should be close to 1.0
-        XCTAssertNotNil(beta)
-        if let beta = beta {
-            XCTAssertEqual(beta, 1.0, accuracy: 0.1, "Beta should be ~1.0 for perfect correlation")
-        }
+        // Then: identical series give a beta of exactly one.
+        XCTAssertEqual(try XCTUnwrap(beta), 1.0, accuracy: 1e-9)
     }
 
     func testBeta_WithHigherVolatility() async throws {
@@ -284,11 +252,8 @@ final class RiskMetricsServiceTests: XCTestCase {
             marketReturns: marketReturns
         )
 
-        // Then: Beta should be close to 2.0
-        XCTAssertNotNil(beta)
-        if let beta = beta {
-            XCTAssertEqual(beta, 2.0, accuracy: 0.2, "Beta should be ~2.0 for 2x market volatility")
-        }
+        // Then: twice the market's moves is a beta of two.
+        XCTAssertEqual(try XCTUnwrap(beta), 2.0, accuracy: 1e-9)
     }
 
     func testBeta_WithInsufficientData() async throws {
@@ -380,39 +345,30 @@ final class RiskMetricsServiceTests: XCTestCase {
     // MARK: - Comprehensive Risk Metrics Test
 
     func testCalculateComprehensiveRiskMetrics() async throws {
-        // Given: Realistic portfolio data
-        let portfolioValues = createMockPortfolioValues()
+        // Daily returns of +10%, -10%, +10%, +10%: mean 5%, sample deviation 10%.
+        let portfolioValues = [100.0, 110.0, 99.0, 108.9, 119.79]
 
-        // When: Calculate all risk metrics
-        let metrics = await service.calculateComprehensiveRiskMetrics(
+        let result = await service.calculateComprehensiveRiskMetrics(
             portfolioValues: portfolioValues,
+            riskFreeRate: 0.04,
             marketReturns: nil
         )
+        let metrics = try XCTUnwrap(result)
+        let annual = sqrt(252.0)
 
-        // Then: All metrics should be calculated
-        XCTAssertNotNil(metrics)
-        if let metrics = metrics {
-            XCTAssertGreaterThan(metrics.valueAtRisk95, 0, "VaR95 should be positive")
-            XCTAssertGreaterThan(metrics.valueAtRisk99, metrics.valueAtRisk95, "VaR99 > VaR95")
-            XCTAssertGreaterThan(metrics.volatility, 0, "Volatility should be positive")
-            XCTAssertGreaterThanOrEqual(metrics.maxDrawdown, 0, "Max drawdown should be non-negative")
-        }
-    }
-
-    // MARK: - Helper Methods
-
-    private func createMockPortfolioValues() -> [Double] {
-        var values: [Double] = []
-        var value = 10000.0
-
-        // Create 252 deterministic daily values (1 trading year)
-        for i in 0..<252 {
-            let randomReturn = sin(Double(i) / 6.0) * 0.01
-            value *= (1.0 + randomReturn)
-            values.append(value)
-        }
-
-        return values
+        // With four returns both levels land on the worst day: 10% of 119.79.
+        XCTAssertEqual(metrics.valueAtRisk95, 11.979, accuracy: 1e-6)
+        XCTAssertEqual(metrics.valueAtRisk99, 11.979, accuracy: 1e-6)
+        XCTAssertEqual(metrics.volatility, 0.1 * annual, accuracy: 1e-9)
+        XCTAssertEqual(metrics.maxDrawdown, 0.10, accuracy: 1e-9)
+        // One 10% fall in four periods: sqrt(0.01 / 4) = 5% a period.
+        XCTAssertEqual(metrics.downsideDeviation, 0.05 * annual, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(metrics.sharpeRatio), (0.05 - 0.04 / 252) / 0.1 * annual, accuracy: 1e-9)
+        // Sortino clears the same hurdle as Sharpe: the risk-free rate per trading day.
+        let hurdle = 0.04 / 252
+        let shortfall = ((-0.10 - hurdle) * (-0.10 - hurdle) / 4).squareRoot()
+        XCTAssertEqual(try XCTUnwrap(metrics.sortinoRatio), (0.05 - hurdle) / shortfall * annual, accuracy: 1e-9)
+        XCTAssertNil(metrics.beta, "no market series was given")
     }
 
     // MARK: - Missing observations

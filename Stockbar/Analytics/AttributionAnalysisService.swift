@@ -144,164 +144,7 @@ actor AttributionAnalysisService {
         return result
     }
 
-    /// Calculate attribution using PortfolioSnapshots (legacy - less accurate)
-    func calculateAttribution(
-        startDate: Date,
-        endDate: Date,
-        portfolioSnapshots: [PortfolioSnapshot],
-        cashFlows: [CashFlowEvent] = []
-    ) async -> AttributionAnalysisResult? {
-
-        await Logger.shared.debug("📊 Calculating attribution from \(startDate) to \(endDate)")
-
-        // Filter and sort data for date range
-        let filteredData = portfolioSnapshots
-            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
-            .sorted { $0.timestamp < $1.timestamp }
-
-        guard filteredData.count >= 2 else {
-            await Logger.shared.warning("📊 Insufficient data for attribution calculation (need at least 2 snapshots)")
-            return nil
-        }
-
-        // Calculate portfolio values (now guaranteed to be in order)
-        guard let startValue = filteredData.first?.totalValue,
-              let endValue = filteredData.last?.totalValue,
-              startValue > 0 else {
-            await Logger.shared.error("📊 Unable to determine start/end values or start value is zero")
-            return nil
-        }
-
-        // Calculate portfolio return
-        let portfolioReturn = ((endValue - startValue) / startValue) * 100
-
-        // Calculate stock contributions
-        let stockContributions = await calculateStockContributions(
-            startDate: startDate,
-            endDate: endDate,
-            portfolioSnapshots: filteredData
-        )
-
-        // Calculate sector contributions
-        let sectorContributions = calculateSectorContributions(from: stockContributions)
-
-        // Calculate TWR and MWR
-        let twrMwrComparison = cashFlows.isEmpty
-            ? nil
-            : calculateTWRMWR(startValue: startValue, endValue: endValue, cashFlows: cashFlows)
-
-        // Generate waterfall data
-        let waterfallData = generateWaterfallData(
-            stockContributions: stockContributions,
-            startValue: startValue,
-            endValue: endValue
-        )
-
-        let netCashFlow: Double? = cashFlows.isEmpty ? nil : cashFlows.reduce(0) { $0 + $1.amount }
-
-        let result = AttributionAnalysisResult(
-            startDate: startDate,
-            endDate: endDate,
-            portfolioReturn: portfolioReturn,
-            stockContributions: stockContributions,
-            sectorContributions: sectorContributions,
-            twrMwrComparison: twrMwrComparison,
-            waterfallData: waterfallData,
-            startingValue: startValue,
-            endingValue: endValue,
-            netCashFlow: netCashFlow
-        )
-
-        await Logger.shared.debug("📊 Attribution calculation complete: \(portfolioReturn)% return")
-        return result
-    }
-
     // MARK: - Stock Contribution Calculation
-
-    private func calculateStockContributions(
-        startDate: Date,
-        endDate: Date,
-        portfolioSnapshots: [PortfolioSnapshot]
-    ) async -> [StockContribution] {
-
-        var contributions: [StockContribution] = []
-
-        // Get all unique symbols
-        var symbolData: [String: [PriceSnapshot]] = [:]
-
-        for snapshot in portfolioSnapshots {
-            for priceSnapshot in snapshot.priceSnapshots where !SymbolMetadata.isBenchmarkSymbol(priceSnapshot.symbol) {
-                if symbolData[priceSnapshot.symbol] == nil {
-                    symbolData[priceSnapshot.symbol] = []
-                }
-                symbolData[priceSnapshot.symbol]?.append(priceSnapshot)
-            }
-        }
-
-        for (symbol, snapshots) in symbolData {
-            // Sort snapshots by timestamp
-            let sortedSnapshots = snapshots.sorted { $0.timestamp < $1.timestamp }
-
-            guard let startSnapshot = sortedSnapshots.first,
-                  let endSnapshot = sortedSnapshots.last,
-                  startSnapshot.price > 0,
-                  sortedSnapshots.count >= 2 else {
-                continue
-            }
-
-            // Calculate stock return
-            let stockReturn = ((endSnapshot.price - startSnapshot.price) / startSnapshot.price) * 100
-
-            // Get start and end portfolio snapshots
-            guard let startPortfolio = portfolioSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).first,
-                  let endPortfolio = portfolioSnapshots.sorted(by: { $0.timestamp < $1.timestamp }).last,
-                  startPortfolio.totalValue > 0 else {
-                continue
-            }
-
-            // Find the stock's position in the portfolio snapshots to calculate actual weight
-            // Use the average of start and end weights
-            var startWeight = 0.0
-            var endWeight = 0.0
-
-            // Calculate start weight: find this stock's value in start portfolio
-            if let startPrice = sortedSnapshots.first(where: { abs($0.timestamp.timeIntervalSince(startPortfolio.timestamp)) < 86400 }) {
-                // Estimate position value (we don't have units, so we'll estimate from price contribution)
-                startWeight = (startPrice.price / startPortfolio.totalValue) * 100
-            }
-
-            // Calculate end weight
-            if let endPrice = sortedSnapshots.first(where: { abs($0.timestamp.timeIntervalSince(endPortfolio.timestamp)) < 86400 }) {
-                endWeight = (endPrice.price / endPortfolio.totalValue) * 100
-            }
-
-            // Use average weight for the period
-            let avgWeight = (startWeight + endWeight) / 2.0
-
-            // Calculate contribution (weight × return)
-            let contribution = (avgWeight / 100) * stockReturn
-
-            // Calculate dollar contribution based on start portfolio value
-            let dollarContribution = (startPortfolio.totalValue * avgWeight / 100) * (stockReturn / 100)
-
-            // Get sector
-            let sector = getSectorForSymbol(symbol)
-
-            let stockContribution = StockContribution(
-                symbol: symbol,
-                weight: avgWeight,
-                stockReturn: stockReturn,
-                contribution: contribution,
-                dollarContribution: dollarContribution,
-                sector: sector
-            )
-
-            contributions.append(stockContribution)
-        }
-
-        await Logger.shared.debug("📊 Calculated \(contributions.count) stock contributions")
-        return contributions.sorted { $0.contribution > $1.contribution }
-    }
 
     // MARK: - Sector Contribution Calculation
 
@@ -445,10 +288,12 @@ actor AttributionAnalysisService {
 
         cumulative = startValue
 
-        // Top 10 contributors
+        // The ten largest moves in either direction, gains first. Taking the
+        // ten largest gains hid the biggest losses inside "Trades & Other".
         let topContributors = stockContributions
-            .sorted { $0.dollarContribution > $1.dollarContribution }
+            .sorted { abs($0.dollarContribution) > abs($1.dollarContribution) }
             .prefix(10)
+            .sorted { $0.dollarContribution > $1.dollarContribution }
 
         for contribution in topContributors {
             cumulative += contribution.dollarContribution
@@ -460,8 +305,8 @@ actor AttributionAnalysisService {
             ))
         }
 
-        // Reconcile to the ending value: deposits/withdrawals, FX moves, other holdings
-        // and contributors beyond the top 10 all land here.
+        // Reconcile to the ending value: deposits/withdrawals, FX moves and
+        // holdings outside the ten largest moves all land here.
         let residual = endValue - cumulative
         if abs(residual) > 0.005 {
             cumulative += residual

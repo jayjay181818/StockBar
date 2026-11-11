@@ -2,11 +2,13 @@ import Charts
 import SwiftUI
 
 /// Comprehensive risk analytics dashboard displaying portfolio risk metrics
-/// Shows VaR, Sharpe ratio, beta, maximum drawdown, and other risk measures
+/// Shows VaR, Sharpe and Sortino ratios, maximum drawdown and volatility
 struct RiskAnalyticsView: View {
     let dataModel: DataModel
 
     @State private var isCalculating = false
+    /// Counts requests so a superseded calculation can tell it is out of date.
+    @State private var requestGeneration = 0
     @State private var riskMetrics: RiskMetricsService.RiskMetrics?
     @State private var drawdownPeriods: [RiskMetricsService.DrawdownPeriod] = []
     @State private var errorMessage: String?
@@ -15,6 +17,8 @@ struct RiskAnalyticsView: View {
     @State private var selectedTimeRange: TimeRange = .oneYear
     /// Set when snapshots recorded in another currency were converted or left out.
     @State private var currencyNotice: String?
+    /// "32 trading days, 1 Sep 2026 – 14 Oct 2026": what the figures rest on.
+    @State private var sampleDescription = ""
 
     enum TimeRange: String, CaseIterable {
         case oneMonth = "1M"
@@ -50,7 +54,9 @@ struct RiskAnalyticsView: View {
                 // Header with time range picker
                 headerSection
 
-                if isCalculating {
+                // A recalculation keeps the previous figures on screen, dimmed,
+                // so the page does not empty and jump on every range change.
+                if isCalculating, riskMetrics == nil {
                     ProgressView("Calculating risk metrics...")
                         .frame(maxWidth: .infinity, minHeight: 200)
                 } else if let insufficientDataMessage {
@@ -63,29 +69,38 @@ struct RiskAnalyticsView: View {
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
-                    if let currencyNotice {
-                        StockbarNotice(message: currencyNotice)
+                    if isCalculating {
+                        ProgressView("Recalculating…")
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    Group {
+                        if let currencyNotice {
+                            StockbarNotice(message: currencyNotice)
+                        }
 
-                    // Risk metrics cards
-                    metricsGridView(metrics: metrics)
+                        // Risk metrics cards
+                        metricsGridView(metrics: metrics)
 
-                    // Value at Risk visualization
-                    varVisualizationSection(metrics: metrics)
+                        // Value at Risk visualization
+                        varVisualizationSection(metrics: metrics)
 
-                    // Risk-adjusted returns
-                    riskAdjustedReturnsSection(metrics: metrics)
+                        // Risk-adjusted returns
+                        riskAdjustedReturnsSection(metrics: metrics)
 
-                    // Maximum drawdown timeline
-                    drawdownSection(metrics: metrics)
+                        // Maximum drawdown timeline
+                        drawdownSection(metrics: metrics)
 
-                    // Drawdown history table
-                    if !drawdownPeriods.isEmpty {
-                        drawdownHistorySection
+                        // Drawdown history table
+                        if !drawdownPeriods.isEmpty {
+                            drawdownHistorySection
+                        }
+
+                        // Calculation details
+                        calculationDetailsSection(metrics: metrics)
                     }
-
-                    // Calculation details
-                    calculationDetailsSection(metrics: metrics)
+                    .opacity(isCalculating ? 0.5 : 1)
+                    .accessibilityHidden(isCalculating)
                 } else {
                     emptyStateView
                 }
@@ -163,22 +178,11 @@ struct RiskAnalyticsView: View {
                 icon: "arrow.down.right.circle.fill"
             )
 
-            // Beta (if available)
-            if let beta = metrics.beta {
-                metricCard(
-                    title: "Portfolio Beta",
-                    value: String(format: "%.2f", beta),
-                    subtitle: betaInterpretation(beta),
-                    color: betaColor(beta),
-                    icon: "waveform.path.ecg"
-                )
-            }
-
             // Maximum Drawdown
             metricCard(
                 title: "Maximum Drawdown",
-                value: String(format: "%.2f%%", metrics.maxDrawdown * 100),
-                subtitle: "\(metrics.maxDrawdownDuration) days",
+                value: formatPercent(metrics.maxDrawdown),
+                subtitle: "\(metrics.maxDrawdownDuration) trading days, peak to trough",
                 color: .red,
                 icon: "arrow.down.circle.fill"
             )
@@ -186,7 +190,7 @@ struct RiskAnalyticsView: View {
             // Volatility
             metricCard(
                 title: "Volatility (Annual)",
-                value: String(format: "%.2f%%", metrics.volatility * 100),
+                value: formatPercent(metrics.volatility),
                 subtitle: volatilityInterpretation(metrics.volatility),
                 color: .purple,
                 icon: "waveform"
@@ -195,7 +199,7 @@ struct RiskAnalyticsView: View {
             // Downside Deviation
             metricCard(
                 title: "Downside Deviation (Annual)",
-                value: String(format: "%.2f%%", metrics.downsideDeviation * 100),
+                value: formatPercent(metrics.downsideDeviation),
                 subtitle: "Negative returns only, annualized",
                 color: .orange,
                 icon: "arrow.down.square.fill"
@@ -227,7 +231,7 @@ struct RiskAnalyticsView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
     }
 
@@ -279,7 +283,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -337,7 +341,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -359,7 +363,7 @@ struct RiskAnalyticsView: View {
                         Text("Peak to Trough")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text(String(format: "%.2f%%", metrics.maxDrawdown * 100))
+                        Text(formatPercent(metrics.maxDrawdown))
                             .font(.system(size: 36, weight: .bold))
                             .foregroundColor(.red)
                     }
@@ -370,7 +374,7 @@ struct RiskAnalyticsView: View {
                         Text("Duration")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text("\(metrics.maxDrawdownDuration) days")
+                        Text("\(metrics.maxDrawdownDuration) trading days")
                             .font(.title)
                             .fontWeight(.semibold)
                     }
@@ -379,12 +383,12 @@ struct RiskAnalyticsView: View {
                 .background(Color.red.opacity(0.1))
                 .cornerRadius(8)
 
-                // Recovery information
+                // From the peak to the lowest point; the time to recover is not measured.
                 if metrics.maxDrawdownDuration > 0 {
                     HStack {
                         Image(systemName: "clock.fill")
                             .foregroundColor(.orange)
-                        Text("Time in drawdown: \(formatDuration(metrics.maxDrawdownDuration))")
+                        Text("Peak to lowest point: \(metrics.maxDrawdownDuration) trading days. Recovery time is not included.")
                             .font(.subheadline)
                         Spacer()
                     }
@@ -393,7 +397,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -404,7 +408,9 @@ struct RiskAnalyticsView: View {
             Text("Significant Drawdown Periods")
                 .font(.headline)
 
-            Text("All drawdowns exceeding 5%")
+            Text(drawdownPeriods.count > 5
+                 ? "Falls of more than 5% from a peak. Showing 5 of \(drawdownPeriods.count)."
+                 : "Falls of more than 5% from a peak")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -415,7 +421,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -436,7 +442,7 @@ struct RiskAnalyticsView: View {
                 Text("\(period.durationDays) days")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                Text("Peak: \(formatCurrency(period.peakValue))")
+                Text("Peak to lowest point")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -456,14 +462,18 @@ struct RiskAnalyticsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 detailRow(label: "Calculation Date", value: formatDateTime(metrics.calculationDate))
                 detailRow(label: "Time Range", value: selectedTimeRange.description)
-                detailRow(label: "Risk-Free Rate", value: "4.0% annually")
-                detailRow(label: "Methodology", value: "Historical VaR, Annualized metrics")
+                detailRow(label: "Based On", value: sampleDescription)
+                detailRow(
+                    label: "Risk-Free Rate",
+                    value: String(format: "%.1f%% annually (Sharpe and Sortino)", RiskMetricsService.annualRiskFreeRate * 100)
+                )
+                detailRow(label: "Methodology", value: "Historical VaR, annualized from daily returns that leave out buys and sells")
             }
             .font(.caption)
             .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .background(StockbarPalette.sheetHeaderFill)
         .cornerRadius(8)
     }
 
@@ -531,6 +541,10 @@ struct RiskAnalyticsView: View {
     // MARK: - Calculation Logic
 
     private func calculateRiskMetrics() {
+        // Two ranges picked quickly run two calculations; only the latest may
+        // write its answer, or the slower, older one would overwrite it.
+        requestGeneration += 1
+        let generation = requestGeneration
         Task {
             await MainActor.run {
                 isCalculating = true
@@ -558,7 +572,9 @@ struct RiskAnalyticsView: View {
 
             guard !snapshots.isEmpty else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics appear once Stockbar has recorded portfolio values for this time range."
+                    riskMetrics = nil
                     isCalculating = false
                 }
                 return
@@ -589,16 +605,35 @@ struct RiskAnalyticsView: View {
                 convert: { converter.convert(amount: $0, from: $1, to: preferredCurrency) }
             ) else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics need portfolio values from at least two different days."
+                    riskMetrics = nil
                     isCalculating = false
                 }
                 return
             }
 
+            let minimum = RiskMetricsService.minimumDailyReturns
+            guard series.returns.count >= minimum else {
+                await MainActor.run {
+                    guard generation == requestGeneration else { return }
+                    insufficientDataMessage = "Risk metrics need at least \(minimum) trading days of history in this time range. "
+                        + "There are \(series.returns.count) so far."
+                    riskMetrics = nil
+                    isCalculating = false
+                }
+                return
+            }
+            let dateFormat = Date.FormatStyle(date: .abbreviated, time: .omitted)
+            let sample = "\(series.returns.count) trading days"
+                + ((series.dates.first).flatMap { first in
+                    series.dates.last.map { ", \(first.formatted(dateFormat)) – \($0.formatted(dateFormat))" }
+                } ?? "")
+
             // Calculate comprehensive risk metrics
             if let metrics = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(
                 series: series,
-                riskFreeRate: 0.04
+                riskFreeRate: RiskMetricsService.annualRiskFreeRate
             ) {
                 // Find significant drawdown periods
                 let periods = await RiskMetricsService.shared.findDrawdownPeriods(
@@ -608,14 +643,18 @@ struct RiskAnalyticsView: View {
                 )
 
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     self.riskMetrics = metrics
                     self.drawdownPeriods = periods
                     self.currencyNotice = notice
+                    self.sampleDescription = sample
                     self.isCalculating = false
                 }
             } else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "At least two recorded portfolio values are needed in this time range."
+                    riskMetrics = nil
                     isCalculating = false
                 }
             }
@@ -624,12 +663,11 @@ struct RiskAnalyticsView: View {
 
     // MARK: - Helper Functions
 
+    /// The same money format as the holdings table and the attribution tab.
+    /// A value that is not known shows a dash, never "NaN" or an invented zero.
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = dataModel.preferredCurrency
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? "\(dataModel.preferredCurrency)\(String(format: "%.2f", value))"
+        guard value.isFinite else { return "—" }
+        return HoldingsCurrencyFormatter.amount(value, currency: dataModel.preferredCurrency)
     }
 
     private func formatDateTime(_ date: Date) -> String {
@@ -645,24 +683,13 @@ struct RiskAnalyticsView: View {
         return "\(formatter.string(from: start)) - \(formatter.string(from: end))"
     }
 
-    private func formatDuration(_ days: Int) -> String {
-        if days < 30 {
-            return "\(days) days"
-        } else if days < 365 {
-            let months = days / 30
-            return "\(months) month\(months == 1 ? "" : "s")"
-        } else {
-            let years = days / 365
-            let remainingMonths = (days % 365) / 30
-            if remainingMonths > 0 {
-                return "\(years) year\(years == 1 ? "" : "s"), \(remainingMonths) month\(remainingMonths == 1 ? "" : "s")"
-            } else {
-                return "\(years) year\(years == 1 ? "" : "s")"
-            }
-        }
-    }
-
     // MARK: - Interpretation Functions
+
+    /// A share as a percentage; a dash when it could not be worked out.
+    private func formatPercent(_ fraction: Double) -> String {
+        guard fraction.isFinite else { return "—" }
+        return String(format: "%.2f%%", fraction * 100)
+    }
 
     private func formatRatio(_ ratio: Double?) -> String {
         guard let ratio else { return "—" }
@@ -684,15 +711,8 @@ struct RiskAnalyticsView: View {
         if sortino > 2.0 { return .green } else if sortino > 1.0 { return .blue } else if sortino > 0.5 { return .orange } else { return .red }
     }
 
-    private func betaInterpretation(_ beta: Double) -> String {
-        if beta > 1.2 { return "High volatility" } else if beta > 0.8 { return "Market-like" } else if beta > 0.5 { return "Low volatility" } else { return "Very defensive" }
-    }
-
-    private func betaColor(_ beta: Double) -> Color {
-        if beta > 1.2 { return .red } else if beta > 0.8 { return .blue } else { return .green }
-    }
-
     private func volatilityInterpretation(_ volatility: Double) -> String {
+        guard volatility.isFinite else { return "" }
         if volatility > 0.30 { return "Very high" } else if volatility > 0.20 { return "High" } else if volatility > 0.15 { return "Moderate" } else if volatility > 0.10 { return "Low" } else { return "Very low" }
     }
 }

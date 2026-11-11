@@ -6,6 +6,7 @@
 //  Intelligent automatic backfilling with gap detection and API quota management
 //
 
+import AppKit
 import Foundation
 
 /// Thread-safe scheduler for intelligent portfolio data backfilling
@@ -25,6 +26,8 @@ final class BackfillScheduler {
     private var dailyCheckTimer: Timer?
     private var historyChangeTimer: Timer?
     private weak var dataModel: DataModel?
+    private var nextDailyCheck: Date?
+    private var wakeObserver: NSObjectProtocol?
 
     // MARK: - UserDefaults Keys
 
@@ -63,6 +66,7 @@ final class BackfillScheduler {
 
             // Schedule daily 15:00 check
             scheduleDailyCheck(dataModel: dataModel)
+            observeWake()
 
             await logger.info("📅 SCHEDULER: Backfill scheduler started successfully")
         }
@@ -79,6 +83,11 @@ final class BackfillScheduler {
 
         dailyCheckTimer?.invalidate()
         dailyCheckTimer = nil
+        nextDailyCheck = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
         historyChangeTimer?.invalidate()
         historyChangeTimer = nil
 
@@ -145,7 +154,28 @@ final class BackfillScheduler {
         }
     }
 
+    /// A timer set many hours ahead does not count time spent asleep, so the
+    /// daily check is worked out again on every wake, and run then if its
+    /// time passed while the Mac slept.
+    private func observeWake() {
+        guard wakeObserver == nil else { return }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let dataModel = self.dataModel else { return }
+                let missed = self.nextDailyCheck.map { $0 <= Date() } ?? false
+                self.scheduleDailyCheck(dataModel: dataModel)
+                if missed {
+                    await self.logger.info("📅 DAILY: Running the check that fell due during sleep")
+                    await self.checkAndRunBackfillIfNeeded(dataModel: dataModel)
+                }
+            }
+        }
+    }
+
     private func scheduleDailyCheck(dataModel: DataModel) {
+        dailyCheckTimer?.invalidate()
         // Calculate next 15:00 occurrence
         let now = Date()
         let calendar = Calendar.current
@@ -167,6 +197,7 @@ final class BackfillScheduler {
             nextRun = calendar.date(byAdding: .day, value: 1, to: nextRun) ?? nextRun
         }
 
+        nextDailyCheck = nextRun
         let timeInterval = nextRun.timeIntervalSince(now)
 
         Task {
@@ -256,8 +287,8 @@ final class BackfillScheduler {
         // Use existing backfill method
         await dataModel.calculateRetroactivePortfolioHistory(days: backfillDays)
 
-        // Reload snapshots into memory
-        await historicalDataManager.reloadPortfolioSnapshotsFromCoreData()
+        // The calculation merges its estimated days into the series in memory. They are not
+        // stored, so reloading from Core Data here would throw the result straight away.
 
         await logger.info("✅ BACKFILL: Intelligent backfill completed")
     }
@@ -315,9 +346,4 @@ final class BackfillScheduler {
     }
 
     // MARK: - Public Helpers
-
-    /// Returns the last backfill run date as a formatted string
-    nonisolated func getLastBackfillDate() -> String? {
-        return StockbarRuntimeStorage.userDefaults.string(forKey: UserDefaultsKey.lastBackfillDate)
-    }
 }

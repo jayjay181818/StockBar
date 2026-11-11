@@ -10,7 +10,9 @@ class MemoryOptimizedDataModel: ObservableObject {
     private struct MemoryLimits {
         static let maxRealTimeTradesInMemory = 50
         static let maxCachedSymbolsData = 20
-        static let cacheCleanupInterval: TimeInterval = 300 // 5 minutes
+        /// Only trims the per-symbol bookkeeping; CacheManager cleans its own
+        /// cache hourly, so this need not run more often than that.
+        static let cacheCleanupInterval: TimeInterval = 3600
         static let memoryWarningThreshold = 100_000_000 // 100MB
     }
     
@@ -45,6 +47,8 @@ class MemoryOptimizedDataModel: ObservableObject {
     }
     
     private func performPeriodicCleanup() async {
+        // Nothing over the limit: nothing to do and nothing to log.
+        guard symbolAccessTimes.count > MemoryLimits.maxCachedSymbolsData else { return }
         await performMemoryCleanup(aggressive: false)
     }
     
@@ -90,32 +94,16 @@ class MemoryOptimizedDataModel: ObservableObject {
     }
     
     private func cleanupHistoricalDataCache(aggressive: Bool) async {
-        // Use CacheManager to clean up historical data caches
+        // CacheManager runs its own hourly clean-up. Running it from this
+        // five-minute timer as well rewrote the whole preferences file each
+        // time just to save the clean-up time.
         if aggressive {
             CacheManager.shared.clearMemoryCache()
-        } else {
-            CacheManager.shared.performMaintenance()
         }
     }
     
     // MARK: - Memory Usage Tracking
     
-    func trackSymbolAccess(_ symbol: String, dataSize: Int = 0) {
-        symbolAccessTimes[symbol] = Date()
-        
-        if dataSize > 0 {
-            let oldSize = cacheSize[symbol] ?? 0
-            cacheSize[symbol] = dataSize
-            totalCacheSize = totalCacheSize - oldSize + dataSize
-        }
-        
-        // Check if we need to cleanup
-        if totalCacheSize > MemoryLimits.memoryWarningThreshold {
-            Task {
-                await performMemoryCleanup(aggressive: false)
-            }
-        }
-    }
     
     private func logMemoryUsage() async {
         let memoryInfo = mach_task_basic_info()
@@ -126,53 +114,7 @@ class MemoryOptimizedDataModel: ObservableObject {
     
     // MARK: - Smart Data Loading
     
-    func loadDataIntelligently(for symbols: [String], timeRange: ChartTimeRange) async -> [String: [PriceSnapshot]] {
-        let maxSymbolsToLoad = min(symbols.count, MemoryLimits.maxCachedSymbolsData)
-        let symbolsToLoad = Array(symbols.prefix(maxSymbolsToLoad))
-        
-        await logger.info("Loading data for \(symbolsToLoad.count) symbols (limited from \(symbols.count))")
-        
-        var results: [String: [PriceSnapshot]] = [:]
-        
-        // Load data in batches to prevent memory spikes
-        let batchSize = 5
-        let batches = symbolsToLoad.chunked(into: batchSize)
-        
-        for batch in batches {
-            await withTaskGroup(of: (String, [PriceSnapshot]).self) { group in
-                for symbol in batch {
-                    group.addTask {
-                        await self.loadSymbolData(symbol: symbol, timeRange: timeRange)
-                    }
-                }
-                
-                for await (symbol, snapshots) in group {
-                    results[symbol] = snapshots
-                    self.trackSymbolAccess(symbol, dataSize: snapshots.count * 100) // Rough size estimate
-                }
-            }
-            
-            // Small delay between batches to prevent overwhelming the system
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-        }
-        
-        return results
-    }
     
-    private func loadSymbolData(symbol: String, timeRange: ChartTimeRange) async -> (String, [PriceSnapshot]) {
-        do {
-            let service = CoreDataHistoricalDataService()
-            let snapshots = try await service.fetchPriceSnapshots(
-                for: symbol,
-                from: timeRange.startDate(),
-                to: Date()
-            )
-            return (symbol, snapshots)
-        } catch {
-            await logger.error("Failed to load data for \(symbol): \(error)")
-            return (symbol, [])
-        }
-    }
     
     // MARK: - Memory Efficient Operations
     
@@ -210,34 +152,6 @@ class MemoryOptimizedDataModel: ObservableObject {
 extension Notification.Name {
     static let symbolEvictedFromCache = Notification.Name("symbolEvictedFromCache")
     static let memoryPressureDetected = Notification.Name("memoryPressureDetected")
-}
-
-// MARK: - CacheManager Extensions
-
-extension CacheManager {
-    func clearMemoryCache() {
-        Task { await Logger.shared.info("🧹 Clearing memory cache due to memory pressure") }
-
-        memoryCacheQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            let removedSize = self.memoryCache.values.reduce(0) { $0 + $1.size }
-            let removedCount = self.memoryCache.count
-            self.memoryCache.removeAll(keepingCapacity: false)
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.cacheStats.memorySize = max(0, self.cacheStats.memorySize - removedSize)
-                self.cacheStats.totalEntries = max(0, self.cacheStats.totalEntries - removedCount)
-                self.cacheStats.lastCleanup = Date()
-            }
-        }
-    }
-    
-    func performMaintenance() {
-        Task { await Logger.shared.debug("🔧 Performing cache maintenance") }
-        self.performCleanup()
-    }
 }
 
 // MARK: - Memory Helper Functions

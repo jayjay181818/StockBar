@@ -9,8 +9,6 @@ protocol NetworkService: Sendable {
     func fetchQuote(for symbol: String) async throws -> StockFetchResult
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult]
     func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot]
-    func fetchOHLCData(for symbol: String, period: String, interval: String) async throws -> [OHLCSnapshot]
-    func fetchBatchOHLCData(for symbols: [String], period: String, interval: String) async throws -> [String: [OHLCSnapshot]]
     func verifyAPIKey(service: String) async throws -> Bool
 }
 
@@ -109,6 +107,10 @@ enum NetworkError: LocalizedError, Sendable {
 
 // MARK: - Python Script Service
 actor PythonNetworkService: NetworkService {
+    /// The instance the app uses for quotes and history. Tests build their
+    /// own with a fake process runner.
+    static let shared = PythonNetworkService()
+
     private let logger = Logger.shared // Assumes Logger.swift (or similar) provides this
     private let scriptName = "get_stock_data.py"
     private let scriptPathOverride: String?
@@ -230,11 +232,6 @@ actor PythonNetworkService: NetworkService {
         return result
     }
     
-    /// Enhanced fetch quote with pre/post market data support
-    func fetchEnhancedQuote(for symbol: String) async throws -> StockFetchResult {
-        try await fetchQuote(for: symbol)
-    }
-    
     private func parseEnhancedQuoteData(_ data: [String: Any], symbol: String) throws -> StockFetchResult {
         guard let displayPrice = data["price"] as? Double,
               let previousClose = data["previousClose"] as? Double,
@@ -333,9 +330,13 @@ actor PythonNetworkService: NetworkService {
         }
         guard !safeSymbols.isEmpty else { return [] }
 
-        let timeout = min(300, max(30, 20 + (Double(safeSymbols.count) * 5)))
+        // The script stops starting new symbols once its own budget runs out and reports
+        // them as timed out, so a slow provider no longer loses the quotes already fetched.
+        // The process timeout stays as the backstop for a script that hangs outright.
+        let timeout = min(300, max(45, 30 + (Double(safeSymbols.count) * 5)))
+        let scriptBudget = Int(timeout - 15)
         let (stdout, _, _) = try await runPythonProcess(
-            arguments: [scriptPath, "--json"] + safeSymbols,
+            arguments: [scriptPath, "--json", "--deadline-seconds", String(scriptBudget)] + safeSymbols,
             timeoutSeconds: timeout,
             logContext: "Quote batch (\(safeSymbols.count) symbols)"
         )
@@ -363,13 +364,20 @@ actor PythonNetworkService: NetworkService {
             guard envelope?["success"] as? Bool == true,
                   let quote = envelope?["quote"] as? [String: Any],
                   let parsed = try? parseEnhancedQuoteData(quote, symbol: symbol) else {
-                return placeholderQuote(for: symbol)
+                let errorCode = (envelope?["error"] as? [String: Any])?["error_code"] as? String
+                return placeholderQuote(for: symbol, failure: QuoteFailure(errorCode: errorCode))
             }
             return parsed
         }
     }
 
-    private func placeholderQuote(for symbol: String) -> StockFetchResult {
+    private func placeholderQuote(for symbol: String, failure: QuoteFailure) -> StockFetchResult {
+        var quote = unpricedQuote(for: symbol)
+        quote.failure = failure
+        return quote
+    }
+
+    private func unpricedQuote(for symbol: String) -> StockFetchResult {
         StockFetchResult(
             currency: SymbolMetadata.defaultCurrency(for: symbol),
             symbol: symbol,
@@ -446,7 +454,7 @@ actor PythonNetworkService: NetworkService {
             await logger.debug("Python historical process exited \(exitCode) for \(symbol)")
 
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
+                await logger.debug("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
             }
             
@@ -463,13 +471,13 @@ actor PythonNetworkService: NetworkService {
 
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
-                await logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")
+                await logger.debug("Script explicitly reported FETCH_FAILED for historical \(symbol).")
                 throw NetworkError.noData("Script reported FETCH_FAILED for historical \(symbol)")
             }
             
             // Validate JSON structure before parsing
             guard output.hasPrefix("[") && output.hasSuffix("]") else {
-                await logger.error("🐍 PYTHON SCRIPT: Invalid JSON structure for \(symbol). Output should start with '[' and end with ']'. First 100 chars: \(String(output.prefix(100)))")
+                await logger.debug("🐍 PYTHON SCRIPT: Invalid JSON structure for \(symbol). Output should start with '[' and end with ']'. First 100 chars: \(String(output.prefix(100)))")
                 throw NetworkError.invalidResponse("Invalid JSON structure from script output")
             }
             
@@ -487,8 +495,10 @@ actor PythonNetworkService: NetworkService {
                     guard let timestamp = item["timestamp"] as? TimeInterval,
                           let price = item["price"] as? Double,
                           let previousClose = item["previousClose"] as? Double,
-                          let symbolValue = item["symbol"] as? String else {
-                        await logger.warning("Skipping invalid historical data item: \(item)")
+                          let symbolValue = item["symbol"] as? String,
+                          timestamp.isFinite, price.isFinite, price > 0,
+                          previousClose.isFinite else {
+                        await logger.warning("Skipping invalid historical data item for \(symbol)")
                         continue
                     }
                     
@@ -514,7 +524,7 @@ actor PythonNetworkService: NetworkService {
                 
                 return priceSnapshots
             } catch {
-                await logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
+                await logger.debug("Failed to parse JSON from historical script output: \(error.localizedDescription)")
                 await logger.debug("Python historical parse failure output length for \(symbol): \(output.count)")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
@@ -523,222 +533,11 @@ actor PythonNetworkService: NetworkService {
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
-            await logger.error("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
+            await logger.debug("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }
 
-    // MARK: - OHLC Data Fetching (v2.3.0 UI Enhancement)
-
-    /// Fetch OHLC (candlestick) data for a single symbol
-    /// - Parameters:
-    ///   - symbol: Stock symbol (e.g., "AAPL", "TSLA")
-    ///   - period: Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
-    ///   - interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
-    /// - Returns: Array of OHLC snapshots
-    func fetchOHLCData(for symbol: String, period: String = "1mo", interval: String = "1d") async throws -> [OHLCSnapshot] {
-        await logger.info("📊 OHLC: Starting fetch for \(symbol) (period: \(period), interval: \(interval))")
-
-        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            await logger.error("Script '\(scriptName)' not found in bundle.")
-            throw NetworkError.scriptNotFound(scriptName)
-        }
-
-        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
-            await logger.error(error.localizedDescription)
-            throw error
-        }
-
-        let arguments = [scriptPath, "--ohlc", symbol, "--period", period, "--interval", interval]
-        await logger.info("📊 OHLC: Command: \(config.interpreterPath) \(arguments.joined(separator: " "))")
-
-        do {
-            let (outputData, errorData, _) = try await runPythonProcess(
-                arguments: arguments,
-                timeoutSeconds: 120,
-                logContext: "OHLC fetch for \(symbol)"
-            )
-
-            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.info("📊 OHLC: Debug output for \(symbol): \(err)")
-            }
-
-            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("📊 OHLC: stdout for \(symbol) is empty.")
-                throw NetworkError.noData("Empty OHLC output from script for \(symbol)")
-            }
-
-            await logger.info("📊 OHLC: Raw output for \(symbol) (\(output.count) chars)")
-
-            // Try to parse as JSON error first
-            do {
-                try parseError(from: output)
-            } catch let error as NetworkError {
-                throw error
-            } catch {
-                // Not a JSON error, continue with normal parsing
-            }
-
-            // Parse JSON array response
-            guard let jsonData = output.data(using: .utf8) else {
-                throw NetworkError.invalidResponse("Could not convert OHLC output to data")
-            }
-
-            do {
-                let ohlcArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] ?? []
-
-                var snapshots: [OHLCSnapshot] = []
-
-                for item in ohlcArray {
-                    guard let timestamp = item["timestamp"] as? TimeInterval,
-                          let symbolValue = item["symbol"] as? String,
-                          let open = item["open"] as? Double,
-                          let high = item["high"] as? Double,
-                          let low = item["low"] as? Double,
-                          let close = item["close"] as? Double,
-                          let volume = item["volume"] as? Int64 else {
-                        await logger.warning("📊 OHLC: Skipping invalid OHLC data item: \(item)")
-                        continue
-                    }
-
-                    let snapshot = OHLCSnapshot(
-                        symbol: symbolValue,
-                        timestamp: Date(timeIntervalSince1970: timestamp),
-                        open: open,
-                        high: high,
-                        low: low,
-                        close: close,
-                        volume: volume
-                    )
-                    snapshots.append(snapshot)
-                }
-
-                await logger.info("📊 OHLC: Successfully parsed \(snapshots.count) candlesticks for \(symbol)")
-                return snapshots
-            } catch {
-                await logger.error("📊 OHLC: Failed to parse JSON: \(error.localizedDescription)")
-                throw NetworkError.invalidResponse("Could not parse OHLC JSON: \(error.localizedDescription)")
-            }
-        } catch let netErr as NetworkError {
-            throw netErr
-        } catch {
-            await logger.error("📊 OHLC: Failed to run Python script for \(symbol): \(error.localizedDescription)")
-            throw NetworkError.scriptExecutionError(error.localizedDescription)
-        }
-    }
-
-    /// Fetch OHLC data for multiple symbols (batch operation)
-    /// - Parameters:
-    ///   - symbols: Array of stock symbols
-    ///   - period: Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
-    ///   - interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
-    /// - Returns: Dictionary mapping symbol to array of OHLC snapshots
-    func fetchBatchOHLCData(for symbols: [String], period: String = "1mo", interval: String = "1d") async throws -> [String: [OHLCSnapshot]] {
-        await logger.info("📊 OHLC BATCH: Starting fetch for \(symbols.count) symbols (period: \(period), interval: \(interval))")
-
-        guard !symbols.isEmpty else { return [:] }
-
-        guard let scriptPath = Bundle.main.path(forResource: scriptName.replacingOccurrences(of: ".py", with: ""), ofType: "py") else {
-            await logger.error("Script '\(scriptName)' not found in bundle.")
-            throw NetworkError.scriptNotFound(scriptName)
-        }
-
-        guard FileManager.default.fileExists(atPath: config.interpreterPath) else {
-            let error = NetworkError.pythonInterpreterNotFound(config.interpreterPath)
-            await logger.error(error.localizedDescription)
-            throw error
-        }
-
-        let safeSymbols = symbols.filter { PythonConfiguration.validateSymbol($0) }
-        guard !safeSymbols.isEmpty else { return [:] }
-
-        var args = [scriptPath, "--batch-ohlc", "--period", period, "--interval", interval]
-        args.append(contentsOf: safeSymbols)
-        await logger.info("📊 OHLC BATCH: Command: \(config.interpreterPath) \(args.joined(separator: " "))")
-
-        do {
-            let (outputData, errorData, _) = try await runPythonProcess(
-                arguments: args,
-                timeoutSeconds: 300,
-                logContext: "OHLC batch fetch"
-            )
-
-            if let err = String(data: errorData, encoding: .utf8), !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                await logger.info("📊 OHLC BATCH: Debug output: \(err)")
-            }
-
-            guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("📊 OHLC BATCH: stdout is empty.")
-                throw NetworkError.noData("Empty OHLC batch output from script")
-            }
-
-            await logger.info("📊 OHLC BATCH: Raw output (\(output.count) chars)")
-
-            // Try to parse as JSON error first
-            do {
-                try parseError(from: output)
-            } catch let error as NetworkError {
-                throw error
-            } catch {
-                // Not a JSON error, continue with normal parsing
-            }
-
-            // Parse JSON dictionary response
-            guard let jsonData = output.data(using: .utf8) else {
-                throw NetworkError.invalidResponse("Could not convert OHLC batch output to data")
-            }
-
-            do {
-                let batchData = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: [[String: Any]]] ?? [:]
-
-                var result: [String: [OHLCSnapshot]] = [:]
-
-                for (symbol, ohlcArray) in batchData {
-                    var snapshots: [OHLCSnapshot] = []
-
-                    for item in ohlcArray {
-                        guard let timestamp = item["timestamp"] as? TimeInterval,
-                              let symbolValue = item["symbol"] as? String,
-                              let open = item["open"] as? Double,
-                              let high = item["high"] as? Double,
-                              let low = item["low"] as? Double,
-                              let close = item["close"] as? Double,
-                              let volume = item["volume"] as? Int64 else {
-                            await logger.warning("📊 OHLC BATCH: Skipping invalid OHLC data item for \(symbol): \(item)")
-                            continue
-                        }
-
-                        let snapshot = OHLCSnapshot(
-                            symbol: symbolValue,
-                            timestamp: Date(timeIntervalSince1970: timestamp),
-                            open: open,
-                            high: high,
-                            low: low,
-                            close: close,
-                            volume: volume
-                        )
-                        snapshots.append(snapshot)
-                    }
-
-                    result[symbol] = snapshots
-                    await logger.info("📊 OHLC BATCH: Successfully parsed \(snapshots.count) candlesticks for \(symbol)")
-                }
-
-                await logger.info("📊 OHLC BATCH: Successfully parsed data for \(result.count) symbols")
-                return result
-            } catch {
-                await logger.error("📊 OHLC BATCH: Failed to parse JSON: \(error.localizedDescription)")
-                throw NetworkError.invalidResponse("Could not parse OHLC batch JSON: \(error.localizedDescription)")
-            }
-        } catch let netErr as NetworkError {
-            throw netErr
-        } catch {
-            await logger.error("📊 OHLC BATCH: Failed to run Python script: \(error.localizedDescription)")
-            throw NetworkError.scriptExecutionError(error.localizedDescription)
-        }
-    }
-    
     /// Verifies the API key for a specific service by running a test fetch
     /// - Parameter service: Service identifier (e.g., "fmp", "twelvedata")
     /// - Returns: Boolean indicating if the key is valid

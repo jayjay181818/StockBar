@@ -18,6 +18,8 @@ struct Trading212DataSourceSection: View {
     @State private var isSyncing = false
     @State private var isReconcilingHoldings = false
     @State private var showingLinkConfirmation = false
+    @State private var confirmingClearCredentials = false
+    @State private var confirmingDeleteMissing = false
     @State private var showingBrokerOnlyImportConfirmation = false
     @State private var statusMessage = "Trading 212 preview has not been tested."
     @State private var preview: Trading212ImportPreview?
@@ -64,7 +66,7 @@ struct Trading212DataSourceSection: View {
                 importBrokerOnlyHoldings()
             }
         } message: {
-            Text("StockBar will create new holdings only for clean broker-only Trading 212 rows and save broker links so future syncs update them. Existing manual holdings, backups, historical data, and market caches are not deleted or migrated.")
+            Text("Stockbar will create new holdings only for clean broker-only Trading 212 rows and save broker links so future syncs update them. Existing manual holdings, backups, historical data, and market caches are not deleted or migrated.")
         }
     }
 
@@ -139,8 +141,20 @@ struct Trading212DataSourceSection: View {
                 }
                 GridRow {
                     Text("Removed holdings:")
-                    Toggle("Delete linked manual holdings missing from Trading 212", isOn: binding(\.deleteMissingLinkedHoldings))
+                    Toggle("Delete linked manual holdings missing from Trading 212", isOn: deleteMissingBinding)
                         .toggleStyle(.checkbox)
+                        .confirmationDialog(
+                            "Delete holdings that disappear from Trading 212?",
+                            isPresented: $confirmingDeleteMissing,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Delete Missing Holdings", role: .destructive) {
+                                binding(\.deleteMissingLinkedHoldings).wrappedValue = true
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("From the next sync, a linked holding that Trading 212 no longer reports is deleted from Stockbar along with its broker link. This cannot be undone.")
+                        }
                 }
                 GridRow {
                     Text("Portfolio changes:")
@@ -156,8 +170,8 @@ struct Trading212DataSourceSection: View {
             }
 
             Text(settings.deleteMissingLinkedHoldings
-                 ? "Enabled: if a linked position disappears from Trading 212, StockBar deletes the matched manual holding and removes its broker link."
-                 : "Disabled: removed Trading 212 positions are reported as missing and manual holdings stay in StockBar.")
+                 ? "Enabled: if a linked position disappears from Trading 212, Stockbar deletes the matched manual holding and removes its broker link."
+                 : "Disabled: removed Trading 212 positions are reported as missing and manual holdings stay in Stockbar.")
                 .font(.caption)
                 .foregroundColor(settings.deleteMissingLinkedHoldings ? .orange : .secondary)
             Text(settings.autoReconcileHoldingsEnabled
@@ -165,7 +179,7 @@ struct Trading212DataSourceSection: View {
                  : "Hourly reconciliation is disabled. Use Preview Import or Sync Linked Holdings manually to apply structural changes.")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Text("Linked holdings sync through one Trading 212 positions request per cycle; StockBar does not poll each ticker separately.")
+            Text("Linked holdings sync through one Trading 212 positions request per cycle; Stockbar does not poll each ticker separately.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -199,10 +213,20 @@ struct Trading212DataSourceSection: View {
                     saveCredentials()
                 }
                 .disabled(!canSaveCredentials)
-                Button("Clear Credentials") {
-                    clearCredentials()
+                Button("Clear Credentials…", role: .destructive) {
+                    confirmingClearCredentials = true
                 }
                 .disabled(!settings.isEnabled || !hasStoredCredentials)
+                .confirmationDialog(
+                    "Remove the Trading 212 credentials from Keychain?",
+                    isPresented: $confirmingClearCredentials,
+                    titleVisibility: .visible
+                ) {
+                    Button("Clear Credentials", role: .destructive) { clearCredentials() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Syncing stops until you enter the API key and secret again. Your holdings stay as they are.")
+                }
             }
 
             Text(credentialHelpText)
@@ -296,6 +320,11 @@ struct Trading212DataSourceSection: View {
             Text(statusMessage)
                 .font(.caption)
                 .foregroundColor(.secondary)
+            if let syncError = dataModel.trading212ScheduledSyncError {
+                Label("Automatic sync is failing: \(syncError)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
             if settings.accountType == .cfdUnsupported {
                 Text("Trading 212's current public API docs list Invest and Stocks ISA only; CFD is not supported.")
                     .font(.caption)
@@ -408,7 +437,7 @@ struct Trading212DataSourceSection: View {
     private var linkConfirmationMessage: String {
         guard let preview else { return "Run Preview Import before linking broker holdings." }
         let selection = Trading212LinkSelection(preview: preview)
-        var message = "StockBar will save broker links for \(selection.exactMatches.count) exact manual match(es). Broker-only rows will not be imported by this action."
+        var message = "Stockbar will save broker links for \(selection.exactMatches.count) exact manual match(es). Broker-only rows will not be imported by this action."
         if !selection.mismatches.isEmpty {
             let listed = selection.mismatches.prefix(6).map { row in
                 "\(row.manualMatch?.symbol ?? row.displaySymbol): manual \(format(row.manualMatch?.quantity)) vs Trading 212 \(format(row.quantity))"
@@ -432,7 +461,7 @@ struct Trading212DataSourceSection: View {
         if hasStoredCredentials {
             return "Credentials are stored in Keychain. Fields stay empty for security; paste both values to replace them."
         }
-        return "Trading 212 credentials can expose sensitive account data. StockBar stores them in Keychain only."
+        return "Trading 212 credentials can expose sensitive account data. Stockbar stores them in Keychain only."
     }
 
     private func credentialPlaceholder(_ label: String) -> String {
@@ -459,12 +488,16 @@ struct Trading212DataSourceSection: View {
                 }
             }
             .textFieldStyle(.roundedBorder)
+            // The visible text beside the field, not the placeholder, names it.
+            .accessibilityLabel(label)
             Button {
                 isVisible.wrappedValue.toggle()
             } label: {
                 Image(systemName: isVisible.wrappedValue ? "eye.slash" : "eye")
             }
             .buttonStyle(.borderless)
+            .help(isVisible.wrappedValue ? "Hide \(label)" : "Show \(label)")
+            .accessibilityLabel(isVisible.wrappedValue ? "Hide \(label)" : "Show \(label)")
         }
     }
 
@@ -688,6 +721,21 @@ struct Trading212DataSourceSection: View {
                 updatedSettings[keyPath: keyPath] = newValue
                 settings = updatedSettings
                 saveSettings(updatedSettings, runImmediately: false)
+            }
+        )
+    }
+
+    /// Turning deletion on can remove holdings at the next sync, so it is
+    /// confirmed first. Turning it off applies at once.
+    private var deleteMissingBinding: Binding<Bool> {
+        Binding(
+            get: { settings.deleteMissingLinkedHoldings },
+            set: { enabled in
+                if enabled {
+                    confirmingDeleteMissing = true
+                } else {
+                    binding(\.deleteMissingLinkedHoldings).wrappedValue = false
+                }
             }
         )
     }

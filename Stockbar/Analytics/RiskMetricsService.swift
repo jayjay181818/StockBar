@@ -1,9 +1,17 @@
 import Foundation
 
 /// Service for calculating portfolio risk metrics and analytics
-/// Provides VaR, Sharpe ratio, beta, maximum drawdown, and other risk measures
+/// Provides VaR, Sharpe ratio, maximum drawdown, and other risk measures
 actor RiskMetricsService {
     static let shared = RiskMetricsService()
+
+    /// Annual risk-free rate used by every risk-adjusted figure in the app
+    /// (Sharpe, Sortino and the chart's Sharpe).
+    static let annualRiskFreeRate = 0.04
+
+    /// Fewer daily returns than this say little about risk: with five days the
+    /// "99% worst case" is simply the worst of five.
+    static let minimumDailyReturns = 20
 
     private let logger = Logger.shared
 
@@ -12,12 +20,13 @@ actor RiskMetricsService {
     // MARK: - Data Models
 
     struct RiskMetrics {
+        // Figures that could not be worked out are NaN, never an invented zero.
         let valueAtRisk95: Double      // 95% VaR (5% worst case)
         let valueAtRisk99: Double      // 99% VaR (1% worst case)
         let sharpeRatio: Double?       // Risk-adjusted return (nil when undefined)
         let beta: Double?              // Market correlation (requires benchmark)
         let maxDrawdown: Double        // Maximum peak-to-trough decline
-        let maxDrawdownDuration: Int   // Observations from peak to trough
+        let maxDrawdownDuration: Int   // Trading days from peak to trough
         let volatility: Double         // Annualized standard deviation
         let downsideDeviation: Double  // Annualized downside deviation (full-sample divisor)
         let sortinoRatio: Double?      // Downside risk-adjusted return (nil when no downside)
@@ -61,7 +70,10 @@ actor RiskMetricsService {
         calendar: Calendar = .current
     ) -> (dates: [Date], values: [Double]) {
         var lastByDay: [Date: (date: Date, value: Double)] = [:]
-        for (date, value) in zip(dates, values) where value.isFinite && value > 0 {
+        // Markets are closed at weekends; a repeated Friday value there would add zero-return
+        // "trading days" and understate every figure annualised with 252.
+        for (date, value) in zip(dates, values)
+        where value.isFinite && value > 0 && !calendar.isDateInWeekend(date) {
             let day = calendar.startOfDay(for: date)
             if let existing = lastByDay[day], existing.date > date { continue }
             lastByDay[day] = (date, value)
@@ -120,7 +132,9 @@ actor RiskMetricsService {
         calendar: Calendar = .current
     ) -> DailyRiskSeries? {
         var lastByDay: [Date: HistoricalPortfolioSnapshot] = [:]
-        for snapshot in snapshots where snapshot.totalValue.isFinite && snapshot.totalValue > 0 {
+        // Weekend snapshots are left out for the same reason as in `dailyCloses`.
+        for snapshot in snapshots
+        where snapshot.totalValue.isFinite && snapshot.totalValue > 0 && !calendar.isDateInWeekend(snapshot.date) {
             let day = calendar.startOfDay(for: snapshot.date)
             if let existing = lastByDay[day], existing.date > snapshot.date { continue }
             lastByDay[day] = snapshot
@@ -211,7 +225,7 @@ actor RiskMetricsService {
     ///   - riskFreeRate: Annual risk-free rate (e.g., 0.04 for 4%)
     ///   - periodsPerYear: Number of periods per year (252 for daily, 52 for weekly, 12 for monthly)
     /// - Returns: Annualized Sharpe Ratio
-    func calculateSharpeRatio(returns: [Double], riskFreeRate: Double = 0.04, periodsPerYear: Int = 252) async -> Double? {
+    func calculateSharpeRatio(returns: [Double], riskFreeRate: Double = RiskMetricsService.annualRiskFreeRate, periodsPerYear: Int = 252) async -> Double? {
         guard returns.count > 1 else { return nil }
 
         // Calculate mean return
@@ -434,12 +448,6 @@ actor RiskMetricsService {
         return sqrt(variance)
     }
 
-    /// Calculate mean (average) of a dataset
-    func calculateMean(_ values: [Double]) -> Double? {
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
     /// Calculate downside deviation with the standard full-sample divisor
     /// (every period is in the denominator; non-negative periods contribute zero).
     /// - Parameter periodsPerYear: when given, the result is annualized by sqrt(periodsPerYear);
@@ -481,7 +489,7 @@ actor RiskMetricsService {
     func calculateComprehensiveRiskMetrics(
         portfolioValues rawValues: [Double],
         dates: [Date]? = nil,
-        riskFreeRate: Double = 0.04,
+        riskFreeRate: Double = RiskMetricsService.annualRiskFreeRate,
         marketReturns: [Double]? = nil
     ) async -> RiskMetrics? {
         // Drop missing observations (0/NaN) so they cannot create spurious
@@ -510,7 +518,7 @@ actor RiskMetricsService {
     /// Calculate comprehensive risk metrics from a daily flow-adjusted series.
     func calculateComprehensiveRiskMetrics(
         series: DailyRiskSeries,
-        riskFreeRate: Double = 0.04,
+        riskFreeRate: Double = RiskMetricsService.annualRiskFreeRate,
         marketReturns: [Double]? = nil
     ) async -> RiskMetrics? {
         guard series.values.count > 1 else {
@@ -536,12 +544,13 @@ actor RiskMetricsService {
             return nil
         }
 
-        let var95 = await calculateVaR(returns: returns, confidenceLevel: 0.95, portfolioValue: currentValue) ?? 0
-        let var99 = await calculateVaR(returns: returns, confidenceLevel: 0.99, portfolioValue: currentValue) ?? 0
+        let var95 = await calculateVaR(returns: returns, confidenceLevel: 0.95, portfolioValue: currentValue) ?? .nan
+        let var99 = await calculateVaR(returns: returns, confidenceLevel: 0.99, portfolioValue: currentValue) ?? .nan
 
         // Ratios stay nil when undefined (zero variance, no downside); callers show "—".
         let sharpe = await calculateSharpeRatio(returns: returns, riskFreeRate: riskFreeRate)
-        let sortino = await calculateSortinoRatio(returns: returns)
+        // The same hurdle as Sharpe: the risk-free rate, per trading day.
+        let sortino = await calculateSortinoRatio(returns: returns, targetReturn: riskFreeRate / 252)
 
         var beta: Double?
         if let marketReturns = marketReturns, marketReturns.count == returns.count {
@@ -549,13 +558,12 @@ actor RiskMetricsService {
         }
 
         let drawdownResult = await calculateMaxDrawdown(portfolioValues: portfolioValues, dates: dates)
-        let maxDrawdown = drawdownResult?.maxDrawdown ?? 0
+        let maxDrawdown = drawdownResult?.maxDrawdown ?? .nan
         let maxDrawdownDuration = drawdownResult?.duration ?? 0
 
         // Annualized with the same factor as the downside deviation (daily periods).
-        let stdDev = calculateStandardDeviation(returns) ?? 0
-        let volatility = stdDev * sqrt(252.0)
-        let downsideDeviation = calculateDownsideDeviation(returns, periodsPerYear: 252) ?? 0
+        let volatility = (calculateStandardDeviation(returns) ?? .nan) * sqrt(252.0)
+        let downsideDeviation = calculateDownsideDeviation(returns, periodsPerYear: 252) ?? .nan
 
         let metrics = RiskMetrics(
             valueAtRisk95: var95,

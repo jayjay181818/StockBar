@@ -45,14 +45,22 @@ final class TradeDataService: @unchecked Sendable {
         await TradeDataWriteGate.shared.wait()
         do {
             try await CoreDataStack.shared.performBackgroundTask { context in
-                // Delete in the context, not with a batch request: a batch delete
-                // commits on its own, so a failed save would leave no trades at all.
+                // Update in place and leave unchanged rows alone. Deleting and
+                // reinserting the table on every save rewrote every row hundreds of
+                // times a day. All changes still land in one save, so a failure
+                // keeps the old rows.
+                var remaining = Dictionary(uniqueTrades.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
                 for existing in try context.fetch(TradeEntity.fetchRequest()) {
-                    context.delete(existing)
+                    guard let name = existing.name, let trade = remaining.removeValue(forKey: name) else {
+                        // No longer held, or a duplicate row for a name already handled.
+                        context.delete(existing)
+                        continue
+                    }
+                    if !existing.matches(trade) {
+                        existing.updateFromTrade(trade)
+                    }
                 }
-                
-                // Create new trade entities
-                for trade in uniqueTrades {
+                for trade in uniqueTrades where remaining[trade.name] != nil {
                     _ = TradeEntity.fromTrade(trade, in: context)
                 }
             }
@@ -89,38 +97,6 @@ final class TradeDataService: @unchecked Sendable {
         return uniqueTrades
     }
     
-    /// Saves a single trade
-    func saveTrade(_ trade: Trade) async throws {
-        try await CoreDataStack.shared.performBackgroundTask { context in
-            // Check if trade already exists
-            let fetchRequest: NSFetchRequest<TradeEntity> = TradeEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "name == %@", trade.name)
-            
-            let existingTrades = try context.fetch(fetchRequest)
-            
-            if let existingTrade = existingTrades.first {
-                // Update existing trade
-                existingTrade.updateFromTrade(trade)
-            } else {
-                // Create new trade
-                _ = TradeEntity.fromTrade(trade, in: context)
-            }
-        }
-    }
-    
-    /// Deletes a trade by symbol name
-    func deleteTrade(withName name: String) async throws {
-        try await CoreDataStack.shared.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<TradeEntity> = TradeEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "name == %@", name)
-            
-            let trades = try context.fetch(fetchRequest)
-            for trade in trades {
-                context.delete(trade)
-            }
-        }
-    }
-    
     // MARK: - Trading Info Management
     
     /// Saves trading info for a symbol
@@ -141,16 +117,6 @@ final class TradeDataService: @unchecked Sendable {
         }
     }
     
-    /// Loads trading info for a symbol
-    func loadTradingInfo(forSymbol symbol: String) async throws -> TradingInfo? {
-        return try await CoreDataStack.shared.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<TradingInfoEntity> = TradingInfoEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "symbol == %@", symbol)
-            
-            let tradingInfos = try context.fetch(fetchRequest)
-            return tradingInfos.first?.toTradingInfo()
-        }
-    }
     
     /// Loads all trading info as a dictionary
     func loadAllTradingInfo() async throws -> [String: TradingInfo] {
@@ -171,13 +137,18 @@ final class TradeDataService: @unchecked Sendable {
     /// Saves all trading info
     func saveAllTradingInfo(_ tradingInfoDict: [String: TradingInfo]) async throws {
         try await CoreDataStack.shared.performBackgroundTask { context in
-            // Deleted in the same save as the inserts, so a failure keeps the old rows.
+            // Updated in place in one save; unchanged rows are not rewritten.
+            var remaining = tradingInfoDict
             for existing in try context.fetch(TradingInfoEntity.fetchRequest()) {
-                context.delete(existing)
+                guard let symbol = existing.symbol, let info = remaining.removeValue(forKey: symbol) else {
+                    context.delete(existing)
+                    continue
+                }
+                if !existing.matches(info) {
+                    existing.updateFromTradingInfo(info)
+                }
             }
-            
-            // Create new trading info entities
-            for (symbol, tradingInfo) in tradingInfoDict {
+            for (symbol, tradingInfo) in remaining {
                 _ = TradingInfoEntity.fromTradingInfo(tradingInfo, symbol: symbol, in: context)
             }
         }

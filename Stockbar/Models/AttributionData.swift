@@ -147,7 +147,10 @@ struct AttributionAnalysisResult: Codable {
     let netCashFlow: Double? // nil when no reliable cash-flow data exists
 
     var topContributors: [StockContribution] {
+        // Gains only: with few winners the list used to fill up with losers,
+        // which then appeared under both headings.
         stockContributions
+            .filter { $0.contribution > 0 }
             .sorted { $0.contribution > $1.contribution }
             .prefix(10)
             .map { $0 }

@@ -76,7 +76,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 - **Folync:** a self-hosted, authoritative read-only portfolio source with optional supplemental history, candles, benchmarks and FX. Local holdings are kept aside and restored when you switch back.
 
 ### 📈 Market data and charts
-- yfinance is the primary market-data provider. Financial Modeling Prep, Twelve Data and Stooq are fallbacks.
+- yfinance is the primary market-data provider. Financial Modeling Prep and Twelve Data are fallbacks.
 - Interactive Swift Charts for portfolio value, gains and individual symbols, as line or candlestick charts with indicators and benchmark comparisons.
 
 ### 🛡️ Reliability
@@ -123,7 +123,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 
 #### Market Data And Charts
 - yfinance remains the primary general market-data provider.
-- Financial Modeling Prep, Twelve Data, and Stooq remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
+- Financial Modeling Prep and Twelve Data remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
 - Historical fetch priority is configurable from Settings → Connections; live quotes use a fixed provider order.
 - Historical charts use the existing market-data system unless their independent Folync line-history or OHLCV route is enabled and usable.
 - Interactive Swift Charts views cover portfolio value, portfolio gains, and individual symbol performance.
@@ -165,7 +165,6 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 |---|---|---|
 | **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider | None |
 | **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in the Keychain |
-| **Stooq** | Fallback quotes and history | None |
 | **Trading 212** | Read-only linked broker positions, value and P/L | API Key + Secret in the Keychain |
 | **Folync** (self-hosted) | Authoritative portfolio, plus optional history, candles, benchmarks and FX | Client token in the Keychain |
 
@@ -174,7 +173,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 ## 🔒 Privacy and security
 
 - Portfolio data is stored locally (Core Data and Application Support). Market-data requests send ticker symbols (with an API key where the provider needs one) to the providers you configure.
-- Trading 212, Folync, FMP and Twelve Data credentials live in the macOS Keychain. Credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
+- Trading 212 and Folync credentials and the FMP and Twelve Data API keys live in the macOS Keychain. The Python helper is handed the two API keys through its environment for each run; keys an earlier version left in the settings file are moved to the Keychain the first time they are needed. Trading 212 and Folync credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
 - Trading 212 access is read-only. Stockbar never places orders, so don't enable *Orders - Execute*.
 - The `uv` download Stockbar's Python setup uses is pinned and checked against a built-in SHA-256.
 
@@ -196,13 +195,13 @@ StockBar uses a hybrid Swift + Python architecture:
 
 - **Swift/AppKit/SwiftUI**: Main app windows, settings, menu bar controllers, portfolio state, Trading 212 provider, broker sync, analytics, diagnostics, and persistence orchestration.
 - **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
-- **Keychain**: Trading 212 credentials, the Folync client token and market-data API keys.
+- **Keychain**: Trading 212 credentials, the Folync client token and the FMP and Twelve Data API keys.
 - **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches when the corresponding Folync category is disabled, unavailable with fallback enabled, or the symbol is local-only.
-- **MarketDataProvider path**: yfinance, FMP, Twelve Data, and Stooq for quotes, watchlists, and history.
+- **MarketDataProvider path**: yfinance, FMP, and Twelve Data for quotes, watchlists, and history.
 - **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
 - **Folync supplemental router**: Category-aware, ETag-backed cached history, benchmark, and USD-base FX reads with no writes to Core Data.
 
-Broker data and market data are intentionally separate. Trading 212 is the source of truth for linked broker positions. Folync may replace a selected market-data category when enabled, while yfinance/FMP/Twelve Data/Stooq continue to serve disabled categories, local-only watchlists, and explicit whole-series fallback.
+Broker data and market data are intentionally separate. Trading 212 is the source of truth for linked broker positions. Folync may replace a selected market-data category when enabled, while yfinance/FMP/Twelve Data continue to serve disabled categories, local-only watchlists, and explicit whole-series fallback.
 
 </details>
 
@@ -276,7 +275,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - Diagnostics shows logs with redacted sensitive values.
 
 #### Data Sources
-- **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data, Stooq.
+- **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data.
 - **Broker data**: Trading 212 for linked broker positions.
 - **Folync supplemental data**: independent toggles for line history, OHLCV, benchmarks, and exchange rates, plus an explicit legacy fallback toggle. These controls require the Folync portfolio source to be active.
 - **FMP/Twelve Data keys**: configured in Settings → Connections.
@@ -287,12 +286,13 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
 - Folync portfolio snapshots poll every 60 seconds; Folync benchmarks and FX poll every 15 minutes; Folync chart history loads on demand. All Folync routes use ETags.
-- An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data/Stooq or direct exchange-rate request. Disabling it resumes the existing local pipeline.
+- An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data or direct exchange-rate request. Disabling it resumes the existing local pipeline.
 - Freshness, partial coverage, stale cache, local fallback, and unavailable states are shown rather than represented as a valid zero.
 
 #### Storage
 - **UserDefaults**: non-secret preferences and settings.
-- **Keychain**: Trading 212 API Key/API Secret, the Folync client token and FMP/Twelve Data keys.
+- **Keychain**: Trading 212 API Key/API Secret, the Folync client token and the FMP and Twelve Data API keys.
+- **Settings file** (`.stockbar_config.json`, readable only by your account): the provider order.
 - **Core Data**: portfolio trades, trading info, historical data, portfolio snapshots.
 - **Broker links**: local broker-link records keyed by broker account and instrument identity.
 - **Folync supplemental cache**: separate atomic Application Support files keyed by endpoint fingerprint, scope, resource, identity, and range. ETag, payload, and receipt time are stored; bearer tokens are never cached.
@@ -349,6 +349,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 
 ```bash
 bash script/develop.sh build          # Debug build, signing disabled, no launch
+bash script/develop.sh build-release  # The same for the Release configuration
 bash script/develop.sh test           # Full XCTest suite
 bash script/develop.sh python-tests   # Offline Python helper tests
 bash script/develop.sh checks         # SwiftLint, entitlements, invariants, docs
@@ -359,14 +360,14 @@ bash script/develop.sh run            # Signed build and launch
 See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rules, the acceptance harness, and the release and dependency-update process.
 
 **Contributing**
-- Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build, test and analyze gates on every PR.
+- Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build and test gates, and a Release build, on every PR.
 - Releases are tagged `vX.Y.Z` on the merged commit.
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- 564 XCTest tests plus offline Python tests run in CI.
+- More than 600 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
@@ -379,7 +380,15 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.4.0 (current): Folync status for VoiceOver
+### 🆕 Version 3.5.0 (current): Audit fixes
+- **Figures**: Attribution, risk, correlation and per-stock metrics are corrected. Sharpe and Sortino use one 4% risk-free rate, so risk figures change.
+- **Refresh**: One slow symbol no longer discards a whole batch, failed refreshes are shown, and Stockbar refreshes on wake.
+- **Storage**: The database no longer grows without limit. Old history is thinned weekly after a safety copy.
+- **Security**: The FMP and Twelve Data API keys move to the Keychain. macOS may ask for access once.
+- **Interface**: Quit from the popover no longer hangs. Chart zoom, alerts, backups and confirmations are improved.
+- See [Changelogs/release_notes_v3.5.0.md](./Changelogs/release_notes_v3.5.0.md).
+
+### Version 3.4.0: Folync status for VoiceOver
 - **Accessibility**: VoiceOver reads the Folync connection status in Settings → Connections and speaks the result of Test Connection, Preview, Activate, Disable and Refresh Now. Background checks announce a problem once, not every minute.
 - **Refresh Now** for Folync shows progress while it runs.
 - See [Changelogs/release_notes_v3.4.0.md](./Changelogs/release_notes_v3.4.0.md).
@@ -490,6 +499,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 6, 2026 · Version 3.4.0</sub>
+<sub>Last updated: November 11, 2026 · Version 3.5.0</sub>
 
 </div>
