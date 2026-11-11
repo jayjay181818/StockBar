@@ -12,11 +12,18 @@ actor StoreMaintenance {
     /// Set after rows were deleted; the next launch reclaims the freed pages.
     static let vacuumPendingKey = "storeVacuumPending"
     static let safetyCopiesKept = 2
+    /// How often the store's change history is trimmed while the app runs,
+    /// and how much of it is kept. Nothing reads that history, and it gains
+    /// thousands of rows a day.
+    static let historyPurgeInterval: TimeInterval = 86_400
+    static let historyKept: TimeInterval = 86_400
 
     private let coreDataStack: CoreDataStack
     private let defaults: UserDefaults
     private let recovery: CoreDataStoreRecovery
     private var isRunning = false
+    /// The launch trim in `CoreDataStack` counts as the first one.
+    private var lastHistoryPurge: Date?
 
     init(
         coreDataStack: CoreDataStack = .shared,
@@ -32,6 +39,20 @@ actor StoreMaintenance {
         guard let lastRun else { return true }
         // A clock set back must not postpone maintenance for ever.
         return now.timeIntervalSince(lastRun) >= interval || lastRun > now
+    }
+
+    static func isHistoryPurgeDue(lastPurge: Date?, launchedAt: Date, now: Date) -> Bool {
+        let last = lastPurge ?? launchedAt
+        return now.timeIntervalSince(last) >= historyPurgeInterval || last > now
+    }
+
+    /// Trims the store's change history once a day, so an app left running
+    /// for weeks does not keep all of it until the next launch.
+    func purgeHistoryIfDue(launchedAt: Date, now: Date = Date()) async {
+        guard coreDataStack.storeLoadState == .loaded,
+              Self.isHistoryPurgeDue(lastPurge: lastHistoryPurge, launchedAt: launchedAt, now: now) else { return }
+        lastHistoryPurge = now
+        await coreDataStack.purgePersistentHistory(olderThan: Self.historyKept, now: now)
     }
 
     /// Runs when a week has passed since the last run. `heldSymbols` as for
