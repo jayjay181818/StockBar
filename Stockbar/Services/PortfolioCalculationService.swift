@@ -362,12 +362,19 @@ class PortfolioCalculationService {
         if let brokerValuation,
            let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
            brokerAmount.isFinite {
+            // The row carries one currency label, the broker's. The day amount
+            // was worked out in the quote currency, so it is converted to match.
+            let brokerCurrency = brokerValuation.currency
+            let dayInBrokerCurrency = dayAmount.isFinite && !currency.isEmpty
+                && currency.uppercased() != brokerCurrency.uppercased()
+                ? currencyConverter.convert(amount: dayAmount, from: currency, to: brokerCurrency)
+                : dayAmount
             return PositionProfitLossSummary(
-                dayAmount: dayAmount,
+                dayAmount: dayInBrokerCurrency,
                 dayPercent: dayPercent,
                 totalAmount: brokerAmount,
                 totalPercent: brokerValuation.totalGainPercent,
-                currency: brokerValuation.currency
+                currency: brokerCurrency
             )
         }
 

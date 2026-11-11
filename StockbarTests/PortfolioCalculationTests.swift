@@ -618,7 +618,8 @@ class PortfolioCalculationTests: XCTestCase {
 
         let summary = service.calculatePositionProfitLoss(for: trade, brokerValuation: valuation)
 
-        XCTAssertEqual(summary.dayAmount, 1500.0, accuracy: 0.01)
+        // $10 a share on 150 shares is $1,500, shown in the row's currency: £1,185 at 0.79.
+        XCTAssertEqual(summary.dayAmount, 1185.0, accuracy: 0.01)
         XCTAssertEqual(summary.totalAmount, 103_468.50, accuracy: 0.01)
         XCTAssertEqual(summary.totalPercent, 898.28, accuracy: 0.01)
         XCTAssertEqual(summary.currency, "GBP")

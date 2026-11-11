@@ -629,6 +629,8 @@ struct RiskAnalyticsView: View {
                 + ((series.dates.first).flatMap { first in
                     series.dates.last.map { ", \(first.formatted(dateFormat)) – \($0.formatted(dateFormat))" }
                 } ?? "")
+                // The main chart shows Folync's series; these figures do not.
+                + (dataModel.isFolyncPortfolioActive ? ", from Stockbar's own stored history rather than Folync's" : "")
 
             // Calculate comprehensive risk metrics
             if let metrics = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(
