@@ -9,10 +9,12 @@
 import AppKit
 import Foundation
 
-extension NSAttributedString: @unchecked @retroactive Sendable {}
-
-/// Thread-safe service for formatting stock data for menu bar display
-actor MenuBarFormattingService {
+/// Formats stock data for menu bar display.
+///
+/// Main-actor and synchronous: the titles are built for AppKit and only ever
+/// used there, so nothing has to cross an actor boundary.
+@MainActor
+final class MenuBarFormattingService {
 
     // MARK: - Cache
 
@@ -33,19 +35,12 @@ actor MenuBarFormattingService {
     }
 
     /// Shown instead of a number that is unknown (never "0.00" or "N/A").
-    static let missingValue = "—"
+    nonisolated static let missingValue = "—"
 
     private var cache: [CacheKey: CacheEntry] = [:]
     private let cacheTTL: TimeInterval = 5.0  // 5 seconds
-    private let logger = Logger.shared
 
-    // MARK: - Initialization
-
-    init() {
-        Task {
-            await logger.debug("MenuBarFormattingService initialized")
-        }
-    }
+    nonisolated init() {}
 
     // MARK: - Public Methods
 
@@ -113,9 +108,6 @@ actor MenuBarFormattingService {
     /// Clears the formatting cache
     func clearCache() {
         cache.removeAll()
-        Task {
-            await logger.debug("MenuBarFormattingService cache cleared")
-        }
     }
 
     // MARK: - Private Methods
@@ -185,7 +177,7 @@ actor MenuBarFormattingService {
     }
 
     /// The value as it will be printed, so "-0.004" at two places is zero, not negative.
-    static func roundedForDisplay(_ value: Double, decimalPlaces: Int) -> Double {
+    nonisolated static func roundedForDisplay(_ value: Double, decimalPlaces: Int) -> Double {
         guard value.isFinite else { return 0 }
         let scale = pow(10, Double(max(0, decimalPlaces)))
         let rounded = (value * scale).rounded() / scale
@@ -193,7 +185,7 @@ actor MenuBarFormattingService {
     }
 
     /// Digits of equal width, so the item does not change width as prices tick.
-    static var titleFont: NSFont {
+    nonisolated static var titleFont: NSFont {
         NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
     }
 

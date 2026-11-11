@@ -95,19 +95,6 @@ struct PriceAlert: Codable, Identifiable {
         }
     }
     
-    func portfolioMilestoneConditionMet(currentValue: Double, previousValue: Double) -> Bool {
-        guard isEnabled, alertType == .portfolioMilestone else { return false }
-        
-        switch condition {
-        case .above:
-            return currentValue > threshold && previousValue <= threshold
-        case .below:
-            return currentValue < threshold && previousValue >= threshold
-        case .percentChange:
-            let change = abs((currentValue - previousValue) / previousValue * 100)
-            return change >= abs(threshold)
-        }
-    }
 
     /// One way of writing money across the Alerts page and its notifications,
     /// matching the Holdings table ("£150.00"). An unknown currency prints the
@@ -186,7 +173,6 @@ class PriceAlertService {
 
     // Track last known prices to detect threshold crossings
     @ObservationIgnored private var lastKnownPrices: [String: Double] = [:]
-    @ObservationIgnored private var lastKnownPortfolioValue: Double = 0.0
 
     private init() {
         // Migrate from UserDefaults to Core Data if needed
@@ -295,9 +281,6 @@ class PriceAlertService {
         alerts.filter { $0.symbol == symbol }
     }
     
-    func getPortfolioMilestoneAlerts() -> [PriceAlert] {
-        alerts.filter { $0.alertType == .portfolioMilestone }
-    }
 
     // MARK: - Price Monitoring
 
@@ -508,59 +491,5 @@ class PriceAlertService {
     
     // MARK: - Portfolio Milestone Checking
     
-    func checkPortfolioMilestones(currentValue: Double, previousValue: Double, currency: String) {
-        let portfolioAlerts = alerts.filter { $0.alertType == .portfolioMilestone && $0.isEnabled }
-        
-        for alert in portfolioAlerts {
-            if alert.portfolioMilestoneConditionMet(currentValue: currentValue, previousValue: lastKnownPortfolioValue) {
-                // Check cooldown period (15 minutes) to avoid spam
-                if let lastTriggered = alert.lastTriggered,
-                   Date().timeIntervalSince(lastTriggered) < 900 {
-                    continue
-                }
-                
-                sendPortfolioMilestoneNotification(for: alert, currentValue: currentValue, currency: currency)
-                updateLastTriggered(alertId: alert.id)
-            }
-        }
-        
-        // Update last known portfolio value
-        lastKnownPortfolioValue = currentValue
-    }
     
-    private func sendPortfolioMilestoneNotification(for alert: PriceAlert, currentValue: Double, currency: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "📊 Portfolio Milestone Alert"
-        
-        let message: String
-        switch alert.condition {
-        case .above:
-            message = "Portfolio value rose above \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentValue, currency: currency))"
-        case .below:
-            message = "Portfolio value fell below \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentValue, currency: currency))"
-        case .percentChange:
-            message = "Portfolio value changed by \(alert.formattedThreshold(currency: currency)). Current: \(PriceAlert.money(currentValue, currency: currency))"
-        }
-        
-        content.body = message
-        content.sound = .default
-        
-        let request = UNNotificationRequest(
-            identifier: alert.id.uuidString,
-            content: content,
-            trigger: nil
-        )
-        
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                Task {
-                    await Logger.shared.error("Failed to send portfolio milestone notification: \(error.localizedDescription)")
-                }
-            } else {
-                Task {
-                    await Logger.shared.info("📊 Portfolio milestone notification sent: \(message)")
-                }
-            }
-        }
-    }
 }

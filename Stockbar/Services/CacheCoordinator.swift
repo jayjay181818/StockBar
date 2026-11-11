@@ -147,11 +147,6 @@ actor CacheCoordinator {
         persist()
     }
 
-    /// Gets the last successful fetch time for a symbol
-    func getLastSuccessfulFetch(for symbol: String) -> Date? {
-        return lastSuccessfulFetch[symbol]
-    }
-
     /// Gets the last failed fetch time for a symbol
     func getLastFailedFetch(for symbol: String) -> Date? {
         return lastFailedFetch[symbol]
@@ -222,16 +217,6 @@ actor CacheCoordinator {
         persist()
     }
 
-    /// Checks if symbol is currently cached
-    func isCached(symbol: String, at time: Date) -> Bool {
-        guard let lastSuccess = lastSuccessfulFetch[symbol] else {
-            return false
-        }
-
-        let timeSinceSuccess = time.timeIntervalSince(lastSuccess)
-        return timeSinceSuccess < cacheInterval
-    }
-
     /// Gets cache status for a symbol.
     ///
     /// This is a **pure query**. It must not mutate cache or breaker state:
@@ -296,11 +281,6 @@ actor CacheCoordinator {
         consecutiveFailures.removeAll()
         suspendedSymbols.removeAll()
         persist()
-    }
-
-    /// Gets all cached symbols
-    func getCachedSymbols() -> Set<String> {
-        return Set(lastSuccessfulFetch.keys)
     }
 
     /// Gets cache statistics

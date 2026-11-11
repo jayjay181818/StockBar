@@ -259,21 +259,6 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
         return totalInserted
     }
     
-    func performBatchDelete(
-        entityName: String,
-        predicate: NSPredicate
-    ) async throws -> Int {
-        return try await performOptimizedBatchTask { context in
-            let fetchRequest = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
-            fetchRequest.predicate = predicate
-            
-            let batchDelete = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-            batchDelete.resultType = .resultTypeCount
-            
-            let result = try context.execute(batchDelete) as? NSBatchDeleteResult
-            return result?.result as? Int ?? 0
-        }
-    }
     
     // MARK: - Store Management
 

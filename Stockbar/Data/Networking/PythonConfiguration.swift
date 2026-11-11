@@ -186,16 +186,4 @@ struct PythonConfiguration: Sendable {
         let allowedCharacters = CharacterSet(charactersIn: allowedSymbolCharacters)
         return symbol.rangeOfCharacter(from: allowedCharacters.inverted) == nil
     }
-
-    /// Sanitizes a symbol for safe command line usage.
-    /// Returns nil when nothing usable survives, so callers must decide what to
-    /// do rather than silently passing an empty argument.
-    static func sanitizeSymbol(_ symbol: String) -> String? {
-        var sanitized = symbol.uppercased().filter { allowedSymbolCharacters.contains($0) }
-        // Strip leading hyphens so the result can never look like a flag.
-        while sanitized.hasPrefix("-") {
-            sanitized.removeFirst()
-        }
-        return sanitized.isEmpty ? nil : sanitized
-    }
 }

@@ -189,16 +189,6 @@ final class TradeDataMigrationService: @unchecked Sendable {
         Task { await logger.info("💾 MIGRATION: User data backup saved to \(userDataBackupURL.path)") }
     }
     
-    private func cleanupUserDefaultsData() {
-        Task { await logger.warning("🗑️ MIGRATION: Cleaning up UserDefaults trade data (keeping as backup for now)") }
-        
-        // For safety, we'll keep the UserDefaults data as backup
-        // In a future version, we can add an option to clean it up
-        // StockbarRuntimeStorage.userDefaults.removeObject(forKey: "trades")
-        // StockbarRuntimeStorage.userDefaults.removeObject(forKey: "tradingInfo")
-        
-        Task { await logger.info("ℹ️ MIGRATION: UserDefaults cleanup skipped for safety - data remains as backup") }
-    }
     
     func validateMigration() async throws -> Bool {
         Task { await logger.info("🔍 MIGRATION: Validating migration integrity") }

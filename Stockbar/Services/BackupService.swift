@@ -267,21 +267,6 @@ class BackupService {
             .filter { $0.created < cutoff && $0.url.standardizedFileURL != keptURL?.standardizedFileURL }
             .map(\.url)
     }
-
-    /// Deletes a specific backup file
-    func deleteBackup(backupURL: URL) throws {
-        try fileManager.removeItem(at: backupURL)
-        Task { await logger.info("Deleted backup: \(backupURL.lastPathComponent)") }
-    }
-
-    /// Deletes all backup files
-    func deleteAllBackups() throws {
-        let backups = listAvailableBackups()
-        for backup in backups {
-            try deleteBackup(backupURL: backup.url)
-        }
-        Task { await logger.info("Deleted all \(backups.count) backup(s)")  }
-    }
 }
 
 enum BackupRestoreError: LocalizedError {

@@ -38,23 +38,6 @@ struct TradingData {
         }
     }
     
-    func marketStateIndicator(useEmoji: Bool) -> String {
-        if useEmoji {
-            switch marketState {
-            case "PRE": return "🔆"      // Bright sun for pre-market
-            case "POST": return "🌙"     // Moon for after-hours
-            case "CLOSED": return "🔒"   // Lock for closed
-            default: return ""
-            }
-        } else {
-            switch marketState {
-            case "PRE": return "PRE"
-            case "POST": return "AH"
-            case "CLOSED": return "CLOSED"
-            default: return ""
-            }
-        }
-    }
 }
 
 enum StatusItemAccessibility {
@@ -272,14 +255,6 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         portfolioActions = PortfolioMenuActions(refresh: refresh, preferences: preferences, quit: quit, openApp: openApp)
     }
     
-    func removeAllSymbolItems() {
-        for controller in symbolStatusItems {
-            controller.tearDown()
-            NSStatusBar.system.removeStatusItem(controller.item)
-        }
-        symbolStatusItems.removeAll()
-        symbolItemByKey.removeAll()
-    }
     
     func syncSymbolItems(with realTimeTrades: [RealTimeTrade], dataModel: DataModel, isVisible: Bool = true) {
         let desiredKeys = Set(realTimeTrades.map { symbolItemKey(for: $0) })
@@ -314,11 +289,6 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         logSymbolItemState()
     }
     
-    func constructSymbolItem(from realTimeTrade: RealTimeTrade, dataModel: DataModel) {
-        let controller = StockStatusItemController(realTimeTrade: realTimeTrade, dataModel: dataModel)
-        symbolStatusItems.append(controller)
-        symbolItemByKey[symbolItemKey(for: realTimeTrade)] = controller
-    }
 
     private func symbolItemKey(for realTimeTrade: RealTimeTrade) -> String {
         (realTimeTrade.sourceIdentity ?? realTimeTrade.trade.name)
@@ -350,9 +320,6 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         }
     }
     
-    func mainItem() -> NSStatusItem? {
-        mainStatusItem
-    }
     
     private func updateMainStatusItem(with trades: [RealTimeTrade]) {
         guard let button = mainStatusItem?.button else { return }
@@ -833,7 +800,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         let updateId = titleUpdateCounter
 
         Task { @MainActor in
-            let formatted = await formattingService.formatStockTitle(
+            let formatted = formattingService.formatStockTitle(
                 symbol: displaySymbol,
                 price: safeDisplay,
                 change: changeSummary.change,
