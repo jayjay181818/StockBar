@@ -20,7 +20,9 @@ class BackgroundCalculationManager {
     
     // MARK: - Private Properties
     
-    @ObservationIgnored private var currentTask: Task<Void, Never>?
+    /// Set by Cancel and cleared when the next calculation starts. The
+    /// calculation checks it before storing anything.
+    @ObservationIgnored private(set) var isCancellationRequested = false
     @ObservationIgnored private var startTime: Date?
     @ObservationIgnored private var totalOperations: Int = 0
     @ObservationIgnored private var completedOperations: Int = 0
@@ -32,6 +34,7 @@ class BackgroundCalculationManager {
     
     /// Starts a new calculation with progress tracking
     func startCalculation(operation: String, totalOperations: Int) {
+        isCancellationRequested = false
         Task { @MainActor in
             self.isCalculating = true
             self.calculationProgress = 0.0
@@ -49,6 +52,7 @@ class BackgroundCalculationManager {
     /// Updates calculation progress
     func updateProgress(completed: Int, status: String? = nil) {
         Task { @MainActor in
+            guard !self.isCancellationRequested else { return }
             // CRITICAL FIX: Validate progress doesn't go backwards or stall
             let newProgress = min(1.0, Double(completed) / Double(max(1, totalOperations)))
             
@@ -159,7 +163,7 @@ class BackgroundCalculationManager {
     
     /// Cancels the current calculation
     func cancelCalculation() {
-        currentTask?.cancel()
+        isCancellationRequested = true
         
         Task { @MainActor in
             self.isCalculating = false
