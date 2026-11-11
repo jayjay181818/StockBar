@@ -137,8 +137,9 @@ actor AttributionAnalysisService {
         let netCashFlow: Double? = hasCashFlows ? cashFlows.reduce(0) { $0 + $1.amount } : nil
 
         let result = AttributionAnalysisResult(
-            startDate: startDate,
-            endDate: endDate,
+            // The days actually measured, which can be fewer than the range asked for.
+            startDate: startSnapshot.date,
+            endDate: endSnapshot.date,
             portfolioReturn: portfolioReturn,
             stockContributions: stockContributions,
             sectorContributions: sectorContributions,

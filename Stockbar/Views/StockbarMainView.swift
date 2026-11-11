@@ -970,6 +970,7 @@ private struct StockbarBackupsView: View {
                                 ProgressView().controlSize(.small)
                             } else {
                                 Image(systemName: "externaldrive.badge.plus")
+                                    .accessibilityHidden(true)
                             }
                             Text("Back Up Now")
                         }

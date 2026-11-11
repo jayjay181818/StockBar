@@ -454,6 +454,7 @@ struct PortfolioAnalyticsView: View {
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "chart.pie")
+                .accessibilityHidden(true)
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
 
@@ -710,6 +711,7 @@ struct PortfolioAnalyticsView: View {
                     HStack {
                         Text("View Details")
                         Image(systemName: "chevron.right")
+                            .accessibilityHidden(true)
                     }
                     .font(.caption)
                 }

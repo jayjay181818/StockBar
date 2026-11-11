@@ -381,6 +381,7 @@ struct PerformanceChartView: View {
     private func errorView(_ error: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
+                .accessibilityHidden(true)
                 .foregroundColor(.orange)
             
             Text(error)
@@ -1115,6 +1116,7 @@ struct PerformanceChartView: View {
             } else if ohlcData.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "chart.bar")
+                        .accessibilityHidden(true)
                         .font(.system(size: 48))
                         .foregroundColor(.accentColor)
 

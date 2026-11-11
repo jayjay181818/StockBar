@@ -147,6 +147,7 @@ struct StockbarMetricTile: View {
                     Image(systemName: systemImage)
                         .foregroundStyle(.secondary)
                         .imageScale(.small)
+                        .accessibilityHidden(true)
                 }
                 Text(title)
                     .font(.subheadline)

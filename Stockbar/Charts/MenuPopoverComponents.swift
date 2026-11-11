@@ -387,6 +387,7 @@ struct MenuPopoverFooter: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.clockwise")
+                        .accessibilityHidden(true)
                         .symbolEffect(.rotate, value: refreshCount)
                     Text(updatedText)
                         .lineLimit(1)
@@ -541,6 +542,7 @@ struct MenuPopoverLineChart: View {
                 } else {
                     VStack(spacing: 5) {
                         Image(systemName: "chart.xyaxis.line")
+                            .accessibilityHidden(true)
                             .font(.title2)
                             .foregroundStyle(.tertiary)
                         Text(emptyTitle)

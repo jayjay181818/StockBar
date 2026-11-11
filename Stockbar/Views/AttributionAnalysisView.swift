@@ -39,6 +39,11 @@ struct AttributionAnalysisView: View {
             } else if let result = attributionResult {
                 ScrollView {
                     VStack(spacing: 20) {
+                        Text(measuredPeriodNote(result))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
                         // Summary Cards
                         summaryCardsView(result)
 
@@ -114,6 +119,17 @@ struct AttributionAnalysisView: View {
         }
         .pickerStyle(.segmented)
         .padding(.horizontal)
+    }
+
+    /// What the figures rest on: the days measured and what is left out.
+    private func measuredPeriodNote(_ result: AttributionAnalysisResult) -> String {
+        let format = Date.FormatStyle(date: .abbreviated, time: .omitted)
+        var note = "Measured \(result.startDate.formatted(format)) – \(result.endDate.formatted(format)), "
+            + "from price changes on the holdings held; exchange-rate moves are not included."
+        if dataModel?.isFolyncPortfolioActive == true {
+            note += " Uses Stockbar's own stored history rather than Folync's."
+        }
+        return note
     }
 
     // MARK: - Summary Cards
@@ -406,6 +422,7 @@ struct AttributionAnalysisView: View {
     private var emptyStateView: some View {
         VStack {
             Image(systemName: "chart.bar.doc.horizontal")
+                .accessibilityHidden(true)
                 .font(.largeTitle)
                 .foregroundColor(.secondary)
             Text("No attribution data available")
