@@ -750,7 +750,7 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
         guard item.button != nil else { return }
 
         // Use normalized average cost (handles GBX to GBP conversion automatically)
-        let avgCost = trade.position.getNormalizedAvgCost(for: trade.name)
+        let avgCost = trade.position.averageCost(for: trade.name, inQuoteCurrency: trading.currency)
         let currency = trading.currency ?? "USD"
 
         let data = TradingData(
@@ -1144,7 +1144,9 @@ class StockStatusItemController: NSObject, NSPopoverDelegate {
             currentPrice: info.currentPrice,
             previousPrice: info.prevClosePrice,
             currency: info.currency ?? "USD",
-            avgCost: realTimeTrade.trade.position.getNormalizedAvgCost(for: realTimeTrade.trade.name),
+            avgCost: realTimeTrade.trade.position.averageCost(
+                for: realTimeTrade.trade.name, inQuoteCurrency: info.currency
+            ),
             units: realTimeTrade.trade.position.unitSize,
             timeInfo: info.getTimeInfo(),
             lastUpdateTime: info.lastUpdateTime,

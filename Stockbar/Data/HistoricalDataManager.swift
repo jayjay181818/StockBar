@@ -677,7 +677,10 @@ class HistoricalDataManager {
         let data = sessionPoints()
         Task { await logger.debug("📊 Portfolio \(label) chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)") }
 
-        if data.isEmpty && timeRange == .day, let dataModel {
+        // Not while the store is still loading: the snapshot would be taken from
+        // an empty holdings list.
+        if data.isEmpty && timeRange == .day, let dataModel,
+           dataModel.hasCompletedInitialTradeLoad, hasLoadedStoredPortfolioHistory {
             Task { await logger.info("📊 No 1-day portfolio \(label) data available, forcing snapshot creation") }
             forceSnapshot(from: dataModel)
             let newData = sessionPoints()
@@ -1452,7 +1455,7 @@ class HistoricalDataManager {
         let input = HistoricalPortfolioCalculationInput(
             startDate: startDate,
             endDate: endDate,
-            priceSnapshots: priceSnapshots,
+            priceSnapshots: storedPriceSnapshots(resolvingAliasesFor: dataModel.realTimeTrades.map { $0.trade.name }),
             composition: createPortfolioComposition(from: dataModel),
             preferredCurrency: dataModel.preferredCurrency
         )
@@ -1680,7 +1683,9 @@ class HistoricalDataManager {
         
         for trade in dataModel.realTimeTrades {
             // Use normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            let adjustedCost = trade.trade.position.averageCost(
+                for: trade.trade.name, inQuoteCurrency: trade.realTimeInfo.currency
+            )
             guard !adjustedCost.isNaN, adjustedCost > 0 else { continue }
             
             let units = trade.trade.position.unitSize
@@ -1961,7 +1966,7 @@ class HistoricalDataManager {
         let input = HistoricalPortfolioCalculationInput(
             startDate: startDate,
             endDate: endDate,
-            priceSnapshots: priceSnapshots,
+            priceSnapshots: storedPriceSnapshots(resolvingAliasesFor: composition.positions.map(\.symbol)),
             composition: composition,
             preferredCurrency: dataModel.preferredCurrency
         )
@@ -2482,6 +2487,27 @@ class HistoricalDataManager {
 
         let normalizedSymbol = symbol.uppercased()
         return livePriceSamples.first { $0.key.uppercased() == normalizedSymbol }?.value ?? []
+    }
+
+    /// Stored prices for `symbol` and every alias of it, oldest first. A ticker
+    /// that was renamed keeps its history under the old key, so an exact-key
+    /// read would report the holding as having none.
+    func storedPriceSnapshots(for symbol: String) -> [PriceSnapshot] {
+        let aliases = instrumentAliasStore.aliases(for: symbol)
+        if aliases.allSatisfy({ $0 == symbol }), let exact = priceSnapshots[symbol] { return exact }
+        return InstrumentAliasHistoryLookup.combinedSnapshots(
+            for: symbol, aliases: aliases, storedBySymbol: priceSnapshots, liveBySymbol: [:]
+        )
+    }
+
+    /// The stored prices keyed for a calculation over `symbols`: each symbol's
+    /// entry also carries what is stored under its aliases.
+    func storedPriceSnapshots(resolvingAliasesFor symbols: [String]) -> [String: [PriceSnapshot]] {
+        var result = priceSnapshots
+        for symbol in Set(symbols) where instrumentAliasStore.aliases(for: symbol).contains(where: { $0 != symbol }) {
+            result[symbol] = storedPriceSnapshots(for: symbol)
+        }
+        return result
     }
 
     private func aliasAwarePriceSnapshots(

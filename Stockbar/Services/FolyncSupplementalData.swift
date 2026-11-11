@@ -1191,6 +1191,9 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         benchmarks.contains(where: isUsableBenchmark)
     }
 
+    /// Rates dated further apart than a long weekend are not used as one set.
+    static let maximumFXDaySpread: TimeInterval = 4 * 24 * 60 * 60
+
     private func usableFX(
         _ payload: FolyncFXResponse,
         requiredQuotes: Set<String>
@@ -1210,11 +1213,15 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             return (row.quote.uppercased(), rate)
         })
         guard requiredQuotes.isSubset(of: Set(rates.keys)) else { return nil }
-        let asOfValues = Set(usableRows.compactMap(\.asOf))
-        guard asOfValues.count == 1,
-              let asOfValue = asOfValues.first,
-              let asOf = Self.parseDay(asOfValue) else { return nil }
-        return (["USD": 1].merging(rates) { _, new in new }, asOf)
+        // Currencies publish on different calendars, so one rate can be a day or
+        // two behind the others around a holiday. The set is then as old as its
+        // oldest rate; only a wider gap means the rates do not belong together.
+        let asOfDays = Set(usableRows.compactMap(\.asOf)).map(Self.parseDay)
+        guard !asOfDays.isEmpty, !asOfDays.contains(nil),
+              let oldest = asOfDays.compactMap({ $0 }).min(),
+              let newest = asOfDays.compactMap({ $0 }).max(),
+              newest.timeIntervalSince(oldest) <= Self.maximumFXDaySpread else { return nil }
+        return (["USD": 1].merging(rates) { _, new in new }, oldest)
     }
 
     private func sourceStatus(quality: FolyncFinancialQuality, stale: Bool) -> FolyncSupplementalSourceStatus {

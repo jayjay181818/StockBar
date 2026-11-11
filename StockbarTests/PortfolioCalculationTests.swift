@@ -51,6 +51,21 @@ class PortfolioCalculationTests: XCTestCase {
 
     // MARK: - Net Gains Calculation Tests
 
+    func testACostInAnotherCurrencyIsConvertedToTheQuoteCurrency() {
+        // A US share costed in pounds: £79 a share is $100 at 0.79.
+        let inPounds = Position(unitSize: "10", positionAvgCost: "79", currency: "USD", costCurrency: "GBP")
+        XCTAssertEqual(inPounds.averageCost(for: "AAPL", inQuoteCurrency: "USD", converter: currencyConverter), 100, accuracy: 0.001)
+        // Pence, written "GBp", on a share that is not UK-listed.
+        let inPence = Position(unitSize: "10", positionAvgCost: "7900", currency: "USD", costCurrency: "GBp")
+        XCTAssertEqual(inPence.averageCost(for: "AAPL", inQuoteCurrency: "USD", converter: currencyConverter), 100, accuracy: 0.001)
+        // A UK share costed in pence and quoted in pounds is only normalised, once.
+        let ukPence = Position(unitSize: "10", positionAvgCost: "486", currency: "GBP", costCurrency: "GBX")
+        XCTAssertEqual(ukPence.averageCost(for: "AV.L", inQuoteCurrency: "GBP", converter: currencyConverter), 4.86, accuracy: 0.0001)
+        // No stated cost currency: used as entered.
+        let unstated = Position(unitSize: "10", positionAvgCost: "79", currency: "USD")
+        XCTAssertEqual(unstated.averageCost(for: "AAPL", inQuoteCurrency: "USD", converter: currencyConverter), 79, accuracy: 0.001)
+    }
+
     func testCalculateNetGainsWithSingleStock() {
         // Create a stock with profit
         let trade = Trade(name: "AAPL", position: Position(unitSize: "10", positionAvgCost: "150", currency: "USD", costCurrency: "USD"))
@@ -603,7 +618,8 @@ class PortfolioCalculationTests: XCTestCase {
 
         let summary = service.calculatePositionProfitLoss(for: trade, brokerValuation: valuation)
 
-        XCTAssertEqual(summary.dayAmount, 1500.0, accuracy: 0.01)
+        // $10 a share on 150 shares is $1,500, shown in the row's currency: £1,185 at 0.79.
+        XCTAssertEqual(summary.dayAmount, 1185.0, accuracy: 0.01)
         XCTAssertEqual(summary.totalAmount, 103_468.50, accuracy: 0.01)
         XCTAssertEqual(summary.totalPercent, 898.28, accuracy: 0.01)
         XCTAssertEqual(summary.currency, "GBP")

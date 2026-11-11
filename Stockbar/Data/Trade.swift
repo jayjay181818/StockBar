@@ -106,11 +106,43 @@ struct Position: Codable, Equatable {
         let detectedCostCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
         
         // Convert GBX to GBP for UK stocks if needed
-        if SymbolMetadata.isUKSymbol(symbol) && detectedCostCurrency == "GBX" {
+        if SymbolMetadata.isUKSymbol(symbol) && Self.isPence(detectedCostCurrency) {
             return rawCost / 100.0
         }
         
         return rawCost
+    }
+
+    /// "GBX" in any case, or "GBp" exactly; "gbp" is taken to mean pounds.
+    static func isPence(_ currency: String) -> Bool {
+        let trimmed = currency.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "GBp" || trimmed.uppercased() == "GBX"
+    }
+
+    /// The average cost per unit in the currency the holding is quoted in.
+    /// A cost entered in another currency (a US share costed in pounds) is
+    /// converted at the current rate, so gains do not subtract pounds from
+    /// dollars. With no stated cost currency, or no rate, the cost is used as
+    /// entered, as before.
+    func averageCost(
+        for symbol: String,
+        inQuoteCurrency quoteCurrency: String?,
+        converter: CurrencyConverter = .shared
+    ) -> Double {
+        let normalized = getNormalizedAvgCost(for: symbol)
+        guard normalized.isFinite, normalized > 0,
+              let quote = quoteCurrency?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty,
+              let stated = costCurrency?.trimmingCharacters(in: .whitespacesAndNewlines), !stated.isEmpty else {
+            return normalized
+        }
+        // `normalized` is already in pounds for a UK symbol costed in pence.
+        let pence = Self.isPence(stated)
+        let costMajor = pence ? "GBP" : stated.uppercased()
+        let costInMajor = pence && !SymbolMetadata.isUKSymbol(symbol) ? normalized / 100.0 : normalized
+        let quoteMajor = Self.isPence(quote) ? "GBP" : quote.uppercased()
+        guard costMajor != quoteMajor else { return normalized }
+        let converted = converter.convert(amount: costInMajor, from: costMajor, to: quote)
+        return converted.isFinite && converted > 0 ? converted : normalized
     }
     
     /// Auto-detects the likely currency unit based on the symbol
@@ -121,9 +153,14 @@ struct Position: Codable, Equatable {
         return "USD" // Default to USD for other stocks
     }
     
+    /// The currency the average cost is entered in.
+    func displayCostCurrency(for symbol: String) -> String {
+        costCurrency ?? autoDetectCostCurrency(for: symbol)
+    }
+
     /// Returns a user-friendly display of the cost with currency unit
     func getDisplayCost(for symbol: String) -> String {
-        let detectedCurrency = costCurrency ?? autoDetectCostCurrency(for: symbol)
+        let detectedCurrency = displayCostCurrency(for: symbol)
         return "\(positionAvgCostString) \(detectedCurrency)"
     }
 }

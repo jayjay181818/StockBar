@@ -74,6 +74,9 @@ struct FolyncDataSourceSection: View {
                 Button("Activate Folync") { activate() }
                     .buttonStyle(.borderedProminent)
                     .disabled(isWorking || !canSubmitConnectionRequest || preview?.scope.id != selectedScope)
+                    .help(preview?.scope.id == selectedScope
+                          ? "Show this Folync portfolio in Stockbar"
+                          : "Preview the selected portfolio first")
                 if dataModel.isFolyncEnabled {
                     Button("Refresh Now") { refreshNow() }
                     .disabled(isWorking)

@@ -337,6 +337,29 @@ struct Trading212BrokerSyncPlanner {
             existingSymbols.contains(link.manualSymbol.uppercased()) && row(for: link) != nil
         }
 
+        // Rows the broker reports that no link accounts for.
+        let brokerOnlyRows = preview.rows.filter { row in
+            let providerTickerID = "\(row.account.brokerAccountKey)|\(row.providerTicker.uppercased())"
+            guard !quarantinedProviderKeys.contains(providerTickerID) else { return false }
+            guard let instrumentId = row.instrumentId else {
+                return !linkedProviderTickerIDs.contains(providerTickerID)
+            }
+            let instrumentLinkID = "\(row.account.brokerAccountKey)|\(instrumentId)"
+            return !linkedInstrumentIDs.contains(instrumentLinkID) && !linkedProviderTickerIDs.contains(providerTickerID)
+        }
+        // A ticker the broker renamed shows up as a linked position that has
+        // vanished and a new unlinked one of the same size. That holding is
+        // reported as missing so it can be relinked, never deleted.
+        func looksRenamed(_ link: BrokerLinkedPosition) -> Bool {
+            guard let trade = existingTrades.first(where: { $0.name.uppercased() == link.manualSymbol.uppercased() }),
+                  trade.position.unitSize > 0 else { return false }
+            let units = trade.position.unitSize
+            return brokerOnlyRows.contains { row in
+                guard let quantity = row.quantity else { return false }
+                return abs(quantity - units) <= max(1e-6, units * 1e-6)
+            }
+        }
+
         var updates: [Trading212BrokerTradeUpdate] = []
         var deletedSymbols: [String] = []
         var deletedLinkIDs: [String] = []
@@ -349,7 +372,7 @@ struct Trading212BrokerSyncPlanner {
             }
 
             guard let row = row(for: link) else {
-                if deletionAllowed {
+                if deletionAllowed, !looksRenamed(link) {
                     deletedSymbols.append(link.manualSymbol)
                     deletedLinkIDs.append(link.id)
                 } else {
@@ -372,15 +395,7 @@ struct Trading212BrokerSyncPlanner {
             updates.append(update)
         }
 
-        let brokerOnlyCount = preview.rows.filter { row in
-            let providerTickerID = "\(row.account.brokerAccountKey)|\(row.providerTicker.uppercased())"
-            guard !quarantinedProviderKeys.contains(providerTickerID) else { return false }
-            guard let instrumentId = row.instrumentId else {
-                return !linkedProviderTickerIDs.contains(providerTickerID)
-            }
-            let instrumentLinkID = "\(row.account.brokerAccountKey)|\(instrumentId)"
-            return !linkedInstrumentIDs.contains(instrumentLinkID) && !linkedProviderTickerIDs.contains(providerTickerID)
-        }.count
+        let brokerOnlyCount = brokerOnlyRows.count
         let hasQuarantinedAccountPosition = links.positions.contains {
             $0.brokerAccountKey == preview.account.brokerAccountKey
                 && quarantinedProviderKeys.contains($0.id)

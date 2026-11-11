@@ -1140,6 +1140,66 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertFalse(activeTimer.isValid)
     }
 
+    func testFXRatesDatedADayApartAreUsedAndDatedByTheOldest() async throws {
+        let dayBehind = Self.fxJSON.replacingOccurrences(
+            of: "{\"quote\":\"JPY\",\"rate\":159.2,\"asOf\":\"2026-07-13\"",
+            with: "{\"quote\":\"JPY\",\"rate\":159.2,\"asOf\":\"2026-07-10\""
+        )
+        let weekBehind = dayBehind.replacingOccurrences(of: "\"asOf\":\"2026-07-10\"", with: "\"asOf\":\"2026-07-03\"")
+
+        guard case .folync(let rates, let asOf, _) = try await routeFX(servingFX: dayBehind) else {
+            return XCTFail("Rates a few days apart should be accepted")
+        }
+        XCTAssertEqual(rates["JPY"], 159.2)
+        XCTAssertEqual(asOf, FolyncSupplementalDateParser.day("2026-07-10"))
+        if case .folync = try await routeFX(servingFX: weekBehind) {
+            XCTFail("Rates ten days apart should not be used as one set")
+        }
+    }
+
+    private func routeFX(servingFX body: String) async throws -> FolyncRoutedFXResult {
+        let suiteName = TestDefaultsSuite.makeName("FolyncFXDays-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "all",
+            pollingIntervalSeconds: 60,
+            supplemental: FolyncSupplementalSettings(
+                historicalLineCharts: false,
+                candlestickCharts: false,
+                benchmarkMarketData: false,
+                exchangeRates: true,
+                allowLegacyFallback: false
+            )
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            switch request.url?.path {
+            case "/api/client/v2/capabilities":
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            case "/api/client/v2/market/fx":
+                return Self.httpResponse(request, status: 200, body: body, etag: "\"fx-days\"")
+            default:
+                return Self.httpResponse(request, status: 404, body: "{}")
+            }
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore,
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            tokenProvider: { "test-token" }
+        )
+        return await coordinator.routeFX()
+    }
+
     func testExtraAdvertisedFXQuotesAreRequestedAndAccepted() async throws {
         let suiteName = TestDefaultsSuite.makeName("FolyncExtraFXQuotes-")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

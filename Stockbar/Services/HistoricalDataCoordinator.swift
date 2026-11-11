@@ -147,7 +147,7 @@ class HistoricalDataCoordinator {
         
         for symbol in symbols {
             // Check if we have complete data for the past month
-            let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
+            let existingSnapshots = historicalDataManager.storedPriceSnapshots(for: symbol)
             let recentSnapshots = existingSnapshots.filter { $0.timestamp >= oneMonthAgo }
             
             // Count unique days with data in the past month
@@ -221,7 +221,7 @@ class HistoricalDataCoordinator {
         for symbol in filteredSymbols {
             await Task.yield()
             
-            let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
+            let existingSnapshots = historicalDataManager.storedPriceSnapshots(for: symbol)
             let isBenchmark = SymbolMetadata.isBenchmarkSymbol(symbol)
             let baseCoverageStartDate = isBenchmark
                 ? (calendar.date(byAdding: .day, value: -benchmarkBackfillDays, to: today) ?? today)
@@ -340,7 +340,7 @@ class HistoricalDataCoordinator {
         await logger.info("🔄 CHUNKED BACKFILL: Starting \(yearsToFetch)-year backfill for \(symbol)")
         
         // Determine what data we already have
-        let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
+        let existingSnapshots = historicalDataManager.storedPriceSnapshots(for: symbol)
         let existingDates = Set(existingSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
         
         var oldestExistingDate: Date?
@@ -457,7 +457,7 @@ class HistoricalDataCoordinator {
             if !historicalData.isEmpty {
                 // Filter out dates that already have data to avoid duplicates
                 let calendar = Calendar.current
-                let existingSnapshots = historicalDataManager.priceSnapshots[symbol] ?? []
+                let existingSnapshots = historicalDataManager.storedPriceSnapshots(for: symbol)
                 let existingDates = Set(existingSnapshots.map { calendar.startOfDay(for: $0.timestamp) })
                 
                 let newSnapshots = historicalData.filter { snapshot in
@@ -498,7 +498,7 @@ class HistoricalDataCoordinator {
                 // boundary is permanent. Record it only when it cannot be one of those: the chunk
                 // ends well in the past and nothing older is already stored for the symbol.
                 let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-                let hasOlderData = (historicalDataManager.priceSnapshots[symbol] ?? [])
+                let hasOlderData = historicalDataManager.storedPriceSnapshots(for: symbol)
                     .contains { $0.timestamp < endDate }
                 guard endDate < cutoff, !hasOlderData else {
                     await logger.warning("⚠️ CHUNKED BACKFILL: No data received for \(symbol) chunk \(yearOffset); not treated as the start of its history")

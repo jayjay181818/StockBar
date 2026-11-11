@@ -426,7 +426,7 @@ struct AttributionAnalysisView: View {
 
         // Calculate date range
         let endDate = Date()
-        let startDate = Date(timeIntervalSince1970: endDate.timeIntervalSince1970 - selectedTimeRange.timeInterval)
+        let startDate = selectedTimeRange.startDate(from: endDate)
 
         // Fetch historical portfolio snapshots from Core Data (has actual position data)
         var historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)

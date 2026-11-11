@@ -79,6 +79,19 @@ struct HistoricalPortfolioCalculationService: Sendable {
     ) -> [HistoricalPortfolioSnapshot] {
         let converter = CurrencyConverter.shared
 
+        // Each holding's latest known value, used to weigh how much of the
+        // portfolio is priced on a given day. Holdings with no usable price at
+        // all are left out, as they are from every total.
+        var referenceValueUSD: [String: Double] = [:]
+        for position in composition.positions where position.units.isFinite && position.units > 0 {
+            guard let price = priceSnapshots[position.symbol]?.last(where: { $0.price.isFinite && $0.price > 0 })?.price else {
+                continue
+            }
+            let value = convertToUSD(amount: price * position.units, currency: position.currency, converter: converter)
+            if value.isFinite, value > 0 { referenceValueUSD[position.symbol] = value }
+        }
+        let totalReferenceUSD = referenceValueUSD.values.reduce(0, +)
+
         return dates.compactMap { date in
             var totalValueUSD = 0.0
             // Cost and gains cover only valued positions with a readable cost,
@@ -86,11 +99,11 @@ struct HistoricalPortfolioCalculationService: Sendable {
             var costedValueUSD = 0.0
             var totalCostUSD = 0.0
             var positionSnapshots: [String: PositionSnapshot] = [:]
-            var validPositions = 0
+            var pricedReferenceUSD = 0.0
 
             for position in composition.positions {
                 guard let symbolSnapshots = priceSnapshots[position.symbol],
-                      let historicalSnapshot = findClosestSnapshot(in: symbolSnapshots, to: date) else {
+                      let historicalSnapshot = latestSnapshot(in: symbolSnapshots, onOrBefore: date) else {
                     continue
                 }
 
@@ -117,7 +130,7 @@ struct HistoricalPortfolioCalculationService: Sendable {
                 }
 
                 totalValueUSD += valueInUSD
-                validPositions += 1
+                pricedReferenceUSD += referenceValueUSD[position.symbol] ?? 0
                 let costInUSD = convertToUSD(
                     amount: position.avgCost * position.units,
                     currency: position.currency,
@@ -136,7 +149,10 @@ struct HistoricalPortfolioCalculationService: Sendable {
                 )
             }
 
-            guard validPositions >= max(1, composition.positions.count / 2),
+            // Half the holdings by count could be a tenth of the value; a total
+            // missing a large holding is a step in the chart, not an estimate.
+            guard totalReferenceUSD > 0,
+                  pricedReferenceUSD / totalReferenceUSD >= minimumPricedShare,
                   totalValueUSD.isFinite,
                   totalValueUSD > 0 else {
                 return nil
@@ -195,41 +211,37 @@ struct HistoricalPortfolioCalculationService: Sendable {
         return converter.convert(amount: amount, from: "USD", to: preferredCurrency)
     }
 
-    private static func findClosestSnapshot(in sortedSnapshots: [PriceSnapshot], to targetDate: Date) -> PriceSnapshot? {
-        guard !sortedSnapshots.isEmpty else {
-            return nil
-        }
+    /// How long a price is carried forward: long enough for a holiday week,
+    /// short enough that a stale price does not stand in for a real one.
+    static let maximumPriceAge: TimeInterval = 10 * 24 * 60 * 60
+    /// The share of the portfolio (by its latest known value) that must have a
+    /// price on a day for that day's total to be recorded.
+    static let minimumPricedShare = 0.9
 
+    /// The latest price on or before the target day, no older than `maximumPriceAge`.
+    /// A later price is never used: it would put tomorrow's move into today's total.
+    private static func latestSnapshot(in sortedSnapshots: [PriceSnapshot], onOrBefore targetDate: Date) -> PriceSnapshot? {
         let calendar = Calendar(identifier: .gregorian)
         let targetDayStart = calendar.startOfDay(for: targetDate)
         var left = 0
         var right = sortedSnapshots.count - 1
-        var bestMatch: PriceSnapshot?
-        var bestDistance = TimeInterval.greatestFiniteMagnitude
+        var match: PriceSnapshot?
 
         while left <= right {
             let mid = (left + right) / 2
             let snapshot = sortedSnapshots[mid]
-            let snapshotDayStart = calendar.startOfDay(for: snapshot.timestamp)
-            let distance = abs(snapshotDayStart.timeIntervalSince(targetDayStart))
-
-            if distance < bestDistance {
-                bestDistance = distance
-                bestMatch = snapshot
-            }
-
-            if snapshotDayStart == targetDayStart {
-                return snapshot
-            } else if snapshotDayStart < targetDayStart {
+            if calendar.startOfDay(for: snapshot.timestamp) <= targetDayStart {
+                match = snapshot
                 left = mid + 1
             } else {
                 right = mid - 1
             }
         }
 
-        guard bestDistance <= 30 * 24 * 60 * 60 else {
+        guard let match,
+              targetDayStart.timeIntervalSince(calendar.startOfDay(for: match.timestamp)) <= maximumPriceAge else {
             return nil
         }
-        return bestMatch
+        return match
     }
 }

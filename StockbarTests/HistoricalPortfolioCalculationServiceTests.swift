@@ -93,6 +93,30 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.totalGains, 50, accuracy: 0.01)
     }
 
+    func testADayIsNotRecordedWhileALargeHoldingHasNoPriceYet() async throws {
+        let day = { (n: Double) in Date(timeIntervalSince1970: 1_777_766_400 + n * 86_400) }
+        let composition = PortfolioComposition(positions: [
+            PortfolioPosition(symbol: "SMALL", units: 1, avgCost: 10, currency: "USD"),
+            PortfolioPosition(symbol: "LARGE", units: 100, avgCost: 10, currency: "USD")
+        ])
+        let input = HistoricalPortfolioCalculationInput(
+            startDate: day(0).addingTimeInterval(-60),
+            endDate: day(3),
+            priceSnapshots: [
+                "SMALL": [0, 1, 2].map { PriceSnapshot(timestamp: day($0), price: 10, previousClose: 10, symbol: "SMALL") },
+                // LARGE has no history before day 1; day 0 must not borrow day 1's price.
+                "LARGE": [PriceSnapshot(timestamp: day(1), price: 20, previousClose: 20, symbol: "LARGE")]
+            ],
+            composition: composition,
+            preferredCurrency: "USD"
+        )
+
+        let snapshots = await HistoricalPortfolioCalculationService().calculateSnapshots(input)
+
+        // Day 0 is dropped (only 10 of 2,010 priced); day 2 carries LARGE's day-1 price forward.
+        XCTAssertEqual(snapshots.map(\.totalValue), [2_010, 2_010])
+    }
+
     // MARK: - History retention and merging
 
     func testThinnedPriceHistoryKeepsRecentPointsAndOneCloseFromEachOlderDay() {

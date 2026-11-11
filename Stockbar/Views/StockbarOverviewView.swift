@@ -388,7 +388,11 @@ struct StockbarOverviewView: View {
                     StockbarDetailRow(label: "Price", value: HoldingsCurrencyFormatter.amount(
                         trade.realTimeInfo.getCurrentDisplayPrice(), currency: trade.realTimeInfo.currency ?? ""
                     ))
-                    StockbarDetailRow(label: "Average cost", value: trade.trade.position.getDisplayCost(for: trade.trade.name))
+                    // Formatted like the price above it, not as the raw text that was typed in.
+                    StockbarDetailRow(label: "Average cost", value: HoldingsCurrencyFormatter.amount(
+                        trade.trade.position.positionAvgCost,
+                        currency: trade.trade.position.displayCostCurrency(for: trade.trade.name)
+                    ))
                     let profit = dataModel.calculatePositionProfitLoss(for: trade)
                     StockbarDetailRow(
                         label: "Today",
