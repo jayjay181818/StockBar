@@ -1677,7 +1677,9 @@ struct PerformanceChartView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         
-                        let avgCost = stockTrade.trade.position.getNormalizedAvgCost(for: symbol)
+                        let avgCost = stockTrade.trade.position.averageCost(
+                            for: symbol, inQuoteCurrency: stockTrade.realTimeInfo.currency
+                        )
                         let currency = stockTrade.realTimeInfo.currency ?? "USD"
                         Text(formatCurrency(avgCost, currency: currency))
                             .font(.subheadline)
@@ -1731,7 +1733,9 @@ struct PerformanceChartView: View {
         
         for trade in model.realTimeTrades {
             // Use normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            let adjustedCost = trade.trade.position.averageCost(
+                for: trade.trade.name, inQuoteCurrency: trade.realTimeInfo.currency
+            )
             guard !adjustedCost.isNaN, adjustedCost > 0 else { 
                 continue 
             }

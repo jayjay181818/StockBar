@@ -132,15 +132,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(submenuItem(makeApplicationMenu()))
         mainMenu.addItem(submenuItem(makeEditMenu()))
 
+        mainMenu.addItem(submenuItem(makeViewMenu()))
+
         let windowMenu = makeWindowMenu()
         mainMenu.addItem(submenuItem(windowMenu))
 
-        let helpMenu = NSMenu(title: "Help")
+        let helpMenu = makeHelpMenu()
         mainMenu.addItem(submenuItem(helpMenu))
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
-        // An empty Help menu still provides the system menu-search field.
         NSApp.helpMenu = helpMenu
     }
 
@@ -207,6 +208,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         return editMenu
+    }
+
+    /// One item per page of the main window, ⌘1 onwards. Settings keeps ⌘, in
+    /// the application menu.
+    private func makeViewMenu() -> NSMenu {
+        let viewMenu = NSMenu(title: "View")
+        for (index, section) in StockbarMainSection.allCases.enumerated() where section != .settings {
+            let item = NSMenuItem(
+                title: section.title,
+                action: #selector(showSection(_:)),
+                keyEquivalent: index < 9 ? "\(index + 1)" : ""
+            )
+            item.target = self
+            item.representedObject = section.rawValue
+            viewMenu.addItem(item)
+        }
+        return viewMenu
+    }
+
+    @objc private func showSection(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let section = StockbarMainSection(rawValue: rawValue) else { return }
+        stockMenuBarController?.showStockbarWindow(section: section)
+    }
+
+    private func makeHelpMenu() -> NSMenu {
+        let helpMenu = NSMenu(title: "Help")
+        for (title, section) in [("Data Health", StockbarMainSection.dataHealth), ("Diagnostics", .diagnostics)] {
+            let item = NSMenuItem(title: title, action: #selector(showSection(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = section.rawValue
+            helpMenu.addItem(item)
+        }
+        helpMenu.addItem(.separator())
+        let logs = NSMenuItem(title: "Show Logs in Finder", action: #selector(showLogsInFinder(_:)), keyEquivalent: "")
+        logs.target = self
+        helpMenu.addItem(logs)
+        return helpMenu
+    }
+
+    @objc private func showLogsInFinder(_ sender: Any?) {
+        Task { @MainActor in
+            let urls = await Logger.shared.existingLogFileURLs()
+            guard !urls.isEmpty else { return NSSound.beep() }
+            NSWorkspace.shared.activateFileViewerSelecting(urls)
+        }
     }
 
     private func makeWindowMenu() -> NSMenu {

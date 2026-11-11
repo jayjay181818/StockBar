@@ -1683,7 +1683,9 @@ class HistoricalDataManager {
         
         for trade in dataModel.realTimeTrades {
             // Use normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            let adjustedCost = trade.trade.position.averageCost(
+                for: trade.trade.name, inQuoteCurrency: trade.realTimeInfo.currency
+            )
             guard !adjustedCost.isNaN, adjustedCost > 0 else { continue }
             
             let units = trade.trade.position.unitSize

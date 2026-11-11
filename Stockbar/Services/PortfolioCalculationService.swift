@@ -99,7 +99,11 @@ class PortfolioCalculationService {
             }
             
             // Get normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: realTimeTradeItem.trade.name)
+            let adjustedCost = realTimeTradeItem.trade.position.averageCost(
+                for: realTimeTradeItem.trade.name,
+                inQuoteCurrency: realTimeTradeItem.realTimeInfo.currency,
+                converter: currencyConverter
+            )
             guard !adjustedCost.isNaN, adjustedCost > 0 else {
                 logger.post(.debug, "Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid cost.")
                 continue
@@ -269,7 +273,9 @@ class PortfolioCalculationService {
                 }
             }
 
-            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: symbol)
+            let adjustedCost = realTimeTradeItem.trade.position.averageCost(
+                for: symbol, inQuoteCurrency: realTimeTradeItem.realTimeInfo.currency, converter: currencyConverter
+            )
             if adjustedCost.isFinite, adjustedCost > 0 {
                 let costUSD = convertToUSD(amount: adjustedCost * units, currency: currency)
                 if costUSD.isFinite {
@@ -309,7 +315,9 @@ class PortfolioCalculationService {
         let previousClose = info.prevClosePrice
         let units = realTimeTrade.trade.position.unitSize
         let symbol = realTimeTrade.trade.name
-        let averageCost = realTimeTrade.trade.position.getNormalizedAvgCost(for: symbol)
+        let averageCost = realTimeTrade.trade.position.averageCost(
+            for: symbol, inQuoteCurrency: info.currency, converter: currencyConverter
+        )
         // Amounts here are already in pounds for a pence-quoted holding, so a
         // cost entered in pence must not label them "GBX" before a quote arrives.
         let statedCurrency = info.currency

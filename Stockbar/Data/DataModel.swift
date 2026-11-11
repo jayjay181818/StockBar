@@ -481,7 +481,9 @@ class DataModel {
                 // Apply saved order to the loaded trades
                 self.realTimeTrades = self.applyUserOrderToTrades(realTimeTrades)
                 Task { await logger.info("✅ Loaded \(realTimeTrades.count) trades successfully from Core Data with user order") }
-                Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(self.realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
+                // Named now: by the time the log task runs, benchmarks have joined the list.
+                let loadedNames = self.realTimeTrades.map { $0.trade.name }.joined(separator: ", ")
+                Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(loadedNames)") }
 
                 // Apply migrations after loading
                 self.removePersistedBenchmarks()

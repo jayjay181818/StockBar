@@ -123,7 +123,7 @@ final class DataMigrationService: @unchecked Sendable {
         Task { await Logger.shared.debug("DataMigrationService: Available UserDefaults keys: \(tradeKeys)") }
         
         if migrationVersionStored >= currentMigrationVersion && !needsDataMigration {
-            Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)) and no UserDefaults data found. No full migration needed.") }
+            Task { await Logger.shared.info("DataMigrationService: Migration already up-to-date (version \(currentMigrationVersion)) and no UserDefaults data is waiting to be migrated. No full migration needed.") }
             // Check if a pending retroactive calculation is needed from a previous partial migration
             if needsRetroactiveCalculation {
                 Task { await Logger.shared.info("DataMigrationService: Pending retroactive calculation flag is set.") }
