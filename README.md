@@ -35,11 +35,23 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 | 🔔 **Alerts** | Price above or below a level, or a percentage move, delivered as macOS notifications. |
 | 🧮 **Analytics** | Value at risk, Sharpe and Sortino, drawdowns, correlation, sector allocation and attribution. |
 | 🐍 **Sets itself up** | Stockbar installs its own Python for market data. Nothing needs installing first. |
+| 🔄 **Updates itself** | Stable and Testing channels, straight from GitHub releases. Every update is signature-checked. |
 | 🔒 **Private by design** | Data stays on your Mac, credentials stay in the Keychain, and logs are redacted. |
 
 ## 🚀 Quick start
 
-**Requirements:** macOS 15.4 or later and a current Xcode.
+**Requirements:** macOS 15.4 or later.
+
+1. Download `Stockbar-<version>.zip` from the [latest release](https://github.com/jayjay181818/StockBar/releases/latest) and unzip it. Version 3.6.0 and earlier have no download; testing builds are on the [Releases page](https://github.com/jayjay181818/StockBar/releases), marked *Pre-release*.
+2. Move **Stockbar** to your Applications folder **before** opening it. Until it is moved, macOS runs a downloaded app from a read-only copy, where it cannot update itself.
+3. Open it. macOS refuses the first time, because the app is not notarised by Apple: open **System Settings → Privacy & Security**, scroll down to **Security** and choose **Open Anyway**. This is needed once per Mac.
+
+From then on Stockbar updates itself: see [Updates](#-updates).
+
+<details>
+<summary><b>Build from source instead</b></summary>
+
+Needs a current Xcode.
 
 ```bash
 git clone https://github.com/jayjay181818/StockBar.git
@@ -47,7 +59,9 @@ cd StockBar
 bash script/develop.sh run      # build, sign and launch
 ```
 
-Or open `Stockbar.xcodeproj` in Xcode and run the **Stockbar** scheme.
+Or open `Stockbar.xcodeproj` in Xcode and run the **Stockbar** scheme. Updates are off in these development builds.
+
+</details>
 
 On first launch, Stockbar asks to **Set Up Stockbar's Python**. Choose **Set Up Automatically**. It needs an internet connection and usually takes under a minute.
 
@@ -58,6 +72,19 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 
 > [!TIP]
 > Upgrading from 2.x? Make a backup first (**Backups → Back Up Now**). The first 3.x launch migrates the store in place, and older backups still restore.
+
+## 🔄 Updates
+
+Stockbar looks for a new version about once a day and offers it with its release notes. **Settings → General → Updates** has the channel, the automatic check and **Check Now**; **Stockbar → Check for Updates…** does the same from the menu.
+
+| Channel | What you get |
+|---|---|
+| **Stable** (default) | Released versions only. |
+| **Testing** | Every change as it lands in the `testing` branch, before it is released, as well as released versions. May be rough. |
+
+- Updates are downloaded from this repository's GitHub releases. Each one is checked against a signing key built into Stockbar before it is installed, and a download or update list that fails the check is refused.
+- After every update macOS asks again for access to each saved credential in your Keychain. Choose **Always Allow**. Stockbar is built without an Apple developer account, so there is no signature macOS would remember from one build to the next.
+- Moving from Testing back to Stable keeps the build you have until a newer version is released.
 
 ## 🧭 Features
 
@@ -176,6 +203,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 - Trading 212 and Folync credentials and the FMP and Twelve Data API keys live in the macOS Keychain. The Python helper is handed the two API keys through its environment for each run; keys an earlier version left in the settings file are moved to the Keychain the first time they are needed. Trading 212 and Folync credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
 - Trading 212 access is read-only. Stockbar never places orders, so don't enable *Orders - Execute*.
 - The `uv` download Stockbar's Python setup uses is pinned and checked against a built-in SHA-256.
+- Update checks fetch one file from GitHub and send nothing about you or your Mac beyond what any web request shows (your IP address and the Stockbar version). Updates are built by GitHub Actions from this repository, signed ad hoc, and verified with an EdDSA key before they are installed.
 
 ## 📚 Documentation
 
@@ -184,7 +212,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 | 📘 [User Guide](Docs/UserGuide.md) | Every screen, the menu bar, alerts, currencies, connections and shortcuts |
 | ❓ [FAQ](Docs/FAQ.md) | Common questions and fixes |
 | 🏗️ [Architecture](Docs/Architecture.md) | Components, data flow and source ownership |
-| 🛠️ [Development](Docs/Development.md) | Tests, isolation, the acceptance harness and release steps |
+| 🛠️ [Development](Docs/Development.md) | Tests, isolation, the acceptance harness, release builds and updates |
 | 🧰 [Recovery scripts](Scripts/README.md) | Backup and restore from outside the app |
 | 📝 [Changelogs](Changelogs/) | Detailed release notes for every version |
 
@@ -309,6 +337,9 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 | Some quotes missing | Provider fallback, yfinance or network issues. Confirm the symbol on Yahoo Finance (UK listings need `.L`). |
 | FMP `403` | Usually key or plan limits; keys are redacted in logs. |
 | Folync "Waiting for Keychain access" | Choose **Always Allow** in the Keychain prompt after an update or rebuild. |
+| macOS will not open Stockbar after downloading it | **System Settings → Privacy & Security → Open Anyway**, once per Mac. See [Quick start](#-quick-start). |
+| Settings shows the version but no update controls | Updates are off in development builds made from source. |
+| An update will not install | Move Stockbar to Applications and reopen it; an app opened straight from Downloads runs from a read-only copy. |
 | Menu bar item missing | A full menu bar, the notch or a menu-bar manager may hide it. |
 
 <details>
@@ -328,6 +359,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 #### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
 - macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
 - Choose **Always Allow** in the prompt; everything recovers within a minute.
+- This happens after every update, once for each saved credential: each released build has a new signature, and macOS only remembers the answer for apps signed with an Apple-issued certificate.
 - `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
 
 #### Menu Bar Item Missing
@@ -361,7 +393,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 **Contributing**
 - Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build and test gates, and a Release build, on every PR.
-- Releases are tagged `vX.Y.Z` on the merged commit.
+- Every merge into `testing` publishes a testing build. Releases are tagged `vX.Y.Z` on the merged commit, and pushing the tag builds and publishes the release.
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 <details>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the Info.plist Xcode generates. Only the keys Xcode has no
+	     build setting for live here: the software-update settings. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/jayjay181818/StockBar/appcast/appcast.xml</string>
+	<!-- Public half of the key every update is signed with. The private half
+	     is a GitHub Actions secret; see Docs/Development.md. -->
+	<key>SUPublicEDKey</key>
+	<string>mhQL8V/Y1/BxcI1lkc8QT/qqSD74RI4C732TMdhtq7M=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<!-- Check the signature before the download is unpacked, and treat an
+	     unsigned or altered feed as untrusted. -->
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
+</dict>
+</plist>

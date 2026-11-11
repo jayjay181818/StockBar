@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!-- The hardened runtime only loads frameworks signed by Apple or by the
+	     app's own Apple team. Stockbar has no team (it is signed ad hoc), so
+	     without this it cannot load the Sparkle update framework it ships. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
 </plist>

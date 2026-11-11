@@ -4,6 +4,7 @@ Stockbar tracks a stock portfolio from the macOS menu bar, with a main window fo
 
 ## Contents
 
+- [Installing](#installing)
 - [Getting started](#getting-started)
 - [The main window](#the-main-window)
 - [Holdings](#holdings)
@@ -13,10 +14,25 @@ Stockbar tracks a stock portfolio from the macOS menu bar, with a main window fo
 - [Currencies and UK stocks](#currencies-and-uk-stocks)
 - [Connections: Trading 212 and Folync](#connections-trading-212-and-folync)
 - [Refreshing and data freshness](#refreshing-and-data-freshness)
+- [Updates](#updates)
 - [Backups, Data Health and Diagnostics](#backups-data-health-and-diagnostics)
 - [Troubleshooting](#troubleshooting)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Privacy](#privacy)
+
+## Installing
+
+1. Download `Stockbar-<version>.zip` from the [latest release](https://github.com/jayjay181818/StockBar/releases/latest) and unzip it.
+2. Move **Stockbar** to your Applications folder before you open it. Until it is moved, macOS runs a downloaded app from a read-only copy, where it cannot update itself.
+3. Open it. macOS refuses the first time, because the app is not notarised by Apple. Open **System Settings → Privacy & Security**, scroll down to **Security** and choose **Open Anyway**. This is needed once per Mac, not after each update.
+
+If you prefer the terminal, this does the same as step 3:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Stockbar.app
+```
+
+Stockbar then keeps itself up to date; see [Updates](#updates).
 
 ## Getting started
 
@@ -127,6 +143,23 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 - A symbol that fails is retried with increasing delays (1, 2, 5, then 10 minutes). After five consecutive failures it is paused for one hour; use **Retry Now** in its popover to resume sooner.
 - **Data Health** summarises tracked rows, menu-bar visibility, currency and refresh settings.
 
+## Updates
+
+Stockbar looks for a new version about once a day. When there is one it shows the version and its release notes; choose **Install Update** and Stockbar downloads it, checks it, installs it and reopens.
+
+**Settings → General → Updates** shows the version you are running and has:
+
+- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. With automatic checks on, changing the channel checks again straight away.
+- **Check Automatically** — turn off to check only when you ask.
+- **Check Now** — the same as **Check for Updates…** in the **Stockbar** menu.
+
+Things to know:
+
+- **Keychain prompts after an update.** macOS asks again for access to each saved connection (Trading 212, Folync, FMP, Twelve Data). Choose **Always Allow**. Stockbar is built without an Apple developer account, so each build has a new signature and macOS does not carry the answer over.
+- **Leaving Testing.** Stockbar never moves to an older build. After switching back to Stable you keep the testing build you have until a newer version is released.
+- **Where updates come from.** They are built by GitHub from Stockbar's source and downloaded from its GitHub releases. Stockbar checks each one against a signing key built into the app and refuses a download or an update list that does not match.
+- **Development builds.** A build made from source in Xcode shows only its version here; updates are off.
+
 ## Backups, Data Health and Diagnostics
 
 - **Backups** — Stockbar makes an automatic backup once a day. The Backups screen (and Settings → Advanced → Backups) shows the last backup and offers **Back Up Now**, **Restore from Backup…** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
@@ -163,4 +196,4 @@ The **Help** menu opens Data Health and Diagnostics and shows the log files in F
 
 ## Privacy
 
-Portfolio data is stored locally on your Mac (Application Support and Core Data). Market-data requests send ticker symbols to the configured providers. Broker and Folync credentials stay in your Keychain and are never written to logs.
+Portfolio data is stored locally on your Mac (Application Support and Core Data). Market-data requests send ticker symbols to the configured providers. Broker and Folync credentials stay in your Keychain and are never written to logs. Update checks fetch a file from GitHub and send nothing about you or your Mac beyond what any web request shows (your IP address and the Stockbar version).
