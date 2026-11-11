@@ -187,6 +187,18 @@ class HistoricalDataManager {
         }
     }
 
+    /// The stored portfolio values in a range, without each snapshot's positions.
+    func loadPortfolioValuesFromCoreData(timeRange: ChartTimeRange) async -> [StoredPortfolioValue] {
+        do {
+            let values = try await coreDataService.fetchPortfolioValues(from: timeRange.startDate(), to: Date())
+            await logger.info("📈 Loaded \(values.count) portfolio values from Core Data")
+            return values
+        } catch {
+            await logger.error("❌ Failed to load portfolio values from Core Data: \(error)")
+            return []
+        }
+    }
+
     /// Fetch historical portfolio snapshots for attribution analysis (preferred method - has position data)
     func fetchHistoricalPortfolioSnapshots(from startDate: Date, to endDate: Date) async -> [HistoricalPortfolioSnapshot] {
         do {

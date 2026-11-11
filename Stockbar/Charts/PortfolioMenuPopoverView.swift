@@ -118,7 +118,14 @@ enum PortfolioMenuChartDataBuilder {
     }
 
     static func matchingCurrencyPoints(_ snapshots: [HistoricalPortfolioSnapshot], currency: String) -> [ChartDataPoint] {
-        snapshots.filter { $0.currency.uppercased() == currency.uppercased() }
+        matchingCurrencyPoints(
+            snapshots.map { StoredPortfolioValue(date: $0.date, totalValue: $0.totalValue, currency: $0.currency) },
+            currency: currency
+        )
+    }
+
+    static func matchingCurrencyPoints(_ values: [StoredPortfolioValue], currency: String) -> [ChartDataPoint] {
+        values.filter { $0.currency.uppercased() == currency.uppercased() }
             .map { ChartDataPoint(date: $0.date, value: $0.totalValue) }
     }
 
@@ -313,10 +320,10 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                         coverageLabel = "Folync portfolio history is unavailable for this period. Check the connection and source history."
                     }
                 } else {
-                    let snapshots = await historicalDataManager.loadPortfolioSnapshotsFromCoreData(timeRange: range.chartTimeRange)
+                    let stored = await historicalDataManager.loadPortfolioValuesFromCoreData(timeRange: range.chartTimeRange)
                     guard !Task.isCancelled else { return }
                     chartData = PortfolioMenuChartDataBuilder.prepareChartPoints(
-                        storedPoints: PortfolioMenuChartDataBuilder.matchingCurrencyPoints(snapshots, currency: currency),
+                        storedPoints: PortfolioMenuChartDataBuilder.matchingCurrencyPoints(stored, currency: currency),
                         currentValue: value, range: range
                     )
                     hasRangeCoverage = PortfolioMenuChartDataBuilder.coversRange(chartData, range: range)
