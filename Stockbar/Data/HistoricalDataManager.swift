@@ -174,15 +174,22 @@ class HistoricalDataManager {
     
     /// Load portfolio snapshots from Core Data
     func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
+        await Self.readPortfolioSnapshots(timeRange: timeRange, from: coreDataService)
+    }
+
+    /// The read itself, which needs nothing from the main actor.
+    nonisolated static func readPortfolioSnapshots(
+        timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
+    ) async -> [HistoricalPortfolioSnapshot] {
         do {
             let startDate = timeRange.startDate()
             let endDate = Date()
-            await logger.info("📈 Loading portfolio snapshots from Core Data: startDate=\(startDate), endDate=\(endDate)")
-            let snapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
-            await logger.info("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
+            await Logger.shared.info("📈 Loading portfolio snapshots from Core Data: startDate=\(startDate), endDate=\(endDate)")
+            let snapshots = try await service.fetchPortfolioSnapshots(from: startDate, to: endDate)
+            await Logger.shared.info("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
             return snapshots
         } catch {
-            await logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            await Logger.shared.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
             return []
         }
     }
@@ -1090,21 +1097,30 @@ class HistoricalDataManager {
         let coreDataMasterVersion = 3
 
         if migrationService.migrationVersionStored >= coreDataMasterVersion {
-            Task {
-                await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).")
+            let storedVersion = migrationService.migrationVersionStored
+            let service = coreDataService
+            // The main thread is busy building the first window while this
+            // runs. Reading and thinning the store needs nothing from the main
+            // actor, so only taking the results into memory waits for it.
+            Task.detached(priority: .userInitiated) {
+                await Logger.shared.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(storedVersion)).")
 
                 // Core Data is the store of record; load each symbol's history.
-                await self.reloadStoredPriceHistory()
+                let prices = await Self.readStoredPriceHistory(for: nil, from: service)
+                // The portfolio read does not wait for the prices to be taken.
+                async let pricesAdopted: Void = self.adoptStoredPriceHistory(prices)
 
                 // Load portfolio snapshots from Core Data
                 let coreDataPortfolioSnaps = Self.thinnedPortfolioHistory(
-                    await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                    await Self.readPortfolioSnapshots(timeRange: .all, from: service)
                 )
-                await MainActor.run {
+                await pricesAdopted
+                let loadedCount = await MainActor.run {
                     self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
                     self.hasLoadedStoredPortfolioHistory = true
+                    return self.historicalPortfolioSnapshots.count
                 }
-                await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.")
+                await Logger.shared.info("HistoricalDataManager: Loaded \(loadedCount) historical portfolio snapshots from Core Data.")
             }
         } else {
             Task { await logger.info("HistoricalDataManager: Falling back to CacheManager/UserDefaults for snapshots (migration version \(migrationService.migrationVersionStored)).") }
