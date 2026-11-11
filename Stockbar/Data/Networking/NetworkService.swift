@@ -450,7 +450,7 @@ actor PythonNetworkService: NetworkService {
             await logger.debug("Python historical process exited \(exitCode) for \(symbol)")
 
             guard let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
-                await logger.warning("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
+                await logger.debug("🐍 PYTHON SCRIPT: stdout for \(symbol) is empty.")
                 throw NetworkError.noData("Empty output from historical script for \(symbol)")
             }
             
@@ -467,13 +467,13 @@ actor PythonNetworkService: NetworkService {
 
             // Check for FETCH_FAILED
             if output.contains("FETCH_FAILED") {
-                await logger.warning("Script explicitly reported FETCH_FAILED for historical \(symbol).")
+                await logger.debug("Script explicitly reported FETCH_FAILED for historical \(symbol).")
                 throw NetworkError.noData("Script reported FETCH_FAILED for historical \(symbol)")
             }
             
             // Validate JSON structure before parsing
             guard output.hasPrefix("[") && output.hasSuffix("]") else {
-                await logger.error("🐍 PYTHON SCRIPT: Invalid JSON structure for \(symbol). Output should start with '[' and end with ']'. First 100 chars: \(String(output.prefix(100)))")
+                await logger.debug("🐍 PYTHON SCRIPT: Invalid JSON structure for \(symbol). Output should start with '[' and end with ']'. First 100 chars: \(String(output.prefix(100)))")
                 throw NetworkError.invalidResponse("Invalid JSON structure from script output")
             }
             
@@ -520,7 +520,7 @@ actor PythonNetworkService: NetworkService {
                 
                 return priceSnapshots
             } catch {
-                await logger.error("Failed to parse JSON from historical script output: \(error.localizedDescription)")
+                await logger.debug("Failed to parse JSON from historical script output: \(error.localizedDescription)")
                 await logger.debug("Python historical parse failure output length for \(symbol): \(output.count)")
                 throw NetworkError.invalidResponse("Could not parse JSON from script output: \(error.localizedDescription)")
             }
@@ -529,7 +529,7 @@ actor PythonNetworkService: NetworkService {
         } catch let netErr as NetworkError {
             throw netErr
         } catch {
-            await logger.error("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
+            await logger.debug("Failed to run Python script for historical \(symbol): \(error.localizedDescription)")
             throw NetworkError.scriptExecutionError(error.localizedDescription)
         }
     }

@@ -82,14 +82,18 @@ actor MemoryManagementService {
     func performMemoryCleanup(forced: Bool = false) async {
         let currentUsage = getCurrentMemoryUsage()
         
-        Task { await logger.info("🧹 Memory cleanup - Current usage: \(String(format: "%.1f", currentUsage))MB") }
-        
         if forced || currentUsage > memoryWarningThreshold {
             await performCacheCleanup(dropAll: forced || currentUsage > memoryCriticalThreshold)
-            
+
             let newUsage = getCurrentMemoryUsage()
             let saved = max(0, currentUsage - newUsage)
-            Task { await logger.info("🧹 Memory cleanup completed - Freed \(String(format: "%.1f", saved))MB") }
+            // Worth an info line only when it freed something to speak of.
+            let summary = "🧹 Memory cleanup: \(String(format: "%.1f", currentUsage))MB before, freed \(String(format: "%.1f", saved))MB"
+            if saved >= 1 {
+                Task { await logger.info(summary) }
+            } else {
+                Task { await logger.debug(summary) }
+            }
         }
     }
     
@@ -280,15 +284,31 @@ actor MemoryManagementService {
             lastSystemPressureLevel = level
         }
 
+        // The system raises a warning when any app is short of memory. Most
+        // of the time that is not Stockbar, and emptying its small caches
+        // freed nothing while making the next chart slower. Act on a warning
+        // only when Stockbar itself is large; always act when it is critical.
+        guard Self.shouldEvictCaches(
+            systemPressureIsCritical: critical,
+            ownUsageMB: getCurrentMemoryUsage(),
+            ownUsageLimitMB: memoryWarningThreshold
+        ) else { return }
+
         await performMemoryCleanup(forced: true)
         CacheManager.shared.clearMemoryCache()
         await OptimizedChartDataService.shared.clearCache()
         await HistoricalDataManager.shared.evictMemoryCachesForPressure(critical: critical)
     }
     
+    nonisolated static func shouldEvictCaches(
+        systemPressureIsCritical: Bool,
+        ownUsageMB: Double,
+        ownUsageLimitMB: Double
+    ) -> Bool {
+        systemPressureIsCritical || ownUsageMB > ownUsageLimitMB
+    }
+
     private func performCacheCleanup(dropAll: Bool = false) async {
-        Task { await logger.debug("🧹 Performing cache cleanup") }
-        
         let currentUsage = getCurrentMemoryUsage()
         
         // More aggressive cleanup under memory pressure

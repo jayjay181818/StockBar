@@ -35,7 +35,12 @@ extension CacheManager {
         cacheStats.lastCleanup = Date()
         
         let duration = Date().timeIntervalSince(startTime)
-        await Logger.shared.info("✅ Cache cleanup completed in \(String(format: "%.2f", duration))s: \(itemsEvicted) items evicted, \(bytesFreed / 1024) KB freed")
+        let summary = "✅ Cache cleanup completed in \(String(format: "%.2f", duration))s: \(itemsEvicted) items evicted, \(bytesFreed / 1024) KB freed"
+        if itemsEvicted > 0 || bytesFreed > 0 {
+            await Logger.shared.info(summary)
+        } else {
+            await Logger.shared.debug(summary)
+        }
     }
     
     // MARK: - LRU Memory Cache Cleanup
