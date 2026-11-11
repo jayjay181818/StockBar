@@ -1384,8 +1384,14 @@ class HistoricalDataManager {
         }
         
         // Calculate daily returns for advanced metrics
-        let dailyReturns = zip(relevantSnapshots.dropFirst(), relevantSnapshots).map { current, previous in
-            (current.price - previous.price) / previous.price
+        // One close per weekday. The stored samples are minutes apart, and treating each as a
+        // day understated volatility and counted every unchanged sample as a losing day.
+        let closes = RiskMetricsService.dailyCloses(
+            dates: relevantSnapshots.map(\.timestamp),
+            values: relevantSnapshots.map(\.price)
+        ).values
+        let dailyReturns = zip(closes.dropFirst(), closes).map { current, previous in
+            (current - previous) / previous
         }
         
         let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
@@ -1404,15 +1410,19 @@ class HistoricalDataManager {
         let riskFreeRate = 0.02 / 252 // Daily risk-free rate
         let excessReturns = dailyReturns.map { $0 - riskFreeRate }
         let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
-        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) : nil
-        
+        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil
+
         // Calculate Maximum Drawdown
         let (maxDrawdown, maxDrawdownPercent) = calculateStockMaxDrawdown(snapshots: relevantSnapshots)
         
         // Calculate Annualized Return and Volatility
-        let periodInYears = max(0.001, lastSnapshot.timestamp.timeIntervalSince(firstSnapshot.timestamp) / (365.25 * 24 * 3600))
-        let annualizedReturn = totalReturnPercent / periodInYears
-        let annualizedVolatility = volatility * sqrt(252) // Assuming ~252 trading days per year
+        // Compounded, and only for a month or more: scaling a one-day move to a year
+        // turned +1% into +365%.
+        let span = lastSnapshot.timestamp.timeIntervalSince(firstSnapshot.timestamp)
+        let periodInYears = span / (365.25 * 24 * 3600)
+        let compounded = (pow(1 + totalReturnPercent / 100, 1 / max(periodInYears, 0.001)) - 1) * 100
+        let annualizedReturn: Double? = span >= 30 * 86_400 && compounded.isFinite ? compounded : nil
+        let annualizedVolatility: Double? = dailyReturns.count >= 2 ? volatility * sqrt(252) : nil
         
         // Calculate Value at Risk (95% confidence level)
         let sortedReturns = dailyReturns.sorted()

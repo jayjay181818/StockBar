@@ -52,6 +52,8 @@ class DataModel {
     @ObservationIgnored private var trading212BrokerSyncTimer: Timer?
     @ObservationIgnored private var trading212ScheduledFailureCount = 0
     @ObservationIgnored private var trading212NextScheduledAttempt = Date.distantPast
+    /// Why the last scheduled Trading 212 sync failed, for the Connections tab; nil once one succeeds.
+    private(set) var trading212ScheduledSyncError: String?
     /// Identifies the current scheduled cycle, so a cancelled older cycle
     /// cannot clear the handle of a newer one.
     @ObservationIgnored private var trading212BrokerSyncGeneration = 0
@@ -790,6 +792,7 @@ class DataModel {
         trading212BrokerSyncTask = nil
         trading212NextScheduledAttempt = .distantPast
         trading212ScheduledFailureCount = 0
+        trading212ScheduledSyncError = nil
 
         guard !isFolyncPortfolioActive, !isBackgroundWorkPausedForImport else { return }
 
@@ -873,10 +876,22 @@ class DataModel {
                 }
                 self.trading212ScheduledFailureCount = 0
                 self.trading212NextScheduledAttempt = .distantPast
+                self.trading212ScheduledSyncError = nil
             } catch {
                 // Cancellation (suspend or restart) is not a provider failure.
                 if error is CancellationError || Task.isCancelled { return }
                 self.trading212ScheduledFailureCount += 1
+                self.trading212ScheduledSyncError = LogRedactor.redact(error.localizedDescription)
+                // Rejected credentials will not start working on their own. Stop until the
+                // scheduler is restarted, which saving new credentials does.
+                if let providerError = error as? Trading212ProviderError,
+                   providerError == .unauthorized || providerError == .forbidden {
+                    self.trading212NextScheduledAttempt = .distantFuture
+                    await Logger.shared.warning(
+                        "Trading 212 scheduled cycle \(reason) was rejected; automatic sync is paused until the credentials are saved again: \(LogRedactor.redact(error.localizedDescription))"
+                    )
+                    return
+                }
                 let retryAfter: TimeInterval?
                 if case let Trading212ProviderError.rateLimited(value) = error {
                     retryAfter = value
