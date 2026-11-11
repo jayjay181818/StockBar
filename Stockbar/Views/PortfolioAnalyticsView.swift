@@ -19,6 +19,8 @@ struct PortfolioAnalyticsView: View {
     @State private var sectorAllocations: [SectorAnalysisService.SectorAllocation] = []
     @State private var diversificationAnalysis: SectorAnalysisService.DiversificationAnalysis?
     @State private var topCorrelations: [CorrelationMatrixService.CorrelationPair] = []
+    /// Holdings left out of the correlation for too little shared history.
+    @State private var correlationExcluded: [String] = []
     @State private var bottomCorrelations: [CorrelationMatrixService.CorrelationPair] = []
     @State private var showAttributionSheet = false
     @State private var analyticsCurrency = "USD"
@@ -339,6 +341,12 @@ struct PortfolioAnalyticsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
+                if !correlationExcluded.isEmpty {
+                    Text("Left out for having too little shared price history: \(correlationExcluded.joined(separator: ", ")).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 if let metrics = diversificationMetrics {
                     HStack(spacing: 20) {
                         metricCard(
@@ -619,7 +627,9 @@ struct PortfolioAnalyticsView: View {
             .map { $0.trade.name }
 
         let historicalData = fetchHistoricalDataForCorrelation(symbols: symbols)
-        let aligned = CorrelationMatrixService.alignedDailyReturns(from: historicalData)
+        let aligned = CorrelationMatrixService.alignedDailyReturns(
+            from: historicalData, minimumCommonDays: Self.minimumCorrelationDays
+        )
         guard aligned.commonDays >= Self.minimumCorrelationDays, aligned.returns.count > 1 else {
             await MainActor.run {
                 guard self.analyticsRevision == revision else { return }
@@ -627,6 +637,7 @@ struct PortfolioAnalyticsView: View {
                 self.diversificationMetrics = nil
                 self.topCorrelations = []
                 self.bottomCorrelations = []
+                self.correlationExcluded = []
             }
             return
         }
@@ -655,6 +666,7 @@ struct PortfolioAnalyticsView: View {
             self.diversificationMetrics = metrics
             self.topCorrelations = top
             self.bottomCorrelations = bottom
+            self.correlationExcluded = aligned.excluded
         }
     }
 
