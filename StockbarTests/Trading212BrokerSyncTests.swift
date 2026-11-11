@@ -2817,6 +2817,24 @@ final class FolyncPortfolioSourceTests: XCTestCase {
             }
         }
 
+        // The stored token is never offered to a server it was not saved for.
+        do {
+            _ = try await dataModel.testFolyncConnection(
+                baseURL: URL(string: "https://folync.example.invalid")!,
+                token: ""
+            )
+            XCTFail("A blank token must not fall back to the stored one before a server is saved")
+        } catch {
+            XCTAssertEqual(error as? FolyncPortfolioSourceError, .missingToken)
+        }
+        XCTAssertTrue(stub.requests.isEmpty, "Nothing is sent without a token for this server")
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: false, baseURL: "https://folync.example.invalid", scopeID: "all", pollingIntervalSeconds: 60
+        ))
+        XCTAssertFalse(dataModel.storedFolyncTokenApplies(to: URL(string: "https://other.example.invalid")))
+        XCTAssertFalse(dataModel.storedFolyncTokenApplies(to: URL(string: "http://folync.example.invalid")))
+        XCTAssertTrue(dataModel.storedFolyncTokenApplies(to: URL(string: "https://folync.example.invalid/base")))
+
         // Empty token falls back to stored token for testConnection, preview, and activate.
         let portfolios = try await dataModel.testFolyncConnection(
             baseURL: URL(string: "https://folync.example.invalid")!,
@@ -2955,7 +2973,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
             urlSession: Self.stubSession(),
             providerPolicy: Self.testProviderPolicy,
             loadToken: { storedToken },
-            saveToken: { _ in },
+            saveToken: { _, _ in },
             hasToken: { !storedToken.isEmpty }
         )
         return IsolatedSessionEnvironment(

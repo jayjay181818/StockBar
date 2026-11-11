@@ -31,7 +31,7 @@ enum FolyncPortfolioSourceError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "Folync endpoint URL is incomplete. Enter a full HTTPS URL."
+            return "Enter a full Folync HTTPS URL, without a user name, password, \"?\" or \"#\"."
         case .insecureTransport:
             return "Folync requires HTTPS except for localhost development."
         case .missingToken:
@@ -63,6 +63,12 @@ enum FolyncEndpointPolicy {
         guard let scheme = url.scheme?.lowercased(),
               let host = url.host?.lowercased(),
               !host.isEmpty else {
+            throw FolyncPortfolioSourceError.invalidEndpoint
+        }
+        // The address is saved and logged as typed. A user name or password in
+        // it would be stored outside the Keychain, and a query or fragment is
+        // never part of a Folync base address.
+        guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
             throw FolyncPortfolioSourceError.invalidEndpoint
         }
         if scheme == "https" { return }

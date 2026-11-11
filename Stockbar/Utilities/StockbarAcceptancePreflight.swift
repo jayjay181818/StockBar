@@ -153,7 +153,7 @@ enum StockbarAcceptancePreflight {
             pollingIntervalSeconds: 60,
             supplemental: supplemental
         ))
-        try FolyncCredentialStore(service: runtime.folyncKeychainService).save(token: token)
+        try FolyncCredentialStore(service: runtime.folyncKeychainService).save(token: token, for: manifest.baseURL)
 
         let report = StockbarAcceptanceBootstrapReport(
             runID: runID,
