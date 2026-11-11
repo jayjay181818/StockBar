@@ -42,8 +42,16 @@ enum PythonWorkerError: Error, Equatable {
 actor PythonWorkerPool {
     static let shared = PythonWorkerPool()
 
+    /// An idle worker holds about 80 MB, as much as the app itself, so it is
+    /// kept for one burst of work (a refresh pass, or a backfill whose
+    /// requests are seconds apart) and not from one refresh to the next.
+    /// 90 seconds outlasts the shortest refresh interval, one minute, which
+    /// therefore still reuses its worker; longer intervals start a new worker
+    /// for each pass, about a third of a second of CPU.
+    static let defaultIdleTimeout: Duration = .seconds(90)
+
     private let maxWorkers: Int
-    private let idleTimeout: Duration
+    let idleTimeout: Duration
     private let logger = Logger.shared
     private var idleWorkers: [(worker: PythonWorker, lastUsed: ContinuousClock.Instant)] = []
     private var busyCount = 0
@@ -56,7 +64,7 @@ actor PythonWorkerPool {
 
     init(
         maxWorkers: Int = 2,
-        idleTimeout: Duration = .seconds(15 * 60),
+        idleTimeout: Duration = PythonWorkerPool.defaultIdleTimeout,
         failureBackoff: Duration = .seconds(5 * 60)
     ) {
         self.maxWorkers = maxWorkers

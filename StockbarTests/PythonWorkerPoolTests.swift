@@ -161,6 +161,53 @@ final class PythonWorkerPoolTests: XCTestCase {
         XCTAssertTrue(stopped, "The cancelled worker must be stopped")
     }
 
+    func testAnIdleWorkerStopsAfterTheIdleTimeoutAndSoDoesTheOneThatReplacesIt() async throws {
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: .seconds(1))
+        let runner = makeRunner()
+        let (idle, _) = try await run(runner, [])
+        let pooled = await pool.workerCount
+        XCTAssertEqual(pooled, 1, "The request must have been served by a pooled worker, not a one-off process")
+
+        let stopped = try await waitUntilGone(idle.pid)
+
+        XCTAssertTrue(stopped, "A worker nobody is using must give its memory back")
+        let workerCount = await pool.workerCount
+        XCTAssertEqual(workerCount, 0)
+        let (fresh, _) = try await run(runner, ["--json", "AAPL"])
+        XCTAssertNotEqual(fresh.pid, idle.pid)
+        XCTAssertEqual(fresh.args, ["--json", "AAPL"])
+        // The first stop ended the pool's idle check; the new worker must restart
+        // it, or only the first worker of a session would ever stop.
+        let stoppedAgain = try await waitUntilGone(fresh.pid)
+        XCTAssertTrue(stoppedAgain, "Every later worker must stop when idle too")
+    }
+
+    func testAWorkerUsedAgainWithinTheIdleTimeoutKeepsRunning() async throws {
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: .seconds(3))
+        let runner = makeRunner()
+        let (first, _) = try await run(runner, [])
+
+        // Each gap is well inside the timeout; together they outlast it. A
+        // refresh interval shorter than the timeout must not restart the worker.
+        for _ in 0..<5 {
+            try await Task.sleep(for: .milliseconds(700))
+            let (next, _) = try await run(runner, [])
+            XCTAssertEqual(next.pid, first.pid)
+        }
+    }
+
+    func testTheDefaultIdleTimeoutKeepsAOneMinuteRefreshWarmAndLetsAFiveMinuteOneExit() async {
+        let configured = await PythonWorkerPool().idleTimeout
+        XCTAssertEqual(configured, PythonWorkerPool.defaultIdleTimeout)
+        // The reaper stops a worker between one and one and a quarter timeouts
+        // after its last request.
+        let earliestStop = configured
+        let latestStop = configured * 5 / 4
+
+        XCTAssertGreaterThan(earliestStop, .seconds(60 + 5), "The shortest refresh interval, plus its timer tolerance, must reuse its worker")
+        XCTAssertLessThan(latestStop, .seconds(5 * 60), "At the default refresh interval the worker must exit between refreshes")
+    }
+
     func testChangedEnvironmentReplacesTheWorker() async throws {
         let (old, _) = try await run(makeRunner(mark: "a"), [])
 
