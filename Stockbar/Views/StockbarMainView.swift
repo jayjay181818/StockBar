@@ -301,7 +301,8 @@ private struct StockbarHoldingsView: View {
 
     private var subtitle: String {
         if dataModel.portfolioLoadFailed {
-            return "Your saved holdings could not be loaded, so editing is paused to avoid overwriting them. Restart Stockbar or restore a backup."
+            return dataModel.portfolioLoadFailureDetail.map { "\($0) Editing is paused to avoid overwriting your saved holdings." }
+                ?? "Your saved holdings could not be loaded, so editing is paused to avoid overwriting them. Restart Stockbar or restore a backup."
         }
         return dataModel.isFolyncPortfolioActive
             ? "Read-only Folync holdings. Visibility and alerts remain local to Stockbar."

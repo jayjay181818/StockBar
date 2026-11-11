@@ -1112,6 +1112,28 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertEqual(Set(decoded.tradingInfoBySymbol.keys), ["DFTX"])
     }
 
+    func testAnUnreadablePendingRecoveryNamesItsFileAndCanBeSetAside() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alias-unreadable-recovery-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AliasIdentityRecoveryStore(rootDirectory: root)
+        XCTAssertNil(try store.pendingBundle())
+        let missing = root.appendingPathComponent("gone.json")
+        try store.markPending(recoveryURL: missing)
+
+        XCTAssertThrowsError(try store.pendingBundle()) { error in
+            guard case AliasIdentityMigrationError.pendingRecoveryUnreadable(let path, _) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(path, missing.path)
+        }
+        store.setAsideUnreadablePending()
+
+        XCTAssertNil(try store.pendingBundle())
+        let kept = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        XCTAssertTrue(kept.contains { $0.hasPrefix("pending-recovery-manifest.unreadable-") })
+    }
+
     func testAliasRecoveryStorePublishesAndClearsDurablePendingManifest() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alias-pending-recovery-tests-\(UUID().uuidString)", isDirectory: true)

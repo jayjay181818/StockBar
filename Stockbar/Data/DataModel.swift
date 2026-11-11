@@ -56,6 +56,8 @@ class DataModel {
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.
     private(set) var portfolioLoadFailed = false
+    /// Why the startup load failed, when the cause can be put in words.
+    private(set) var portfolioLoadFailureDetail: String?
     /// Last time a Trading 212 sync actually updated linked holdings. Market
     /// refresh only defers to the broker while this is recent.
     @ObservationIgnored private var lastTrading212LinkedSyncAt: Date?
@@ -496,10 +498,12 @@ class DataModel {
             return true
         } catch {
             await logger.error("❌ Failed to load trades from Core Data: \(error)")
-            
+            let detail = (error as? AliasIdentityMigrationError)?.errorDescription
+
             // Initialize with empty trades if Core Data fails
             await MainActor.run {
                 self.realTimeTrades = []
+                self.portfolioLoadFailureDetail = detail
                 // Every save replaces the whole stored portfolio, so the unread
                 // holdings would be lost by the next edit. Block writes until a
                 // restore or import replaces the portfolio deliberately.
@@ -1847,7 +1851,9 @@ class DataModel {
         }
 
         try await tradeDataService.saveAllTrades(portfolioTrades)
+        if portfolioLoadFailed { aliasIdentityMigrationService.setAsideUnreadablePendingRecovery() }
         portfolioLoadFailed = false
+        portfolioLoadFailureDetail = nil
 
         var existingInfo: [String: TradingInfo] = [:]
         for trade in realTimeTrades {

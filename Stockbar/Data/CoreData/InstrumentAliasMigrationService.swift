@@ -303,6 +303,28 @@ struct AliasIdentityRecoveryStore {
         try fileManager.removeItem(at: pendingManifestURL)
     }
 
+    /// The bundle an interrupted repair left behind, or nil when there is none.
+    /// A manifest or bundle that cannot be read is reported with its path, so
+    /// the failure names the file instead of a bare decoding error.
+    func pendingBundle() throws -> AliasIdentityRecoveryBundle? {
+        var path = pendingManifestURL.path
+        do {
+            guard let recoveryURL = try pendingRecoveryURL() else { return nil }
+            path = recoveryURL.path
+            return try load(from: recoveryURL)
+        } catch {
+            throw AliasIdentityMigrationError.pendingRecoveryUnreadable(path: path, reason: error.localizedDescription)
+        }
+    }
+
+    /// Moves an unreadable pending manifest aside, keeping it for inspection; it
+    /// would otherwise fail every later launch. A readable one is left to be applied.
+    func setAsideUnreadablePending() {
+        guard (try? pendingBundle()) == nil, fileManager.fileExists(atPath: pendingManifestURL.path) else { return }
+        let aside = rootDirectory.appendingPathComponent("pending-recovery-manifest.unreadable-\(UUID().uuidString.prefix(8))")
+        try? fileManager.moveItem(at: pendingManifestURL, to: aside)
+    }
+
     private var pendingManifestURL: URL {
         rootDirectory.appendingPathComponent("pending-recovery-manifest")
     }
@@ -405,9 +427,13 @@ struct InstrumentAliasStore {
 enum AliasIdentityMigrationError: Error, LocalizedError {
     case validationFailed(String)
     case migrationAndRestoreFailed(migration: String, restore: String)
+    /// An interrupted repair left a recovery file that cannot be read back.
+    case pendingRecoveryUnreadable(path: String, reason: String)
 
     var errorDescription: String? {
         switch self {
+        case .pendingRecoveryUnreadable(let path, let reason):
+            return "An earlier repair of your holdings was interrupted and its recovery file cannot be read (\(path): \(reason)). Restore a backup to continue."
         case .validationFailed(let reason):
             return "Alias identity migration validation failed: \(reason)"
         case .migrationAndRestoreFailed(let migration, let restore):
@@ -552,12 +578,15 @@ final class AliasIdentityMigrationService: @unchecked Sendable {
     }
 
     private func restorePendingMigrationIfNeeded() async throws {
-        let recoveryURL = try recoveryStore.pendingRecoveryURL()
-        guard let recoveryURL else { return }
-        let bundle = try recoveryStore.load(from: recoveryURL)
+        guard let bundle = try recoveryStore.pendingBundle() else { return }
         try await restore(bundle)
         defaults.synchronize()
         try recoveryStore.clearPending()
+    }
+
+    /// Called after the user has deliberately replaced the portfolio (restore or import).
+    func setAsideUnreadablePendingRecovery() {
+        recoveryStore.setAsideUnreadablePending()
     }
 
     private func persist(_ result: AliasIdentityRepairResult) async throws {

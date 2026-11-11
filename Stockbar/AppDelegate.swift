@@ -73,7 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Performs automatic backup if needed (once per day)
     @MainActor
     private func scheduleAutomaticBackup() async {
-        guard await dataModel.waitForInitialTradeLoad() else {
+        guard await dataModel.waitForInitialTradeLoad(timeout: 600) else {
             await Logger.shared.warning("Automatic backup skipped because portfolio load did not complete")
             return
         }
