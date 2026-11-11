@@ -15,6 +15,9 @@ extension HistoricalDataManager {
     ) -> [PriceSnapshot] {
         let cutoff = now.addingTimeInterval(-Double(intradayDays) * 86_400)
         var result: [PriceSnapshot] = []
+        // The result is kept for as long as the app runs. Left to grow by
+        // doubling, these arrays ended up nearly half empty.
+        result.reserveCapacity(snapshots.count)
         var lastDay: Date?
         for snapshot in snapshots.sorted(by: { $0.timestamp < $1.timestamp }) {
             guard snapshot.timestamp < cutoff else {
@@ -29,7 +32,12 @@ extension HistoricalDataManager {
                 lastDay = day
             }
         }
-        return result
+        // Thinning that dropped a lot would leave the same waste the other way.
+        guard result.count * 8 < result.capacity * 7 else { return result }
+        var fitted: [PriceSnapshot] = []
+        fitted.reserveCapacity(result.count)
+        fitted.append(contentsOf: result)
+        return fitted
     }
 
     /// Recorded snapshots are the record of what the portfolio was actually
