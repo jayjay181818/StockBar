@@ -422,7 +422,17 @@ struct AttributionAnalysisView: View {
         let startDate = Date(timeIntervalSince1970: endDate.timeIntervalSince1970 - selectedTimeRange.timeInterval)
 
         // Fetch historical portfolio snapshots from Core Data (has actual position data)
-        let historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
+        var historicalSnapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
+
+        // Each snapshot was recorded in the currency preferred at the time. Bring them all into
+        // today's currency so a USD start is never compared with a GBP end.
+        if let dataModel {
+            let converter = dataModel.currencyConverter
+            historicalSnapshots = RiskMetricsService.normalizingSnapshotCurrencies(
+                historicalSnapshots, to: dataModel.preferredCurrency,
+                convert: { converter.convert(amount: $0, from: $1, to: $2) }
+            ).snapshots
+        }
 
         // Check if we have enough data
         guard historicalSnapshots.count >= 2 else {

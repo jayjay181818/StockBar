@@ -182,7 +182,8 @@ class StockMenuBarController: NSObject {
     // MARK: - Actions
     
     private func quitApp() {
-        NSApp.terminate(self)
+        // Reached from main-actor tasks (popover buttons); terminating inside one would hang.
+        StockbarRelauncher.quitAfterCurrentWork()
     }
     
     /// The main window, created on demand, for attaching sheets.
