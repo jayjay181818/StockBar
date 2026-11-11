@@ -745,7 +745,12 @@ private final class TransferSide {
             : nil
 
         defaultsSuite = suite
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        self.defaults = defaults
+        // The service and the test share one defaults object. A second object
+        // for the same suite can briefly return a value the first has already
+        // removed, which made an assertion after an import fail now and then.
+        let sharedDefaults = SharedTestDefaults(defaults)
         self.configDirectory = configDirectory
         self.configuration = configuration
         self.marketData = marketData
@@ -756,14 +761,9 @@ private final class TransferSide {
         self.recoveryRoot = recoveryRoot
         self.store = store
         var dependencies = SettingsTransferDependencies(
-            // No fallback to the standard domain: a test that reached it
-            // would rewrite the real settings of whoever runs the tests.
-            defaults: {
-                guard let isolated = UserDefaults(suiteName: suite) else {
-                    preconditionFailure("The test defaults suite could not be opened")
-                }
-                return isolated
-            },
+            // Never the standard domain: a test that reached it would rewrite
+            // the real settings of whoever runs the tests.
+            defaults: { sharedDefaults.value },
             configuration: configuration,
             trading212Credentials: trading212,
             folyncCredentials: folync,
@@ -786,6 +786,13 @@ private final class TransferSide {
         try? folync.delete()
         try? marketData.deleteAll()
     }
+}
+
+/// Lets a `@Sendable` closure hand out one `UserDefaults` object, which is
+/// safe to use from any thread but is not marked `Sendable`.
+private struct SharedTestDefaults: @unchecked Sendable {
+    let value: UserDefaults
+    init(_ value: UserDefaults) { self.value = value }
 }
 
 /// A SQLite store opened the way `CoreDataStack` opens the real one, using
