@@ -380,7 +380,15 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.4.0 (current): Folync status for VoiceOver
+### 🆕 Version 3.5.0 (current): Audit fixes
+- **Figures**: Attribution, risk, correlation and per-stock metrics are corrected. Sharpe and Sortino use one 4% risk-free rate, so risk figures change.
+- **Refresh**: One slow symbol no longer discards a whole batch, failed refreshes are shown, and Stockbar refreshes on wake.
+- **Storage**: The database no longer grows without limit. Old history is thinned weekly after a safety copy.
+- **Security**: The FMP and Twelve Data API keys move to the Keychain. macOS may ask for access once.
+- **Interface**: Quit from the popover no longer hangs. Chart zoom, alerts, backups and confirmations are improved.
+- See [Changelogs/release_notes_v3.5.0.md](./Changelogs/release_notes_v3.5.0.md).
+
+### Version 3.4.0: Folync status for VoiceOver
 - **Accessibility**: VoiceOver reads the Folync connection status in Settings → Connections and speaks the result of Test Connection, Preview, Activate, Disable and Refresh Now. Background checks announce a problem once, not every minute.
 - **Refresh Now** for Folync shows progress while it runs.
 - See [Changelogs/release_notes_v3.4.0.md](./Changelogs/release_notes_v3.4.0.md).
@@ -491,6 +499,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 6, 2026 · Version 3.4.0</sub>
+<sub>Last updated: November 11, 2026 · Version 3.5.0</sub>
 
 </div>
