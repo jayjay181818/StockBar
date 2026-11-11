@@ -371,9 +371,11 @@ final class ChartAuditFixTests: XCTestCase {
     // MARK: Remembered choices
 
     private func scratchDefaults() throws -> UserDefaults {
-        let name = "ChartAuditFixTests.\(UUID().uuidString)"
+        // Stored under the test defaults folder, not ~/Library/Preferences,
+        // where each run used to leave a file behind.
+        let name = TestDefaultsSuite.makeName("ChartAuditFixTests.")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
+        addTeardownBlock { TestDefaultsSuite.remove(name) }
         return defaults
     }
 
