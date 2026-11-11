@@ -109,8 +109,8 @@ extension HistoricalDataManager {
         let maxValue = values.max() ?? lastPoint.value
         let minValue = values.min() ?? lastPoint.value
 
-        // Sharpe ratio, assuming a 2% annual risk-free rate.
-        let riskFreeRate = 0.02 / 252
+        // Sharpe ratio, with the same risk-free rate as the Risk page.
+        let riskFreeRate = RiskMetricsService.annualRiskFreeRate / 252
         let meanExcessReturn = meanReturn - riskFreeRate
         // Annualised, as on the Risk page and as the colour thresholds for this figure assume.
         let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil

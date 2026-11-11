@@ -208,7 +208,11 @@ final class OHLCFetchService: Sendable {
             return []
         }
 
-        return snapshots.map { snapshot in
+        // A candle with a missing or non-positive price would poison every
+        // moving average and band drawn from it.
+        return snapshots.filter { snapshot in
+            [snapshot.open, snapshot.high, snapshot.low, snapshot.close].allSatisfy { $0.isFinite && $0 > 0 }
+        }.map { snapshot in
             OHLCDataPoint(
                 timestamp: snapshot.timestamp,
                 open: snapshot.open,
