@@ -298,6 +298,7 @@ final class SettingsTransferTests: XCTestCase {
         let previous = Trading212AuthConfiguration(apiKey: "old-key", apiSecret: "old-secret")
         try target.trading212.save(previous, environment: .live)
         try storeFolync(token: "old-folync", address: Self.oldFolyncAddress, on: target)
+        try target.configuration.setAPIKey("old-fmp", for: .fmp)
         // An unreadable API key file makes the import fail after defaults and
         // Keychain items were already written.
         let configURL = target.configDirectory.appendingPathComponent(".stockbar_config.json")
@@ -317,6 +318,54 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertFalse(target.trading212.hasCredentials(environment: .demo))
         XCTAssertEqual(try target.folync.load(for: Self.oldFolyncAddress), "old-folync", "The token goes back to its own server")
         XCTAssertEqual(try Data(contentsOf: configURL), unreadable)
+        XCTAssertEqual(try target.marketData.load(.fmp), "old-fmp", "The imported key was already in the Keychain and is taken out again")
+        XCTAssertNil(try target.marketData.load(.twelveData))
+    }
+
+    // MARK: - Market-data keys
+
+    func testKeysLeftInTheConfigurationFileMoveToTheKeychain() throws {
+        let side = try makeSide("legacy")
+        let configURL = side.configDirectory.appendingPathComponent(".stockbar_config.json")
+        let legacy: [String: Any] = [
+            "FMP_API_KEY": " file-fmp-key ",
+            "TWELVE_DATA_API_KEY": "your_twelve_data_api_key_here",
+            "DATA_SOURCE_PRIORITY": ["twelvedata", "yfinance"]
+        ]
+        try write(try JSONSerialization.data(withJSONObject: legacy), to: configURL)
+        try side.marketData.save("stale-keychain-key", for: .fmp)
+
+        XCTAssertEqual(side.configuration.getFMPAPIKey(), "file-fmp-key", "The file's key wins: only an earlier version can have written it")
+        XCTAssertNil(side.configuration.getTwelveDataAPIKey(), "The sample value is not a key")
+        XCTAssertEqual(try side.marketData.load(.fmp), "file-fmp-key")
+        XCTAssertNil(try side.marketData.load(.twelveData))
+
+        let remaining = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any])
+        XCTAssertNil(remaining["FMP_API_KEY"])
+        XCTAssertNil(remaining["TWELVE_DATA_API_KEY"])
+        XCTAssertEqual(remaining["DATA_SOURCE_PRIORITY"] as? [String], ["twelvedata", "yfinance"])
+        XCTAssertEqual(side.configuration.scriptEnvironmentKeys(), ["FMP_API_KEY": "file-fmp-key"])
+    }
+
+    func testSavedKeysGoToTheKeychainAndTheScriptEnvironmentNotTheFile() throws {
+        let side = try makeSide("keys")
+        let configURL = side.configDirectory.appendingPathComponent(".stockbar_config.json")
+        try side.configuration.applyImportedValues(
+            fmpAPIKey: "fmp-key", twelveDataAPIKey: "td-key", dataSourcePriority: ["fmp", "yfinance"]
+        )
+
+        let file = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertFalse(file.contains("fmp-key"))
+        XCTAssertFalse(file.contains("td-key"))
+        XCTAssertEqual(try side.marketData.load(.twelveData), "td-key")
+        XCTAssertEqual(
+            side.configuration.scriptEnvironmentKeys(),
+            ["FMP_API_KEY": "fmp-key", "TWELVE_DATA_API_KEY": "td-key"]
+        )
+
+        try side.configuration.removeAPIKey(.fmp)
+        XCTAssertNil(side.configuration.getFMPAPIKey())
+        XCTAssertEqual(side.configuration.scriptEnvironmentKeys(), ["TWELVE_DATA_API_KEY": "td-key"])
     }
 
     func testFailurePartwayThroughEverythingImportRestoresStoreAndSettings() async throws {
@@ -646,6 +695,7 @@ private final class TransferSide {
     let defaults: UserDefaults
     let configDirectory: URL
     let configuration: ConfigurationManager
+    let marketData: MarketDataKeyStore
     let trading212: Trading212CredentialStore
     let folync: FolyncCredentialStore
     let brokerLinksURL: URL
@@ -658,7 +708,8 @@ private final class TransferSide {
         let id = UUID().uuidString
         let suite = TestDefaultsSuite.makeName("StockbarSettingsTransferTests-")
         let configDirectory = root.appendingPathComponent("com.stockbar", isDirectory: true)
-        let configuration = ConfigurationManager(directory: configDirectory)
+        let marketData = MarketDataKeyStore(service: "com.stockbar.tests.settings-transfer.marketdata.\(id)")
+        let configuration = ConfigurationManager(directory: configDirectory, keyStore: marketData)
         let trading212 = Trading212CredentialStore(service: "com.stockbar.tests.settings-transfer.trading212.\(id)")
         let folync = FolyncCredentialStore(service: "com.stockbar.tests.settings-transfer.folync.\(id)")
         let links = brokerLinksURL ?? root.appendingPathComponent("Stockbar/BrokerLinks/broker_links.json")
@@ -672,6 +723,7 @@ private final class TransferSide {
         defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         self.configDirectory = configDirectory
         self.configuration = configuration
+        self.marketData = marketData
         self.trading212 = trading212
         self.folync = folync
         self.brokerLinksURL = links
@@ -705,6 +757,7 @@ private final class TransferSide {
             try? trading212.delete(environment: environment)
         }
         try? folync.delete()
+        try? marketData.deleteAll()
     }
 }
 

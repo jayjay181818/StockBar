@@ -41,8 +41,11 @@ struct PythonConfiguration: Sendable {
         self.environment = environment
     }
     
-    /// Loads configuration from UserDefaults or environment, falling back to defaults
-    static func load() -> PythonConfiguration {
+    /// Loads configuration from UserDefaults or environment, falling back to defaults.
+    /// `includingAPIKeys` adds the stored FMP and Twelve Data keys, which the
+    /// script reads from its environment. That reads the Keychain, so pass it
+    /// only off the main actor and only when a script will run.
+    static func load(includingAPIKeys: Bool = false) -> PythonConfiguration {
         let defaults = StockbarRuntimeStorage.userDefaults
         let path = resolveInterpreterPath(
             configured: defaults.string(forKey: "pythonInterpreterPath"),
@@ -60,6 +63,9 @@ struct PythonConfiguration: Sendable {
             defaults.object(forKey: "refreshInterval") as? TimeInterval
         )
         environment["STOCKBAR_QUOTE_CACHE_SECONDS"] = String(Int(quoteCacheSeconds(forRefreshInterval: refreshInterval)))
+        if includingAPIKeys {
+            environment.merge(ConfigurationManager.shared.scriptEnvironmentKeys()) { _, stored in stored }
+        }
         
         return PythonConfiguration(interpreterPath: path, environment: environment)
     }
