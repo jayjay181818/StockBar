@@ -117,7 +117,7 @@ struct StockbarMainView: View {
     }
 
     private var portfolioSourceTitle: String {
-        switch dataModel.calculateDisplayPortfolioSummary().valuationSource {
+        switch dataModel.displayValuationSource {
         case .folyncProvided: "Folync portfolio"
         case .brokerProvided: "Trading 212"
         case .localCalculationFallback, .marketDataFallback: "Local portfolio"
@@ -265,6 +265,9 @@ private struct StockbarHoldingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchText = ""
     @State private var isEditing = false
+    /// The row "Add Holding" just made, so the table can scroll to it and put
+    /// the cursor in its symbol field instead of leaving it off screen.
+    @State private var newlyAddedHoldingID: UUID?
     @State private var selectedHoldingID: UUID?
     @State private var sortOrder: [KeyPathComparator<RealTimeTrade>] = []
     @State private var dayProfitLossDisplayMode: ProfitLossDisplayMode = .amount
@@ -276,10 +279,17 @@ private struct StockbarHoldingsView: View {
         let symbol: String
     }
 
+    /// Search by ticker or by company name.
+    private static func matches(_ trade: RealTimeTrade, search: String) -> Bool {
+        if trade.trade.name.localizedCaseInsensitiveContains(search) { return true }
+        if let label = trade.displayLabel, label.localizedCaseInsensitiveContains(search) { return true }
+        return trade.realTimeInfo.shortName.localizedCaseInsensitiveContains(search)
+    }
+
     private var visibleIndices: [Int] {
         dataModel.realTimeTrades.indices.filter {
             !SymbolMetadata.isBenchmarkSymbol(dataModel.realTimeTrades[$0].trade.name)
-                && (searchText.isEmpty || dataModel.realTimeTrades[$0].trade.name.localizedCaseInsensitiveContains(searchText))
+                && (searchText.isEmpty || Self.matches(dataModel.realTimeTrades[$0], search: searchText))
         }
     }
 
@@ -412,8 +422,10 @@ private struct StockbarHoldingsView: View {
     private func addHolding() {
         searchText = ""
         setEditing(true)
-        dataModel.realTimeTrades.append(emptyRealTimeTrade())
+        let added = emptyRealTimeTrade()
+        dataModel.realTimeTrades.append(added)
         dataModel.persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
+        newlyAddedHoldingID = added.id
     }
 
     private var compactTable: some View {
@@ -508,14 +520,20 @@ private struct StockbarHoldingsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HoldingsHeaderRow()
                     Divider()
+                    ScrollViewReader { scroller in
                     ScrollView(.vertical) {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(indices, id: \.self) { index in
-                                let realTimeTrade = trades[index]
+                            // Keyed by the holding, not its position: keyed by
+                            // index, deleting or moving a row handed its focus
+                            // and half-typed text to whichever row took its place.
+                            ForEach(indices.map { HoldingsRowEntry(index: $0, trade: trades[$0]) }) { entry in
+                                let index = entry.index
+                                let realTimeTrade = entry.trade
                                 HoldingsEditableRow(
                                     realTimeTrade: realTimeTrade,
                                     dataModel: dataModel,
                                     rowIndex: index,
+                                    focusSymbolOnAppear: entry.id == newlyAddedHoldingID,
                                     canMoveUp: HoldingsEditing.moveDestination(from: index, by: -1, visibleIndices: indices) != nil,
                                     canMoveDown: HoldingsEditing.moveDestination(from: index, by: 1, visibleIndices: indices) != nil,
                                     onDelete: { requestRemoval(of: realTimeTrade) },
@@ -527,8 +545,16 @@ private struct StockbarHoldingsView: View {
                                     : StockbarPalette.cardFill
                                 )
                                 .transition(.opacity)
+                                .id(entry.id)
                             }
                         }
+                    }
+                    .onChange(of: newlyAddedHoldingID) { _, added in
+                        guard let added else { return }
+                        withAnimation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion)) {
+                            scroller.scrollTo(added, anchor: .bottom)
+                        }
+                    }
                     }
                     .frame(maxHeight: .infinity)
                 }
@@ -616,6 +642,8 @@ private struct HoldingsEditableRow: View {
     @Bindable var realTimeTrade: RealTimeTrade
     let dataModel: DataModel
     let rowIndex: Int
+    /// True for the row just added, which takes the cursor when it appears.
+    var focusSymbolOnAppear = false
     let canMoveUp: Bool
     let canMoveDown: Bool
     let onDelete: () -> Void
@@ -673,17 +701,14 @@ private struct HoldingsEditableRow: View {
                 TextField("Symbol", text: $realTimeTrade.trade.name)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: HoldingsTableLayout.symbolWidth)
-                    .foregroundStyle(isSymbolAcceptable && !isDuplicateSymbol ? Color.primary : Color.red)
-                    .overlay(alignment: .trailing) {
-                        if isDuplicateSymbol {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .padding(.trailing, 6)
-                                .accessibilityLabel("Duplicate symbol")
-                        }
-                    }
-                    .help(symbolHelp)
+                    .holdingsFieldProblem(
+                        isSymbolAcceptable && !isDuplicateSymbol ? nil : symbolHelp,
+                        help: symbolHelp
+                    )
                     .focused($symbolFieldFocused)
+                    .onAppear {
+                        if focusSymbolOnAppear { symbolFieldFocused = true }
+                    }
                     .onSubmit { commitSymbolChange() }
                     .onChange(of: symbolFieldFocused) { _, focused in
                         if focused {
@@ -718,17 +743,21 @@ private struct HoldingsEditableRow: View {
             TextField("Units", text: $realTimeTrade.trade.position.unitSizeString)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: HoldingsTableLayout.unitsWidth)
-                .foregroundStyle(Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString) ? Color.primary : Color.red)
-                .help(Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString)
-                      ? "Units held" : "Not a number Stockbar can read; it counts as 0 units")
+                .holdingsFieldProblem(
+                    Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString)
+                        ? nil : "Not a number Stockbar can read; it counts as 0 units",
+                    help: "Units held"
+                )
                 .onChange(of: realTimeTrade.trade.position.unitSizeString) { _, _ in dataModel.triggerTradeUpdate() }
 
             TextField("Avg Cost", text: $realTimeTrade.trade.position.positionAvgCostString)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: HoldingsTableLayout.averageCostWidth)
-                .foregroundStyle(Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString) ? Color.primary : Color.red)
-                .help(Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString)
-                      ? "Average cost per unit" : "Not a number Stockbar can read; cost and P&L are left blank")
+                .holdingsFieldProblem(
+                    Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString)
+                        ? nil : "Not a number Stockbar can read; cost and P&L are left blank",
+                    help: "Average cost per unit"
+                )
                 .onChange(of: realTimeTrade.trade.position.positionAvgCostString) { _, _ in dataModel.triggerTradeUpdate() }
 
             Picker("Currency for \(realTimeTrade.trade.name)", selection: currencyBinding) {
@@ -881,8 +910,8 @@ private struct ProfitLossCell: View {
     }
 
     private var foregroundStyle: Color {
-        guard amount.isFinite, amount != 0 else { return .secondary }
-        return amount > 0 ? .green : .red
+        // Coloured by what is shown, so "£0.00" is never red or green.
+        StockbarPalette.signed(HoldingsCurrencyFormatter.displayedSign(of: amount, currency: summary.currency))
     }
 
     private var helpText: String {
@@ -993,12 +1022,9 @@ private struct StockbarBackupsView: View {
     private func backUpNow() {
         isBackingUp = true
         Task {
-            let success = await BackupService.shared.performManualBackup(trades: dataModel.localPortfolioTradesForBackup)
+            let outcome = await BackupService.shared.performManualBackupReportingOutcome(trades: dataModel.localPortfolioTradesForBackup)
             isBackingUp = false
-            status = BackupStatusMessage(
-                text: success ? "Backup completed." : "Backup failed. See Diagnostics for details.",
-                succeeded: success
-            )
+            status = BackupStatusMessage(text: outcome.userMessage, succeeded: outcome != .failed)
             reloadBackupState()
         }
     }
@@ -1044,7 +1070,7 @@ private struct StockbarDataHealthView: View {
                     StockbarMetricTile(
                         title: "Portfolio Source",
                         value: sourceTitle,
-                        detail: dataModel.isFolyncPortfolioActive ? dataModel.folyncConnectionState.message : "Holdings entered in Stockbar",
+                        detail: sourceDetail,
                         systemImage: dataModel.isFolyncPortfolioActive ? "link" : "internaldrive"
                     )
                     StockbarMetricTile(
@@ -1105,6 +1131,7 @@ private struct StockbarDataHealthView: View {
     }
 
     private func pricesDetail(now: Date) -> String {
+        guard !pricedTrades.isEmpty else { return "Add a holding to start tracking prices" }
         let base = "Oldest of \(pricedTrades.count) · refreshes every \(refreshIntervalText)"
         let status = dataModel.quoteRefreshStatus
         if let problem = status.problemSummary, let tried = status.lastAttempt {
@@ -1117,6 +1144,8 @@ private struct StockbarDataHealthView: View {
 
     /// Stale once more than two refresh intervals have passed without new prices for any position.
     private func pricesAreStale(now: Date) -> Bool {
+        // Nothing to price is not a problem: an empty portfolio is not "stale".
+        guard !pricedTrades.isEmpty else { return false }
         let freshness = priceFreshness
         guard freshness.missingCount == 0, let lastPriceUpdate else { return true }
         // Shut exchanges are polled slowly, so their quotes are allowed to be older.
@@ -1132,8 +1161,17 @@ private struct StockbarDataHealthView: View {
         return minutes >= 60 ? "\(minutes / 60) hr" : "\(max(minutes, 1)) min"
     }
 
+    private var sourceDetail: String {
+        if dataModel.isFolyncPortfolioActive { return dataModel.folyncConnectionState.message }
+        switch dataModel.displayValuationSource {
+        case .folyncProvided: return dataModel.folyncConnectionState.message
+        case .brokerProvided: return "Holdings and values synced from Trading 212"
+        case .localCalculationFallback, .marketDataFallback: return "Holdings entered in Stockbar"
+        }
+    }
+
     private var sourceTitle: String {
-        switch dataModel.calculateDisplayPortfolioSummary().valuationSource {
+        switch dataModel.displayValuationSource {
         case .folyncProvided: "Folync"
         case .brokerProvided: "Trading 212"
         case .localCalculationFallback, .marketDataFallback: "Local"
@@ -1157,5 +1195,32 @@ private struct StockbarDiagnosticsView: View {
         }
         .padding(StockbarLayout.pageInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// One editable holdings row: the holding and where it sits in the full list.
+private struct HoldingsRowEntry: Identifiable {
+    let index: Int
+    let trade: RealTimeTrade
+    var id: UUID { trade.id }
+}
+
+private extension View {
+    /// Marks a holdings field whose contents cannot be used. Red text alone is
+    /// invisible to anyone who cannot tell red from black and to VoiceOver, so
+    /// the field also gets a warning symbol and reads the problem aloud.
+    func holdingsFieldProblem(_ problem: String?, help: String) -> some View {
+        self
+            .foregroundStyle(problem == nil ? Color.primary : Color.red)
+            .overlay(alignment: .trailing) {
+                if problem != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .padding(.trailing, 6)
+                        .accessibilityHidden(true)
+                }
+            }
+            .help(problem ?? help)
+            .accessibilityHint(problem ?? "")
     }
 }

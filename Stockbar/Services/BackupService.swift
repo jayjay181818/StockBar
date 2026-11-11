@@ -74,27 +74,34 @@ class BackupService {
             return true
         }
 
-        return await performBackup(trades: trades, automatic: true)
+        return await performBackup(trades: trades, automatic: true) != .failed
     }
 
     /// Performs manual backup
     func performManualBackup(trades: [RealTimeTrade]) async -> Bool {
+        return await performBackup(trades: trades, automatic: false) == .saved
+    }
+
+    /// Manual backup that tells an empty portfolio apart from a failed write,
+    /// so the app does not report "failed" when there was nothing to save.
+    func performManualBackupReportingOutcome(trades: [RealTimeTrade]) async -> BackupOutcome {
         return await performBackup(trades: trades, automatic: false)
     }
 
     /// Safety backup taken just before a restore. Its retention cleanup never
     /// deletes `keeping`, the backup about to be restored.
+    /// True when the current portfolio is safe: copied, or with nothing in it to copy.
     func performPreRestoreBackup(trades: [RealTimeTrade], keeping restoreURL: URL) async -> Bool {
-        return await performBackup(trades: trades, automatic: false, keeping: restoreURL)
+        return await performBackup(trades: trades, automatic: false, keeping: restoreURL) != .failed
     }
 
     /// Backup taken before a settings import replaces the portfolio database.
     func performPreImportBackup(trades: [RealTimeTrade]) async -> Bool {
-        return await performBackup(trades: trades, automatic: false)
+        return await performBackup(trades: trades, automatic: false) != .failed
     }
 
     /// Core backup implementation
-    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> Bool {
+    private func performBackup(trades: [RealTimeTrade], automatic: Bool, keeping keptURL: URL? = nil) async -> BackupOutcome {
         do {
             let backupDir = try getBackupDirectory()
 
@@ -128,9 +135,9 @@ class BackupService {
                 if nonEmptyTrades.isEmpty {
                     await logger.debug("Backup skipped because no portfolio rows were present")
                 } else {
-                    await logger.warning("Backup skipped because only internal benchmark rows were present")
+                    await logger.debug("Backup skipped because only internal benchmark rows were present")
                 }
-                return false
+                return .nothingToBackUp
             }
 
             // Encode to JSON
@@ -150,10 +157,10 @@ class BackupService {
             try await cleanupOldBackups(keeping: keptURL)
 
             await logger.info("Backup successful: \(filename)")
-            return true
+            return .saved
         } catch {
             await logger.error("Backup failed: \(error.localizedDescription)")
-            return false
+            return .failed
         }
     }
 
@@ -310,5 +317,22 @@ struct BackupInfo: Identifiable {
 
     var formattedSize: String {
         ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+}
+
+/// What a backup attempt did.
+enum BackupOutcome: Equatable, Sendable {
+    case saved
+    /// No holdings to save: not an error, and no file was written.
+    case nothingToBackUp
+    case failed
+
+    /// The line shown to the user after "Back Up Now".
+    var userMessage: String {
+        switch self {
+        case .saved: return "Backup completed."
+        case .nothingToBackUp: return "Nothing to back up yet. Add a holding first."
+        case .failed: return "Backup failed. See Diagnostics for details."
+        }
     }
 }

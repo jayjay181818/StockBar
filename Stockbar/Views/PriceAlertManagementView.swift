@@ -28,6 +28,30 @@ struct PriceAlertManagementView: View {
                 .help(alertableSymbols.isEmpty ? "Add a holding first" : "Create a price alert")
             }
 
+            if alertService.notificationsDenied {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "bell.slash.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Notifications are turned off for Stockbar")
+                            .font(.headline)
+                        Text("Alerts are still checked, but macOS will not show them. Allow notifications to be told when one is met.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Open Notification Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+                .stockbarCard()
+                .accessibilityElement(children: .contain)
+            }
+
             if alertService.alerts.isEmpty {
                 ContentUnavailableView {
                     Label("No alerts yet", systemImage: "bell.badge")
@@ -64,6 +88,11 @@ struct PriceAlertManagementView: View {
                 .foregroundStyle(.secondary)
         }
         .stockbarPage()
+        .task { await alertService.refreshNotificationPermission() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // The user may have just changed the setting.
+            Task { await alertService.refreshNotificationPermission() }
+        }
         .sheet(isPresented: $showingAddAlert) {
             AddPriceAlertView(
                 dataModel: dataModel,
@@ -85,10 +114,12 @@ struct PriceAlertRow: View {
     private let alertService = PriceAlertService.shared
     @State private var isHovered = false
     @State private var confirmingDelete = false
+    @State private var isEditing = false
 
     private var currency: String {
         if let symbol = alert.symbol {
-            return dataModel.realTimeTrades.first(where: { $0.trade.name == symbol })?.realTimeInfo.currency ?? "USD"
+            // A symbol no longer held has no known currency: show the bare number.
+            return dataModel.realTimeTrades.first(where: { $0.trade.name == symbol })?.realTimeInfo.currency ?? ""
         } else {
             // Portfolio milestone - use preferred currency
             return dataModel.preferredCurrency
@@ -144,7 +175,7 @@ struct PriceAlertRow: View {
                         .foregroundStyle(.secondary)
                 }
                 if let lastTriggered = alert.lastTriggered {
-                    Text("Triggered \(lastTriggered.formatted(.relative(presentation: .named)))")
+                    Text("\(PriceAlertService.shared.notificationsDenied ? "Condition met" : "Triggered") \(lastTriggered.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -159,6 +190,17 @@ struct PriceAlertRow: View {
                 }
                 .help(alert.isEnabled ? "Pause alert" : "Resume alert")
                 .accessibilityLabel(alert.isEnabled ? "Pause alert for \(alert.symbol ?? "portfolio")" : "Resume alert for \(alert.symbol ?? "portfolio")")
+
+                if alert.symbol != nil {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Image(systemName: "pencil.circle")
+                            .font(.title3)
+                    }
+                    .help("Edit alert")
+                    .accessibilityLabel("Edit alert for \(alert.symbol ?? "portfolio")")
+                }
 
                 Button(role: .destructive) {
                     confirmingDelete = true
@@ -181,7 +223,13 @@ struct PriceAlertRow: View {
         }
         .contextMenu {
             Button(alert.isEnabled ? "Pause Alert" : "Resume Alert") { alertService.toggleAlert(id: alert.id) }
+            if alert.symbol != nil {
+                Button("Edit Alert…") { isEditing = true }
+            }
             Button("Delete Alert", role: .destructive) { confirmingDelete = true }
+        }
+        .sheet(isPresented: $isEditing) {
+            AddPriceAlertView(dataModel: dataModel, isPresented: $isEditing, editing: alert)
         }
         .confirmationDialog(
             "Delete the alert for \(alert.symbol ?? "portfolio")?",
@@ -198,6 +246,9 @@ struct PriceAlertRow: View {
 struct AddPriceAlertView: View {
     let dataModel: DataModel
     @Binding var isPresented: Bool
+    /// The alert being changed, or nil when adding a new one. Editing keeps
+    /// the symbol: an alert for another symbol is a different alert.
+    var editing: PriceAlert?
     private let alertService = PriceAlertService.shared
 
     @State private var selectedSymbol: String = ""
@@ -225,12 +276,16 @@ struct AddPriceAlertView: View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    Picker("Symbol", selection: $selectedSymbol) {
-                        if selectedSymbol.isEmpty {
-                            Text("Select…").tag("")
-                        }
-                        ForEach(availableSymbols, id: \.self) { symbol in
-                            Text(symbol).tag(symbol)
+                    if let editing {
+                        LabeledContent("Symbol", value: editing.symbol ?? "")
+                    } else {
+                        Picker("Symbol", selection: $selectedSymbol) {
+                            if selectedSymbol.isEmpty {
+                                Text("Select…").tag("")
+                            }
+                            ForEach(availableSymbols, id: \.self) { symbol in
+                                Text(symbol).tag(symbol)
+                            }
                         }
                     }
                     if let currentPriceText {
@@ -254,7 +309,7 @@ struct AddPriceAlertView: View {
                         }
                     }
                 } header: {
-                    Text("New Price Alert")
+                    Text(editing == nil ? "New Price Alert" : "Edit Price Alert")
                 } footer: {
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
@@ -276,7 +331,7 @@ struct AddPriceAlertView: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Add Alert") {
+                Button(editing == nil ? "Add Alert" : "Save") {
                     addAlert()
                 }
                 .buttonStyle(.borderedProminent)
@@ -287,7 +342,14 @@ struct AddPriceAlertView: View {
         }
         .frame(width: 420)
         .onAppear {
-            if !availableSymbols.isEmpty && selectedSymbol.isEmpty {
+            if let editing {
+                selectedSymbol = editing.symbol ?? ""
+                selectedCondition = editing.condition
+                thresholdValue = abs(editing.threshold)
+                    .formatted(.number.precision(.fractionLength(0...6)).grouping(.never))
+                // Filling the fields in is not the user changing them.
+                errorMessage = nil
+            } else if !availableSymbols.isEmpty && selectedSymbol.isEmpty {
                 selectedSymbol = availableSymbols[0]
             }
         }
@@ -303,7 +365,7 @@ struct AddPriceAlertView: View {
     }
 
     private var thresholdUnit: String {
-        let currency = dataModel.realTimeTrades.first(where: { $0.trade.name == selectedSymbol })?.realTimeInfo.currency ?? "USD"
+        let currency = dataModel.realTimeTrades.first(where: { $0.trade.name == selectedSymbol })?.realTimeInfo.currency ?? ""
         switch selectedCondition {
         case .above, .below:
             return currency
@@ -326,7 +388,8 @@ struct AddPriceAlertView: View {
         }
 
         if alertService.alerts.contains(where: {
-            $0.symbol == selectedSymbol && $0.condition == selectedCondition && abs($0.threshold - threshold) < 1e-9
+            $0.id != editing?.id
+                && $0.symbol == selectedSymbol && $0.condition == selectedCondition && abs($0.threshold - threshold) < 1e-9
         }) {
             errorMessage = "An identical alert already exists for \(selectedSymbol)."
             return
@@ -338,12 +401,18 @@ struct AddPriceAlertView: View {
             .realTimeInfo.getCurrentDisplayPrice()
         if let currentPrice, currentPrice.isFinite, currentPrice > 0 {
             if selectedCondition == .above && currentPrice >= threshold {
-                errorMessage = "The price is already above this level, so the alert only fires after it dips and rises through it again. Press Add again to create it anyway."
+                errorMessage = "The price is already above this level, so the alert only fires after it dips and rises through it again. Press \(editing == nil ? "Add" : "Save") again to keep it anyway."
                 guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
             } else if selectedCondition == .below && currentPrice <= threshold {
-                errorMessage = "The price is already below this level, so the alert only fires after it recovers and falls through it again. Press Add again to create it anyway."
+                errorMessage = "The price is already below this level, so the alert only fires after it recovers and falls through it again. Press \(editing == nil ? "Add" : "Save") again to keep it anyway."
                 guard confirmedAlreadyMet else { confirmedAlreadyMet = true; return }
             }
+        }
+
+        if let editing {
+            alertService.updateAlert(id: editing.id, condition: selectedCondition, threshold: threshold)
+            isPresented = false
+            return
         }
 
         let alert = PriceAlert(

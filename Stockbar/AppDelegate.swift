@@ -88,9 +88,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let success = await BackupService.shared.performAutomaticBackupIfNeeded(trades: dataModel.localPortfolioTradesForBackup)
         if success {
-            await Logger.shared.info("Automatic backup completed successfully")
+            await Logger.shared.debug("Automatic backup is up to date")
         } else {
-            await Logger.shared.debug("Automatic backup skipped (already done today or failed)")
+            await Logger.shared.warning("Automatic backup failed")
         }
     }
     
@@ -102,10 +102,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await dataModel.flushPendingPersistence()
             reply.send()
         }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            reply.send()
+        // The time limit is a run-loop timer, not a sleeping task. After
+        // `.terminateLater` AppKit spins the run loop in the modal-panel mode,
+        // and the limit must fire there even if the flush never returns, or
+        // Quit would hang for good.
+        let fallback = Timer(timeInterval: 5, repeats: false) { _ in
+            MainActor.assumeIsolated { reply.send() }
         }
+        RunLoop.main.add(fallback, forMode: .common)
+        RunLoop.main.add(fallback, forMode: .modalPanel)
         return .terminateLater
     }
 

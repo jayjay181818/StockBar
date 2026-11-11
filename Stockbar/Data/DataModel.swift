@@ -1101,7 +1101,7 @@ class DataModel {
                 deletedCount: 0,
                 missingCount: linkedPositionsForAccount.count,
                 brokerOnlyCount: 0,
-                skippedReason: "Trading 212 returned no positions for an account with linked holdings. StockBar did not delete anything; run Preview Import to review."
+                skippedReason: "Trading 212 returned no positions for an account with linked holdings. Stockbar did not delete anything; run Preview Import to review."
             )
             await logger.warning("Trading 212 holding reconciliation (\(reason)): \(result.userMessage)")
             return result
@@ -1469,6 +1469,17 @@ class DataModel {
     }
 
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
+    /// Where the displayed totals come from, decided the same way as
+    /// `calculateDisplayPortfolioSummary` but without valuing every holding.
+    /// For labels that only need the source name.
+    var displayValuationSource: PortfolioValuationSource {
+        if let total = folyncPortfolioSnapshot?.totalValue.value, total.isFinite {
+            return .folyncProvided
+        }
+        guard portfolioCalculationService != nil else { return .localCalculationFallback }
+        return freshTrading212BrokerValuationSnapshot() != nil ? .brokerProvided : .localCalculationFallback
+    }
+
     func calculateDisplayPortfolioSummary(preferredCurrency overrideCurrency: String? = nil) -> DisplayPortfolioSummary {
         if let snapshot = folyncPortfolioSnapshot,
            let totalValue = snapshot.totalValue.value,
