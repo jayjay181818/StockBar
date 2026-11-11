@@ -239,10 +239,6 @@ public actor Logger {
         return logFileURL
     }
 
-    private func getLogDirectoryURL() -> URL? {
-        Self.resolveLogDirectoryURL(fileManager: fileManager)
-    }
-
     private static func resolveLogDirectoryURL(fileManager: FileManager) -> URL? {
         if let acceptanceRoot = StockbarRuntimeStorage.acceptance.root {
             return createLogDirectory(
@@ -643,25 +639,6 @@ public actor Logger {
             let message = "\(timestamp) ℹ️ [INFO] [Logger.swift] clearAllLogs: All log files cleared by user\n"
             try? message.write(to: newLogURL, atomically: true, encoding: .utf8)
         }
-    }
-
-    /// Gets total size of all log files in MB
-    public nonisolated func getTotalLogSize() -> Double {
-        guard let baseURL = Self.resolveLogDirectoryURL(fileManager: .default) else { return 0 }
-
-        let logFiles = Self.logFileNames
-        var totalSize: Int64 = 0
-
-        for logFile in logFiles {
-            let fileURL = baseURL.appendingPathComponent(logFile)
-            if FileManager.default.fileExists(atPath: fileURL.path),
-               let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-               let fileSize = attributes[.size] as? Int64 {
-                totalSize += fileSize
-            }
-        }
-
-        return Double(totalSize) / 1_000_000.0 // Convert to MB
     }
 }
 

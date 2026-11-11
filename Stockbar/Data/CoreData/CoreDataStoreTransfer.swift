@@ -138,12 +138,6 @@ enum CoreDataStoreTransfer {
             throw SettingsTransferError.damagedDatabase
         }
     }
-
-    static func removeStoreFiles(at storeURL: URL) {
-        for suffix in fileSuffixes {
-            try? FileManager.default.removeItem(atPath: storeURL.path + suffix)
-        }
-    }
 }
 
 extension CoreDataStoreRecovery {

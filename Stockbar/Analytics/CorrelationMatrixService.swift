@@ -316,24 +316,6 @@ actor CorrelationMatrixService {
         return returns
     }
 
-    /// Extract return series from historical data
-    func extractReturnSeries(
-        from snapshots: [String: [PriceSnapshot]]
-    ) async -> [String: [Double]] {
-        var returnSeries: [String: [Double]] = [:]
-
-        for (symbol, prices) in snapshots {
-            let priceValues = prices.sorted { $0.timestamp < $1.timestamp }.map { $0.price }
-            let returns = calculateReturns(prices: priceValues)
-
-            if !returns.isEmpty {
-                returnSeries[symbol] = returns
-            }
-        }
-
-        return returnSeries
-    }
-
     /// Builds date-aligned daily return series. Each symbol contributes its
     /// last valid price per calendar day; only days present for every symbol
     /// are used, so return `i` covers the same interval for all series.

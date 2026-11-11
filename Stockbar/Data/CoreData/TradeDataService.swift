@@ -117,16 +117,6 @@ final class TradeDataService: @unchecked Sendable {
         }
     }
     
-    /// Loads trading info for a symbol
-    func loadTradingInfo(forSymbol symbol: String) async throws -> TradingInfo? {
-        return try await CoreDataStack.shared.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<TradingInfoEntity> = TradingInfoEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "symbol == %@", symbol)
-            
-            let tradingInfos = try context.fetch(fetchRequest)
-            return tradingInfos.first?.toTradingInfo()
-        }
-    }
     
     /// Loads all trading info as a dictionary
     func loadAllTradingInfo() async throws -> [String: TradingInfo] {

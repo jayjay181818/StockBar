@@ -315,9 +315,4 @@ final class BackfillScheduler {
     }
 
     // MARK: - Public Helpers
-
-    /// Returns the last backfill run date as a formatted string
-    nonisolated func getLastBackfillDate() -> String? {
-        return StockbarRuntimeStorage.userDefaults.string(forKey: UserDefaultsKey.lastBackfillDate)
-    }
 }

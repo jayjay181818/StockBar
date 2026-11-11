@@ -439,12 +439,6 @@ actor RiskMetricsService {
         return sqrt(variance)
     }
 
-    /// Calculate mean (average) of a dataset
-    func calculateMean(_ values: [Double]) -> Double? {
-        guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
     /// Calculate downside deviation with the standard full-sample divisor
     /// (every period is in the denominator; non-negative periods contribute zero).
     /// - Parameter periodsPerYear: when given, the result is annualized by sqrt(periodsPerYear);

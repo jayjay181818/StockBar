@@ -46,19 +46,12 @@ private extension NSColor {
     }
 }
 
+@MainActor
 final class MenuBarFormattingServiceTests: XCTestCase {
 
-    var service: MenuBarFormattingService!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        service = MenuBarFormattingService()
-    }
-
-    override func tearDown() async throws {
-        service = nil
-        try await super.tearDown()
-    }
+    // XCTest makes one instance of the class per test, so each test gets a
+    // formatter with an empty cache.
+    private let service = MenuBarFormattingService()
 
     func testMenuBarSymbolPresentationUsesTickerInsteadOfFolyncDisplayLabel() {
         XCTAssertEqual(MenuBarSymbolPresentation.title(for: " CARD.L "), "CARD.L")
@@ -215,7 +208,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -238,7 +231,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -285,7 +278,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndPercentage
 
         // When: A positive stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -305,7 +298,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndShareChange
 
         // When: A positive stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -325,7 +318,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndShareChange
 
         // When: A negative stock title is formatted
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -347,7 +340,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "GOOGL",
             price: 140.75,
             change: 3.25,
@@ -373,7 +366,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "MSFT",
             price: 425.00,
             change: 5.00,
@@ -398,7 +391,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format stock title (positive change)
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "NVDA",
             price: 450.00,
             change: 10.00,
@@ -420,7 +413,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
         for before in [true, false] {
             settings.showArrowBeforeSymbol = before
-            let result = await service.formatStockTitle(
+            let result = service.formatStockTitle(
                 symbol: "NVDA", price: 450, change: 10, changePct: 2.27,
                 currency: "USD", settings: settings, useColorCoding: false
             )
@@ -441,7 +434,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
             settings.changeFormat = format
             settings.arrowStyle = .none
             settings.decimalPlaces = 2
-            return await service.formatStockTitle(
+            return service.formatStockTitle(
                 symbol: "NVDA", price: price, change: change, changePct: pct, dayPL: dayPL,
                 currency: currency, settings: settings, useColorCoding: false
             ).string
@@ -465,7 +458,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
         settings.arrowStyle = .simple
         settings.decimalPlaces = 2
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "NVDA", price: 450, change: 0.001, changePct: 0.0004,
             currency: "USD", settings: settings, useColorCoding: true
         )
@@ -483,7 +476,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format stock title (negative change)
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AMD",
             price: 120.00,
             change: -5.00,
@@ -508,7 +501,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -533,7 +526,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 2
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: 10.50,
@@ -559,7 +552,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -581,7 +574,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .dollar
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -603,7 +596,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .both
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -629,7 +622,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 0
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -652,7 +645,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.decimalPlaces = 4
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23456,
             change: 4.29123,
@@ -675,15 +668,15 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .priceAndPercentage
 
         for change in [2.0, -2.0] {
-            let plain = await service.formatStockTitle(
+            let plain = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: false
             )
-            let colored = await service.formatStockTitle(
+            let colored = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: true
             )
-            let plainAgain = await service.formatStockTitle(
+            let plainAgain = service.formatStockTitle(
                 symbol: "AAPL", price: 100, change: change, changePct: change,
                 currency: "USD", settings: settings, useColorCoding: false
             )
@@ -702,7 +695,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format with color coding enabled
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -735,7 +728,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format with color coding enabled
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "TSLA",
             price: 250.00,
             change: -10.50,
@@ -770,7 +763,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.changeFormat = .percentage
 
         // When: Format same stock twice
-        let result1 = await service.formatStockTitle(
+        let result1 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -780,7 +773,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
             useColorCoding: false
         )
 
-        let result2 = await service.formatStockTitle(
+        let result2 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -799,7 +792,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         var settings1 = MenuBarDisplaySettings()
         settings1.displayMode = .compact
 
-        let result1 = await service.formatStockTitle(
+        let result1 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -813,7 +806,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         var settings2 = MenuBarDisplaySettings()
         settings2.displayMode = .expanded
 
-        let result2 = await service.formatStockTitle(
+        let result2 = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -837,7 +830,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.arrowStyle = .simple
 
         // When: Format with positive change
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -856,7 +849,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .compact
         settings.arrowStyle = .simple
 
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL", price: 175.23, change: 0, changePct: 0,
             currency: "USD", settings: settings, useColorCoding: true)
 
@@ -877,7 +870,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.displayMode = .expanded
 
         for missing in [Double.nan, 0, -1] {
-            let result = await service.formatStockTitle(
+            let result = service.formatStockTitle(
                 symbol: "AAPL", price: missing, change: .nan, changePct: .nan,
                 currency: "USD", settings: settings, useColorCoding: false)
             XCTAssertTrue(result.string.contains("—"), "price \(missing) must render as a dash: \(result.string)")
@@ -894,7 +887,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.showCurrency = true
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "AAPL",
             price: 175.23,
             change: 4.29,
@@ -916,7 +909,7 @@ final class MenuBarFormattingServiceTests: XCTestCase {
         settings.showCurrency = true
 
         // When: Format stock title
-        let result = await service.formatStockTitle(
+        let result = service.formatStockTitle(
             symbol: "VOD.L",
             price: 75.50,
             change: 2.50,

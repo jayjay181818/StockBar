@@ -290,30 +290,6 @@ public final class ConfigurationManager: @unchecked Sendable {
     public func getConfigFilePath() -> String? {
         return getConfigFileURL()?.path
     }
-
-    /// Checks if the configuration file exists
-    public func configFileExists() -> Bool {
-        guard let configFileURL = getConfigFileURL() else { return false }
-        return fileManager.fileExists(atPath: configFileURL.path)
-    }
-
-    /// Creates a sample configuration file with instructions
-    public func createSampleConfigFile() {
-        guard let configFileURL = getConfigFileURL() else {
-            Task { await Logger.shared.error("Failed to get configuration file URL") }
-            return
-        }
-
-        let sampleConfig: [String: Any] = [
-            "FMP_API_KEY": "your_fmp_api_key_here",
-            "TWELVE_DATA_API_KEY": "your_twelve_data_api_key_here",
-            "DATA_SOURCE_PRIORITY": ["yfinance", "fmp", "twelvedata"],
-            "_comment": "Replace 'your_api_key_here' with your actual API keys. DATA_SOURCE_PRIORITY determines the order of fetch attempts."
-        ]
-
-        saveConfig(sampleConfig)
-        Task { await Logger.shared.info("Sample configuration file created at: \(configFileURL.path)") }
-    }
 }
 
 /// Market-data values carried by a settings export.
