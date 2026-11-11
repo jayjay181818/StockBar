@@ -32,6 +32,10 @@ struct SettingsTransferDependencies: Sendable {
     var storeHost: (any SettingsTransferStoreHost)?
     var appInfo: SettingsTransferAppInfo
     var now: @Sendable () -> Date = { Date() }
+    /// Largest export file an import reads. The file, its decrypted contents
+    /// and the database inside are each held in memory, so a file far beyond
+    /// any real portfolio is refused before it is read.
+    var maximumImportBytes: Int64 = 1 << 30
 
     static var live: SettingsTransferDependencies {
         SettingsTransferDependencies(
@@ -238,13 +242,13 @@ final class SettingsTransferService: Sendable {
     /// asking for a password.
     @concurrent
     func checkImportFile(at source: URL) async throws {
-        try SettingsTransferContainer.validateHeader(try Data(contentsOf: source))
+        try SettingsTransferContainer.validateHeader(try readImportFile(at: source))
     }
 
     /// Decrypts and validates everything without changing anything.
     @concurrent
     func prepareImport(from source: URL, password: String) async throws -> PreparedSettingsImport {
-        let data = try Data(contentsOf: source)
+        let data = try readImportFile(at: source)
         var plaintext = try SettingsTransferContainer.open(data, password: password)
         defer { plaintext.zeroBytes() }
         let payload = try SettingsTransferPayload.decode(plaintext)
@@ -654,5 +658,15 @@ final class SettingsTransferService: Sendable {
 
     private static func fileSize(of url: URL) -> Int64 {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    /// The export file's bytes, refused when it is larger than an import can hold in memory.
+    private func readImportFile(at source: URL) throws -> Data {
+        let limit = dependencies.maximumImportBytes
+        guard Self.fileSize(of: source) <= limit else {
+            let size = ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)
+            throw SettingsTransferError.unsupportedContents("the file is larger than \(size), the most Stockbar can import.")
+        }
+        return try Data(contentsOf: source, options: .mappedIfSafe)
     }
 }
