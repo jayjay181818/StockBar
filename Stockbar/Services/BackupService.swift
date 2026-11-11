@@ -152,6 +152,8 @@ class BackupService {
 
             // Update last backup date
             lastBackupDate = Date()
+            // An open Settings or Backups page read the date before this backup ran.
+            await MainActor.run { NotificationCenter.default.post(name: .stockbarBackupDidComplete, object: nil) }
 
             // Cleanup old backups
             try await cleanupOldBackups(keeping: keptURL)
@@ -320,4 +322,9 @@ enum BackupOutcome: Equatable, Sendable {
         case .failed: return "Backup failed. See Diagnostics for details."
         }
     }
+}
+
+extension Notification.Name {
+    /// Posted on the main actor after a backup file has been written.
+    static let stockbarBackupDidComplete = Notification.Name("stockbarBackupDidComplete")
 }

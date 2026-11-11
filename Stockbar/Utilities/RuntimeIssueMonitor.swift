@@ -84,7 +84,8 @@ actor RuntimeIssueMonitor {
     }
 
     /// Counts the issues in `logs`. With `since`, lines stamped before it are
-    /// skipped; lines with no readable time stamp are always counted.
+    /// skipped. A line with no time stamp continues the entry above it (a Python
+    /// traceback, say) and takes that entry's time; with no entry above, it is counted.
     static func scan(logs: [String], since: Date? = nil) -> RuntimeIssueSnapshot {
         var errorCount = 0
         var warningCount = 0
@@ -93,8 +94,10 @@ actor RuntimeIssueMonitor {
         var secretLeakCount = 0
         var scanned = 0
 
+        var entryStamp: Date?
         for log in logs {
-            if let since, let stamp = timestamp(of: log), stamp < since {
+            if let stamp = timestamp(of: log) { entryStamp = stamp }
+            if let since, let entryStamp, entryStamp < since {
                 continue
             }
             scanned += 1

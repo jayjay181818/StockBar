@@ -175,7 +175,7 @@ struct FolyncDataSourceSection: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let capabilities = dataModel.folyncCapabilities {
-                        Text("Capabilities revision \(capabilities.sourceRevision.prefix(10)) · checked \(capabilities.generatedAt)")
+                        Text("Capabilities revision \(capabilities.sourceRevision.prefix(10)) · checked \(FolyncConnectionState.readable(asOf: capabilities.generatedAt))")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -445,7 +445,7 @@ struct FolyncDataSourceSection: View {
     private func capabilityLabel(for route: FolyncSupplementalRoute) -> String {
         guard let capability = capability(for: route) else { return "Not supported by this Folync server" }
         if !capability.supported { return "Unsupported" }
-        if !capability.ready { return "Not ready · \(capability.reasonCodes.joined(separator: ", "))" }
+        if !capability.ready { return "Not ready · \(FolyncConnectionState.readable(reasons: capability.reasonCodes))" }
         return dataModel.folyncSupplementalStatuses[route]?.label ?? "Ready"
     }
 

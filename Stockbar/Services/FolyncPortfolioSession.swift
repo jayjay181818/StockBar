@@ -19,10 +19,10 @@ enum FolyncConnectionState: Equatable {
         case .waitingForKeychain:
             return "Waiting for Keychain access. If macOS asks to let Stockbar use its saved credentials, choose Always Allow."
         case .connecting: return "Connecting to Folync…"
-        case .current(let asOf): return asOf.map { "Current as of \($0)." } ?? "Current."
+        case .current(let asOf): return asOf.map { "Current as of \(Self.readable(asOf: $0))" } ?? "Current"
         case .stale(let asOf, let reasons):
-            return "Stale\(asOf.map { " as of \($0)" } ?? ""): \(reasons.joined(separator: ", "))"
-        case .rebuilding(_, let reasons): return "Folync is rebuilding: \(reasons.joined(separator: ", "))"
+            return "Stale\(asOf.map { " as of \(Self.readable(asOf: $0))" } ?? ""): \(Self.readable(reasons: reasons))"
+        case .rebuilding(_, let reasons): return "Folync is rebuilding: \(Self.readable(reasons: reasons))"
         case .offlineCached(let message): return "Showing the last Folync data. \(message)"
         case .unauthorized: return "Folync access token was rejected."
         case .rateLimited(let retryAfter):
@@ -32,6 +32,25 @@ enum FolyncConnectionState: Equatable {
             return message.isEmpty ? "Folync is unavailable." : message
         case .incompatible: return "Folync API version is incompatible."
         }
+    }
+
+    /// Folync sends `asOf` as a calendar day ("2026-11-11") or an instant. A day is
+    /// shown as that day in every time zone; anything unrecognised is shown as sent.
+    static func readable(asOf: String) -> String {
+        if let day = FolyncSupplementalDateParser.day(asOf) {
+            var style = Date.FormatStyle(date: .abbreviated, time: .omitted)
+            style.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+            return day.formatted(style)
+        }
+        if let instant = FolyncSupplementalDateParser.instant(asOf) {
+            return instant.formatted(date: .abbreviated, time: .shortened)
+        }
+        return asOf
+    }
+
+    /// Reason codes arrive as identifiers such as `prices_stale`.
+    static func readable(reasons: [String]) -> String {
+        reasons.map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ")
     }
 }
 

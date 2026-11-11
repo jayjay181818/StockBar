@@ -113,7 +113,7 @@ actor SectorAnalysisService {
             // ===== US STOCKS =====
 
             // Technology
-            "AAPL": .technology, "MSFT": .technology, "GOOGL": .technology, "GOOG": .technology,
+            "AAPL": .technology, "MSFT": .technology, "GOOGL": .communicationServices, "GOOG": .communicationServices,
             "AMZN": .consumerCyclical, "META": .communicationServices, "NVDA": .technology,
             "TSLA": .consumerCyclical, "AVGO": .technology, "ORCL": .technology,
             "CRM": .technology, "ADBE": .technology, "CSCO": .technology, "INTC": .technology,
@@ -426,7 +426,7 @@ actor SectorAnalysisService {
         var recommendations: [String] = []
 
         for allocation in topHeavy {
-            recommendations.append("Consider reducing exposure to \(allocation.sector.displayName) (>\(String(format: "%.1f", classifiedShare(allocation)))%)")
+            recommendations.append("Consider reducing exposure to \(allocation.sector.displayName) (\(String(format: "%.1f", classifiedShare(allocation)))%)")
         }
 
         // Suggest underrepresented sectors
