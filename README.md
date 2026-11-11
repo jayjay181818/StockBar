@@ -380,7 +380,15 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.5.0 (current): Audit fixes
+### 🆕 Version 3.6.0 (current): Charts, costs and broker safety
+- **Charts**: The 1 Day and 1 Week charts draw nights and weekends narrow. Chart money reads the same as in the holdings table.
+- **Figures**: A cost entered in another currency is converted before gains are worked out. Attribution counts holdings opened or closed in the period and says which days it measured.
+- **Trading 212**: A ticker renamed by the broker is reported as missing, never deleted. Links now record the ISIN.
+- **Start-up**: The full history rebuild at every launch is gone, and Folync prices are no longer overwritten in the first minute.
+- **Interface**: New View menu (⌘1 to ⌘9) and Help menu.
+- See [Changelogs/release_notes_v3.6.0.md](./Changelogs/release_notes_v3.6.0.md).
+
+### Version 3.5.0: Audit fixes
 - **Figures**: Attribution, risk, correlation and per-stock metrics are corrected. Sharpe and Sortino use one 4% risk-free rate, so risk figures change.
 - **Refresh**: One slow symbol no longer discards a whole batch, failed refreshes are shown, and Stockbar refreshes on wake.
 - **Storage**: The database no longer grows without limit. Old history is thinned weekly after a safety copy.
@@ -499,6 +507,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 11, 2026 · Version 3.5.0</sub>
+<sub>Last updated: November 11, 2026 · Version 3.6.0</sub>
 
 </div>

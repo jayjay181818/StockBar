@@ -96,7 +96,7 @@ Gains are green and losses red when **Color Coding** is on (Settings → General
 
 ## Analysis
 
-- **Performance** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons.
+- **Performance** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons. On the 1 Day and 1 Week ranges the line chart draws nights and weekends narrow, so the hours with prices fill the chart; longer ranges are drawn to scale.
 - **Risk** — value at risk, Sharpe and Sortino ratios, volatility and drawdowns from stored portfolio history. Missing observations are ignored rather than treated as zero.
 - **Allocation** — sector allocation and diversification, a correlation matrix built from at least 20 shared trading days of stored prices, and performance attribution. Benchmarks and watchlist symbols are excluded.
 
@@ -153,10 +153,13 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 | ⌘O | Open Stockbar |
 | ⌘, | Settings |
 | ⌘R | Refresh prices (main window) |
+| ⌘1 – ⌘9 | Show a page of the main window, in sidebar order (also in the **View** menu) |
 | ⌘W / ⌘M | Close / minimise window |
 | ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
 | ⌘H | Hide Stockbar |
 | ⌘Q | Quit |
+
+The **Help** menu opens Data Health and Diagnostics and shows the log files in Finder.
 
 ## Privacy
 
