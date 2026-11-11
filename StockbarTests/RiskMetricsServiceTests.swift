@@ -568,4 +568,28 @@ final class RiskMetricsServiceTests: XCTestCase {
         XCTAssertEqual(perPeriod, sqrt(0.0020 / 4), accuracy: 1e-9)
         XCTAssertEqual(annual, perPeriod * sqrt(252.0), accuracy: 1e-9)
     }
+
+    func testReturnStatistics_HandWorkedValues() {
+        // Mean 1%; squared deviations 1, 4, 4, 1 (x 1e-4), so variance 2.5e-4.
+        let statistics = ReturnStatistics(dailyReturns: [0.02, -0.01, 0.03, 0.00], annualRiskFreeRate: 0)
+        let deviation = sqrt(2.5e-4)
+
+        XCTAssertEqual(statistics.volatility, deviation * 100, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.sharpeRatio), 0.01 / deviation * sqrt(252), accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.annualizedVolatility), deviation * 100 * sqrt(252), accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.valueAtRisk), 1.0, accuracy: 1e-9, "the worst of four days")
+        XCTAssertEqual(try XCTUnwrap(statistics.winRate), 50, accuracy: 1e-9)
+    }
+
+    func testReturnStatistics_UndefinedFiguresAreNil() {
+        let none = ReturnStatistics(dailyReturns: [])
+        XCTAssertEqual(none.volatility, 0)
+        XCTAssertNil(none.sharpeRatio)
+        XCTAssertNil(none.annualizedVolatility)
+        XCTAssertNil(none.valueAtRisk)
+        XCTAssertNil(none.winRate)
+
+        // Returns that never vary have no Sharpe ratio.
+        XCTAssertNil(ReturnStatistics(dailyReturns: [0.01, 0.01, 0.01]).sharpeRatio)
+    }
 }

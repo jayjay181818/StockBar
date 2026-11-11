@@ -989,9 +989,7 @@ class HistoricalDataManager {
             (current - previous) / previous
         }
         
-        let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
-        let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - meanReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance) * 100 // Convert to percentage
+        let statistics = ReturnStatistics(dailyReturns: dailyReturns)
         
         let maxValue = relevantSnapshots.map { $0.price }.max() ?? lastSnapshot.price
         let minValue = relevantSnapshots.map { $0.price }.min() ?? lastSnapshot.price
@@ -999,14 +997,6 @@ class HistoricalDataManager {
         // Determine currency for the stock
         let currency = SymbolMetadata.defaultCurrency(for: symbol)
         
-        // MARK: - Advanced Analytics for Stocks
-        
-        // Sharpe ratio, with the same risk-free rate as the Risk page.
-        let riskFreeRate = RiskMetricsService.annualRiskFreeRate / 252
-        let excessReturns = dailyReturns.map { $0 - riskFreeRate }
-        let meanExcessReturn = excessReturns.isEmpty ? 0 : excessReturns.reduce(0, +) / Double(excessReturns.count)
-        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil
-
         // Calculate Maximum Drawdown
         let (maxDrawdown, maxDrawdownPercent) = calculateStockMaxDrawdown(snapshots: relevantSnapshots)
         
@@ -1017,37 +1007,26 @@ class HistoricalDataManager {
         let periodInYears = span / (365.25 * 24 * 3600)
         let compounded = (pow(1 + totalReturnPercent / 100, 1 / max(periodInYears, 0.001)) - 1) * 100
         let annualizedReturn: Double? = span >= 30 * 86_400 && compounded.isFinite ? compounded : nil
-        let annualizedVolatility: Double? = dailyReturns.count >= 2 ? volatility * sqrt(252) : nil
-        
-        // Calculate Value at Risk (95% confidence level)
-        let sortedReturns = dailyReturns.sorted()
-        let var95Index = Int(Double(sortedReturns.count) * 0.05)
-        let valueAtRisk = var95Index < sortedReturns.count ? abs(sortedReturns[var95Index] * 100) : nil
-        
-        // Calculate Win Rate
-        let positiveReturns = dailyReturns.filter { $0 > 0 }.count
-        let winRate = dailyReturns.isEmpty ? nil : Double(positiveReturns) / Double(dailyReturns.count) * 100
-        
         // Beta calculation would require market benchmark data - set to nil for now
         let beta: Double? = nil
         
         return PerformanceMetrics(
             totalReturn: totalReturn,
             totalReturnPercent: totalReturnPercent,
-            volatility: volatility,
+            volatility: statistics.volatility,
             maxValue: maxValue,
             minValue: minValue,
             currency: currency,
             startDate: firstSnapshot.timestamp,
             endDate: lastSnapshot.timestamp,
-            sharpeRatio: sharpeRatio,
+            sharpeRatio: statistics.sharpeRatio,
             maxDrawdown: maxDrawdown,
             maxDrawdownPercent: maxDrawdownPercent,
             beta: beta,
             annualizedReturn: annualizedReturn,
-            annualizedVolatility: annualizedVolatility,
-            valueAtRisk: valueAtRisk,
-            winRate: winRate
+            annualizedVolatility: statistics.annualizedVolatility,
+            valueAtRisk: statistics.valueAtRisk,
+            winRate: statistics.winRate
         )
     }
     
