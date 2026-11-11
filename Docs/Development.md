@@ -6,7 +6,7 @@ Read [shared instructions](../AGENTS.md) first. This reference is needed for run
 
 Use the existing Xcode installation and Python environment. Deployment/language settings live in [the Xcode project](../Stockbar.xcodeproj/project.pbxproj), dependency pins in [requirements.txt](../Stockbar/Resources/requirements.txt), lint rules in [.swiftlint.yml](../.swiftlint.yml), and required gates in [CI](../.github/workflows/ci.yml). The project enables strict concurrency; do not infer Swift language mode from a toolchain version.
 
-If dependencies need installation, use `bash script/setup_python_env.sh` for Stockbar's own environment (which the app uses automatically), or `python3 -m pip install -r Stockbar/Resources/requirements.txt` in another intended environment. Do not install or upgrade packages as part of an unrelated change. Use the shared commands below.
+If dependencies need installation, use `bash script/setup_python_env.sh` for Stockbar's own environment (which the app uses automatically), or `python3 -m pip install -r Stockbar/Resources/requirements.txt` in another intended environment. [requirements.lock](../Stockbar/Resources/requirements.lock) holds every package those pins pull in, at an exact version with checksums; Stockbar's own environment and CI install from it. After changing `requirements.txt`, run `bash script/update_python_lock.sh` (needs uv) and commit both files; CI fails when they disagree. A weekly workflow opens a pull request that moves the locked packages to releases at least a week old. Do not install or upgrade packages as part of an unrelated change. Use the shared commands below.
 
 ## Commands
 

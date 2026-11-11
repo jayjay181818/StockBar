@@ -90,6 +90,25 @@ class SetupPythonEnvTests(unittest.TestCase):
             self.assertIn(f'cache={self.root}/cache/uv', call)
             self.assertIn('pref=only-managed', call)
 
+    def test_installs_from_the_lock_file_with_checksums_when_one_is_present(self):
+        lock = self.root / 'requirements.lock'
+        lock.write_text('yfinance==1.2.0 --hash=sha256:' + '0' * 64 + '\n')
+
+        result = self.run_setup()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        install = self.calls.read_text().splitlines()[1]
+        self.assertIn(f'--require-hashes -r {lock} |', install)
+        self.assertNotIn(str(self.requirements), install)
+
+    def test_installs_from_the_requirements_file_when_there_is_no_lock(self):
+        result = self.run_setup()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        install = self.calls.read_text().splitlines()[1]
+        self.assertIn(f'-r {self.requirements} |', install)
+        self.assertNotIn('--require-hashes', install)
+
     def test_second_run_reuses_the_downloaded_uv(self):
         self.assertEqual(self.run_setup().returncode, 0)
         self.archive.unlink()  # A second download would now fail.

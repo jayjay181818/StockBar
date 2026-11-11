@@ -5,6 +5,9 @@ on:
     branches: [ main, testing ]
   pull_request:
     branches: [ main, testing ]
+  # Lets the weekly lock update start this workflow on its own branch: a pull
+  # request opened by a workflow does not start one by itself.
+  workflow_dispatch:
 
 # A newer push to the same branch or pull request replaces the run in progress.
 concurrency:
@@ -30,13 +33,18 @@ jobs:
         # Stockbar's own environment uses Python 3.13 (setup_python_env.sh).
         python-version: '3.13'
         cache: pip
-        cache-dependency-path: Stockbar/Resources/requirements.txt
+        cache-dependency-path: Stockbar/Resources/requirements.lock
 
-    - name: Install pinned Python dependencies
-      run: python -m pip install -r Stockbar/Resources/requirements.txt
+    # The lock file, as Stockbar's own environment installs it: exact versions,
+    # each download checked against its recorded checksum.
+    - name: Install locked Python dependencies
+      run: python -m pip install --require-hashes -r Stockbar/Resources/requirements.lock
 
-    - name: Install SwiftLint and ripgrep
-      run: brew install swiftlint ripgrep
+    - name: Install SwiftLint, ripgrep and uv
+      run: brew install swiftlint ripgrep uv
+
+    - name: Python lock file matches requirements.txt
+      run: bash script/update_python_lock.sh --check
 
     - name: Python syntax and unit tests
       run: bash script/develop.sh python-tests

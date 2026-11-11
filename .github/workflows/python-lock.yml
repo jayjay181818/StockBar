@@ -1,0 +1,68 @@
+name: Update Python lock
+
+# Once a week, moves the packages in Stockbar/Resources/requirements.lock to
+# their newest releases that are at least a week old and opens a pull request
+# into testing. Direct pins in requirements.txt are not changed here;
+# Dependabot proposes those.
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: python-lock
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write        # push the update branch
+      pull-requests: write   # open the pull request
+      actions: write         # start CI on the update branch
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: chore/python-lock-update
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: testing
+
+    - name: Install uv
+      run: python3 -m pip install --quiet --user uv && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Upgrade the lock
+      run: bash script/update_python_lock.sh --upgrade
+
+    - name: Open or refresh the pull request
+      run: |
+        if git diff --quiet -- Stockbar/Resources/requirements.lock; then
+          echo "Nothing to update."
+          exit 0
+        fi
+        {
+          echo "Weekly update of the Python helper's locked packages. Only releases at least a week old are taken."
+          echo
+          echo '```diff'
+          git diff --unified=0 -- Stockbar/Resources/requirements.lock | grep -E '^[+-][A-Za-z0-9_.-]+==' || true
+          echo '```'
+          echo
+          echo "CI was started on this branch by the update workflow; its result appears in the checks below."
+        } > "$RUNNER_TEMP/body.md"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -B "$BRANCH"
+        git add Stockbar/Resources/requirements.lock
+        git commit -m "chore(python): update locked packages"
+        git push --force origin "$BRANCH"
+        if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qx OPEN; then
+          gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+        else
+          gh pr create --base testing --head "$BRANCH" \
+            --title "chore(python): update locked packages" --body-file "$RUNNER_TEMP/body.md"
+        fi
+        gh workflow run ci.yml --ref "$BRANCH"
