@@ -6,36 +6,38 @@
    - Run Stockbar.app from Applications or Xcode
    - Wait for app to fully load and complete initial data fetch
 
-2. **Run Performance Test**
+2. **Run the sampler** from the repository root
    ```bash
-   cd Scripts  # from the repository root
-   ./measure_performance.sh
+   bash Scripts/measure_performance.sh                 # ten minutes
+   bash Scripts/measure_performance.sh --duration 60   # a quick look
    ```
+   It only reads counters; it never pauses or signals the app. Leave the app
+   alone for an idle figure, or use it normally for an active one.
 
-3. **During Test (30 seconds)**
-   - Use app normally: view charts, switch tabs, check analytics
-   - Interact with menu bar items
-   - Open/close preferences
-   - This simulates real-world usage
+3. **Review Results**
+   - Memory of the app and of its Python helper (physical footprint, the
+     figure Activity Monitor shows), and how much of the time the helper was
+     running
+   - CPU seconds and wakeups per minute
+   - Compared against targets:
+     - CPU: <5% of one core
+     - Memory: <200 MB for app and helper together
 
-4. **Review Results**
-   - Script outputs CPU, memory, and thread metrics
-   - Compares against targets:
-     - CPU: <5% average
-     - Memory: <200 MB
-     - Both must pass for green status
+For a repeatable before/after comparison on fixed synthetic data, use
+`bash Scripts/perf/benchmark.sh`; [the optimisation log](../Docs/perf_2026-11-11.md)
+records how it is used and the numbers so far.
 
 ## Performance Targets
 
 ### CPU Usage
 - **Target**: <5% average during normal operation
-- **Measurement**: 30-second average, 15 samples
+- **Measurement**: CPU seconds used per minute over the sampling window
 - **Acceptable**: Spikes to 10-20% during refresh are OK
 - **Warning**: Sustained >10% indicates optimization needed
 
 ### Memory Footprint
 - **Target**: <200 MB total
-- **Measurement**: Resident Set Size (RSS)
+- **Measurement**: Physical footprint of the app plus its Python helper
 - **Acceptable**: Growth during initial data load is OK
 - **Warning**: >250 MB indicates memory leak
 
