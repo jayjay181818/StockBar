@@ -76,7 +76,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 - **Folync:** a self-hosted, authoritative read-only portfolio source with optional supplemental history, candles, benchmarks and FX. Local holdings are kept aside and restored when you switch back.
 
 ### 📈 Market data and charts
-- yfinance is the primary market-data provider. Financial Modeling Prep, Twelve Data and Stooq are fallbacks.
+- yfinance is the primary market-data provider. Financial Modeling Prep and Twelve Data are fallbacks.
 - Interactive Swift Charts for portfolio value, gains and individual symbols, as line or candlestick charts with indicators and benchmark comparisons.
 
 ### 🛡️ Reliability
@@ -123,7 +123,7 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 
 #### Market Data And Charts
 - yfinance remains the primary general market-data provider.
-- Financial Modeling Prep, Twelve Data, and Stooq remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
+- Financial Modeling Prep and Twelve Data remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
 - Historical fetch priority is configurable from Settings → Connections; live quotes use a fixed provider order.
 - Historical charts use the existing market-data system unless their independent Folync line-history or OHLCV route is enabled and usable.
 - Interactive Swift Charts views cover portfolio value, portfolio gains, and individual symbol performance.
@@ -165,7 +165,6 @@ Then open **Holdings → Edit → Add Holding** and enter symbols in Yahoo Finan
 |---|---|---|
 | **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider | None |
 | **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in the Keychain |
-| **Stooq** | Fallback quotes and history | None |
 | **Trading 212** | Read-only linked broker positions, value and P/L | API Key + Secret in the Keychain |
 | **Folync** (self-hosted) | Authoritative portfolio, plus optional history, candles, benchmarks and FX | Client token in the Keychain |
 
@@ -198,11 +197,11 @@ StockBar uses a hybrid Swift + Python architecture:
 - **Core Data**: Portfolio trades, trading info, historical price snapshots, and portfolio snapshots.
 - **Keychain**: Trading 212 credentials, the Folync client token and market-data API keys.
 - **Python/yfinance subprocesses**: General market quotes, OHLC data, and historical data fetches when the corresponding Folync category is disabled, unavailable with fallback enabled, or the symbol is local-only.
-- **MarketDataProvider path**: yfinance, FMP, Twelve Data, and Stooq for quotes, watchlists, and history.
+- **MarketDataProvider path**: yfinance, FMP, and Twelve Data for quotes, watchlists, and history.
 - **BrokerProvider path**: Trading 212 for broker-linked holdings and live position data.
 - **Folync supplemental router**: Category-aware, ETag-backed cached history, benchmark, and USD-base FX reads with no writes to Core Data.
 
-Broker data and market data are intentionally separate. Trading 212 is the source of truth for linked broker positions. Folync may replace a selected market-data category when enabled, while yfinance/FMP/Twelve Data/Stooq continue to serve disabled categories, local-only watchlists, and explicit whole-series fallback.
+Broker data and market data are intentionally separate. Trading 212 is the source of truth for linked broker positions. Folync may replace a selected market-data category when enabled, while yfinance/FMP/Twelve Data continue to serve disabled categories, local-only watchlists, and explicit whole-series fallback.
 
 </details>
 
@@ -276,7 +275,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - Diagnostics shows logs with redacted sensitive values.
 
 #### Data Sources
-- **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data, Stooq.
+- **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data.
 - **Broker data**: Trading 212 for linked broker positions.
 - **Folync supplemental data**: independent toggles for line history, OHLCV, benchmarks, and exchange rates, plus an explicit legacy fallback toggle. These controls require the Folync portfolio source to be active.
 - **FMP/Twelve Data keys**: configured in Settings → Connections.
@@ -287,7 +286,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
 - Folync portfolio snapshots poll every 60 seconds; Folync benchmarks and FX poll every 15 minutes; Folync chart history loads on demand. All Folync routes use ETags.
-- An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data/Stooq or direct exchange-rate request. Disabling it resumes the existing local pipeline.
+- An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data or direct exchange-rate request. Disabling it resumes the existing local pipeline.
 - Freshness, partial coverage, stale cache, local fallback, and unavailable states are shown rather than represented as a valid zero.
 
 #### Storage
