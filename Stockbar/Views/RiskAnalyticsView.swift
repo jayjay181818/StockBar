@@ -54,7 +54,9 @@ struct RiskAnalyticsView: View {
                 // Header with time range picker
                 headerSection
 
-                if isCalculating {
+                // A recalculation keeps the previous figures on screen, dimmed,
+                // so the page does not empty and jump on every range change.
+                if isCalculating, riskMetrics == nil {
                     ProgressView("Calculating risk metrics...")
                         .frame(maxWidth: .infinity, minHeight: 200)
                 } else if let insufficientDataMessage {
@@ -67,29 +69,38 @@ struct RiskAnalyticsView: View {
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
-                    if let currencyNotice {
-                        StockbarNotice(message: currencyNotice)
+                    if isCalculating {
+                        ProgressView("Recalculating…")
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    Group {
+                        if let currencyNotice {
+                            StockbarNotice(message: currencyNotice)
+                        }
 
-                    // Risk metrics cards
-                    metricsGridView(metrics: metrics)
+                        // Risk metrics cards
+                        metricsGridView(metrics: metrics)
 
-                    // Value at Risk visualization
-                    varVisualizationSection(metrics: metrics)
+                        // Value at Risk visualization
+                        varVisualizationSection(metrics: metrics)
 
-                    // Risk-adjusted returns
-                    riskAdjustedReturnsSection(metrics: metrics)
+                        // Risk-adjusted returns
+                        riskAdjustedReturnsSection(metrics: metrics)
 
-                    // Maximum drawdown timeline
-                    drawdownSection(metrics: metrics)
+                        // Maximum drawdown timeline
+                        drawdownSection(metrics: metrics)
 
-                    // Drawdown history table
-                    if !drawdownPeriods.isEmpty {
-                        drawdownHistorySection
+                        // Drawdown history table
+                        if !drawdownPeriods.isEmpty {
+                            drawdownHistorySection
+                        }
+
+                        // Calculation details
+                        calculationDetailsSection(metrics: metrics)
                     }
-
-                    // Calculation details
-                    calculationDetailsSection(metrics: metrics)
+                    .opacity(isCalculating ? 0.5 : 1)
+                    .accessibilityHidden(isCalculating)
                 } else {
                     emptyStateView
                 }
@@ -563,6 +574,7 @@ struct RiskAnalyticsView: View {
                 await MainActor.run {
                     guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics appear once Stockbar has recorded portfolio values for this time range."
+                    riskMetrics = nil
                     isCalculating = false
                 }
                 return
@@ -595,6 +607,7 @@ struct RiskAnalyticsView: View {
                 await MainActor.run {
                     guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics need portfolio values from at least two different days."
+                    riskMetrics = nil
                     isCalculating = false
                 }
                 return
@@ -606,6 +619,7 @@ struct RiskAnalyticsView: View {
                     guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics need at least \(minimum) trading days of history in this time range. "
                         + "There are \(series.returns.count) so far."
+                    riskMetrics = nil
                     isCalculating = false
                 }
                 return
@@ -640,6 +654,7 @@ struct RiskAnalyticsView: View {
                 await MainActor.run {
                     guard generation == requestGeneration else { return }
                     insufficientDataMessage = "At least two recorded portfolio values are needed in this time range."
+                    riskMetrics = nil
                     isCalculating = false
                 }
             }

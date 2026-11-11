@@ -19,6 +19,7 @@ struct Trading212DataSourceSection: View {
     @State private var isReconcilingHoldings = false
     @State private var showingLinkConfirmation = false
     @State private var confirmingClearCredentials = false
+    @State private var confirmingDeleteMissing = false
     @State private var showingBrokerOnlyImportConfirmation = false
     @State private var statusMessage = "Trading 212 preview has not been tested."
     @State private var preview: Trading212ImportPreview?
@@ -140,8 +141,20 @@ struct Trading212DataSourceSection: View {
                 }
                 GridRow {
                     Text("Removed holdings:")
-                    Toggle("Delete linked manual holdings missing from Trading 212", isOn: binding(\.deleteMissingLinkedHoldings))
+                    Toggle("Delete linked manual holdings missing from Trading 212", isOn: deleteMissingBinding)
                         .toggleStyle(.checkbox)
+                        .confirmationDialog(
+                            "Delete holdings that disappear from Trading 212?",
+                            isPresented: $confirmingDeleteMissing,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Delete Missing Holdings", role: .destructive) {
+                                binding(\.deleteMissingLinkedHoldings).wrappedValue = true
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("From the next sync, a linked holding that Trading 212 no longer reports is deleted from Stockbar along with its broker link. This cannot be undone.")
+                        }
                 }
                 GridRow {
                     Text("Portfolio changes:")
@@ -708,6 +721,21 @@ struct Trading212DataSourceSection: View {
                 updatedSettings[keyPath: keyPath] = newValue
                 settings = updatedSettings
                 saveSettings(updatedSettings, runImmediately: false)
+            }
+        )
+    }
+
+    /// Turning deletion on can remove holdings at the next sync, so it is
+    /// confirmed first. Turning it off applies at once.
+    private var deleteMissingBinding: Binding<Bool> {
+        Binding(
+            get: { settings.deleteMissingLinkedHoldings },
+            set: { enabled in
+                if enabled {
+                    confirmingDeleteMissing = true
+                } else {
+                    binding(\.deleteMissingLinkedHoldings).wrappedValue = false
+                }
             }
         )
     }
