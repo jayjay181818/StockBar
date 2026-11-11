@@ -582,7 +582,7 @@ final class CacheManager: ObservableObject, @unchecked Sendable {
     }
     
     func performCleanup() {
-        Task { await logger.info("🧹 Starting cache cleanup") }
+        Task { await logger.debug("🧹 Starting cache cleanup") }
         
         // Cleanup memory cache (remove expired items)
         memoryCacheQueue.async { [weak self] in
