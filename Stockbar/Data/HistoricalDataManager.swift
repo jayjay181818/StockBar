@@ -29,6 +29,11 @@ class HistoricalDataManager {
     private(set) var portfolioHistoryRevision: Int = 0
     private(set) var folyncSupplementalConfigurationRevision: Int = 0
     private(set) var folyncSourceStatusBySeries: [String: FolyncSupplementalSourceStatus] = [:]
+    /// Folync portfolio-history requests that have not answered yet. A chart with no data
+    /// shows a loading state rather than "no data" while this is above zero.
+    private(set) var folyncPortfolioHistoryRequestsInFlight = 0
+    /// False until the stored portfolio history has been read at launch.
+    private(set) var hasLoadedStoredPortfolioHistory = false
     private(set) var folyncCoverageBySeries: [String: String] = [:]
     
     // MARK: - Enhanced Portfolio Storage
@@ -635,7 +640,11 @@ class HistoricalDataManager {
         // 3. Start a recalculation and show what is stored meanwhile.
         if let dataModel {
             let timeSinceLastRetroactive = Date().timeIntervalSince(lastRetroactiveCalculationDate)
-            if timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
+            // A chart drawn while the store is still loading sees no history and no
+            // holdings. Calculating then would record an empty portfolio as the
+            // current one, and the next launch-time check would rebuild everything.
+            let storeIsLoaded = dataModel.hasCompletedInitialTradeLoad && hasLoadedStoredPortfolioHistory
+            if storeIsLoaded, timeSinceLastRetroactive > 3600 || historicalPortfolioSnapshots.isEmpty {
                 Task { await logger.info("📊 Portfolio \(label) chart: Triggering background retroactive calculation") }
                 Task.detached(priority: .background) { [self] in
                     await self.calculateRetroactivePortfolioHistory(using: dataModel)
@@ -1174,6 +1183,7 @@ class HistoricalDataManager {
                 )
                 await MainActor.run {
                     self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
+                    self.hasLoadedStoredPortfolioHistory = true
                 }
                 await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.")
             }
@@ -1182,6 +1192,7 @@ class HistoricalDataManager {
             // Legacy loading from CacheManager / UserDefaults
             self.priceSnapshots = retrieveFromCache([String: [PriceSnapshot]].self, key: StorageKeys.priceSnapshots) ?? [:]
             self.historicalPortfolioSnapshots = retrieveFromCache([HistoricalPortfolioSnapshot].self, key: StorageKeys.historicalPortfolioSnapshots) ?? []
+            self.hasLoadedStoredPortfolioHistory = true
             // Also load legacy portfolioSnapshots if necessary for compatibility or if historicalPortfolioSnapshots is empty
             if self.historicalPortfolioSnapshots.isEmpty {
                  self.portfolioSnapshots = retrieveFromCache([PortfolioSnapshot].self, key: StorageKeys.portfolioSnapshots) ?? []
@@ -2649,8 +2660,10 @@ class HistoricalDataManager {
         }
         folyncPortfolioHistoryFetchRequestTimes[key] = now
         let configurationRevision = folyncSupplementalConfigurationRevision
+        folyncPortfolioHistoryRequestsInFlight += 1
         Task { [weak self] in
             guard let self else { return }
+            defer { self.folyncPortfolioHistoryRequestsInFlight -= 1 }
             let result = await FolyncSupplementalCoordinator.shared.routePortfolioHistory(
                 range: timeRange.folyncRange,
                 from: timeRange == .custom ? customFrom : nil,

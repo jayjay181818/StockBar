@@ -64,6 +64,7 @@ struct StockbarSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { refreshBackupState() }
+        .onReceive(NotificationCenter.default.publisher(for: .stockbarBackupDidComplete)) { _ in refreshBackupState() }
         .sheet(isPresented: $showingRestoreSheet, onDismiss: refreshBackupState) {
             RestoreBackupView(isPresented: $showingRestoreSheet, dataModel: dataModel)
         }
@@ -270,7 +271,12 @@ struct StockbarSettingsView: View {
         } header: {
             Text("Schedule")
         } footer: {
-            Text("A price fetched within about 90% of the refresh interval is reused. Symbols that keep failing are retried after 1, 2, 5 and 10 minutes, then paused for an hour.")
+            Text(
+                (dataModel.isFolyncPortfolioActive
+                    ? "Folync holdings update every minute; these intervals apply to watchlist symbols and stored chart history. "
+                    : "")
+                + "A price fetched within about 90% of the refresh interval is reused. Symbols that keep failing are retried after 1, 2, 5 and 10 minutes, then paused for an hour."
+            )
         }
 
         Section("Now") {

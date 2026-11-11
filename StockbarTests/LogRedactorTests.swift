@@ -269,6 +269,26 @@ final class LogAuditFixTests: XCTestCase {
         XCTAssertEqual(snapshot.summary, "1 error, 1 timeout, 1 warning")
     }
 
+    func testAContinuationLineIsAsOldAsTheEntryAboveIt() {
+        let now = Date()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSZ"
+        let old = formatter.string(from: now.addingTimeInterval(-3_600))
+        let recent = formatter.string(from: now.addingTimeInterval(-60))
+        let logs = [
+            "\(old) ⚠️ [WARNING] [A.swift:1] f(): helper output follows",
+            "Error fetching ^FTSE: 403 Client Error",
+            "\(recent) ℹ️ [INFO] [A.swift:1] f(): fine"
+        ]
+
+        let snapshot = RuntimeIssueMonitor.scan(logs: logs, since: now.addingTimeInterval(-600))
+
+        XCTAssertEqual(snapshot.errorCount, 0, "Yesterday's traceback is not a current error")
+        XCTAssertEqual(snapshot.scannedLineCount, 1)
+        XCTAssertEqual(RuntimeIssueMonitor.scan(logs: ["Error: no entry above"], since: now).errorCount, 1)
+    }
+
     func testMonitorReadsTheOlderTimestampFormatAndSaysNothingWhenHealthy() {
         let line = "2026-07-24 10:15:00 ℹ️ [INFO] [A.swift:1] f(): fine"
 

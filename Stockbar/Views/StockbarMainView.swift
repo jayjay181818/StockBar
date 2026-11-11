@@ -1009,6 +1009,7 @@ private struct StockbarBackupsView: View {
         }
         .stockbarPage()
         .onAppear(perform: reloadBackupState)
+        .onReceive(NotificationCenter.default.publisher(for: .stockbarBackupDidComplete)) { _ in reloadBackupState() }
         .sheet(isPresented: $showingRestoreSheet, onDismiss: reloadBackupState) {
             RestoreBackupView(isPresented: $showingRestoreSheet, dataModel: dataModel)
         }
@@ -1082,8 +1083,8 @@ private struct StockbarDataHealthView: View {
                     )
                     StockbarMetricTile(
                         title: "Menu Bar",
-                        value: dataModel.hideAllMenuBarItems ? "Hidden" : "\(trackedTrades.filter(\.trade.showInMenuBar).count) visible",
-                        detail: dataModel.requireExternalDisplayForMenuBarStocks ? "Only with an external display" : "Shown on every display",
+                        value: menuBarTile.value,
+                        detail: menuBarTile.detail,
                         systemImage: "menubar.rectangle"
                     )
                     StockbarMetricTile(
@@ -1157,7 +1158,21 @@ private struct StockbarDataHealthView: View {
         return now.timeIntervalSince(lastPriceUpdate) > max(dataModel.refreshInterval * 2, 600, closedAllowance)
     }
 
+    /// Says "Hidden" when nothing is on screen: either switched off, or waiting for an external display.
+    private var menuBarTile: (value: String, detail: String) {
+        let selected = trackedTrades.filter(\.trade.showInMenuBar).count
+        if dataModel.hideAllMenuBarItems { return ("Hidden", "Switched off in Settings") }
+        guard dataModel.requireExternalDisplayForMenuBarStocks else {
+            return ("\(selected) visible", "Shown on every display")
+        }
+        return dataModel.isExternalDisplayConnected
+            ? ("\(selected) visible", "Only with an external display")
+            : ("Hidden", "\(selected) selected · shown with an external display")
+    }
+
     private var refreshIntervalText: String {
+        // Folync holdings follow Folync's own poll, not the quote refresh interval.
+        if dataModel.isFolyncPortfolioActive { return "\(Int(FolyncRefreshSchedule.interval / 60)) min" }
         let minutes = Int(dataModel.refreshInterval / 60)
         return minutes >= 60 ? "\(minutes / 60) hr" : "\(max(minutes, 1)) min"
     }

@@ -46,6 +46,13 @@ struct StockbarOverviewView: View {
         case .localCalculationFallback, .marketDataFallback: "Local portfolio"
         }
     }
+    /// Folync can return a full chart and still mark the period partial (carried or stale
+    /// prices); the change is then withheld, and more local history would not bring it back.
+    private var rangeChangeUnavailableHint: String {
+        summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
+            ? "Folync marks this period partial"
+            : "Needs more stored history"
+    }
     private var rangeChange: PortfolioMenuRangeChange? {
         PortfolioMenuPerformanceResolver.resolve(
             summary: summary, range: chartModel.selectedTimeRange,
@@ -139,7 +146,7 @@ struct StockbarOverviewView: View {
             if chartModel.selectedTimeRange != .day {
                 changeMetric("\(chartModel.selectedTimeRange.description) change",
                              amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan,
-                             unavailableHint: "Needs more stored history")
+                             unavailableHint: rangeChangeUnavailableHint)
                     .transition(.opacity)
             }
         }

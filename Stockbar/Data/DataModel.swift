@@ -191,7 +191,7 @@ class DataModel {
     // MARK: - Memory Management
     @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
     @ObservationIgnored private var isMemoryOptimizationEnabled = true
-    @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    @ObservationIgnored private(set) var hasCompletedInitialTradeLoad = false
     /// False when the model was created without runtime services (tests, previews), where
     /// no stored portfolio is loaded and so no load has to finish before saving.
     @ObservationIgnored private var requiresInitialTradeLoad = true

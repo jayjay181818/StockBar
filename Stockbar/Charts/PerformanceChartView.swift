@@ -928,7 +928,8 @@ struct PerformanceChartView: View {
             if isCandlestickActive && !(isComparisonActive && !selectedComparisonSymbols.isEmpty) {
                 // OHLC has its own loading and empty states, independent of line history.
                 candlestickChartPlaceholder
-            } else if isLoadingData && displayableChartData.isEmpty {
+            } else if (isLoadingData || historicalDataManager.folyncPortfolioHistoryRequestsInFlight > 0)
+                        && displayableChartData.isEmpty {
                 ProgressView("Loading chart data...")
                     .frame(height: 300)
             } else if displayableChartData.isEmpty {
@@ -1017,7 +1018,7 @@ struct PerformanceChartView: View {
                                 AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
                             }
                             AxisTick()
-                            AxisValueLabel(format: currencyValueFormat)
+                            AxisValueLabel(format: currencyValueFormat(spanning: domain))
                         }
                     }
                     .chartYScale(domain: domain)
@@ -1895,7 +1896,9 @@ struct PerformanceChartView: View {
         .number.precision(.fractionLength(2))
     }
     
-    private var currencyValueFormat: FloatingPointFormatStyle<Double>.Currency {
+    /// Axis labels show pence only when the axis is fine enough to need them:
+    /// "£10,000.00" on a portfolio axis is noise, "£0.79" on a share price is not.
+    private func currencyValueFormat(spanning domain: ClosedRange<Double>) -> FloatingPointFormatStyle<Double>.Currency {
         // For individual stock charts, use the stock's native currency
         // For portfolio charts, use the preferred currency
         let currency: String
@@ -1912,8 +1915,9 @@ struct PerformanceChartView: View {
         }
         
         let currencyCode = currency == "GBX" ? "GBP" : currency
-        // Always show 2 decimal places for better precision, especially for lower value stocks
-        return FloatingPointFormatStyle<Double>.Currency(code: currencyCode).precision(.fractionLength(2))
+        let wholeUnits = domain.upperBound - domain.lowerBound >= 100
+        return FloatingPointFormatStyle<Double>.Currency(code: currencyCode)
+            .precision(.fractionLength(wholeUnits ? 0 : 2))
     }
     
     // MARK: - Helper Functions
