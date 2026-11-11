@@ -23,15 +23,11 @@ struct CandlestickChartView: View {
     @State private var hoveredCandle: OHLCDataPoint?
     /// Last candle the pointer was over; the context menu uses it, since the menu has no pointer position.
     @State private var lastPointerCandle: OHLCDataPoint?
-    @State private var showVolume: Bool = true
-    @State private var showSMA20: Bool = false
-    @State private var showSMA50: Bool = false
-    @State private var showEMA12: Bool = false
-    @State private var showBollingerBands: Bool = false
-    @State private var showRSI: Bool = false
-    @State private var showMACD: Bool = false
-    @State private var showGridLines: Bool
-    @State private var showCrosshair: Bool
+    /// Indicator and option toggles, remembered between reloads and launches.
+    @State private var toggles: CandlestickChartToggles
+    /// Indicator series for the candles on screen, computed once per data set
+    /// rather than on every redraw.
+    @State private var indicatorCache = CandleIndicatorCache()
 
     private let annotationService = ChartAnnotationService.shared
     
@@ -50,8 +46,7 @@ struct CandlestickChartView: View {
         self.currency = currency
         self.settings = settings
         self.symbol = symbol
-        _showGridLines = State(initialValue: settings.showGrid)
-        _showCrosshair = State(initialValue: settings.showCrosshair)
+        _toggles = State(initialValue: CandlestickChartToggles.load(defaults: settings))
     }
 
     var body: some View {
@@ -72,17 +67,43 @@ struct CandlestickChartView: View {
             }
 
             // RSI indicator (if enabled)
-            if showRSI {
+            if toggles.rsi {
                 rsiChartView
                     .frame(height: 100)
             }
 
             // MACD indicator (if enabled)
-            if showMACD {
+            if toggles.macd {
                 macdChartView
                     .frame(height: 100)
             }
         }
+        .onChange(of: toggles) { _, newValue in newValue.save() }
+    }
+
+    /// One x-axis for the price chart and every panel under it, so a date sits
+    /// at the same horizontal position in all of them.
+    private var sharedXDomain: ClosedRange<Date> {
+        ChartSeriesProcessing.paddedDateDomain(data.map(\.timestamp)) ?? Date.now...Date.now.addingTimeInterval(1)
+    }
+
+    /// Annotations inside the candles' date span; ones outside must not stretch the axis.
+    private var annotationsInView: [ChartAnnotation] {
+        guard let symbol else { return [] }
+        let domain = sharedXDomain
+        return annotationService.getAnnotations(for: symbol)
+            .filter { domain.contains($0.date) }
+            .sorted { $0.date < $1.date }
+    }
+
+    private func annotationMenuTitle(_ annotation: ChartAnnotation) -> String {
+        let text = annotation.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = text.isEmpty ? "Untitled" : String(text.prefix(40))
+        return "\(label) – \(annotation.date.formatted(date: .abbreviated, time: .omitted))"
+    }
+
+    private func indicator<T>(_ name: String, _ compute: () -> T) -> T {
+        indicatorCache.value(name, for: data, compute: compute)
     }
 
     // MARK: - Indicator Controls
@@ -91,15 +112,15 @@ struct CandlestickChartView: View {
         HStack(spacing: 8) {
             Menu {
                 Section("Moving averages") {
-                    Toggle("SMA 20", isOn: $showSMA20)
-                    Toggle("SMA 50", isOn: $showSMA50)
-                    Toggle("EMA 12", isOn: $showEMA12)
+                    Toggle("SMA 20", isOn: $toggles.sma20)
+                    Toggle("SMA 50", isOn: $toggles.sma50)
+                    Toggle("EMA 12", isOn: $toggles.ema12)
                 }
 
                 Section("Bands and panels") {
-                    Toggle("Bollinger Bands", isOn: $showBollingerBands)
-                    Toggle("RSI", isOn: $showRSI)
-                    Toggle("MACD", isOn: $showMACD)
+                    Toggle("Bollinger Bands", isOn: $toggles.bollingerBands)
+                    Toggle("RSI", isOn: $toggles.rsi)
+                    Toggle("MACD", isOn: $toggles.macd)
                 }
             } label: {
                 Label("Indicators", systemImage: "chart.xyaxis.line")
@@ -111,8 +132,8 @@ struct CandlestickChartView: View {
                 Text("Style: \(settings.style.description)")
                 Text("Volume: \(settings.volumeDisplay.description)")
                 Divider()
-                Toggle("Grid lines", isOn: $showGridLines)
-                Toggle("Crosshair", isOn: $showCrosshair)
+                Toggle("Grid lines", isOn: $toggles.gridLines)
+                Toggle("Crosshair", isOn: $toggles.crosshair)
             } label: {
                 Label("Options", systemImage: "slider.horizontal.3")
             }
@@ -128,12 +149,7 @@ struct CandlestickChartView: View {
 
     private var priceChartView: some View {
         // The x axis spans the candles only; annotations outside them must not stretch it.
-        let xDomain = ChartSeriesProcessing.paddedDateDomain(data.map(\.timestamp))
-        let visibleAnnotations: [ChartAnnotation] = symbol.map { currentSymbol in
-            annotationService.getAnnotations(for: currentSymbol).filter { annotation in
-                xDomain?.contains(annotation.date) ?? false
-            }
-        } ?? []
+        let visibleAnnotations = annotationsInView
 
         return Chart {
             ForEach(data) { candle in
@@ -193,8 +209,8 @@ struct CandlestickChartView: View {
             }
 
             // SMA 20 overlay
-            if showSMA20 {
-                let sma20 = indicatorService.calculateSMA(data: data, period: 20)
+            if toggles.sma20 {
+                let sma20 = indicator("sma20") { indicatorService.calculateSMA(data: data, period: 20) }
                 ForEach(Array(sma20.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
@@ -207,8 +223,8 @@ struct CandlestickChartView: View {
             }
 
             // SMA 50 overlay
-            if showSMA50 {
-                let sma50 = indicatorService.calculateSMA(data: data, period: 50)
+            if toggles.sma50 {
+                let sma50 = indicator("sma50") { indicatorService.calculateSMA(data: data, period: 50) }
                 ForEach(Array(sma50.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
@@ -221,8 +237,8 @@ struct CandlestickChartView: View {
             }
 
             // EMA 12 overlay
-            if showEMA12 {
-                let ema12 = indicatorService.calculateEMA(data: data, period: 12)
+            if toggles.ema12 {
+                let ema12 = indicator("ema12") { indicatorService.calculateEMA(data: data, period: 12) }
                 ForEach(Array(ema12.enumerated()), id: \.offset) { _, point in
                     LineMark(
                         x: .value("Time", point.0),
@@ -235,8 +251,10 @@ struct CandlestickChartView: View {
             }
 
             // Bollinger Bands overlay
-            if showBollingerBands {
-                let bb = indicatorService.calculateBollingerBands(data: data, period: 20, standardDeviations: 2.0)
+            if toggles.bollingerBands {
+                let bb = indicator("bollinger") {
+                    indicatorService.calculateBollingerBands(data: data, period: 20, standardDeviations: 2.0)
+                }
                 ForEach(Array(bb.enumerated()), id: \.offset) { _, band in
                     // Upper band
                     LineMark(
@@ -270,7 +288,7 @@ struct CandlestickChartView: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 if let date = value.as(Date.self) {
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: showGridLines ? 0.5 : 0))
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: toggles.gridLines ? 0.5 : 0))
                         .foregroundStyle(.secondary.opacity(0.2))
                     AxisTick()
                     AxisValueLabel {
@@ -283,7 +301,7 @@ struct CandlestickChartView: View {
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 6)) { value in
                 if let price = value.as(Double.self) {
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: showGridLines ? 0.5 : 0))
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: toggles.gridLines ? 0.5 : 0))
                         .foregroundStyle(.secondary.opacity(0.2))
                     AxisTick()
                     AxisValueLabel {
@@ -295,7 +313,7 @@ struct CandlestickChartView: View {
             }
         }
         .chartYScale(domain: yAxisRange)
-        .chartXScale(domain: xDomain ?? Date.now...Date.now.addingTimeInterval(1))
+        .chartXScale(domain: sharedXDomain)
         .chartOverlay { proxy in
             GeometryReader { geometry in
                 Rectangle()
@@ -351,11 +369,26 @@ struct CandlestickChartView: View {
             }
             .disabled(symbol == nil || data.isEmpty)
 
-            if let selectedAnnotation {
-                Button("Edit Selected Annotation") {
-                    draftAnnotation = selectedAnnotation
-                    draftIsNew = false
-                    showAnnotationEditor = true
+            // Each annotation in view can be edited or deleted on its own;
+            // before, the only way to remove one was to clear them all.
+            let annotations = annotationsInView
+            if !annotations.isEmpty {
+                Menu("Edit Annotation") {
+                    ForEach(annotations) { annotation in
+                        Button(annotationMenuTitle(annotation)) {
+                            draftAnnotation = annotation
+                            draftIsNew = false
+                            showAnnotationEditor = true
+                        }
+                    }
+                }
+                Menu("Delete Annotation") {
+                    ForEach(annotations) { annotation in
+                        Button(annotationMenuTitle(annotation), role: .destructive) {
+                            annotationService.removeAnnotation(id: annotation.id)
+                            if selectedAnnotation?.id == annotation.id { selectedAnnotation = nil }
+                        }
+                    }
                 }
             }
             Button("Clear Annotations…", role: .destructive) {
@@ -414,6 +447,7 @@ struct CandlestickChartView: View {
             }
         }
         .chartXAxis(.hidden)
+        .chartXScale(domain: sharedXDomain)
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
@@ -427,12 +461,15 @@ struct CandlestickChartView: View {
                 }
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Volume")
+        .accessibilityValue(data.last?.volume.map { "Latest \(formatVolume($0))" } ?? "No volume data")
     }
 
     // MARK: - RSI Chart
 
     private var rsiChartView: some View {
-        let rsiData = indicatorService.calculateRSI(data: data, period: 14)
+        let rsiData = indicator("rsi") { indicatorService.calculateRSI(data: data, period: 14) }
 
         return Chart {
             ForEach(Array(rsiData.enumerated()), id: \.offset) { _, point in
@@ -464,6 +501,7 @@ struct CandlestickChartView: View {
         }
         .chartYScale(domain: 0...100)
         .chartXAxis(.hidden)
+        .chartXScale(domain: sharedXDomain)
         .chartYAxis {
             AxisMarks(position: .trailing, values: [0, 30, 50, 70, 100]) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
@@ -483,12 +521,17 @@ struct CandlestickChartView: View {
                 .foregroundColor(.secondary)
                 .padding(4)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("RSI, 14 periods")
+        .accessibilityValue(rsiData.last.map { String(format: "Latest %.0f", $0.1) } ?? "No data")
     }
 
     // MARK: - MACD Chart
 
     private var macdChartView: some View {
-        let macdData = indicatorService.calculateMACD(data: data, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9)
+        let macdData = indicator("macd") {
+            indicatorService.calculateMACD(data: data, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9)
+        }
 
         return Chart {
             ForEach(Array(macdData.enumerated()), id: \.offset) { _, point in
@@ -524,6 +567,7 @@ struct CandlestickChartView: View {
                 .lineStyle(StrokeStyle(lineWidth: 1))
         }
         .chartXAxis(.hidden)
+        .chartXScale(domain: sharedXDomain)
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
@@ -559,6 +603,11 @@ struct CandlestickChartView: View {
             }
             .padding(4)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("MACD, 12, 26 and 9 periods")
+        .accessibilityValue(macdData.last.map {
+            String(format: "MACD %.2f, signal %.2f", $0.macdLine, $0.signalLine)
+        } ?? "No data")
     }
 
     // MARK: - Info Overlay
@@ -610,7 +659,7 @@ struct CandlestickChartView: View {
     }
 
     private var displayedCandle: OHLCDataPoint? {
-        selectedCandle ?? (showCrosshair ? hoveredCandle : nil)
+        selectedCandle ?? (toggles.crosshair ? hoveredCandle : nil)
     }
 
     private var candlestickAccessibilitySummary: String {
@@ -621,18 +670,7 @@ struct CandlestickChartView: View {
     }
 
     private var yAxisRange: ClosedRange<Double> {
-        guard !data.isEmpty else { return 0...100 }
-
-        let lows = data.map { $0.low }
-        let highs = data.map { $0.high }
-
-        guard let minLow = lows.min(), let maxHigh = highs.max() else {
-            return 0...100
-        }
-
-        let range = maxHigh - minLow
-        let buffer = range * 0.05
-        return (minLow - buffer)...(maxHigh + buffer)
+        ChartSeriesProcessing.paddedDomain(data.map(\.low) + data.map(\.high), fallback: 0...100)
     }
 
     private func formatXAxisDate(_ date: Date) -> String {
@@ -730,4 +768,65 @@ struct AnnotationMarkView: View {
     )
     .frame(height: 500)
     .padding()
+}
+
+// MARK: - Remembered toggles
+
+/// Which indicators and options are switched on. Stored so they survive the
+/// chart being rebuilt, which happens on every data reload.
+struct CandlestickChartToggles: Codable, Equatable {
+    var sma20 = false
+    var sma50 = false
+    var ema12 = false
+    var bollingerBands = false
+    var rsi = false
+    var macd = false
+    var gridLines = true
+    var crosshair = true
+
+    private static let storageKey = "candlestickChartToggles"
+
+    static func load(
+        defaults settings: CandlestickChartSettings,
+        from store: UserDefaults = StockbarRuntimeStorage.userDefaults
+    ) -> CandlestickChartToggles {
+        if let data = store.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode(CandlestickChartToggles.self, from: data) {
+            return decoded
+        }
+        var toggles = CandlestickChartToggles()
+        toggles.gridLines = settings.showGrid
+        toggles.crosshair = settings.showCrosshair
+        return toggles
+    }
+
+    func save(to store: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        if let encoded = try? JSONEncoder().encode(self) {
+            store.set(encoded, forKey: Self.storageKey)
+        }
+    }
+}
+
+/// Indicator series for one set of candles.
+@MainActor
+final class CandleIndicatorCache {
+    private var signature: String?
+    private var values: [String: Any] = [:]
+
+    func value<T>(_ name: String, for data: [OHLCDataPoint], compute: () -> T) -> T {
+        let current = [
+            String(data.count),
+            String(data.first?.timestamp.timeIntervalSince1970 ?? 0),
+            String(data.last?.timestamp.timeIntervalSince1970 ?? 0),
+            String(data.last?.close ?? 0)
+        ].joined(separator: "|")
+        if signature != current {
+            signature = current
+            values.removeAll()
+        }
+        if let cached = values[name] as? T { return cached }
+        let computed = compute()
+        values[name] = computed
+        return computed
+    }
 }

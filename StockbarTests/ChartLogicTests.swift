@@ -235,3 +235,197 @@ private func assertClose(_ lhs: [Double], _ rhs: [Double], accuracy: Double, fil
         XCTAssertEqual(left, right, accuracy: accuracy, file: file, line: line)
     }
 }
+
+final class ChartAuditFixTests: XCTestCase {
+    private let epoch = Date(timeIntervalSince1970: 1_700_000_000)
+    private let day: TimeInterval = 86_400
+
+    // MARK: Axis domain
+
+    func testPaddedDomainIgnoresValuesThatWouldCrashAScale() {
+        let domain = ChartSeriesProcessing.paddedDomain([10, .nan, 20, .infinity, -.infinity])
+        XCTAssertEqual(domain.lowerBound, 9.5, accuracy: 1e-9)
+        XCTAssertEqual(domain.upperBound, 20.5, accuracy: 1e-9)
+    }
+
+    func testPaddedDomainIsNeverEmpty() {
+        XCTAssertEqual(ChartSeriesProcessing.paddedDomain([]), 0...1)
+        XCTAssertEqual(ChartSeriesProcessing.paddedDomain([.nan], fallback: 0...100), 0...100)
+        let flat = ChartSeriesProcessing.paddedDomain([50, 50])
+        XCTAssertLessThan(flat.lowerBound, 50)
+        XCTAssertGreaterThan(flat.upperBound, 50)
+    }
+
+    // MARK: Zoom
+
+    func testZoomedDomainIsNilAtNormalSize() {
+        XCTAssertNil(ChartSeriesProcessing.zoomedDomain(
+            first: epoch, last: epoch.addingTimeInterval(100), scale: 1, panFraction: 0
+        ))
+        XCTAssertNil(ChartSeriesProcessing.zoomedDomain(first: epoch, last: epoch, scale: 4, panFraction: 0))
+    }
+
+    func testZoomedDomainHalvesTheSpanAndStaysInsideTheSeries() throws {
+        let last = epoch.addingTimeInterval(100)
+        let centred = try XCTUnwrap(ChartSeriesProcessing.zoomedDomain(
+            first: epoch, last: last, scale: 2, panFraction: 0
+        ))
+        XCTAssertEqual(centred.lowerBound, epoch.addingTimeInterval(25))
+        XCTAssertEqual(centred.upperBound, epoch.addingTimeInterval(75))
+
+        // Dragging right shows earlier dates, but never before the first point.
+        let earliest = try XCTUnwrap(ChartSeriesProcessing.zoomedDomain(
+            first: epoch, last: last, scale: 2, panFraction: 50
+        ))
+        XCTAssertEqual(earliest.lowerBound, epoch)
+        XCTAssertEqual(earliest.upperBound, epoch.addingTimeInterval(50))
+    }
+
+    // MARK: Candle aggregation
+
+    private func dailyCandles(_ count: Int) -> [OHLCDataPoint] {
+        (0..<count).map { index in
+            let price = 100 + Double(index)
+            return OHLCDataPoint(
+                timestamp: epoch.addingTimeInterval(Double(index) * day),
+                open: price, high: price + 2, low: price - 3, close: price + 1, volume: 10
+            )
+        }
+    }
+
+    func testFewCandlesAreLeftAlone() {
+        let candles = dailyCandles(50)
+        XCTAssertEqual(ChartSeriesProcessing.aggregatedCandles(candles).map(\.id), candles.map(\.id))
+    }
+
+    func testManyDailyCandlesMergeIntoLongerPeriodsWithoutLosingExtremes() throws {
+        let candles = dailyCandles(2_000)
+        let merged = ChartSeriesProcessing.aggregatedCandles(candles)
+
+        XCTAssertLessThanOrEqual(merged.count, ChartSeriesProcessing.maxCandles)
+        XCTAssertGreaterThan(merged.count, 20)
+        XCTAssertEqual(merged.first?.open, candles.first?.open)
+        XCTAssertEqual(merged.last?.close, candles.last?.close)
+        XCTAssertEqual(merged.map(\.high).max(), candles.map(\.high).max())
+        XCTAssertEqual(merged.map(\.low).min(), candles.map(\.low).min())
+        XCTAssertEqual(merged.compactMap(\.volume).reduce(0, +), 20_000)
+        XCTAssertEqual(merged.map(\.timestamp), merged.map(\.timestamp).sorted())
+    }
+
+    func testIntradayCandlesMergeInEqualRuns() {
+        let candles = (0..<900).map { index in
+            OHLCDataPoint(
+                timestamp: epoch.addingTimeInterval(Double(index) * 300),
+                open: 1, high: Double(index), low: 0.5, close: 1, volume: nil
+            )
+        }
+        let merged = ChartSeriesProcessing.aggregatedCandles(candles)
+        XCTAssertEqual(merged.count, 300)
+        XCTAssertEqual(merged.first?.high, 2)
+        XCTAssertNil(merged.first?.volume)
+    }
+
+    // MARK: Comparison
+
+    func testComparisonRebasesEverySeriesToTheFirstSharedDate() throws {
+        let long = (0..<4).map { ChartDataPoint(date: epoch.addingTimeInterval(Double($0) * day), value: [50, 100, 110, 120][$0]) }
+        let short = (2..<4).map { ChartDataPoint(date: epoch.addingTimeInterval(Double($0) * day), value: [200, 220][$0 - 2]) }
+        let rebased = ChartSeriesProcessing.rebasedToCommonStart(["LONG": long, "SHORT": short])
+
+        // LONG doubled before SHORT existed; that must not count in the comparison.
+        let longSeries = try XCTUnwrap(rebased["LONG"])
+        XCTAssertEqual(longSeries.count, 2)
+        XCTAssertEqual(longSeries[0].value, 0, accuracy: 1e-9)
+        XCTAssertEqual(longSeries[1].value, 120.0 / 110.0 - 1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(rebased["SHORT"]?.last).value, 0.1, accuracy: 1e-9)
+    }
+
+    func testComparisonDropsSeriesWithNothingUsable() {
+        let rebased = ChartSeriesProcessing.rebasedToCommonStart([
+            "EMPTY": [],
+            "BAD": [ChartDataPoint(date: epoch, value: .nan)],
+            "OK": [ChartDataPoint(date: epoch, value: 5), ChartDataPoint(date: epoch.addingTimeInterval(day), value: 6)]
+        ])
+        XCTAssertEqual(Array(rebased.keys), ["OK"])
+    }
+
+    // MARK: Popover downsampling
+
+    func testPopoverDownsamplingKeepsSpikesAndEndpoints() {
+        var prices = Array(repeating: 100.0, count: 1_000)
+        prices[333] = 250
+        prices[777] = 10
+        let points = prices.enumerated().map { index, price in
+            MenuChartDataPoint(date: epoch.addingTimeInterval(Double(index) * 60), price: price, symbol: "X")
+        }
+        let sampled = MenuChartDataBuilder.downsample(points, maxPoints: 60)
+
+        XCTAssertLessThanOrEqual(sampled.count, 60)
+        XCTAssertEqual(sampled.first?.date, points.first?.date)
+        XCTAssertEqual(sampled.last?.date, points.last?.date)
+        XCTAssertEqual(sampled.map(\.price).max(), 250)
+        XCTAssertEqual(sampled.map(\.price).min(), 10)
+        XCTAssertEqual(sampled.map(\.date), sampled.map(\.date).sorted())
+    }
+
+    // MARK: Remembered choices
+
+    private func scratchDefaults() throws -> UserDefaults {
+        let name = "ChartAuditFixTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    func testChartSelectionRoundTripsAndForgetsCustomRanges() throws {
+        let defaults = try scratchDefaults()
+        ChartViewSelection(chartType: .individualStock("NVDA"), timeRange: .year, style: .candlestick).save(to: defaults)
+        let loaded = ChartViewSelection.load(from: defaults)
+        XCTAssertEqual(loaded.timeRange, .year)
+        XCTAssertEqual(loaded.style, .candlestick)
+        guard case .individualStock("NVDA") = loaded.chartType(among: ["AAPL", "NVDA"]) else {
+            return XCTFail("the saved stock should be restored")
+        }
+
+        // A stock that has since been sold falls back to the portfolio.
+        guard case .portfolioValue = loaded.chartType(among: ["AAPL"]) else {
+            return XCTFail("a stock no longer held should not be restored")
+        }
+
+        ChartViewSelection(chartType: .portfolioGains, timeRange: .custom, style: .line).save(to: defaults)
+        XCTAssertEqual(ChartViewSelection.load(from: defaults).timeRange, .month)
+    }
+
+    func testIndicatorTogglesSurviveAReload() throws {
+        let defaults = try scratchDefaults()
+        var settings = CandlestickChartSettings()
+        settings.showGrid = false
+        var toggles = CandlestickChartToggles.load(defaults: settings, from: defaults)
+        XCTAssertFalse(toggles.gridLines, "the first load follows the saved chart settings")
+        XCTAssertFalse(toggles.rsi)
+
+        toggles.rsi = true
+        toggles.sma50 = true
+        toggles.save(to: defaults)
+        XCTAssertEqual(CandlestickChartToggles.load(defaults: CandlestickChartSettings(), from: defaults), toggles)
+    }
+
+    // MARK: Menu bar
+
+    func testPriceIsMarkedStaleOnlyWellPastTheRefreshCadence() {
+        let now = epoch
+        func stale(minutesOld: Double, interval: TimeInterval = 300) -> Bool {
+            MenuBarStaleness.isStale(
+                lastUpdate: now.addingTimeInterval(-minutesOld * 60), now: now, refreshInterval: interval
+            )
+        }
+        // Closed markets refetch every half hour, so an hour old is still normal.
+        XCTAssertFalse(stale(minutesOld: 5))
+        XCTAssertFalse(stale(minutesOld: 60))
+        XCTAssertTrue(stale(minutesOld: 80))
+        // A long refresh interval moves the line with it.
+        XCTAssertFalse(stale(minutesOld: 120, interval: 3_600))
+        XCTAssertTrue(stale(minutesOld: 160, interval: 3_600))
+        XCTAssertFalse(MenuBarStaleness.isStale(lastUpdate: nil, now: now, refreshInterval: 300))
+    }
+}

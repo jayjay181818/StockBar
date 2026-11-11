@@ -15,6 +15,9 @@ struct MenuPopoverMetrics {
     let units: Double
     let avgCost: Double
     let currency: String
+    /// Currency of market value and total P&L. A linked source reports these in
+    /// its own currency, which need not be the one the price is quoted in.
+    var valueCurrency: String?
     let updatedText: String
     let canEditUnits: Bool
     /// Set while the circuit breaker is suspending automatic updates.
@@ -299,12 +302,14 @@ struct MenuPriceChartView: View {
 
     private let chartHeight: CGFloat = 140
 
+    // Value and total P&L come from the metrics, which carry the linked
+    // source's own figures when there is one; they are not recomputed here.
+    private var valueCurrency: String { metrics.valueCurrency ?? metrics.currency }
     private var marketValue: String {
-        let val = currentPrice * metrics.units
-        if val.isNaN || val.isInfinite { return "—" }
-        return MenuPopoverFormatter.currencyExact(val, currency: metrics.currency)
+        guard let value = metrics.marketValue, value.isFinite else { return "—" }
+        return MenuPopoverFormatter.currencyExact(value, currency: valueCurrency)
     }
-    private var totalPnL: String { MenuPopoverFormatter.currencyExact(metrics.totalPnL, currency: metrics.currency, includeSign: true) }
+    private var totalPnL: String { MenuPopoverFormatter.currencyExact(metrics.totalPnL, currency: valueCurrency, includeSign: true) }
     private var totalPnLPercent: String { MenuPopoverFormatter.percent(metrics.totalPnLPercent) }
     private var priceChangePercent: Double? { metrics.priceChangePercent }
     private var units: String { MenuPopoverFormatter.units(metrics.units) }
@@ -333,9 +338,9 @@ struct MenuPriceChartView: View {
     /// Names the span the range P&L really covers: the selected range only
     /// when history reaches back that far, otherwise the first point's date.
     private var rangePnLLabel: String {
-        guard rangePriceChange != nil, let first = viewModel.chartData.first else { return "Today's P&L" }
+        guard rangePriceChange != nil, let first = viewModel.chartData.first else { return "24h P&L" }
         if PortfolioMenuChartDataBuilder.coversRange(viewModel.chartData, range: viewModel.selectedTimeRange) {
-            return "\(viewModel.selectedTimeRange.description) P&L"
+            return viewModel.selectedTimeRange == .day ? "24h P&L" : "\(viewModel.selectedTimeRange.description) P&L"
         }
         return "P&L since \(first.date.formatted(.dateTime.day().month(.abbreviated)))"
     }
@@ -381,7 +386,8 @@ struct MenuPriceChartView: View {
             headerView
 
             MenuPopoverTimeRangePicker(
-                selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) })
+                selectedRange: Binding(get: { viewModel.selectedTimeRange }, set: { viewModel.setTimeRange($0) }),
+                dayLabel: "24h"
             ) { _ in
                 hoveredPoint = nil
             }
@@ -423,6 +429,7 @@ struct MenuPriceChartView: View {
         .padding(.top, 16)
         .padding(.bottom, 10)
         .frame(width: 330)
+        .onChange(of: viewModel.chartData) { _, _ in hoveredPoint = nil }
         .fixedSize(horizontal: false, vertical: true)
         .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: metrics.suspensionNotice)
         .onAppear { viewModel.activate() }
@@ -518,7 +525,9 @@ struct MenuPriceChartView: View {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
-                        .help("Units come from the linked source and are read-only")
+                        .help(metrics.units == 0
+                            ? "Watchlist only: there is no holding to edit"
+                            : "Units come from the linked source and are read-only")
                         .accessibilityLabel("Units are read-only")
                 }
             }
