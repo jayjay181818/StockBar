@@ -189,6 +189,9 @@ class DataModel {
     @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
     @ObservationIgnored private var isMemoryOptimizationEnabled = true
     @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    /// False when the model was created without runtime services (tests, previews), where
+    /// no stored portfolio is loaded and so no load has to finish before saving.
+    @ObservationIgnored private var requiresInitialTradeLoad = true
     @ObservationIgnored private var mayStartRuntimeSchedulers = false
     /// Set while a settings import runs and until relaunch; cleared only when
     /// a failed import is rolled back.
@@ -221,6 +224,7 @@ class DataModel {
         // Initialize realTimeTrades first - will be loaded async after init
         self.realTimeTrades = []
         self.isInitialPortfolioSourceResolved = !startRuntimeServices
+        self.requiresInitialTradeLoad = startRuntimeServices
         
         // Note: All data loading now happens asynchronously via loadTradesAsync()
         // including migration of cost currency and trading info currency
@@ -1672,6 +1676,12 @@ class DataModel {
 
     func persistPortfolioAfterUserEdit(allowEmptyPortfolio: Bool = false) {
         guard !isFolyncPortfolioActive else { return }
+        // Every save replaces the whole stored portfolio. Before the stored one has been read,
+        // the list in memory is empty, so saving it would wipe the holdings on disk.
+        guard hasCompletedInitialTradeLoad || !requiresInitialTradeLoad else {
+            Task { await logger.debug("Skipping portfolio save until initial load completes") }
+            return
+        }
         ensureBenchmarkTracking()
 
         let validTrades = realTimeTrades.filter { trade in
@@ -2033,13 +2043,11 @@ extension RealTimeTrade {
             Task { await Logger.shared.warning("Fetch failed for \(result.symbol) - regularPrice: \(regularPrice), prevClose: \(prevClose)") }
 
             if retainOnFailure {
-                // Don't update the price data, but DO update the timestamp to show when we last tried
-                // Keep existing currentPrice, previousClose, prevClosePrice, currency
+                // Keep the existing price, previous close, currency and both timestamps. The price
+                // shown is still the last one fetched, so "updated" must keep saying when that was;
+                // stamping a failed attempt as fresh would present a stale price as current.
                 Task { await Logger.shared.info("Retaining last successful data for \(result.symbol)") }
 
-                // CRITICAL: Update timestamp and metadata even on failure so UI shows fresh "last updated" time
-                updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
-                updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
                 updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? updatedInfo.exchangeTimezoneName
                 updatedInfo.shortName = result.shortName ?? updatedInfo.shortName
 

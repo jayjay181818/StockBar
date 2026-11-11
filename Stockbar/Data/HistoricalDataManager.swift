@@ -232,7 +232,8 @@ class HistoricalDataManager {
         static let lastRetroactiveCalculationDate = "lastRetroactiveCalculationDate"
         static let cachedHistoricalPortfolioValues = "cachedHistoricalPortfolioValues"
         static let lastPortfolioCalculationDate = "lastPortfolioCalculationDate"
-        static let earliestAvailableDates = "earliestAvailableDates"
+        // "v2": the first key also held dates recorded from failed fetches, which capped history.
+        static let earliestAvailableDates = "earliestAvailableDates.v2"
     }
     
     // MARK: - Performance Caching
@@ -516,6 +517,9 @@ class HistoricalDataManager {
     }
     
     func recordSnapshot(from dataModel: DataModel) {
+        // Until the portfolio source (local, Trading 212 or Folync) is known, the holdings in
+        // memory may be the old local list. A snapshot of those would store a false dip.
+        guard dataModel.isInitialPortfolioSourceResolved else { return }
         let now = Date()
         let timeSinceLastSnapshot = now.timeIntervalSince(lastSnapshotTime)
         
@@ -1234,7 +1238,7 @@ class HistoricalDataManager {
 
         var dailyCloses: [Double] = []
         var lastDay: Date?
-        for point in points {
+        for point in points where !calendar.isDateInWeekend(point.date) {
             let day = calendar.startOfDay(for: point.date)
             if day == lastDay {
                 dailyCloses[dailyCloses.count - 1] = point.value
@@ -1258,7 +1262,8 @@ class HistoricalDataManager {
         // Sharpe ratio, assuming a 2% annual risk-free rate.
         let riskFreeRate = 0.02 / 252
         let meanExcessReturn = meanReturn - riskFreeRate
-        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) : nil
+        // Annualised, as on the Risk page and as the colour thresholds for this figure assume.
+        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil
 
         let (maxDrawdown, maxDrawdownPercent) = calculateMaxDrawdown(values: values)
 
@@ -1644,14 +1649,16 @@ class HistoricalDataManager {
         calculationDate: Date
     ) async {
         if let composition = portfolioComposition {
-            storeInCache(composition, key: StorageKeys.currentPortfolioComposition, isRecent: true)
+            // Written to the disk tier: a memory-only write left an older disk copy in place,
+            // which the next launch read first and took for a changed portfolio.
+            storeInCache(composition, key: StorageKeys.currentPortfolioComposition, isRecent: false)
         } else {
             // If composition is nil, consider removing it from cache or storing a representation of nil
             // For now, we just don't store it if it's nil. A remove(forKey:) might be better.
             cacheManager.remove(forKey: StorageKeys.currentPortfolioComposition)
         }
-        storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: true)
-        storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: true)
+        storeInCache(retroactiveCalculationDate, key: StorageKeys.lastRetroactiveCalculationDate, isRecent: false)
+        storeInCache(calculationDate, key: StorageKeys.lastPortfolioCalculationDate, isRecent: false)
         if !earliestAvailableDates.isEmpty {
             storeInCache(earliestAvailableDates, key: StorageKeys.earliestAvailableDates, isRecent: false)
         }
@@ -2500,10 +2507,13 @@ class HistoricalDataManager {
     /// Creates portfolio composition from current DataModel
     private func createPortfolioComposition(from dataModel: DataModel) -> PortfolioComposition {
         let positions = dataModel.realTimeTrades.filter { !$0.trade.isWatchlistOnly }.map { trade in
-            PortfolioPosition(
+            // An unreadable or blank average cost is NaN. NaN cannot be stored as JSON and never
+            // equals itself, so it would both fail to cache and look like a change on every check.
+            let avgCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            return PortfolioPosition(
                 symbol: trade.trade.name,
                 units: trade.trade.position.unitSize,
-                avgCost: trade.trade.position.getNormalizedAvgCost(for: trade.trade.name),
+                avgCost: avgCost.isFinite ? avgCost : 0,
                 currency: trade.realTimeInfo.currency ?? "USD"
             )
         }

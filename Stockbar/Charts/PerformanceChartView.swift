@@ -166,9 +166,20 @@ struct PerformanceChartView: View {
             fullResolutionChartData = []
             selectedDataPoints = []
             hoveredDataPoint = nil
+            // Candles belong to one symbol; drop them so they never show under another title.
+            resetOHLCState()
             if case .individualStock = newType { return }
             comparisonMode = false
             chartVisualizationStyle = .line
+        }
+        .onChange(of: selectedTimeRange) { _, _ in
+            resetOHLCState()
+        }
+        .onChange(of: chartVisualizationStyle) { _, _ in
+            // The candlestick view's own reload hooks only exist once it is on screen, so
+            // switching to it must start the first load.
+            guard isCandlestickActive, ohlcData.isEmpty else { return }
+            Task { await loadOHLCData() }
         }
         .onReceive(historicalDataManager.priceDataChanges) { changed in
             // Reload quietly, and only when a shown or compared symbol changed: the chart
@@ -814,6 +825,15 @@ struct PerformanceChartView: View {
             }
             await Logger.shared.error("Failed to load OHLC data: \(error)")
         }
+    }
+
+    /// Discards loaded candles and invalidates any load still in flight.
+    private func resetOHLCState() {
+        ohlcRequestGeneration &+= 1
+        ohlcData = []
+        ohlcSourceStatus = nil
+        ohlcCoverageLabel = nil
+        isLoadingOHLC = false
     }
 
     /// Line and comparison series reload through the load task; candles need an explicit reload.

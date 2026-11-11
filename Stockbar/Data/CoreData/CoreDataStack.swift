@@ -5,6 +5,15 @@ typealias CoreDataBatchValues = [String: any Sendable]
 
 extension NSPredicate: @unchecked @retroactive Sendable {}
 
+enum CoreDataStackError: LocalizedError {
+    /// The database could not be opened at launch, so nothing can be read or written.
+    case storeUnavailable
+
+    var errorDescription: String? {
+        "Stockbar's database could not be opened, so this change was not saved."
+    }
+}
+
 final class CoreDataStack: ObservableObject, @unchecked Sendable {
     static let shared = CoreDataStack()
     private let storeRecovery = CoreDataStoreRecovery()
@@ -159,11 +168,23 @@ final class CoreDataStack: ObservableObject, @unchecked Sendable {
     // MARK: - Background Operations
     
     func performBackgroundTask<T: Sendable>(_ block: @Sendable @escaping (NSManagedObjectContext) throws -> T) async throws -> T {
+        // Loading is synchronous, so once the container exists the state is final. With no store
+        // attached, Core Data raises an Objective-C exception on save that Swift cannot catch,
+        // which would crash the app; callers get an ordinary error instead.
+        let container = persistentContainer
+        switch storeLoadState {
+        case .failedAndBackedUp, .failedBackup:
+            throw CoreDataStackError.storeUnavailable
+        case .notLoaded, .loaded:
+            break
+        }
         return try await withCheckedThrowingContinuation { continuation in
-            persistentContainer.performBackgroundTask { context in
+            container.performBackgroundTask { context in
                 do {
                     let result = try block(context)
-                    try context.save()
+                    if context.hasChanges {
+                        try context.save()
+                    }
                     continuation.resume(returning: result)
                 } catch {
                     continuation.resume(throwing: error)
