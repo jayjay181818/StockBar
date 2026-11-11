@@ -496,9 +496,11 @@ class PortfolioCalculationService {
     private func convertBrokerAmount(_ amount: Double, from sourceCurrency: String, to targetCurrency: String) -> Double {
         let normalizedSource = CurrencyConverter.isPenceCurrency(sourceCurrency) ? "GBP" : sourceCurrency.uppercased()
         let normalizedTarget = CurrencyConverter.isPenceCurrency(targetCurrency) ? "GBP" : targetCurrency.uppercased()
+        // A pence amount is divided once here; relabelling it as pounds would overstate it 100 times.
+        let sourceAmount = CurrencyConverter.isPenceCurrency(sourceCurrency) ? amount / 100.0 : amount
         let converted = normalizedSource == normalizedTarget
-            ? amount
-            : currencyConverter.convert(amount: amount, from: normalizedSource, to: normalizedTarget)
+            ? sourceAmount
+            : currencyConverter.convert(amount: sourceAmount, from: normalizedSource, to: normalizedTarget)
         return CurrencyConverter.isPenceCurrency(targetCurrency) ? converted * 100.0 : converted
     }
 }

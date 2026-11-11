@@ -118,6 +118,9 @@ actor RiskMetricsService {
         return (result, converted, dropped)
     }
 
+    /// Day-to-day price ratios outside this range are treated as data breaks.
+    nonisolated static let discontinuityRange: ClosedRange<Double> = 0.25...4.0
+
     /// Builds a daily, trade-flow-adjusted series. Each day's return revalues the
     /// previous day's holdings at the new prices (`prevValue * priceNow / pricePrev`),
     /// so buying or selling units never registers as performance.
@@ -166,7 +169,10 @@ actor RiskMetricsService {
                     if let current = nowHoldings[symbol],
                        position.priceAtDate.isFinite, position.priceAtDate > 0,
                        current.priceAtDate.isFinite, current.priceAtDate > 0 {
-                        ratio = current.priceAtDate / position.priceAtDate
+                        let change = current.priceAtDate / position.priceAtDate
+                        // A one-day move this large is a split or a pence/pound slip in
+                        // the stored price, not performance; hold the holding flat.
+                        if discontinuityRange.contains(change) { ratio = change }
                     }
                     before += value
                     after += value * ratio

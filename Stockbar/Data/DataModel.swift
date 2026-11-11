@@ -928,6 +928,9 @@ class DataModel {
             links = try await trading212BrokerLinkStore.loadSnapshot()
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
         }
+        if try await trading212BrokerLinkStore.recordISINs(from: preview.rows) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+        }
         let plan = trading212BrokerSyncPlanner.plan(
             existingTrades: realTimeTrades.map(\.trade),
             tradingInfoBySymbol: tradingInfoBySymbol(),
@@ -1061,6 +1064,9 @@ class DataModel {
                 brokerOnlyCount: 0,
                 skippedReason: Self.trading212SkippedForFolyncReason
             )
+        }
+        if try await trading212BrokerLinkStore.recordISINs(from: preview.rows) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
         }
         let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
 

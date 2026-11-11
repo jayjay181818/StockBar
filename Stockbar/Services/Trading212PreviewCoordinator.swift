@@ -94,7 +94,8 @@ extension Trading212ImportPreviewRow {
             valueSource: position.currentPrice == nil && position.walletImpact?.currentValue == nil
                 ? .unavailable
                 : .brokerProvidedLivePositionData,
-            warnings: warnings
+            warnings: warnings,
+            isin: resolution.identity?.isin ?? position.instrument.isin
         )
     }
 
@@ -188,7 +189,8 @@ extension Trading212ImportPreviewRow {
             additionalManualMatchCount: 0,
             conflictStatus: conflict,
             valueSource: valueSource,
-            warnings: updatedWarnings
+            warnings: updatedWarnings,
+            isin: isin
         )
     }
 }

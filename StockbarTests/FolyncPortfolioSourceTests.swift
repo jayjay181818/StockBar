@@ -679,6 +679,24 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(trade.realTimeInfo.currency, "USD")
     }
 
+    func testAPenceCostCurrencyStaysPenceWhenNormalised() throws {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(versionTwoSnapshotJSON.utf8)) as? [String: Any]
+        )
+        var holdings = try XCTUnwrap(object["holdings"] as? [[String: Any]])
+        holdings[0]["averageCostCurrency"] = "GBp"
+        holdings[0]["valueCurrency"] = " gbp "
+        object["holdings"] = holdings
+
+        let holding = try XCTUnwrap(FolyncPortfolioDecoder().decodeSnapshot(
+            JSONSerialization.data(withJSONObject: object)
+        ).holdings.first)
+
+        // Upper-casing "GBp" would have read a cost in pence as pounds.
+        XCTAssertEqual(holding.resolvedAverageCostCurrency, "GBX")
+        XCTAssertEqual(holding.resolvedValueCurrency, "GBP")
+    }
+
     func testAggregateSameAssetRowsKeepDistinctPortfolioIdentityAndLabels() throws {
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(versionTwoSnapshotJSON.utf8)) as? [String: Any]
