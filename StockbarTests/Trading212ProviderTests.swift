@@ -37,7 +37,7 @@ final class Trading212AuthTests: XCTestCase {
         XCTAssertFalse(store.hasCredentials(environment: .demo))
     }
 
-    func testCredentialStoreSavesAndLoadsCurrentSingleKeychainItem() throws {
+    func testCredentialStoreSavesAndLoadsCredentials() throws {
         // Given: A test-only Keychain namespace and valid fake credentials.
         let service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
         let store = Trading212CredentialStore(service: service)
@@ -66,17 +66,17 @@ final class Trading212AuthTests: XCTestCase {
 
         // When: The credential has already been loaded once and the Keychain item disappears externally.
         XCTAssertEqual(try store.load(environment: .live), credentials)
-        deleteKeychainValue(service: service, account: "live.credentials.v2")
+        deleteKeychainValue(service: "\(service).combined", account: "credentials.v1")
 
         // Then: The same app session can keep syncing without another Keychain read.
         XCTAssertEqual(try store.load(environment: .live, allowUserInteraction: false), credentials)
 
         // And: Clearing the session cache returns to the durable Keychain state.
-        store.clearSessionCache(environment: .live)
+        store.clearSessionCache()
         XCTAssertThrowsError(try store.load(environment: .live, allowUserInteraction: false))
     }
 
-    func testCredentialStoreMigratesLegacySplitItemsOnlyOnExplicitLoad() throws {
+    func testCredentialStoreImportsLegacySplitItemsOnlyOnLoad() throws {
         // Given: Fake credentials saved in the old two-item Keychain layout.
         let service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
         let store = Trading212CredentialStore(service: service)
@@ -88,7 +88,7 @@ final class Trading212AuthTests: XCTestCase {
         XCTAssertEqual(store.storageState(environment: .demo), .legacySplitItems)
         XCTAssertTrue(store.hasCredentials(environment: .demo))
 
-        // Then: An explicit load returns the credentials and upgrades storage to one item.
+        // Then: A load returns the credentials and moves them into the shared item.
         XCTAssertEqual(
             try store.load(environment: .demo),
             Trading212AuthConfiguration(apiKey: "legacy-key", apiSecret: "legacy-secret")
@@ -136,6 +136,7 @@ final class Trading212AuthTests: XCTestCase {
         for environment in [Trading212Environment.live, .demo] {
             try? store.delete(environment: environment)
         }
+        try? CredentialVault.named("\(service).combined").deleteItem()
         for account in ["live.credentials.v2", "demo.credentials.v2",
                         "live.apiKey", "live.apiSecret", "demo.apiKey", "demo.apiSecret"] {
             deleteKeychainValue(service: service, account: account)

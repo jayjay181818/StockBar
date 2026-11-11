@@ -36,6 +36,7 @@
 		04C0FFEE0000000000000046 /* Trading212ProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000047 /* Trading212ProviderTests.swift */; };
 		04C0FFEE0000000000000032 /* StockbarAcceptanceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */; };
 		04C0FFEE000000000000004A /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */; };
+		04C0FFEE000000000000004C /* CredentialVaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000004D /* CredentialVaultTests.swift */; };
 		04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */; };
 		04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */; };
 		04C0FFEE00000000005A0001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 04C0FFEE00000000005A0002 /* Sparkle */; };
@@ -73,6 +74,7 @@
 		04C0FFEE0000000000000047 /* Trading212ProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Trading212ProviderTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptanceRuntimeTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateServiceTests.swift; sourceTree = "<group>"; };
+		04C0FFEE000000000000004D /* CredentialVaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialVaultTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarProviderAccessPolicyTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptancePreflightTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -149,6 +151,7 @@
 			isa = PBXGroup;
 			children = (
 				04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */,
+				04C0FFEE000000000000004D /* CredentialVaultTests.swift */,
 				04C0FFEE0000000000000011 /* CacheCoordinatorTests.swift */,
 				04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */,
 				04C0FFEE0000000000000013 /* CurrencyConverterTests.swift */,
@@ -311,6 +314,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				04C0FFEE000000000000004A /* AppUpdateServiceTests.swift in Sources */,
+				04C0FFEE000000000000004C /* CredentialVaultTests.swift in Sources */,
 				04C0FFEE0000000000000010 /* CacheCoordinatorTests.swift in Sources */,
 				04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */,
 				04C0FFEE0000000000000012 /* CurrencyConverterTests.swift in Sources */,

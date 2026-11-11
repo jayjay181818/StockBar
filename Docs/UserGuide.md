@@ -155,7 +155,7 @@ Stockbar looks for a new version about once a day. When there is one it shows th
 
 Things to know:
 
-- **Keychain prompts after an update.** macOS asks again for access to each saved connection (Trading 212, Folync, FMP, Twelve Data). Choose **Always Allow**. Stockbar is built without an Apple developer account, so each build has a new signature and macOS does not carry the answer over.
+- **Keychain prompt after an update.** macOS asks once for access to your saved credentials (Trading 212, Folync, FMP and Twelve Data are kept in one Keychain item, "Stockbar credentials"). Choose **Always Allow**. The first update to a version that keeps them in one item asks once more for each credential saved by the version before, to move it across. Stockbar is built without an Apple developer account, so each build has a new signature and macOS does not carry the answer over.
 - **Leaving Testing.** Stockbar never moves to an older build. After switching back to Stable you keep the testing build you have until a newer version is released.
 - **Where updates come from.** They are built by GitHub from Stockbar's source and downloaded from its GitHub releases. Stockbar checks each one against a signing key built into the app and refuses a download or an update list that does not match.
 - **Development builds.** A build made from source in Xcode shows only its version here; updates are off.

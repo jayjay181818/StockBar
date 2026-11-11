@@ -732,7 +732,7 @@ class DataModel {
                credentialState == .legacySplitItems {
                 Task {
                     await Logger.shared.warning(
-                        "Trading 212 auto-sync not started because credentials use older split Keychain storage. Open Settings and run Test Connection or re-save credentials to upgrade."
+                        "Trading 212 auto-sync not started because credentials use older Keychain storage. Open Settings and run Test Connection or re-save credentials to upgrade."
                     )
                 }
             }

@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 enum Trading212CredentialStoreError: Error, LocalizedError {
@@ -33,231 +32,166 @@ enum Trading212CredentialStorageState: Equatable {
     }
 }
 
-final class Trading212CredentialStore: @unchecked Sendable {
+/// Keeps the Trading 212 API key and secret in the Keychain, in the item all
+/// credentials share (`CredentialVault`).
+///
+/// `load` can wait on a Keychain prompt; call it off the main actor.
+/// `storageState` never does.
+final class Trading212CredentialStore: Sendable {
     static let shared = Trading212CredentialStore()
 
     private let service: String
-    private let cacheLock = NSLock()
-    private var sessionCredentials: [String: Trading212AuthConfiguration] = [:]
+    private let vault: CredentialVault
 
     init(service: String = StockbarRuntimeStorage.acceptance.trading212KeychainService) {
         self.service = service
+        self.vault = .backing(storeService: service)
     }
 
     func save(_ credentials: Trading212AuthConfiguration, environment: Trading212Environment) throws {
         let normalized = credentials.normalized
         _ = try Trading212AuthHeaderBuilder().authorizationHeader(for: normalized)
-        let account = currentAccountName(environment: environment)
-        let data = try JSONEncoder().encode(StoredCredentialPayload(credentials: normalized))
-        try saveData(data, account: account)
-        try deleteLegacyValues(environment: environment)
-        cache(normalized, account: account)
+        try keychain {
+            try vault.update { values in
+                values[apiKeyName(environment)] = normalized.apiKey
+                values[apiSecretName(environment)] = normalized.apiSecret
+            }
+        }
+        // The vault now holds the newer pair; the old items are never read again.
+        for item in legacyItems(environment) { try? item.delete() }
     }
 
+    /// The stored credentials. After the first read they come from memory.
+    /// With `allowUserInteraction` off, a read that would need the user fails
+    /// with `errSecInteractionNotAllowed` instead of asking.
     func load(
         environment: Trading212Environment,
         allowUserInteraction: Bool = true
     ) throws -> Trading212AuthConfiguration {
-        let account = currentAccountName(environment: environment)
-        if let cached = cachedCredential(account: account) {
-            return cached
-        }
-
-        if let data = try loadData(account: account, allowUserInteraction: allowUserInteraction) {
-            guard let payload = try? JSONDecoder().decode(StoredCredentialPayload.self, from: data) else {
-                throw Trading212CredentialStoreError.invalidStoredCredentials
+        let values = try keychain {
+            try vault.importLegacy(into: names(environment), allowUserInteraction: allowUserInteraction) {
+                legacySources(environment)
             }
-            let credentials = payload.credentials.normalized
-            cache(credentials, account: account)
-            return credentials
+            return try vault.values(allowUserInteraction: allowUserInteraction)
         }
-
-        guard storageState(environment: environment) == .legacySplitItems else {
+        guard let apiKey = values[apiKeyName(environment)],
+              let apiSecret = values[apiSecretName(environment)] else {
             throw Trading212CredentialStoreError.missingCredentials
         }
-
-        guard let apiKey = try loadValue(
-            account: legacyAccountName("apiKey", environment: environment),
-            allowUserInteraction: allowUserInteraction
-        ),
-              let apiSecret = try loadValue(
-                account: legacyAccountName("apiSecret", environment: environment),
-                allowUserInteraction: allowUserInteraction
-              ) else {
-            throw Trading212CredentialStoreError.missingCredentials
-        }
-
-        let credentials = Trading212AuthConfiguration(apiKey: apiKey, apiSecret: apiSecret).normalized
-        try save(credentials, environment: environment)
-        return credentials
+        return Trading212AuthConfiguration(apiKey: apiKey, apiSecret: apiSecret).normalized
     }
 
     func hasCredentials(environment: Trading212Environment) -> Bool {
         storageState(environment: environment).hasCredentials
     }
 
+    /// Whether credentials are stored and in which form, without reading them.
     func storageState(environment: Trading212Environment) -> Trading212CredentialStorageState {
-        if credentialExists(account: currentAccountName(environment: environment)) {
-            return .currentSingleItem
-        }
+        // A locked Keychain will not say; as before, that counts as stored.
+        guard let stored = vault.storedKeys() else { return .currentSingleItem }
+        let names = names(environment)
+        if names.allSatisfy(stored.contains) { return .currentSingleItem }
+        guard stored.isDisjoint(with: names) else { return .notStored }
 
-        if credentialExists(account: legacyAccountName("apiKey", environment: environment)),
-           credentialExists(account: legacyAccountName("apiSecret", environment: environment)) {
+        // Not in the shared item yet: an earlier version's items are imported
+        // by the next `load`.
+        if legacyPair(environment).exists() { return .currentSingleItem }
+        if legacySplitKey(environment).exists(), legacySplitSecret(environment).exists() {
             return .legacySplitItems
         }
-
         return .notStored
     }
 
     func delete(environment: Trading212Environment) throws {
-        removeCachedCredential(account: currentAccountName(environment: environment))
-        try deleteValue(account: currentAccountName(environment: environment))
-        try deleteLegacyValues(environment: environment)
-    }
-
-    func clearSessionCache(environment: Trading212Environment? = nil) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-
-        if let environment {
-            sessionCredentials.removeValue(forKey: currentAccountName(environment: environment))
-        } else {
-            sessionCredentials.removeAll()
+        try keychain {
+            // First, so credentials that were never imported cannot come back.
+            for item in legacyItems(environment) { try item.delete() }
+            guard vault.storedKeys()?.isDisjoint(with: names(environment)) != true else { return }
+            try vault.update { values in
+                for name in names(environment) { values[name] = nil }
+            }
         }
     }
 
-    private func currentAccountName(environment: Trading212Environment) -> String {
-        "\(environment.rawValue).credentials.v2"
+    /// Forgets the copy in memory; the next `load` reads the Keychain.
+    func clearSessionCache() {
+        vault.forgetCachedContents()
     }
 
-    private func legacyAccountName(_ name: String, environment: Trading212Environment) -> String {
-        "\(environment.rawValue).\(name)"
+    // MARK: Names in the vault
+
+    private func apiKeyName(_ environment: Trading212Environment) -> String {
+        "trading212.\(environment.rawValue).apiKey"
     }
 
-    private func cachedCredential(account: String) -> Trading212AuthConfiguration? {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        return sessionCredentials[account]
+    private func apiSecretName(_ environment: Trading212Environment) -> String {
+        "trading212.\(environment.rawValue).apiSecret"
     }
 
-    private func cache(_ credentials: Trading212AuthConfiguration, account: String) {
-        cacheLock.lock()
-        sessionCredentials[account] = credentials
-        cacheLock.unlock()
+    private func names(_ environment: Trading212Environment) -> [String] {
+        [apiKeyName(environment), apiSecretName(environment)]
     }
 
-    private func removeCachedCredential(account: String) {
-        cacheLock.lock()
-        sessionCredentials.removeValue(forKey: account)
-        cacheLock.unlock()
+    // MARK: Items of earlier versions
+
+    /// One item holding the pair as JSON: the form before the shared item.
+    private func legacyPair(_ environment: Trading212Environment) -> LegacyKeychainItem {
+        legacyItem("\(environment.rawValue).credentials.v2")
     }
 
-    private func saveData(_ data: Data, account: String) throws {
-        let query = baseQuery(account: account)
-        let updateStatus = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
-
-        if updateStatus == errSecSuccess {
-            return
-        }
-        guard updateStatus == errSecItemNotFound else {
-            throw Trading212CredentialStoreError.keychainStatus(updateStatus)
-        }
-
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw Trading212CredentialStoreError.keychainStatus(addStatus)
-        }
+    /// The first form: the key and the secret in an item each.
+    private func legacySplitKey(_ environment: Trading212Environment) -> LegacyKeychainItem {
+        legacyItem("\(environment.rawValue).apiKey")
     }
 
-    private func loadData(account: String, allowUserInteraction: Bool = true) throws -> Data? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        if !allowUserInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound {
-            return nil
-        }
-        guard status == errSecSuccess else {
-            throw Trading212CredentialStoreError.keychainStatus(status)
-        }
-        guard let data = item as? Data else {
-            return nil
-        }
-        return data
+    private func legacySplitSecret(_ environment: Trading212Environment) -> LegacyKeychainItem {
+        legacyItem("\(environment.rawValue).apiSecret")
     }
 
-    private func loadValue(account: String, allowUserInteraction: Bool = true) throws -> String? {
-        guard let data = try loadData(account: account, allowUserInteraction: allowUserInteraction) else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
+    private func legacyItems(_ environment: Trading212Environment) -> [LegacyKeychainItem] {
+        [legacyPair(environment), legacySplitKey(environment), legacySplitSecret(environment)]
     }
 
-    private func deleteValue(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw Trading212CredentialStoreError.keychainStatus(status)
-        }
+    /// This store's queries never carried `kSecAttrAccessible`; the items are
+    /// only found by a query without it.
+    private func legacyItem(_ account: String) -> LegacyKeychainItem {
+        LegacyKeychainItem(service: service, account: account, setsAccessible: false)
     }
 
-    private func deleteLegacyValues(environment: Trading212Environment) throws {
-        try deleteValue(account: legacyAccountName("apiKey", environment: environment))
-        try deleteValue(account: legacyAccountName("apiSecret", environment: environment))
-    }
-
-    private func credentialExists(account: String) -> Bool {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-
-        var query = baseQuery(account: account)
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        query[kSecReturnAttributes as String] = true
-        query[kSecUseAuthenticationContext as String] = context
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        return status == errSecSuccess || status == errSecInteractionNotAllowed
-    }
-
-    /// Lookup/insert/delete predicate.
-    ///
-    /// NOTE: unlike `FolyncCredentialStore`, this store deliberately does **not**
-    /// set `kSecAttrAccessible` or `kSecUseDataProtectionKeychain`, so its items
-    /// live in the legacy macOS keychain. That is not ideal — the modern
-    /// data-protection keychain is preferable — but the two keychains are
-    /// separate stores: adding either attribute here would write new credentials
-    /// somewhere these lookups do not search, silently unlinking every existing
-    /// Trading 212 connection. Moving this store needs a deliberate read-old /
-    /// write-new migration, not an attribute change.
-    private func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+    /// Newest form first. The split items count only as a pair.
+    private func legacySources(_ environment: Trading212Environment) -> [LegacyCredentialSource] {
+        let apiKeyName = apiKeyName(environment)
+        let apiSecretName = apiSecretName(environment)
+        var sources = [
+            LegacyCredentialSource(item: legacyPair(environment)) { data in
+                guard let payload = try? JSONDecoder().decode(StoredCredentialPayload.self, from: data) else {
+                    throw Trading212CredentialStoreError.invalidStoredCredentials
+                }
+                let credentials = Trading212AuthConfiguration(apiKey: payload.apiKey, apiSecret: payload.apiSecret)
+                    .normalized
+                return [apiKeyName: credentials.apiKey, apiSecretName: credentials.apiSecret]
+            }
         ]
+        let splitKey = legacySplitKey(environment)
+        let splitSecret = legacySplitSecret(environment)
+        if splitKey.exists(), splitSecret.exists() {
+            sources.append(.text(splitKey, key: apiKeyName))
+            sources.append(.text(splitSecret, key: apiSecretName))
+        }
+        return sources
+    }
+
+    private func keychain<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CredentialVaultError {
+            throw Trading212CredentialStoreError.keychainStatus(error.status)
+        }
     }
 
     private struct StoredCredentialPayload: Codable {
         let apiKey: String
         let apiSecret: String
-
-        init(credentials: Trading212AuthConfiguration) {
-            self.apiKey = credentials.apiKey
-            self.apiSecret = credentials.apiSecret
-        }
-
-        var credentials: Trading212AuthConfiguration {
-            Trading212AuthConfiguration(apiKey: apiKey, apiSecret: apiSecret)
-        }
     }
 }
 
