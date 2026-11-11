@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (360.17)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.17</link>
+      <pubDate>Wed, 11 Nov 2026 16:06:49 +0000</pubDate>
+      <sparkle:version>360.17</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 360.17 of Stockbar 3.7.0. Changes since testing-360.15:
+
+- Release 3.7.0</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-360.17/Stockbar-360.17.zip" length="8234989" type="application/octet-stream" sparkle:edSignature="5ljM7w2OP4g69+e3oEFblSQAImEi8BMD43YalLfCKZ7yK6GprzABCADG2qhDjBBTVwWepWKHLJMcq8A5AtnGCg=="></enclosure>
+    </item>
+    <item>
       <title>3.6.0 (360.15)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.15</link>
       <pubDate>Wed, 11 Nov 2026 15:43:09 +0000</pubDate>
@@ -35,6 +48,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 1lGZEXxsfV7dOneKapL2OeRa0dNFBrlsRKrpLwJm4cH6xSCTfpapGIHHIdW2muNdQhk5o0ddf3bVy4CMKJLjBA==
-length: 2459
+edSignature: 1Q5WE0m08Fvghp0yXazerw5MfYR07pMmtaFsVGva5EWh1JLNtwu1OpScMlStz+ftB1Lafx1ytwmytvBNY0miCg==
+length: 3339
 -->
