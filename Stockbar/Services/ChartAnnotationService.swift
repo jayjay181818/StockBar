@@ -85,7 +85,7 @@ class ChartAnnotationService {
         saveAnnotations()
         
         Task {
-            await logger.info("📝 Added annotation: \(annotation.text) for \(annotation.symbol)")
+            await logger.debug("📝 Added annotation for \(annotation.symbol)")
         }
     }
     

@@ -130,12 +130,17 @@ actor MenuBarFormattingService {
         settings: MenuBarDisplaySettings,
         useColorCoding: Bool
     ) -> NSAttributedString {
-        // Zero (and unknown) change is neutral: no arrow, no green.
-        let isPositive = change > 0
-        let isNegative = change < 0
+        // Zero (and unknown) change is neutral: no arrow, no green. So is a change
+        // too small to show at the chosen precision: "+0.00%" in green says nothing.
+        let shownChange = Self.roundedForDisplay(change, decimalPlaces: settings.decimalPlaces)
+        let shownChangePct = Self.roundedForDisplay(changePct, decimalPlaces: settings.decimalPlaces)
+        let direction = shownChange != 0 ? shownChange : shownChangePct
+        let isPositive = direction > 0
+        let isNegative = direction < 0
 
         // Get the template
         var template = settings.effectiveTemplate
+        let templateHasArrow = template.contains("{arrow}")
 
         // Prepare formatted values
         let formattedPrice = formatPrice(price, currency: currency, settings: settings)
@@ -155,7 +160,7 @@ actor MenuBarFormattingService {
         template = template.replacingOccurrences(of: "{arrow}", with: arrow)
 
         // Handle arrow before/after symbol for non-custom modes
-        if settings.displayMode != .custom && settings.arrowStyle != .none && !arrow.isEmpty {
+        if settings.displayMode != .custom && settings.arrowStyle != .none && !arrow.isEmpty && !templateHasArrow {
             if settings.showArrowBeforeSymbol {
                 // Arrow before symbol
                 if template.hasPrefix(symbol) {
@@ -170,16 +175,26 @@ actor MenuBarFormattingService {
             }
         }
 
-        // Apply color coding if enabled
-        if useColorCoding {
-            return createAttributedString(
-                template,
-                isPositive: isPositive,
-                isNegative: isNegative
-            )
-        } else {
-            return NSAttributedString(string: template)
-        }
+        // Without colour coding the title is still neutral, but keeps the same font.
+        return createAttributedString(
+            template,
+            isPositive: isPositive,
+            isNegative: isNegative,
+            colored: useColorCoding
+        )
+    }
+
+    /// The value as it will be printed, so "-0.004" at two places is zero, not negative.
+    static func roundedForDisplay(_ value: Double, decimalPlaces: Int) -> Double {
+        guard value.isFinite else { return 0 }
+        let scale = pow(10, Double(max(0, decimalPlaces)))
+        let rounded = (value * scale).rounded() / scale
+        return rounded == 0 ? 0 : rounded
+    }
+
+    /// Digits of equal width, so the item does not change width as prices tick.
+    static var titleFont: NSFont {
+        NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
     }
 
     private func formatPrice(_ price: Double, currency: String, settings: MenuBarDisplaySettings) -> String {
@@ -208,6 +223,7 @@ actor MenuBarFormattingService {
         }
 
         // A change that rounds to zero carries no sign.
+        let change = Self.roundedForDisplay(change, decimalPlaces: settings.decimalPlaces)
         let formatted = String(format: change == 0 ? "%.\(settings.decimalPlaces)f" : "%+.\(settings.decimalPlaces)f", change)
 
         if settings.showCurrency {
@@ -227,6 +243,7 @@ actor MenuBarFormattingService {
             return Self.missingValue
         }
 
+        let percent = Self.roundedForDisplay(percent, decimalPlaces: settings.decimalPlaces)
         return String(format: percent == 0 ? "%.\(settings.decimalPlaces)f%%" : "%+.\(settings.decimalPlaces)f%%", percent)
     }
 
@@ -238,10 +255,17 @@ actor MenuBarFormattingService {
     private func createAttributedString(
         _ text: String,
         isPositive: Bool,
-        isNegative: Bool
+        isNegative: Bool,
+        colored: Bool
     ) -> NSAttributedString {
         let attributed = NSMutableAttributedString(string: text)
         let range = NSRange(location: 0, length: text.utf16.count)
+
+        // Digits of equal width whether or not the title is coloured.
+        attributed.addAttribute(.font, value: Self.titleFont, range: range)
+        guard colored else {
+            return attributed.copy() as? NSAttributedString ?? NSAttributedString(attributedString: attributed)
+        }
 
         // Apply color based on change
         let color: NSColor = if isPositive {
@@ -253,9 +277,6 @@ actor MenuBarFormattingService {
         }
 
         attributed.addAttribute(.foregroundColor, value: color, range: range)
-
-        // Use system font
-        attributed.addAttribute(.font, value: NSFont.menuBarFont(ofSize: 0), range: range)
 
         return attributed.copy() as? NSAttributedString ?? NSAttributedString(attributedString: attributed)
     }

@@ -6,6 +6,141 @@ enum ChartSeriesProcessing {
     static let downsampleThreshold = 1_000
     static let downsampleTarget = 800
 
+    // MARK: - Comparison
+
+    /// Each series as a fractional change from its value on the first date
+    /// every series has data for, clipped to start there. Rebasing each to its
+    /// own first point compared changes over different periods.
+    static func rebasedToCommonStart(_ series: [String: [ChartDataPoint]]) -> [String: [ChartDataPoint]] {
+        let usable = series.mapValues { points in points.filter { $0.value.isFinite } }.filter { !$0.value.isEmpty }
+        guard let start = usable.values.compactMap({ $0.first?.date }).max() else { return [:] }
+        var result: [String: [ChartDataPoint]] = [:]
+        for (symbol, points) in usable {
+            let window = points.filter { $0.date >= start }
+            guard let base = window.first?.value, base != 0 else { continue }
+            result[symbol] = window.map {
+                ChartDataPoint(date: $0.date, value: ($0.value - base) / base, symbol: $0.symbol)
+            }
+        }
+        return result
+    }
+
+    // MARK: - Candle aggregation
+
+    static let maxCandles = 400
+
+    /// Merges candles until at most `maxCandles` remain: daily candles into
+    /// calendar weeks, months, quarters or years, shorter ones into equal runs.
+    /// Thousands of one-pixel daily candles are unreadable and slow to draw.
+    /// Expects ascending order.
+    static func aggregatedCandles(_ candles: [OHLCDataPoint], maxCandles: Int = maxCandles) -> [OHLCDataPoint] {
+        guard maxCandles > 0, candles.count > maxCandles else { return candles }
+
+        let gaps = zip(candles.dropFirst(), candles).map { $0.timestamp.timeIntervalSince($1.timestamp) }.sorted()
+        let isDaily = (gaps.isEmpty ? 0 : gaps[gaps.count / 2]) >= 20 * 3600
+
+        if isDaily {
+            var calendar = Calendar(identifier: .iso8601)
+            calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+            let steps: [(Date) -> DateComponents] = [
+                { calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: $0) },
+                { calendar.dateComponents([.year, .month], from: $0) },
+                { calendar.dateComponents([.year, .quarter], from: $0) },
+                { calendar.dateComponents([.year], from: $0) }
+            ]
+            var merged = candles
+            for bucket in steps {
+                merged = mergeRuns(candles) { bucket($0.timestamp) == bucket($1.timestamp) }
+                if merged.count <= maxCandles { return merged }
+            }
+            return merged
+        }
+
+        let size = Int((Double(candles.count) / Double(maxCandles)).rounded(.up))
+        return stride(from: 0, to: candles.count, by: size).compactMap { start in
+            mergedCandle(Array(candles[start..<min(start + size, candles.count)]))
+        }
+    }
+
+    private static func mergeRuns(
+        _ candles: [OHLCDataPoint],
+        sameBucket: (OHLCDataPoint, OHLCDataPoint) -> Bool
+    ) -> [OHLCDataPoint] {
+        var result: [OHLCDataPoint] = []
+        var run: [OHLCDataPoint] = []
+        for candle in candles {
+            if let first = run.first, !sameBucket(first, candle) {
+                if let merged = mergedCandle(run) { result.append(merged) }
+                run.removeAll(keepingCapacity: true)
+            }
+            run.append(candle)
+        }
+        if let merged = mergedCandle(run) { result.append(merged) }
+        return result
+    }
+
+    /// Opens at the first candle, closes at the last, and spans every high and
+    /// low between. Volume is the total, or nil if no candle reported any.
+    private static func mergedCandle(_ run: [OHLCDataPoint]) -> OHLCDataPoint? {
+        guard let first = run.first, let last = run.last else { return nil }
+        guard run.count > 1 else { return first }
+        let volumes = run.compactMap(\.volume)
+        return OHLCDataPoint(
+            timestamp: first.timestamp,
+            open: first.open,
+            high: run.map(\.high).max() ?? first.high,
+            low: run.map(\.low).min() ?? first.low,
+            close: last.close,
+            volume: volumes.isEmpty ? nil : volumes.reduce(0) { $0.addingReportingOverflow($1).partialValue }
+        )
+    }
+
+    // MARK: - Zoom
+
+    static let maxZoom = 10.0
+
+    /// The dates shown at `scale` (1 is the whole series). `panFraction` moves
+    /// the window by that fraction of its own width, positive towards earlier
+    /// dates, and never past either end. Nil when there is nothing to zoom.
+    static func zoomedDomain(
+        first: Date,
+        last: Date,
+        scale: Double,
+        panFraction: Double
+    ) -> ClosedRange<Date>? {
+        let full = last.timeIntervalSince(first)
+        guard scale.isFinite, scale > 1.001, full.isFinite, full > 0 else { return nil }
+        let visible = full / min(scale, maxZoom)
+        let slack = (full - visible) / 2
+        let pan = panFraction.isFinite ? panFraction : 0
+        let shift = max(-slack, min(slack, -pan * visible))
+        let middle = first.addingTimeInterval(full / 2 + shift)
+        return middle.addingTimeInterval(-visible / 2)...middle.addingTimeInterval(visible / 2)
+    }
+
+    // MARK: - Axis domain
+
+    /// The range of the finite values with `padding` (a fraction of the span)
+    /// added at each end. Never empty, inverted or non-finite, any of which
+    /// crashes a chart scale; `fallback` is used when no value is finite.
+    static func paddedDomain(
+        _ values: [Double],
+        padding: Double = 0.05,
+        fallback: ClosedRange<Double> = 0...1
+    ) -> ClosedRange<Double> {
+        let finite = values.filter(\.isFinite)
+        guard let low = finite.min(), let high = finite.max() else { return fallback }
+        let span = high - low
+        guard span.isFinite, span > 0 else {
+            let margin = max(abs(low) * padding, 0.5)
+            return (low - margin)...(low + margin)
+        }
+        let lower = low - span * padding
+        let upper = high + span * padding
+        guard lower.isFinite, upper.isFinite, lower < upper else { return fallback }
+        return lower...upper
+    }
+
     // MARK: - Downsampling
 
     /// Min/max bucketing: every bucket keeps its lowest and highest point so price extremes
