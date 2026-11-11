@@ -15,7 +15,7 @@ actor PythonProcessRunner: PythonProcessRunning {
     private static let terminationGraceNanoseconds: UInt64 = 5_000_000_000
 
     /// A pinned configuration (tests), or nil to rebuild the configuration for every run so
-    /// interpreter, config-file and quote-cache settings changed after launch take effect.
+    /// interpreter, config-file, API-key and quote-cache settings changed after launch take effect.
     private let pinnedConfig: PythonConfiguration?
     private let providerPolicy: StockbarProviderAccessPolicy
     /// Serves bridge script requests from a running worker; nil runs every request as its own process.
@@ -40,7 +40,7 @@ actor PythonProcessRunner: PythonProcessRunning {
         try providerPolicy.authorize(.python)
         try Task.checkCancellation()
 
-        let config = pinnedConfig ?? PythonConfiguration.load()
+        let config = pinnedConfig ?? PythonConfiguration.load(includingAPIKeys: true)
         if let workerPool, let request = PythonWorkerRequest(arguments: arguments) {
             do {
                 if let result = try await workerPool.run(

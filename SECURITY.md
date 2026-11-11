@@ -17,10 +17,9 @@ Only the latest release receives fixes.
 
 ## What Stockbar stores
 
-- Trading 212 credentials and the Folync client token: macOS Keychain.
-- Financial Modeling Prep and Twelve Data API keys: a settings file in
-  Application Support, readable only by your account. The Python helper reads
-  it, which is why these keys are not in the Keychain.
+- Trading 212 credentials, the Folync client token, and the Financial Modeling
+  Prep and Twelve Data API keys: macOS Keychain. The Python helper is handed
+  the two API keys through its environment for each run.
 - Portfolio data, history and backups: local files only.
 
 Stockbar's Trading 212 access is read-only. It never places orders and does
