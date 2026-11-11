@@ -11,7 +11,15 @@ import Foundation
 /// Coordinates caching strategy for stock price data with exponential backoff and circuit breaker
 actor CacheCoordinator {
     // MARK: - Cache Configuration
-    let cacheInterval: TimeInterval = 900  // 15 minutes for successful fetches
+    /// How long a quote counts as fresh. The refresh service keeps this in step
+    /// with the user's refresh interval, so the status shown for a symbol and the
+    /// decision to refetch it use the same figure.
+    private(set) var cacheInterval: TimeInterval = 900
+
+    func setFreshnessInterval(_ interval: TimeInterval) {
+        guard interval.isFinite, interval > 0 else { return }
+        cacheInterval = interval
+    }
     private let maxCacheAge: TimeInterval = 3600  // 1 hour before forcing refresh
 
     // Exponential backoff retry intervals

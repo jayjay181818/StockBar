@@ -389,40 +389,89 @@ class QuoteBatchTests(unittest.TestCase):
             self.assertEqual(self.module.fetch_historical_data("AAPL", "2026-01-01", "2026-01-31"), history)
 
 
-class OHLCFetchTests(unittest.TestCase):
+class ProviderHousekeepingTests(unittest.TestCase):
     def setUp(self):
         self.temp_directory = tempfile.TemporaryDirectory()
-        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+        self.cache_path = os.path.join(self.temp_directory.name, "cache.json")
+        self.module = load_module(self.cache_path)
 
     def tearDown(self):
         self.temp_directory.cleanup()
 
-    def ohlc(self, symbol, currency, rows):
-        fake_yf = mock.Mock()
-        fake_yf.Ticker.return_value = _FakeTicker(rows, currency)
-        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
-                mock.patch.object(self.module, "yf", fake_yf, create=True):
-            return self.module.fetch_ohlc_data_yfinance(symbol)
+    def test_exchange_time_zone_follows_the_suffix(self):
+        zone = self.module.market_timezone_name
+        self.assertEqual(zone("VOD.L"), "Europe/London")
+        self.assertEqual(zone("SAP.DE"), "Europe/Berlin")
+        self.assertEqual(zone("7203.T"), "Asia/Tokyo")
+        self.assertEqual(zone("shop.to"), "America/Toronto")
+        self.assertEqual(zone("AAPL"), "America/New_York")
+        self.assertEqual(zone("BRK.B"), "America/New_York")
+        self.assertEqual(zone("^GSPC"), "America/New_York")
 
-    @staticmethod
-    def bar(hour, price, volume):
-        from datetime import datetime as real_datetime, timezone
+    def test_clock_state_uses_each_exchange_s_hours(self):
+        from datetime import datetime
+        state = self.module.clock_market_state
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 7, 30)), "PRE")
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 16, 29)), "REGULAR")
+        self.assertEqual(state("VOD.L", datetime(2026, 7, 22, 17, 30)), "CLOSED")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 9, 29)), "PRE")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 9, 30)), "REGULAR")
+        self.assertEqual(state("AAPL", datetime(2026, 7, 22, 19, 59)), "POST")
+        self.assertEqual(state("SAP.DE", datetime(2026, 7, 22, 8, 59)), "CLOSED")
+        self.assertEqual(state("SAP.DE", datetime(2026, 7, 22, 12, 0)), "REGULAR")
 
-        return (
-            real_datetime(2026, 11, 3, hour, tzinfo=timezone.utc),
-            {"Open": price, "High": price, "Low": price, "Close": price, "Volume": volume},
+    def test_trading_currency_never_uses_the_accounts_currency(self):
+        class Ticker:
+            history_metadata = {"currency": "GBp"}
+
+        class NoMetadata:
+            @property
+            def history_metadata(self):
+                raise RuntimeError("no chart")
+
+        currency = self.module.trading_currency
+        self.assertEqual(currency(Ticker(), {"currency": "EUR", "financialCurrency": "USD"}), "EUR")
+        self.assertEqual(currency(Ticker(), {"financialCurrency": "USD"}), "GBp")
+        self.assertIsNone(currency(NoMetadata(), {"financialCurrency": "USD"}))
+
+    def test_old_cache_entries_are_pruned(self):
+        now = 1_800_000_000
+        week = self.module.CACHE_ENTRY_MAX_AGE_SECONDS
+        day = self.module.PREV_CLOSE_CACHE_MAX_AGE_SECONDS
+        cache = {
+            "OLD": {"timestamp": now - week - 1, "result": {}},
+            "NEW": {"timestamp": now - 60, "result": {}},
+            "BROKEN": "not an entry",
+            self.module.PREV_CLOSE_CACHE_KEY: {
+                "OLD": {"timestamp": now - day - 1, "value": 1.0},
+                "NEW": {"timestamp": now - 60, "value": 1.0},
+            },
+            self.module.PROVIDER_COOLDOWN_KEY: {"twelvedata": now + 30},
+        }
+        self.assertEqual(self.module.prune_cache(cache, now=now), 3)
+        self.assertEqual(
+            sorted(cache),
+            sorted(["NEW", self.module.PREV_CLOSE_CACHE_KEY, self.module.PROVIDER_COOLDOWN_KEY]),
         )
+        self.assertEqual(list(cache[self.module.PREV_CLOSE_CACHE_KEY]), ["NEW"])
 
-    def test_missing_volume_is_zero_and_does_not_fail_the_fetch(self):
-        data = self.ohlc("^FTSE", None, [self.bar(10, 8000.0, float("nan")), self.bar(11, 8010.0, 1500.0)])
-        self.assertEqual([(point["close"], point["volume"]) for point in data], [(8000.0, 0), (8010.0, 1500)])
+    def test_twelve_data_pauses_after_its_allowance_is_used_up(self):
+        calls = []
 
-    def test_rows_with_a_missing_price_are_skipped(self):
-        data = self.ohlc("AAPL", "USD", [self.bar(10, 200.0, 10.0), self.bar(11, float("nan"), 10.0)])
-        self.assertEqual([point["close"] for point in data], [200.0])
-        self.assertIsNone(self.ohlc("AAPL", "USD", [self.bar(10, float("nan"), 10.0)]))
+        def refused(url, params):
+            calls.append(url)
+            return {"code": 429, "status": "error", "message": "out of credits"}
 
-    def test_london_bars_are_scaled_by_reported_currency(self):
-        self.assertEqual(self.ohlc("VOD.L", "GBp", [self.bar(10, 1000.0, 5.0)])[0]["close"], 10.0)
-        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["close"], 600.0)
-        self.assertEqual(self.ohlc("CSPX.L", "USD", [self.bar(10, 600.0, 5.0)])[0]["volume"], 5)
+        with mock.patch.object(self.module, "make_request", refused):
+            self.assertIsNone(self.module.twelvedata_request("https://example.invalid/quote", {}))
+            self.assertIsNone(self.module.twelvedata_request("https://example.invalid/quote", {}))
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(self.module.provider_cooldown_remaining("twelvedata"), 0)
+
+        later = self.module.time.time() + self.module.TWELVE_DATA_COOLDOWN_SECONDS + 1
+        self.assertEqual(self.module.provider_cooldown_remaining("twelvedata", now=later), 0)
+
+    def test_twelve_data_passes_other_answers_through(self):
+        with mock.patch.object(self.module, "make_request", lambda url, params: {"close": "1.0"}):
+            self.assertEqual(self.module.twelvedata_request("https://example.invalid/quote", {}), {"close": "1.0"})
+        self.assertEqual(self.module.provider_cooldown_remaining("twelvedata"), 0)

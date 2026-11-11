@@ -179,6 +179,7 @@ class RefreshService {
             return
         }
 
+        await cacheCoordinator.setFreshnessInterval(Self.freshnessInterval(forRefreshInterval: refreshInterval))
         let finalSymbolsToRefresh = await symbolsDue(among: candidateSymbols, request: request, at: now)
 
         if finalSymbolsToRefresh.isEmpty {
@@ -201,6 +202,11 @@ class RefreshService {
 
             guard !results.isEmpty else {
                 await Logger.shared.warning("Refresh completed but received no results from network service.")
+                dataModel.quoteRefreshStatus.record(
+                    attempted: finalSymbolsToRefresh.count,
+                    failures: Array(repeating: .noData, count: finalSymbolsToRefresh.count),
+                    at: now
+                )
                 return
             }
 
@@ -266,6 +272,11 @@ class RefreshService {
             }
 
             await recordFailures(failedSymbols, anySucceeded: anySuccessfulUpdate, at: now)
+            dataModel.quoteRefreshStatus.record(
+                attempted: symbolsToApply.count,
+                failures: failedSymbols.map(\.failure),
+                at: now
+            )
 
             if anySuccessfulUpdate {
                 dataModel.saveTradingInfo()
@@ -288,8 +299,24 @@ class RefreshService {
             await Logger.shared.debug("Batch refresh skipped: \(error.localizedDescription)")
         } catch is CancellationError {
             await Logger.shared.debug("Batch refresh cancelled")
+        } catch NetworkError.pythonInterpreterNotFound(let path) {
+            // Nothing to retry and nobody to back off from: say so once and wait
+            // for the environment to be set up.
+            let isNew = dataModel.quoteRefreshStatus.recordSetupProblem(
+                "Prices cannot be fetched: Python is not set up (Settings > Advanced > Python)",
+                attempted: finalSymbolsToRefresh.count,
+                at: now
+            )
+            if isNew {
+                await Logger.shared.error("Quote refresh needs Python, which is missing at \(path)")
+            }
         } catch {
             await Logger.shared.error("Batch refresh failed: \(error.localizedDescription)")
+            dataModel.quoteRefreshStatus.record(
+                attempted: finalSymbolsToRefresh.count,
+                failures: Array(repeating: .network, count: finalSymbolsToRefresh.count),
+                at: now
+            )
             // The whole batch failed, so no symbol is to blame.
             if ConnectivityMonitor.shared.isConnected {
                 let wait = await cacheCoordinator.recordProviderFailure(at: now)
