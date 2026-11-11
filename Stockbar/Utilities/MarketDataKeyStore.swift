@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// The market-data API keys Stockbar keeps for the Python helper.
 enum MarketDataAPIKey: String, CaseIterable, Sendable {
@@ -23,6 +22,10 @@ enum MarketDataAPIKey: String, CaseIterable, Sendable {
         }
     }
 
+    /// Name of the value in `CredentialVault`.
+    fileprivate var vaultKey: String { "marketdata.\(rawValue)" }
+
+    /// Keychain account of the item earlier versions kept the key in.
     fileprivate var account: String {
         switch self {
         case .fmp: return "fmp-api-key.v1"
@@ -42,48 +45,43 @@ enum MarketDataKeyStoreError: Error, Equatable, LocalizedError {
     }
 }
 
-/// Keeps the FMP and Twelve Data API keys in the Keychain. The Python helper
-/// gets them through its environment for each run, so they are no longer
-/// written to the configuration file.
+/// Keeps the FMP and Twelve Data API keys in the Keychain, in the item all
+/// credentials share (`CredentialVault`). The Python helper gets them through
+/// its environment for each run, so they are no longer written to the
+/// configuration file.
 ///
 /// Calls can wait on a Keychain prompt; make them off the main actor.
 final class MarketDataKeyStore: Sendable {
     static let shared = MarketDataKeyStore()
     private let service: String
+    private let vault: CredentialVault
 
     init(service: String = StockbarRuntimeStorage.acceptance.marketDataKeychainService) {
         self.service = service
+        self.vault = .backing(storeService: service)
     }
 
     func load(_ key: MarketDataAPIKey) throws -> String? {
-        var query = baseQuery(account: key.account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw MarketDataKeyStoreError.keychainStatus(status)
+        try keychain {
+            try vault.importLegacy(into: [key.vaultKey]) { [.text(legacyItem(key), key: key.vaultKey)] }
+            return try vault.values()[key.vaultKey]
         }
-        return value
     }
 
     func save(_ value: String, for key: MarketDataAPIKey) throws {
-        let data = Data(value.utf8)
-        let query = baseQuery(account: key.account)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
-        if status == errSecSuccess { return }
-        guard status == errSecItemNotFound else { throw MarketDataKeyStoreError.keychainStatus(status) }
-        var add = query
-        add[kSecValueData as String] = data
-        let addStatus = SecItemAdd(add as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { throw MarketDataKeyStoreError.keychainStatus(addStatus) }
+        try keychain {
+            try vault.update { $0[key.vaultKey] = value }
+        }
+        // The vault now holds the newer value; the old item is never read again.
+        try? legacyItem(key).delete()
     }
 
     func delete(_ key: MarketDataAPIKey) throws {
-        let status = SecItemDelete(baseQuery(account: key.account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw MarketDataKeyStoreError.keychainStatus(status)
+        try keychain {
+            // First, so a key that was never imported cannot come back.
+            try legacyItem(key).delete()
+            guard vault.storedKeys()?.contains(key.vaultKey) != false else { return }
+            try vault.update { $0[key.vaultKey] = nil }
         }
     }
 
@@ -91,15 +89,16 @@ final class MarketDataKeyStore: Sendable {
         for key in MarketDataAPIKey.allCases { try delete(key) }
     }
 
-    /// Same predicate as `FolyncCredentialStore`: `kSecAttrAccessible` stays on
-    /// every query so lookups use the data-protection keychain rather than the
-    /// legacy file-based one (see the note there).
-    private func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
+    /// Where versions before the shared item kept the key.
+    private func legacyItem(_ key: MarketDataAPIKey) -> LegacyKeychainItem {
+        LegacyKeychainItem(service: service, account: key.account, setsAccessible: true)
+    }
+
+    private func keychain<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CredentialVaultError {
+            throw MarketDataKeyStoreError.keychainStatus(error.status)
+        }
     }
 }

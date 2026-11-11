@@ -83,7 +83,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 | **Testing** | Every change as it lands in the `testing` branch, before it is released, as well as released versions. May be rough. |
 
 - Updates are downloaded from this repository's GitHub releases. Each one is checked against a signing key built into Stockbar before it is installed, and a download or update list that fails the check is refused.
-- After every update macOS asks again for access to each saved credential in your Keychain. Choose **Always Allow**. Stockbar is built without an Apple developer account, so there is no signature macOS would remember from one build to the next.
+- After every update macOS asks once for access to your saved credentials in the Keychain. Choose **Always Allow**. Stockbar is built without an Apple developer account, so there is no signature macOS would remember from one build to the next.
 - Moving from Testing back to Stable keeps the build you have until a newer version is released.
 
 ## 🧭 Features
@@ -359,7 +359,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 #### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
 - macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
 - Choose **Always Allow** in the prompt; everything recovers within a minute.
-- This happens after every update, once for each saved credential: each released build has a new signature, and macOS only remembers the answer for apps signed with an Apple-issued certificate.
+- This happens once after every update: each released build has a new signature, and macOS only remembers the answer for apps signed with an Apple-issued certificate.
 - `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
 
 #### Menu Bar Item Missing

@@ -22,6 +22,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertFalse(runtime.isEnabled)
         XCTAssertNil(runtime.root)
         XCTAssertEqual(runtime.folyncKeychainService, "com.stockbar.folync")
+        XCTAssertEqual(runtime.credentialsKeychainService, "com.stockbar.credentials")
         XCTAssertTrue(runtime.liveProviderRequestsAllowed)
     }
 
@@ -125,6 +126,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.isEnabled)
         XCTAssertEqual(runtime.root, root.standardizedFileURL)
         XCTAssertEqual(runtime.folyncKeychainService, "com.stockbar.folync.acceptance.\(runID)")
+        XCTAssertEqual(runtime.credentialsKeychainService, "com.stockbar.credentials.acceptance.\(runID)")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
         XCTAssertTrue(try runtime.applicationSupportRoot.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.bundleApplicationSupportRoot.unwrap().isDescendant(of: root))

@@ -126,7 +126,7 @@ It is usually there but hidden: a full menu bar, the notch or a menu-bar manager
 
 ### After an update, Folync says it is waiting for Keychain access.
 
-macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. This happens after every update, once for each saved credential, because each released build has a new signature. Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
+macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. This happens once after every update, because each released build has a new signature. (The first update to a version that keeps all credentials in one Keychain item asks once more for each credential the version before had saved, to move it across.) Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
 
 ### Colours aren't showing.
 

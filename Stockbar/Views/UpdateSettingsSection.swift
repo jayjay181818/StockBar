@@ -41,7 +41,7 @@ struct UpdateSettingsSection: View {
             Text("Updates")
         } footer: {
             if updates.availability == .available {
-                Text("Updates are downloaded from GitHub and checked against Stockbar's signing key before they are installed. After an update, macOS asks again for access to each saved connection in your Keychain. Moving from Testing to Stable takes effect at the next released version.")
+                Text("Updates are downloaded from GitHub and checked against Stockbar's signing key before they are installed. After an update, macOS asks once for access to your saved credentials in the Keychain. Moving from Testing to Stable takes effect at the next released version.")
             }
         }
     }

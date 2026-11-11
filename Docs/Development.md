@@ -66,7 +66,7 @@ Stockbar updates itself with [Sparkle](https://sparkle-project.org). Everything 
 **Signing the app.** [package_release.sh](../script/package_release.sh) builds the Release configuration, signs it ad hoc with the hardened runtime, zips it, then unpacks the archive and checks that the app starts. Ad hoc signing has three consequences:
 
 - macOS blocks the first launch of a downloaded copy until the user chooses **Open Anyway** (once per Mac). Updates installed by Sparkle are not blocked.
-- macOS asks for Keychain access again after every update, once per saved credential. A self-signed certificate was tried and does not help: for any signature not issued by Apple, macOS ties Keychain access to the exact build.
+- macOS asks for Keychain access again after every update. Every credential is in one Keychain item (`CredentialVault`), so it asks once. A self-signed certificate was tried and does not help: for any signature not issued by Apple, macOS ties Keychain access to the exact build.
 - The hardened runtime refuses to load a framework from another signer unless library validation is off, and an ad hoc build has no signer in common with the Sparkle framework inside it. [Stockbar.entitlements](../Stockbar/Stockbar.entitlements) therefore carries `com.apple.security.cs.disable-library-validation`, the only entitlement [validate_entitlements.sh](../Scripts/validate_entitlements.sh) allows.
 
 The script refuses to package a build whose signature names a certificate or a team, or whose binaries contain a home-folder path other than the build runner's. Do not sign a release with an Apple Development certificate: on a free account its name contains the Apple ID.
