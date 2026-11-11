@@ -41,7 +41,7 @@ Three sources coexist and must stay non-destructive to each other:
 - Failed fetches return a placeholder `StockFetchResult` with `.nan` prices rather than throwing, so metadata survives.
 - `PythonConfiguration.validateSymbol/sanitizeSymbol` restrict symbols to `A-Z0-9.^=-` to prevent argument injection — route new symbol paths through them.
 - Providers inside the script: live quotes use a fixed order (yfinance, Twelve Data, the Yahoo quote API, then FMP); historical data follows `DATA_SOURCE_PRIORITY` (default yfinance, then FMP). Python-side quote cache at `~/Library/Caches/stockbar-cache/quote_cache.json` (passed by the app via `STOCKBAR_CACHE_FILE`, acceptance-aware; a legacy `~/.stockbar_cache.json` is moved there once), lock-file guarded with atomic replace.
-- `ENABLE_USER_SCRIPT_SANDBOXING = NO` and the app must stay unsandboxed — the subprocess bridge depends on it. The entitlement validator checks app sandbox and server permissions; the Xcode project defines script sandboxing.
+- `ENABLE_USER_SCRIPT_SANDBOXING = NO` and the app must stay unsandboxed — the subprocess bridge depends on it. The entitlement validator checks app sandbox and server permissions and allows exactly one entitlement, which lets the ad hoc signed app load its Sparkle framework; the Xcode project defines script sandboxing.
 
 ### UI layer
 - **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over ten sections — Overview, Holdings, Alerts, Charts, Risk, Allocation, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
@@ -68,3 +68,6 @@ Settings export/import (`SettingsTransferService`) seals an allowlist of default
 
 ### Currency
 `CurrencyConverter` (exchangerate-api.com, USD base) for USD/GBP/EUR/JPY/CAD/AUD. **Normalize GBX/GBp to GBP once at the provider boundary.** Preserve values already reported as GBP, including cost bases. Use reported currency and existing provider-specific fallbacks; a `.L` suffix alone is not evidence that a value still needs division. See `PythonTests/test_get_ohlc_data.py` for regression examples.
+
+### Updates
+`Services/AppUpdateService.swift` owns Sparkle's updater and the state `Views/UpdateSettingsSection.swift` shows in Settings → General. Sparkle downloads, verifies and installs; Stockbar only decides whether the updater runs (`UpdaterAvailability`: not in Debug builds, not in test or acceptance runs unless the feed is on loopback) and which builds it may see (`UpdateChannel`: the Testing channel also allows feed items marked `testing`). The feed address, public key and signature requirements are in `Stockbar/Info.plist`, which Xcode merges into the generated one. How builds and the feed are produced is in [development workflows](Development.md#release-builds-and-updates).

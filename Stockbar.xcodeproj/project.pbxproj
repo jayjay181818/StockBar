@@ -35,8 +35,10 @@
 		04C0FFEE0000000000000048 /* FolyncPortfolioSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000049 /* FolyncPortfolioSourceTests.swift */; };
 		04C0FFEE0000000000000046 /* Trading212ProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000047 /* Trading212ProviderTests.swift */; };
 		04C0FFEE0000000000000032 /* StockbarAcceptanceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */; };
+		04C0FFEE000000000000004A /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */; };
 		04C0FFEE0000000000000034 /* StockbarProviderAccessPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */; };
 		04C0FFEE0000000000000036 /* StockbarAcceptancePreflightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */; };
+		04C0FFEE00000000005A0001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 04C0FFEE00000000005A0002 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +72,7 @@
 		04C0FFEE0000000000000049 /* FolyncPortfolioSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolyncPortfolioSourceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000047 /* Trading212ProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Trading212ProviderTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000033 /* StockbarAcceptanceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptanceRuntimeTests.swift; sourceTree = "<group>"; };
+		04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000035 /* StockbarProviderAccessPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarProviderAccessPolicyTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000037 /* StockbarAcceptancePreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockbarAcceptancePreflightTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -84,6 +87,7 @@
 				"Data/AGENTS.md",
 				"Data/CoreData/AGENTS.md",
 				"Data/Networking/AGENTS.md",
+				Info.plist,
 				"Resources/AGENTS.md",
 				"Services/AGENTS.md",
 				"Utilities/AGENTS.md",
@@ -109,6 +113,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				04C0FFEE00000000005A0001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,6 +148,7 @@
 		04C0FFEE0000000000000001 /* StockbarTests */ = {
 			isa = PBXGroup;
 			children = (
+				04C0FFEE000000000000004B /* AppUpdateServiceTests.swift */,
 				04C0FFEE0000000000000011 /* CacheCoordinatorTests.swift */,
 				04C0FFEE0000000000000025 /* CoreDataStoreRecoveryTests.swift */,
 				04C0FFEE0000000000000013 /* CurrencyConverterTests.swift */,
@@ -197,6 +203,7 @@
 			);
 			name = Stockbar;
 			packageProductDependencies = (
+				04C0FFEE00000000005A0002 /* Sparkle */,
 			);
 			productName = Stockbar;
 			productReference = 0346FE102DB7E7DA00F3488D /* Stockbar.app */;
@@ -260,6 +267,9 @@
 			);
 			mainGroup = 0346FE072DB7E7DA00F3488D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				04C0FFEE00000000005A0003 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0346FE112DB7E7DA00F3488D /* Products */;
 			projectDirPath = "";
@@ -300,6 +310,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				04C0FFEE000000000000004A /* AppUpdateServiceTests.swift in Sources */,
 				04C0FFEE0000000000000010 /* CacheCoordinatorTests.swift in Sources */,
 				04C0FFEE0000000000000024 /* CoreDataStoreRecoveryTests.swift in Sources */,
 				04C0FFEE0000000000000012 /* CurrencyConverterTests.swift in Sources */,
@@ -481,6 +492,7 @@
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Stockbar/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -512,6 +524,7 @@
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = "AGENTS.md";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Stockbar/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -604,6 +617,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		04C0FFEE00000000005A0003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		04C0FFEE00000000005A0002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 04C0FFEE00000000005A0003 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0346FE082DB7E7DA00F3488D /* Project object */;
 }

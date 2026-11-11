@@ -23,4 +23,17 @@ if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.server' "$canon
   exit 1
 fi
 
+# The one hardened-runtime exception: without an Apple team the app cannot
+# otherwise load its own Sparkle framework. Nothing else may be relaxed.
+allowed_keys="com.apple.security.cs.disable-library-validation"
+actual_keys="$(/usr/bin/plutil -convert json -o - "$canonical" \
+  | /usr/bin/python3 -c 'import json, sys; print("\n".join(sorted(json.load(sys.stdin))))')"
+if [[ "$actual_keys" != "$allowed_keys" ]]; then
+  echo "Unexpected entitlements. Expected exactly:"
+  printf '  %s\n' "$allowed_keys"
+  echo "Found:"
+  printf '  %s\n' "${actual_keys:-(none)}"
+  exit 1
+fi
+
 echo "Entitlement validation passed"

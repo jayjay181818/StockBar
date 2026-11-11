@@ -44,6 +44,14 @@ defaults write com.stockbar pythonInterpreterPath "$HOME/stockbar-venv/bin/pytho
 
 Relaunch Stockbar afterwards; it re-checks whenever the interpreter or the pinned versions change.
 
+### macOS says it cannot verify Stockbar. How do I open it?
+
+Stockbar is not notarised by Apple, so macOS blocks the first launch of a downloaded copy. Move Stockbar to Applications, try to open it, then open **System Settings → Privacy & Security**, scroll down to **Security** and choose **Open Anyway**. You do this once per Mac; updates do not ask again.
+
+### How do I update Stockbar?
+
+It updates itself. Stockbar checks about once a day and offers a new version with its release notes; **Settings → General → Updates** has **Check Now**, the automatic check, and the channel: **Stable** for released versions, **Testing** for every change before it is released. See [Updates](UserGuide.md#updates) in the User Guide.
+
 ### Can Stockbar start at login?
 
 Yes: System Settings → General → Login Items → add Stockbar.
@@ -118,7 +126,7 @@ It is usually there but hidden: a full menu bar, the notch or a menu-bar manager
 
 ### After an update, Folync says it is waiting for Keychain access.
 
-macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
+macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. This happens after every update, once for each saved credential, because each released build has a new signature. Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
 
 ### Colours aren't showing.
 
@@ -165,5 +173,6 @@ No. There is no account, telemetry or analytics. Holdings stay on your Mac.
 - **Market data** through the Python script: Yahoo Finance (yfinance), plus FMP and Twelve Data if configured. Only ticker symbols (and your API key for FMP/Twelve Data) are sent.
 - **Exchange rates** from exchangerate-api.com.
 - **Trading 212** (read-only) and **your Folync instance**, only if you connect them.
+- **Updates** from GitHub: a list of available versions about once a day, and the download when you install one. Nothing about you or your portfolio is sent.
 
 Stockbar never places trades.
