@@ -851,95 +851,50 @@ struct PerformanceChartView: View {
         .frame(height: 250)
     }
 
+    /// Money for the chart's labels, written the same way as the holdings table.
+    /// A single holding is shown in its own currency; portfolio figures are
+    /// converted to the preferred currency, with the other of pounds and dollars
+    /// in brackets.
     func formatCurrency(_ amount: Double, currency: String) -> String {
         guard amount.isFinite else { return "—" }
-        // For individual stock charts, don't apply currency conversion - just format with the native currency
-        switch selectedChartType {
-        case .individualStock:
-            // For individual stocks, always display in the stock's native currency without conversion
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .currency
-            formatter.currencyCode = currency == "GBX" ? "GBP" : currency
-            formatter.minimumFractionDigits = 2
-            formatter.maximumFractionDigits = 2
-            return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
-            
-        case .portfolioValue, .portfolioGains:
-            // For portfolio charts, apply currency conversion as before
-            guard let model = dataModel else {
-                let formatter = NumberFormatter()
-                formatter.numberStyle = .currency
-                formatter.currencyCode = currency == "GBX" ? "GBP" : currency
-                formatter.maximumFractionDigits = currency == "GBX" ? 0 : 2
-                return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
-            }
-            
-            let preferredCurrency = model.preferredCurrency
-            let currencyConverter = CurrencyConverter.shared
-            
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .currency
-            formatter.maximumFractionDigits = preferredCurrency == "GBX" ? 0 : 2
-            
-            // Determine what currency the amount is currently in (assume USD if not specified)
-            let sourceCurrency = currency.isEmpty ? "USD" : currency
-            
-            // Convert amount to preferred currency if needed
-            var convertedAmount: Double
-            if sourceCurrency == preferredCurrency || 
-               (sourceCurrency == "GBP" && preferredCurrency == "GBX") ||
-               (sourceCurrency == "GBX" && preferredCurrency == "GBP") {
-                // Handle GBX/GBP as same currency family
-                if sourceCurrency == "GBP" && preferredCurrency == "GBX" {
-                    convertedAmount = amount * 100.0
-                } else if sourceCurrency == "GBX" && preferredCurrency == "GBP" {
-                    convertedAmount = amount / 100.0
-                } else {
-                    convertedAmount = amount
-                }
-            } else {
-                convertedAmount = currencyConverter.convert(amount: amount, from: sourceCurrency, to: preferredCurrency == "GBX" ? "GBP" : preferredCurrency)
-                if preferredCurrency == "GBX" {
-                    convertedAmount *= 100.0
-                }
-            }
-            
-            // Primary display currency
-            guard convertedAmount.isFinite else { return "—" }
-            formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
-            let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
-            
-            // Secondary currency in brackets (opposite of preferred)
-            var secondaryString = ""
-            if preferredCurrency == "USD" {
-                // Show GBP in brackets
-                let gbpAmount = currencyConverter.convert(amount: convertedAmount, from: "USD", to: "GBP")
-                guard gbpAmount.isFinite else { return primaryString }
-                let gbpFormatter = NumberFormatter()
-                gbpFormatter.numberStyle = .currency
-                gbpFormatter.currencyCode = "GBP"
-                gbpFormatter.maximumFractionDigits = 2
-                secondaryString = gbpFormatter.string(from: NSNumber(value: gbpAmount)) ?? String(format: "%.2f GBP", gbpAmount)
-            } else if preferredCurrency == "GBP" || preferredCurrency == "GBX" {
-                // Show USD in brackets
-                let baseAmount = preferredCurrency == "GBX" ? convertedAmount / 100.0 : convertedAmount
-                let usdAmount = currencyConverter.convert(amount: baseAmount, from: "GBP", to: "USD")
-                guard usdAmount.isFinite else { return primaryString }
-                let usdFormatter = NumberFormatter()
-                usdFormatter.numberStyle = .currency
-                usdFormatter.currencyCode = "USD"
-                usdFormatter.maximumFractionDigits = 2
-                secondaryString = usdFormatter.string(from: NSNumber(value: usdAmount)) ?? String(format: "%.2f USD", usdAmount)
-            }
-            
-            if !secondaryString.isEmpty {
-                return "\(primaryString) (\(secondaryString))"
-            } else {
-                return primaryString
-            }
+        if case .individualStock = selectedChartType {
+            return HoldingsCurrencyFormatter.amount(amount, currency: currency)
         }
+        guard let model = dataModel else {
+            return HoldingsCurrencyFormatter.amount(amount, currency: currency)
+        }
+
+        let converter = CurrencyConverter.shared
+        let preferredCurrency = model.preferredCurrency
+        let prefersPence = CurrencyConverter.isPenceCurrency(preferredCurrency)
+        let preferredMajor = prefersPence ? "GBP" : preferredCurrency
+        let sourceCurrency = currency.isEmpty ? "USD" : currency
+        let sourceIsPence = CurrencyConverter.isPenceCurrency(sourceCurrency)
+        let sourceMajor = sourceIsPence ? "GBP" : sourceCurrency
+
+        // Work in whole units, then put pence back only for display.
+        let sourceMajorAmount = sourceIsPence ? amount / 100.0 : amount
+        let majorAmount = sourceMajor == preferredMajor
+            ? sourceMajorAmount
+            : converter.convert(amount: sourceMajorAmount, from: sourceMajor, to: preferredMajor)
+        guard majorAmount.isFinite else { return "—" }
+
+        let primary = HoldingsCurrencyFormatter.amount(
+            prefersPence ? majorAmount * 100.0 : majorAmount,
+            currency: preferredCurrency
+        )
+
+        let secondaryCurrency: String
+        switch preferredMajor {
+        case "USD": secondaryCurrency = "GBP"
+        case "GBP": secondaryCurrency = "USD"
+        default: return primary
+        }
+        let secondaryAmount = converter.convert(amount: majorAmount, from: preferredMajor, to: secondaryCurrency)
+        guard secondaryAmount.isFinite else { return primary }
+        return "\(primary) (\(HoldingsCurrencyFormatter.amount(secondaryAmount, currency: secondaryCurrency)))"
     }
-    
+
     private var chartColor: Color {
         switch selectedChartType {
         case .portfolioValue:
