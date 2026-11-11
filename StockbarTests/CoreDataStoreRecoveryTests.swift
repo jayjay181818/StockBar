@@ -1,3 +1,4 @@
+import CoreData
 import XCTest
 @testable import Stockbar
 
@@ -425,5 +426,115 @@ final class HistoricalStoreCompactionTests: XCTestCase {
 
         XCTAssertEqual(Array(stored.keys), ["HELD"])
         XCTAssertEqual(stored["HELD"]?.valueAtDate, 10)
+    }
+}
+
+/// Every model version that has shipped must still open with the current one,
+/// because the store is migrated in place when the app starts.
+final class StoreModelMigrationTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarMigrationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func modelDirectory() throws -> URL {
+        try XCTUnwrap(
+            Bundle(for: CoreDataStack.self).url(forResource: "StockbarDataModel", withExtension: "momd"),
+            "The compiled data model is missing from the app bundle"
+        )
+    }
+
+    private func sampleValue(for attribute: NSAttributeDescription) -> Any? {
+        switch attribute.attributeType {
+        case .stringAttributeType: return "sample"
+        case .integer16AttributeType, .integer32AttributeType, .integer64AttributeType: return 1
+        case .doubleAttributeType, .floatAttributeType: return 1.5
+        case .decimalAttributeType: return NSDecimalNumber(string: "1.5")
+        case .booleanAttributeType: return true
+        case .dateAttributeType: return Date(timeIntervalSince1970: 1_700_000_000)
+        case .UUIDAttributeType: return UUID()
+        case .binaryDataAttributeType: return Data([1, 2, 3])
+        case .URIAttributeType: return URL(string: "https://example.test")
+        default: return nil
+        }
+    }
+
+    /// Entities that can be saved on their own: no relationship that must be set.
+    private func standaloneEntities(in model: NSManagedObjectModel) -> [NSEntityDescription] {
+        model.entities.filter { entity in
+            !entity.isAbstract && entity.relationshipsByName.values.allSatisfy { $0.isOptional || $0.isToMany }
+        }
+    }
+
+    func testEveryShippedModelVersionMigratesToTheCurrentOne() throws {
+        let models = try modelDirectory()
+        let current = try XCTUnwrap(NSManagedObjectModel(contentsOf: models))
+        let versions = try FileManager.default.contentsOfDirectory(at: models, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "mom" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        XCTAssertGreaterThanOrEqual(versions.count, 8, "Expected every model version to be compiled into the app")
+
+        for versionURL in versions {
+            let name = versionURL.deletingPathExtension().lastPathComponent
+            let old = try XCTUnwrap(NSManagedObjectModel(contentsOf: versionURL), name)
+            let storeURL = directory.appendingPathComponent("\(name).sqlite")
+
+            // Build a store in the old format holding one row of each entity.
+            var saved: [String] = []
+            do {
+                let coordinator = NSPersistentStoreCoordinator(managedObjectModel: old)
+                let store = try coordinator.addPersistentStore(
+                    ofType: NSSQLiteStoreType, configurationName: nil, at: storeURL, options: nil
+                )
+                let context = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+                context.persistentStoreCoordinator = coordinator
+                try context.performAndWait {
+                    for entity in standaloneEntities(in: old) {
+                        let object = NSManagedObject(entity: entity, insertInto: context)
+                        for attribute in entity.attributesByName.values where !attribute.isTransient {
+                            if let value = sampleValue(for: attribute) {
+                                object.setValue(value, forKey: attribute.name)
+                            }
+                        }
+                        if let entityName = entity.name { saved.append(entityName) }
+                    }
+                    try context.save()
+                }
+                try coordinator.remove(store)
+            }
+            XCTAssertFalse(saved.isEmpty, "\(name): nothing could be saved in the old format")
+
+            // Open it the way the app does.
+            let coordinator = NSPersistentStoreCoordinator(managedObjectModel: current)
+            let options: [AnyHashable: Any] = [
+                NSMigratePersistentStoresAutomaticallyOption: true,
+                NSInferMappingModelAutomaticallyOption: true
+            ]
+            let store: NSPersistentStore
+            do {
+                store = try coordinator.addPersistentStore(
+                    ofType: NSSQLiteStoreType, configurationName: nil, at: storeURL, options: options
+                )
+            } catch {
+                XCTFail("\(name) does not migrate to the current model: \(error)")
+                continue
+            }
+            let context = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+            context.persistentStoreCoordinator = coordinator
+            try context.performAndWait {
+                for entityName in saved where current.entitiesByName[entityName] != nil {
+                    let count = try context.count(for: NSFetchRequest<NSManagedObject>(entityName: entityName))
+                    XCTAssertEqual(count, 1, "\(name): the \(entityName) row was lost in migration")
+                }
+            }
+            try coordinator.remove(store)
+        }
     }
 }
