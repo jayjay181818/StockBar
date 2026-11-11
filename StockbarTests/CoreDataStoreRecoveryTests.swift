@@ -424,7 +424,7 @@ final class HistoricalStoreCompactionTests: XCTestCase {
             trade("HELD", units: "2"), trade("ZERO", units: "0"), trade("WATCH", units: "3", watchOnly: true)
         ])
 
-        XCTAssertEqual(Array(stored.keys), ["HELD"])
+        XCTAssertEqual(stored.symbols, ["HELD"])
         XCTAssertEqual(stored["HELD"]?.valueAtDate, 10)
     }
 }
