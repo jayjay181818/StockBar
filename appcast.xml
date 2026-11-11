@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.6.0 (360.15)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.15</link>
+      <pubDate>Wed, 11 Nov 2026 15:43:09 +0000</pubDate>
+      <sparkle:version>360.15</sparkle:version>
+      <sparkle:shortVersionString>3.6.0</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 360.15 of Stockbar 3.6.0. Changes since testing-360.13:
+
+- Keep every credential in one Keychain item</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-360.15/Stockbar-360.15.zip" length="8234991" type="application/octet-stream" sparkle:edSignature="SO2hnyZ/d75vKFt/4kIUCwDThK2BRzdQuy6QDQN77f2AUSPHaFaQ4keZbuiT7JFcSTbOnCl1PSH0DRvM55PYCg=="></enclosure>
+    </item>
+    <item>
       <title>3.6.0 (360.13)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.13</link>
       <pubDate>Wed, 11 Nov 2026 15:03:02 +0000</pubDate>
@@ -22,6 +35,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: KPViC56TZr4dhCImDsWGtxs8FVqRGiT1Y68+vul1ha6lWUXGPI/KV/iOPLle0LqvozO16UZKSwEXXCVdZZoiDw==
-length: 1550
+edSignature: 1lGZEXxsfV7dOneKapL2OeRa0dNFBrlsRKrpLwJm4cH6xSCTfpapGIHHIdW2muNdQhk5o0ddf3bVy4CMKJLjBA==
+length: 2459
 -->
