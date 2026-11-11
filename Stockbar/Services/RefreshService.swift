@@ -219,9 +219,17 @@ class RefreshService {
             // portfolio swap) mutate or reorder `realTimeTrades` underneath us —
             // a captured index would go stale and either trap or update the
             // wrong holding.
+            //
+            // A Folync portfolio can also become active while the fetch was in
+            // flight. Its holdings carry the same symbols but Folync's own
+            // prices, so only the symbols Folync leaves to Stockbar are applied.
+            let applicableSet = Self.symbolsToApply(
+                targeted: targetedSet,
+                folyncRefreshable: dataModel.isFolyncPortfolioActive ? dataModel.folyncRefreshableSymbols : nil
+            )
             let symbolsToApply = dataModel.realTimeTrades
                 .map { $0.trade.name }
-                .filter { targetedSet.contains($0.uppercased()) }
+                .filter { applicableSet.contains($0.uppercased()) }
 
             for symbol in symbolsToApply {
                 guard let idx = dataModel.realTimeTrades.firstIndex(
@@ -444,6 +452,13 @@ class RefreshService {
         let open = isUK ? 7 * 60 : 4 * 60
         let close = isUK ? 18 * 60 : 20 * 60
         return minutes < open || minutes >= close
+    }
+
+    /// The fetched symbols whose results may be written to the holdings list.
+    /// `folyncRefreshable` is nil unless a Folync portfolio is active.
+    nonisolated static func symbolsToApply(targeted: Set<String>, folyncRefreshable: Set<String>?) -> Set<String> {
+        guard let folyncRefreshable else { return targeted }
+        return targeted.intersection(folyncRefreshable)
     }
 
     nonisolated static func filterFolyncRoutedBenchmarks(
