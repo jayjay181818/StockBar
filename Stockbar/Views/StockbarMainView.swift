@@ -325,12 +325,15 @@ private struct StockbarHoldingsView: View {
                         .controlSize(.large)
                         .help(isEditing ? "Finish editing" : "Edit units, cost, currency and order")
                     }
-                    Button(action: addHolding) {
-                        Label("Add Holding", systemImage: "plus")
+                    // Shown only when it can be used: a prominent button that is
+                    // always disabled reads as something broken.
+                    if canEditPortfolio {
+                        Button(action: addHolding) {
+                            Label("Add Holding", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!canEditPortfolio)
                 }
             }
 

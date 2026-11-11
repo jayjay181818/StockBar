@@ -328,6 +328,43 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertTrue(plan.missingLinkedSymbols.isEmpty)
     }
 
+    func testARenamedBrokerTickerIsReportedMissingNotDeleted() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let renamed = makeLink(
+            instrumentId: "LSE:AV", providerTicker: "AVI_EQ", manualSymbol: "AV.L", manualCurrency: "GBX", linkedAt: linkedAt
+        )
+        let held = makeLink(
+            instrumentId: "LSE:SSE", providerTicker: "SSEl_EQ", manualSymbol: "SSE.L", manualCurrency: "GBX", linkedAt: linkedAt
+        )
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 1, updatedAt: linkedAt, accounts: [makeLinkedAccount(linkedAt: linkedAt)], positions: [renamed, held]
+        )
+        let trades = [("AV.L", "300"), ("SSE.L", "500")].map {
+            Trade(name: $0.0, position: Position(unitSize: $0.1, positionAvgCost: "486.26", currency: "GBX", costCurrency: "GBX"))
+        }
+        let heldRow = makePreview(
+            instrumentId: "LSE:SSE", providerTicker: "SSEl_EQ", manualSymbol: "SSE.L",
+            quantity: 500, averagePrice: 486.26, brokerPrice: 620, currentValue: 3_100
+        ).rows[0]
+        // The broker now reports the same 300 shares under a new ticker.
+        let newTicker = makeBrokerOnlyRow(
+            instrumentId: "LSE:AVV", providerTicker: "AVVl_EQ", displaySymbol: "AVV", displayName: "Aviva",
+            quantity: 300, averagePrice: 486.26, brokerPrice: 620, currentValue: 1_860
+        )
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: trades,
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: makePreview(rows: [heldRow, newTicker]),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+        XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
+    }
+
     func testRekeyedMovesLinksWhenAccountLabelOrAPIKeyChanges() throws {
         let linkedAt = Date(timeIntervalSince1970: 100)
         let link = makeLink(

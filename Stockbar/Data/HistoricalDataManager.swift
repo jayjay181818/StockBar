@@ -677,7 +677,10 @@ class HistoricalDataManager {
         let data = sessionPoints()
         Task { await logger.debug("📊 Portfolio \(label) chart data: \(data.count) real-time fallback points for range \(timeRange.rawValue)") }
 
-        if data.isEmpty && timeRange == .day, let dataModel {
+        // Not while the store is still loading: the snapshot would be taken from
+        // an empty holdings list.
+        if data.isEmpty && timeRange == .day, let dataModel,
+           dataModel.hasCompletedInitialTradeLoad, hasLoadedStoredPortfolioHistory {
             Task { await logger.info("📊 No 1-day portfolio \(label) data available, forcing snapshot creation") }
             forceSnapshot(from: dataModel)
             let newData = sessionPoints()
