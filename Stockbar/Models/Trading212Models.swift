@@ -479,6 +479,8 @@ struct Trading212ImportPreviewRow: Identifiable, Equatable {
     let conflictStatus: Trading212PreviewConflictStatus
     let valueSource: Trading212PreviewValueSource
     let warnings: [String]
+    /// The instrument's ISIN when the broker gave one. It survives a ticker rename.
+    var isin: String? = nil
 
     var quantityDelta: Double? {
         guard let quantity, let manualQuantity = manualMatch?.quantity else {

@@ -186,16 +186,15 @@ credentials*.json
 *.xcresult
 codex-images/
 
-# Local agent tool settings
+# Local agent tool settings and working notes
 .codex/
+/plan-progress.md
 
 # Folync/Stockbar compatibility notes (private)
 /stockbarintegrationchangelog.md
 /README_Folync.md
 
-# Stockbar local data that must never be committed: API keys, exported
-# settings (encrypted, but still personal) and test or coverage results.
+# Stockbar local data that must never be committed: API keys and exported
+# settings (encrypted, but still personal).
 .stockbar_config.json
 *.stockbarexport
-*.xcresult
-default.profraw

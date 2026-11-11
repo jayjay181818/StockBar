@@ -132,7 +132,9 @@ class MemoryOptimizedDataModel: ObservableObject {
                   currentPrice > 0 else { continue }
 
             let units = trade.trade.position.unitSize
-            let adjustedCost = trade.trade.position.getNormalizedAvgCost(for: trade.trade.name)
+            let adjustedCost = trade.trade.position.averageCost(
+                for: trade.trade.name, inQuoteCurrency: trade.realTimeInfo.currency
+            )
 
             guard !adjustedCost.isNaN, adjustedCost > 0 else { continue }
 

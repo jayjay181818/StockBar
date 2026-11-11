@@ -43,6 +43,32 @@ final class PortfolioAnalyticsServicesTests: XCTestCase {
         return from == to ? amount : toGBP(amount, from)
     }
 
+    func testAttributionCountsHoldingsOpenedOrClosedInsideThePeriod() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        func day(_ n: Double) -> Date { start.addingTimeInterval(n * 86400) }
+        func position(_ symbol: String, _ price: Double) -> PositionSnapshot {
+            PositionSnapshot(symbol: symbol, units: 10, priceAtDate: price, valueAtDate: 10 * price, currency: "GBP")
+        }
+        // KEEP is held throughout (+10 a share). SOLD falls 20 a share and is gone by
+        // the last day. NEW is bought on day 1 and gains 5 a share afterwards.
+        let snapshots = [
+            attributionSnapshot(day(0), total: 2000, positions: [position("KEEP", 100), position("SOLD", 100)]),
+            attributionSnapshot(day(1), total: 2900, positions: [position("KEEP", 105), position("SOLD", 80), position("NEW", 100)]),
+            attributionSnapshot(day(2), total: 2150, positions: [position("KEEP", 110), position("NEW", 105)])
+        ]
+        let result = await AttributionAnalysisService.shared.calculateAttributionFromHistorical(
+            startDate: day(0), endDate: day(2), historicalSnapshots: snapshots, convert: attributionConvert
+        )
+        let attribution = try XCTUnwrap(result)
+        let bySymbol = Dictionary(uniqueKeysWithValues: attribution.stockContributions.map { ($0.symbol, $0) })
+        XCTAssertEqual(try XCTUnwrap(bySymbol["KEEP"]).dollarContribution, 100, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["SOLD"]).dollarContribution, -200, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["NEW"]).dollarContribution, 50, accuracy: 0.001)
+        // SOLD carries no weight at the end and NEW none at the start.
+        XCTAssertEqual(try XCTUnwrap(bySymbol["SOLD"]).weight, 25, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["NEW"]).weight, (1050.0 / 2150.0) * 100 / 2, accuracy: 0.001)
+    }
+
     func testAttributionConvertsMixedCurrenciesBeforeWeighting() async throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let end = start.addingTimeInterval(86400)

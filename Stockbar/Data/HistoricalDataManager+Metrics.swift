@@ -101,19 +101,11 @@ extension HistoricalDataManager {
             (current - previous) / previous
         }
 
-        let meanReturn = dailyReturns.isEmpty ? 0 : dailyReturns.reduce(0, +) / Double(dailyReturns.count)
-        let variance = dailyReturns.isEmpty ? 0 : dailyReturns.map { pow($0 - meanReturn, 2) }.reduce(0, +) / Double(dailyReturns.count)
-        let volatility = sqrt(variance) * 100
+        let statistics = ReturnStatistics(dailyReturns: dailyReturns)
 
         let values = points.map(\.value)
         let maxValue = values.max() ?? lastPoint.value
         let minValue = values.min() ?? lastPoint.value
-
-        // Sharpe ratio, with the same risk-free rate as the Risk page.
-        let riskFreeRate = RiskMetricsService.annualRiskFreeRate / 252
-        let meanExcessReturn = meanReturn - riskFreeRate
-        // Annualised, as on the Risk page and as the colour thresholds for this figure assume.
-        let sharpeRatio = variance > 0 ? meanExcessReturn / sqrt(variance) * sqrt(252) : nil
 
         let (maxDrawdown, maxDrawdownPercent) = calculateMaxDrawdown(values: values)
 
@@ -122,32 +114,24 @@ extension HistoricalDataManager {
         let annualizedReturn: Double? = span >= 30 * 86_400 && basePoint != nil
             ? (pow(1 + totalReturnPercent / 100, 1 / periodInYears) - 1) * 100
             : nil
-        let annualizedVolatility: Double? = dailyReturns.count >= 2 ? volatility * sqrt(252) : nil
-
-        let sortedReturns = dailyReturns.sorted()
-        let var95Index = Int(Double(sortedReturns.count) * 0.05)
-        let valueAtRisk = var95Index < sortedReturns.count ? abs(sortedReturns[var95Index] * 100) : nil
-
-        let positiveReturns = dailyReturns.filter { $0 > 0 }.count
-        let winRate = dailyReturns.isEmpty ? nil : Double(positiveReturns) / Double(dailyReturns.count) * 100
 
         return PerformanceMetrics(
             totalReturn: totalReturn,
             totalReturnPercent: totalReturnPercent,
-            volatility: volatility,
+            volatility: statistics.volatility,
             maxValue: maxValue,
             minValue: minValue,
             currency: currency,
             startDate: basePoint?.date ?? firstPoint.date,
             endDate: lastPoint.date,
-            sharpeRatio: sharpeRatio,
+            sharpeRatio: statistics.sharpeRatio,
             maxDrawdown: maxDrawdown,
             maxDrawdownPercent: maxDrawdownPercent,
             beta: nil,
             annualizedReturn: annualizedReturn.flatMap { $0.isFinite ? $0 : nil },
-            annualizedVolatility: annualizedVolatility,
-            valueAtRisk: valueAtRisk,
-            winRate: winRate
+            annualizedVolatility: statistics.annualizedVolatility,
+            valueAtRisk: statistics.valueAtRisk,
+            winRate: statistics.winRate
         )
     }
 

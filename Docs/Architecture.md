@@ -46,7 +46,8 @@ Three sources coexist and must stay non-destructive to each other:
 ### UI layer
 - **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over ten sections — Overview, Holdings, Alerts, Charts, Risk, Allocation, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
 - **Menu bar**: `StockMenuBarController` + `StockStatusBar`, one `NSStatusItem` per visible symbol, Combine-driven; also handles external-display polling for status-item visibility.
-- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `MenuPriceChartView`.
+- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `MenuPriceChartView`. `PerformanceChartView` is split by concern: the main file holds state, loading and the line chart; `+Comparison`, `+Metrics`, `+Export` and `+Candlestick` hold those panels. On the 1 Day and 1 Week ranges `ChartTimeCompression` draws long gaps between points narrow; the line chart, its axis labels, zoom and `ChartInteractionView` all work in those plot times, and only labels and hover text convert back to real times.
+- **History**: `HistoricalDataManager` is split the same way: the main file holds storage, snapshot recording and chart reads; `+Folync` holds the Folync overlay, `+PortfolioMenu` the menu-bar values, `+Retroactive` the recalculation of past days, `+Metrics` and `+Thinning` the helpers.
 
 ### Persistence
 | Store | Location | Contents |

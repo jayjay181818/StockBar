@@ -56,6 +56,8 @@ class DataModel {
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.
     private(set) var portfolioLoadFailed = false
+    /// Why the startup load failed, when the cause can be put in words.
+    private(set) var portfolioLoadFailureDetail: String?
     /// Last time a Trading 212 sync actually updated linked holdings. Market
     /// refresh only defers to the broker while this is recent.
     @ObservationIgnored private var lastTrading212LinkedSyncAt: Date?
@@ -191,7 +193,7 @@ class DataModel {
     // MARK: - Memory Management
     @ObservationIgnored private var memoryOptimizer: MemoryOptimizedDataModel?
     @ObservationIgnored private var isMemoryOptimizationEnabled = true
-    @ObservationIgnored private var hasCompletedInitialTradeLoad = false
+    @ObservationIgnored private(set) var hasCompletedInitialTradeLoad = false
     /// False when the model was created without runtime services (tests, previews), where
     /// no stored portfolio is loaded and so no load has to finish before saving.
     @ObservationIgnored private var requiresInitialTradeLoad = true
@@ -479,7 +481,9 @@ class DataModel {
                 // Apply saved order to the loaded trades
                 self.realTimeTrades = self.applyUserOrderToTrades(realTimeTrades)
                 Task { await logger.info("✅ Loaded \(realTimeTrades.count) trades successfully from Core Data with user order") }
-                Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(self.realTimeTrades.map { $0.trade.name }.joined(separator: ", "))") }
+                // Named now: by the time the log task runs, benchmarks have joined the list.
+                let loadedNames = self.realTimeTrades.map { $0.trade.name }.joined(separator: ", ")
+                Task { await logger.info("📋 DIAGNOSTIC: Trades loaded: \(loadedNames)") }
 
                 // Apply migrations after loading
                 self.removePersistedBenchmarks()
@@ -496,10 +500,12 @@ class DataModel {
             return true
         } catch {
             await logger.error("❌ Failed to load trades from Core Data: \(error)")
-            
+            let detail = (error as? AliasIdentityMigrationError)?.errorDescription
+
             // Initialize with empty trades if Core Data fails
             await MainActor.run {
                 self.realTimeTrades = []
+                self.portfolioLoadFailureDetail = detail
                 // Every save replaces the whole stored portfolio, so the unread
                 // holdings would be lost by the next edit. Block writes until a
                 // restore or import replaces the portfolio deliberately.
@@ -922,6 +928,9 @@ class DataModel {
             links = try await trading212BrokerLinkStore.loadSnapshot()
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
         }
+        if try await trading212BrokerLinkStore.recordISINs(from: preview.rows) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
+        }
         let plan = trading212BrokerSyncPlanner.plan(
             existingTrades: realTimeTrades.map(\.trade),
             tradingInfoBySymbol: tradingInfoBySymbol(),
@@ -1055,6 +1064,9 @@ class DataModel {
                 brokerOnlyCount: 0,
                 skippedReason: Self.trading212SkippedForFolyncReason
             )
+        }
+        if try await trading212BrokerLinkStore.recordISINs(from: preview.rows) {
+            links = try await trading212BrokerLinkStore.loadSnapshot()
         }
         let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
 
@@ -1847,7 +1859,9 @@ class DataModel {
         }
 
         try await tradeDataService.saveAllTrades(portfolioTrades)
+        if portfolioLoadFailed { aliasIdentityMigrationService.setAsideUnreadablePendingRecovery() }
         portfolioLoadFailed = false
+        portfolioLoadFailureDetail = nil
 
         var existingInfo: [String: TradingInfo] = [:]
         for trade in realTimeTrades {

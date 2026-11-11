@@ -104,6 +104,16 @@ final class StockbarProviderAccessPolicyTests: XCTestCase {
         )
     }
 
+    func testQuotesFetchedBeforeFolyncBecameActiveDoNotOverwriteItsHoldings() {
+        let fetched: Set<String> = ["MU", "TW.L", "^GSPC"]
+
+        XCTAssertEqual(RefreshService.symbolsToApply(targeted: fetched, folyncRefreshable: nil), fetched)
+        XCTAssertEqual(
+            RefreshService.symbolsToApply(targeted: fetched, folyncRefreshable: ["^GSPC", "^FTSE"]),
+            ["^GSPC"]
+        )
+    }
+
     func testFolyncBenchmarkLegacyFallbackRestoresLocalRefresh() {
         let symbols = ["AAPL", "^FTSE", "^GSPC"]
 

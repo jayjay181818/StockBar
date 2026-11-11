@@ -99,7 +99,11 @@ class PortfolioCalculationService {
             }
             
             // Get normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: realTimeTradeItem.trade.name)
+            let adjustedCost = realTimeTradeItem.trade.position.averageCost(
+                for: realTimeTradeItem.trade.name,
+                inQuoteCurrency: realTimeTradeItem.realTimeInfo.currency,
+                converter: currencyConverter
+            )
             guard !adjustedCost.isNaN, adjustedCost > 0 else {
                 logger.post(.debug, "Skipping net gain calculation for \(realTimeTradeItem.trade.name) due to invalid cost.")
                 continue
@@ -269,7 +273,9 @@ class PortfolioCalculationService {
                 }
             }
 
-            let adjustedCost = realTimeTradeItem.trade.position.getNormalizedAvgCost(for: symbol)
+            let adjustedCost = realTimeTradeItem.trade.position.averageCost(
+                for: symbol, inQuoteCurrency: realTimeTradeItem.realTimeInfo.currency, converter: currencyConverter
+            )
             if adjustedCost.isFinite, adjustedCost > 0 {
                 let costUSD = convertToUSD(amount: adjustedCost * units, currency: currency)
                 if costUSD.isFinite {
@@ -309,7 +315,9 @@ class PortfolioCalculationService {
         let previousClose = info.prevClosePrice
         let units = realTimeTrade.trade.position.unitSize
         let symbol = realTimeTrade.trade.name
-        let averageCost = realTimeTrade.trade.position.getNormalizedAvgCost(for: symbol)
+        let averageCost = realTimeTrade.trade.position.averageCost(
+            for: symbol, inQuoteCurrency: info.currency, converter: currencyConverter
+        )
         // Amounts here are already in pounds for a pence-quoted holding, so a
         // cost entered in pence must not label them "GBX" before a quote arrives.
         let statedCurrency = info.currency
@@ -354,12 +362,19 @@ class PortfolioCalculationService {
         if let brokerValuation,
            let brokerAmount = brokerValuation.brokerUnrealizedProfitLoss,
            brokerAmount.isFinite {
+            // The row carries one currency label, the broker's. The day amount
+            // was worked out in the quote currency, so it is converted to match.
+            let brokerCurrency = brokerValuation.currency
+            let dayInBrokerCurrency = dayAmount.isFinite && !currency.isEmpty
+                && currency.uppercased() != brokerCurrency.uppercased()
+                ? currencyConverter.convert(amount: dayAmount, from: currency, to: brokerCurrency)
+                : dayAmount
             return PositionProfitLossSummary(
-                dayAmount: dayAmount,
+                dayAmount: dayInBrokerCurrency,
                 dayPercent: dayPercent,
                 totalAmount: brokerAmount,
                 totalPercent: brokerValuation.totalGainPercent,
-                currency: brokerValuation.currency
+                currency: brokerCurrency
             )
         }
 
@@ -481,9 +496,11 @@ class PortfolioCalculationService {
     private func convertBrokerAmount(_ amount: Double, from sourceCurrency: String, to targetCurrency: String) -> Double {
         let normalizedSource = CurrencyConverter.isPenceCurrency(sourceCurrency) ? "GBP" : sourceCurrency.uppercased()
         let normalizedTarget = CurrencyConverter.isPenceCurrency(targetCurrency) ? "GBP" : targetCurrency.uppercased()
+        // A pence amount is divided once here; relabelling it as pounds would overstate it 100 times.
+        let sourceAmount = CurrencyConverter.isPenceCurrency(sourceCurrency) ? amount / 100.0 : amount
         let converted = normalizedSource == normalizedTarget
-            ? amount
-            : currencyConverter.convert(amount: amount, from: normalizedSource, to: normalizedTarget)
+            ? sourceAmount
+            : currencyConverter.convert(amount: sourceAmount, from: normalizedSource, to: normalizedTarget)
         return CurrencyConverter.isPenceCurrency(targetCurrency) ? converted * 100.0 : converted
     }
 }

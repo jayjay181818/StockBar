@@ -133,18 +133,23 @@ enum ChartTimeRange: String, CaseIterable, Sendable {
         }
     }
 
-    func startDate(from endDate: Date = Date()) -> Date {
+    /// The one definition of where a range starts: calendar units back from
+    /// `endDate`, so "1M" from 31 March is 28 February, not 30 days earlier.
+    func startDate(from endDate: Date = Date(), calendar: Calendar = .current) -> Date {
+        let step: (component: Calendar.Component, value: Int)
         switch self {
-        case .all:
-            // Use a reasonable past date instead of distantPast to ensure all historical data is included
-            // Go back 10 years which should cover any reasonable historical data
-            return endDate.addingTimeInterval(-10 * 365 * 24 * 60 * 60)
-        case .custom:
-            // Custom range will be handled by customStartDate in PerformanceChartView
-            return endDate.addingTimeInterval(-30 * 24 * 60 * 60) // Default to 30 days
-        default:
-            return endDate.addingTimeInterval(-timeInterval)
+        case .day: step = (.day, -1)
+        case .week: step = (.weekOfYear, -1)
+        case .month: step = (.month, -1)
+        case .threeMonths: step = (.month, -3)
+        case .sixMonths: step = (.month, -6)
+        case .year: step = (.year, -1)
+        // Ten years covers any stored history without using distantPast.
+        case .all: step = (.year, -10)
+        // A custom range carries its own start; this is only the default.
+        case .custom: step = (.month, -1)
         }
+        return calendar.date(byAdding: step.component, value: step.value, to: endDate) ?? endDate
     }
 }
 

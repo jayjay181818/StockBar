@@ -16,6 +16,9 @@
 # Environment:
 #   STOCKBAR_PYTHON_VERSION   Python version for uv (default 3.13)
 #   STOCKBAR_REQUIREMENTS     requirements file (default: beside this script)
+#                             When a .lock file sits beside it, that is installed
+#                             instead: every package at an exact version, and each
+#                             download checked against the checksum recorded there.
 #   STOCKBAR_SUPPORT_DIR      where python-env goes (default: Application Support/Stockbar)
 #   STOCKBAR_CACHE_DIR        cache for the downloaded uv (default: ~/Library/Caches/Stockbar)
 #   STOCKBAR_USE_OWN_UV=1     skip any installed uv or Python and use the downloaded uv
@@ -45,6 +48,13 @@ done
 export PATH
 
 [[ -f "$REQUIREMENTS" ]] || { echo "Requirements file not found: $REQUIREMENTS" >&2; exit 1; }
+# requirements.lock is written by script/update_python_lock.sh from requirements.txt.
+LOCK="${REQUIREMENTS%.txt}.lock"
+if [[ -f "$LOCK" ]]; then
+  install_from=(--require-hashes -r "$LOCK")
+else
+  install_from=(-r "$REQUIREMENTS")
+fi
 
 mkdir -p "$SUPPORT_DIR"
 cleanup() {
@@ -138,12 +148,12 @@ if [[ -n "$uv_bin" ]]; then
   echo "Creating Python $PYTHON_VERSION environment with uv..."
   run "$uv_bin" venv --quiet --python "$PYTHON_VERSION" "$BUILD"
   echo "Installing packages..."
-  run "$uv_bin" pip install --quiet --python "$BUILD/bin/python3" -r "$REQUIREMENTS"
+  run "$uv_bin" pip install --quiet --python "$BUILD/bin/python3" "${install_from[@]}"
 else
   echo "Creating environment with $base..."
   run "$base" -m venv "$BUILD"
   echo "Installing packages..."
-  run "$BUILD/bin/python3" -m pip install --quiet --disable-pip-version-check -r "$REQUIREMENTS"
+  run "$BUILD/bin/python3" -m pip install --quiet --disable-pip-version-check "${install_from[@]}"
 fi
 
 echo "Checking the environment..."

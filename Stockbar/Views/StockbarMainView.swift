@@ -301,7 +301,8 @@ private struct StockbarHoldingsView: View {
 
     private var subtitle: String {
         if dataModel.portfolioLoadFailed {
-            return "Your saved holdings could not be loaded, so editing is paused to avoid overwriting them. Restart Stockbar or restore a backup."
+            return dataModel.portfolioLoadFailureDetail.map { "\($0) Editing is paused to avoid overwriting your saved holdings." }
+                ?? "Your saved holdings could not be loaded, so editing is paused to avoid overwriting them. Restart Stockbar or restore a backup."
         }
         return dataModel.isFolyncPortfolioActive
             ? "Read-only Folync holdings. Visibility and alerts remain local to Stockbar."
@@ -324,12 +325,15 @@ private struct StockbarHoldingsView: View {
                         .controlSize(.large)
                         .help(isEditing ? "Finish editing" : "Edit units, cost, currency and order")
                     }
-                    Button(action: addHolding) {
-                        Label("Add Holding", systemImage: "plus")
+                    // Shown only when it can be used: a prominent button that is
+                    // always disabled reads as something broken.
+                    if canEditPortfolio {
+                        Button(action: addHolding) {
+                            Label("Add Holding", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!canEditPortfolio)
                 }
             }
 
@@ -916,9 +920,14 @@ private struct ProfitLossCell: View {
     }
 
     private var helpText: String {
-        switch displayMode {
-        case .amount: "Show percentage"
-        case .percent: "Show amount"
+        let toggle = switch displayMode {
+        case .amount: "Click to show the percentage."
+        case .percent: "Click to show the amount."
+        }
+        switch kind {
+        case .day: return toggle
+        case .total:
+            return "Unrealised gain or loss against the average cost; sales and dividends are not included. \(toggle)"
         }
     }
 }
@@ -966,6 +975,7 @@ private struct StockbarBackupsView: View {
                                 ProgressView().controlSize(.small)
                             } else {
                                 Image(systemName: "externaldrive.badge.plus")
+                                    .accessibilityHidden(true)
                             }
                             Text("Back Up Now")
                         }
@@ -1009,6 +1019,7 @@ private struct StockbarBackupsView: View {
         }
         .stockbarPage()
         .onAppear(perform: reloadBackupState)
+        .onReceive(NotificationCenter.default.publisher(for: .stockbarBackupDidComplete)) { _ in reloadBackupState() }
         .sheet(isPresented: $showingRestoreSheet, onDismiss: reloadBackupState) {
             RestoreBackupView(isPresented: $showingRestoreSheet, dataModel: dataModel)
         }
@@ -1082,8 +1093,8 @@ private struct StockbarDataHealthView: View {
                     )
                     StockbarMetricTile(
                         title: "Menu Bar",
-                        value: dataModel.hideAllMenuBarItems ? "Hidden" : "\(trackedTrades.filter(\.trade.showInMenuBar).count) visible",
-                        detail: dataModel.requireExternalDisplayForMenuBarStocks ? "Only with an external display" : "Shown on every display",
+                        value: menuBarTile.value,
+                        detail: menuBarTile.detail,
                         systemImage: "menubar.rectangle"
                     )
                     StockbarMetricTile(
@@ -1157,7 +1168,21 @@ private struct StockbarDataHealthView: View {
         return now.timeIntervalSince(lastPriceUpdate) > max(dataModel.refreshInterval * 2, 600, closedAllowance)
     }
 
+    /// Says "Hidden" when nothing is on screen: either switched off, or waiting for an external display.
+    private var menuBarTile: (value: String, detail: String) {
+        let selected = trackedTrades.filter(\.trade.showInMenuBar).count
+        if dataModel.hideAllMenuBarItems { return ("Hidden", "Switched off in Settings") }
+        guard dataModel.requireExternalDisplayForMenuBarStocks else {
+            return ("\(selected) visible", "Shown on every display")
+        }
+        return dataModel.isExternalDisplayConnected
+            ? ("\(selected) visible", "Only with an external display")
+            : ("Hidden", "\(selected) selected · shown with an external display")
+    }
+
     private var refreshIntervalText: String {
+        // Folync holdings follow Folync's own poll, not the quote refresh interval.
+        if dataModel.isFolyncPortfolioActive { return "\(Int(FolyncRefreshSchedule.interval / 60)) min" }
         let minutes = Int(dataModel.refreshInterval / 60)
         return minutes >= 60 ? "\(minutes / 60) hr" : "\(max(minutes, 1)) min"
     }

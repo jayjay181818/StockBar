@@ -167,12 +167,18 @@ enum HoldingsCurrencyFormatter {
         minimumFractionDigits: Int = 2,
         maximumFractionDigits: Int = 2
     ) -> NumberFormatter {
+        // One formatter per thread and precision: a table redraw formats
+        // hundreds of cells, and building a NumberFormatter each time is slow.
+        let key = "HoldingsCurrencyFormatter.decimal.\(minimumFractionDigits).\(maximumFractionDigits)"
+        let cache = Thread.current.threadDictionary
+        if let cached = cache[key] as? NumberFormatter { return cached }
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = true
         formatter.minimumFractionDigits = minimumFractionDigits
         formatter.maximumFractionDigits = maximumFractionDigits
+        cache[key] = formatter
         return formatter
     }
 }

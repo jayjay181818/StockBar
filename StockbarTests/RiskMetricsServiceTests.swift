@@ -494,6 +494,21 @@ final class RiskMetricsServiceTests: XCTestCase {
         XCTAssertEqual(series.currentValue, 550, accuracy: 0.001)
     }
 
+    func testFlowAdjustedSeries_AHundredfoldPriceJumpIsNotAReturn() throws {
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000)
+        let snapshots = [
+            snapshot(day1, positions: [position("VOD.L", units: 10, price: 1), position("AAPL", units: 10, price: 100)]),
+            // VOD.L stored in pence on day two (a data slip); AAPL really rose 10%.
+            snapshot(day1 + 86_400, positions: [position("VOD.L", units: 10, price: 100), position("AAPL", units: 10, price: 110)])
+        ]
+
+        let series = try XCTUnwrap(RiskMetricsService.flowAdjustedDailySeries(
+            snapshots: snapshots, convert: { amount, _ in amount }, calendar: utcCalendar))
+
+        // Base 10 + 1000; only AAPL's +100 counts.
+        XCTAssertEqual(series.returns[0], 100.0 / 1010.0, accuracy: 0.0001)
+    }
+
     func testFlowAdjustedSeries_BuyingMoreIsNotAGain() throws {
         let day1 = Date(timeIntervalSince1970: 1_699_920_000)
         let snapshots = [
@@ -552,5 +567,29 @@ final class RiskMetricsServiceTests: XCTestCase {
 
         XCTAssertEqual(perPeriod, sqrt(0.0020 / 4), accuracy: 1e-9)
         XCTAssertEqual(annual, perPeriod * sqrt(252.0), accuracy: 1e-9)
+    }
+
+    func testReturnStatistics_HandWorkedValues() {
+        // Mean 1%; squared deviations 1, 4, 4, 1 (x 1e-4), so variance 2.5e-4.
+        let statistics = ReturnStatistics(dailyReturns: [0.02, -0.01, 0.03, 0.00], annualRiskFreeRate: 0)
+        let deviation = sqrt(2.5e-4)
+
+        XCTAssertEqual(statistics.volatility, deviation * 100, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.sharpeRatio), 0.01 / deviation * sqrt(252), accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.annualizedVolatility), deviation * 100 * sqrt(252), accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(statistics.valueAtRisk), 1.0, accuracy: 1e-9, "the worst of four days")
+        XCTAssertEqual(try XCTUnwrap(statistics.winRate), 50, accuracy: 1e-9)
+    }
+
+    func testReturnStatistics_UndefinedFiguresAreNil() {
+        let none = ReturnStatistics(dailyReturns: [])
+        XCTAssertEqual(none.volatility, 0)
+        XCTAssertNil(none.sharpeRatio)
+        XCTAssertNil(none.annualizedVolatility)
+        XCTAssertNil(none.valueAtRisk)
+        XCTAssertNil(none.winRate)
+
+        // Returns that never vary have no Sharpe ratio.
+        XCTAssertNil(ReturnStatistics(dailyReturns: [0.01, 0.01, 0.01]).sharpeRatio)
     }
 }

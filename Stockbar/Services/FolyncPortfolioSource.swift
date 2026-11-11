@@ -198,11 +198,19 @@ struct FolyncHolding: Codable, Equatable {
     }
 
     var resolvedAverageCostCurrency: String {
-        normalized(averageCostCurrency) ?? normalized(currency) ?? currency
+        normalizedCurrency(averageCostCurrency) ?? normalizedCurrency(currency) ?? currency
     }
 
     var resolvedValueCurrency: String {
-        normalized(valueCurrency) ?? normalized(valuation.currency) ?? normalized(currency) ?? currency
+        normalizedCurrency(valueCurrency) ?? normalizedCurrency(valuation.currency) ?? normalizedCurrency(currency) ?? currency
+    }
+
+    /// Upper-cases a currency code, except that pence ("GBp") becomes "GBX":
+    /// upper-casing it would turn pence into pounds.
+    private func normalizedCurrency(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return CurrencyConverter.isPenceCurrency(trimmed) ? "GBX" : trimmed.uppercased()
     }
 
     var resolvedPortfolioDisplayName: String {
