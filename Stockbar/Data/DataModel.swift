@@ -337,7 +337,10 @@ class DataModel {
 
         // INTELLIGENT BACKFILL SCHEDULER: Start automatic gap detection and scheduled backfills
         Task { @MainActor in
-            guard await waitForInitialTradeLoad(), mayStartRuntimeSchedulers else { return }
+            // The wait returns as soon as the load finishes. The default 15 s
+            // was too short for a launch that migrates the store, and missing
+            // it meant no gap checks or scheduled backfills until the next launch.
+            guard await waitForInitialTradeLoad(timeout: 600), mayStartRuntimeSchedulers else { return }
             BackfillScheduler.shared.start(dataModel: self)
         }
     }
@@ -752,20 +755,6 @@ class DataModel {
     func verifyAPIKey(service: String) async throws -> Bool {
         await logger.info("Verifying API key for service: \(service)")
         return try await networkService.verifyAPIKey(service: service)
-    }
-    
-    /// Clears bad historical data for specific symbols
-    @MainActor
-    public func clearHistoricalDataForSymbol(_ symbol: String) async {
-        historicalDataManager.clearDataForSymbol(symbol)
-        await logger.info("Cleared bad historical data for \(symbol)")
-    }
-
-    /// Clears bad historical data for multiple symbols
-    @MainActor
-    public func clearHistoricalDataForSymbols(_ symbols: [String]) async {
-        historicalDataManager.clearDataForSymbols(symbols)
-        await logger.info("Cleared bad historical data for \(symbols.count) symbols")
     }
     
     /// Manually triggers retroactive portfolio calculation
@@ -2147,8 +2136,18 @@ extension RealTimeTrade {
         // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
         updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
         updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
-        updatedInfo.exchangeTimezoneName = result.exchangeTimezoneName ?? "GMT"
-        updatedInfo.shortName = result.shortName ?? self.trade.name
+        // A provider that omits these (the FMP fallback does) must not replace
+        // a known time zone with GMT or a known name with the ticker.
+        if let zone = result.exchangeTimezoneName, !zone.isEmpty {
+            updatedInfo.exchangeTimezoneName = zone
+        } else if updatedInfo.exchangeTimezoneName.isEmpty {
+            updatedInfo.exchangeTimezoneName = "GMT"
+        }
+        if let name = result.shortName, !name.isEmpty {
+            updatedInfo.shortName = name
+        } else if updatedInfo.shortName.isEmpty {
+            updatedInfo.shortName = self.trade.name
+        }
 
         // Market state handling: if result provides a state, use it; otherwise infer from current time
         if let newMarketState = result.marketState?.rawValue {

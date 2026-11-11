@@ -253,6 +253,49 @@ class HistoricalDataManager {
         return stored >= 30 ? stored : 300
     }()
     @ObservationIgnored private var lastSnapshotTime: Date = Date.distantPast
+    /// Last price row recorded per symbol, to skip rows that repeat it.
+    @ObservationIgnored private var lastRecordedPrice: [String: PriceSnapshot] = [:]
+    @ObservationIgnored private var unsavedPriceSnapshots: [PriceSnapshot] = []
+    @ObservationIgnored private var unsavedPortfolioSnapshots: [HistoricalPortfolioSnapshot] = []
+    private static let maxUnsavedRows = 5_000
+    /// First check ten minutes after launch, then hourly; the work itself is weekly.
+    @ObservationIgnored private var nextStoreMaintenanceCheck = Date().addingTimeInterval(600)
+
+    /// A row repeating the previous price is recorded once an hour, enough to
+    /// show the series is alive. 62% of stored rows repeated the row before.
+    nonisolated static let unchangedPriceRecordInterval: TimeInterval = 3600
+    /// Refreshes arrive on a timer of the same length as the snapshot interval,
+    /// so asking for the full interval skipped every other snapshot whenever a
+    /// refresh landed a moment early.
+    nonisolated static let snapshotIntervalTolerance = 0.9
+
+    nonisolated static func shouldRecordPrice(_ snapshot: PriceSnapshot, after last: PriceSnapshot?) -> Bool {
+        guard let last else { return true }
+        return snapshot.price != last.price
+            || snapshot.previousClose != last.previousClose
+            || snapshot.timestamp.timeIntervalSince(last.timestamp) >= unchangedPriceRecordInterval
+    }
+
+    nonisolated static func isSnapshotDue(elapsed: TimeInterval, interval: TimeInterval) -> Bool {
+        elapsed >= interval * snapshotIntervalTolerance
+    }
+
+    /// The positions worth storing with a portfolio snapshot: those actually
+    /// held. Watch-only and zero-unit rows were 13% of the position table.
+    nonisolated static func storedPositions(from trades: [RealTimeTrade]) -> [String: PositionSnapshot] {
+        Dictionary(firstValuesFor: trades.compactMap { trade -> (String, PositionSnapshot)? in
+            let units = trade.trade.position.unitSize
+            guard !trade.trade.isWatchlistOnly, units.isFinite, units > 0 else { return nil }
+            let price = trade.realTimeInfo.currentPrice
+            return (trade.trade.name, PositionSnapshot(
+                symbol: trade.trade.name,
+                units: units,
+                priceAtDate: price,
+                valueAtDate: price * units,
+                currency: trade.realTimeInfo.currency ?? "USD"
+            ))
+        })
+    }
     @ObservationIgnored private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
         didSet { aliasHistoryCache.removeAll() }
     }
@@ -292,20 +335,6 @@ class HistoricalDataManager {
     }
     
     // MARK: - Core Data Integration
-    
-    /// Load price snapshots from Core Data for a specific symbol
-    func loadPriceSnapshotsFromCoreData(for symbol: String, timeRange: ChartTimeRange) async -> [PriceSnapshot] {
-        do {
-            let startDate = timeRange.startDate()
-            let endDate = Date()
-            let snapshots = try await coreDataService.fetchPriceSnapshots(for: symbol, from: startDate, to: endDate)
-            await logger.debug("📊 Loaded \(snapshots.count) price snapshots from Core Data for \(symbol)") 
-            return snapshots
-        } catch {
-            await logger.error("❌ Failed to load price snapshots from Core Data for \(symbol): \(error)") 
-            return []
-        }
-    }
     
     /// Load portfolio snapshots from Core Data
     func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
@@ -381,72 +410,35 @@ class HistoricalDataManager {
         }
     }
     
-    /// Save new price snapshots to Core Data using optimized background context
+    /// Saves price snapshots to Core Data. Rows from a failed save are kept
+    /// and written with the next one; memory already holds them, and without
+    /// this they were lost at quit.
     private func savePriceSnapshotsToCoreData(_ snapshots: [PriceSnapshot]) async {
-        // Use optimized background context for heavy save operations
-        try? await performOptimizedBackgroundOperation("save price snapshots") { [self] in
-            do {
-                try await self.coreDataService.savePriceSnapshots(snapshots)
-                await self.logger.debug("💾 Saved \(snapshots.count) price snapshots to Core Data") 
-            } catch {
-                await self.logger.error("❌ Failed to save price snapshots to Core Data: \(error)") 
-            }
-        }
-    }
-    
-    /// Save portfolio snapshot to Core Data
-    private func savePortfolioSnapshotToCoreData(_ snapshot: HistoricalPortfolioSnapshot) async {
+        let batch = unsavedPriceSnapshots + snapshots
+        unsavedPriceSnapshots = []
         do {
-            try await coreDataService.savePortfolioSnapshot(snapshot)
-            await logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)") 
+            try await coreDataService.savePriceSnapshots(batch)
+            await logger.debug("💾 Saved \(batch.count) price snapshots to Core Data")
         } catch {
-            await logger.error("❌ Failed to save portfolio snapshot to Core Data: \(error)") 
+            unsavedPriceSnapshots = Array((batch + unsavedPriceSnapshots).suffix(Self.maxUnsavedRows))
+            await logger.error("❌ Failed to save price snapshots to Core Data; \(unsavedPriceSnapshots.count) kept for the next save: \(error)")
         }
     }
-    
-    // MARK: - Optimized Background Operations
-    
-    /// Perform heavy operations using optimized background context to prevent UI blocking
-    private func performOptimizedBackgroundOperation<T: Sendable>(
-        _ operationName: String,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        await logger.debug("🔄 Starting optimized background operation: \(operationName)")
-        
-        // Use task with specific priority for background work
-        return try await Task.detached(priority: .utility) {
-            let result = try await operation()
-            await Logger.shared.debug("✅ Completed optimized background operation: \(operationName)")
-            return result
-        }.value
-    }
-    
-    /// Batch process large datasets in chunks to prevent memory spikes
-    private func processBatchOperation<T: Sendable, R: Sendable>(
-        items: [T],
-        batchSize: Int = 100,
-        operationName: String,
-        operation: @escaping @Sendable ([T]) async throws -> R
-    ) async throws -> [R] {
-        let batches = items.chunked(into: batchSize)
-        var results: [R] = []
-        
-        await logger.info("🔄 Processing \(items.count) items in \(batches.count) batches for \(operationName)")
-        
-        for (index, batch) in batches.enumerated() {
-            let result = try await performOptimizedBackgroundOperation("\(operationName) batch \(index + 1)") {
-                return try await operation(batch)
-            }
-            results.append(result)
-            
-            // Small delay between batches to prevent overwhelming the system
-            if index < batches.count - 1 {
-                try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+
+    /// Saves a portfolio snapshot to Core Data, with any left from failed saves.
+    private func savePortfolioSnapshotToCoreData(_ snapshot: HistoricalPortfolioSnapshot) async {
+        let batch = unsavedPortfolioSnapshots + [snapshot]
+        unsavedPortfolioSnapshots = []
+        for (index, pending) in batch.enumerated() {
+            do {
+                try await coreDataService.savePortfolioSnapshot(pending)
+            } catch {
+                unsavedPortfolioSnapshots = Array((batch[index...] + unsavedPortfolioSnapshots).suffix(Self.maxUnsavedRows))
+                await logger.error("❌ Failed to save portfolio snapshot to Core Data; \(unsavedPortfolioSnapshots.count) kept for the next save: \(error)")
+                return
             }
         }
-        
-        await logger.info("✅ Completed batch processing for \(operationName)")
-        return results
+        await logger.debug("💾 Saved portfolio snapshot to Core Data for \(snapshot.date)")
     }
     
     // MARK: - Tiered Cache Integration
@@ -525,7 +517,7 @@ class HistoricalDataManager {
         
         Task { await logger.debug("📸 Snapshot attempt: timeSinceLastSnapshot=\(Int(timeSinceLastSnapshot))s, required=\(Int(snapshotInterval))s") }
         
-        guard timeSinceLastSnapshot >= snapshotInterval else {
+        guard Self.isSnapshotDue(elapsed: timeSinceLastSnapshot, interval: snapshotInterval) else {
             Task { await logger.debug("📸 Skipping snapshot - too soon (\(Int(timeSinceLastSnapshot))s < \(Int(snapshotInterval))s)") }
             return // Too soon since last snapshot
         }
@@ -534,6 +526,7 @@ class HistoricalDataManager {
         Task { await logger.debug("📸 Recording snapshot at \(now)") }
         
         var currentPriceSnapshots: [PriceSnapshot] = []
+        var changedPriceSnapshots: [PriceSnapshot] = []
         var hasValidData = false
         
         Task { await logger.debug("📸 Checking \(dataModel.realTimeTrades.count) trades for valid data") }
@@ -558,16 +551,21 @@ class HistoricalDataManager {
             )
             
             currentPriceSnapshots.append(snapshot)
-            
-            // Add to individual stock history
-            if priceSnapshots[trade.trade.name] == nil {
-                priceSnapshots[trade.trade.name] = []
-            }
-            priceSnapshots[trade.trade.name]?.append(snapshot)
-            
-            // CRITICAL FIX: Keep snapshots sorted by timestamp for binary search performance
-            priceSnapshots[trade.trade.name]?.sort { $0.timestamp < $1.timestamp }
             hasValidData = true
+
+            let name = trade.trade.name
+            guard Self.shouldRecordPrice(snapshot, after: lastRecordedPrice[name] ?? priceSnapshots[name]?.last) else {
+                continue
+            }
+            lastRecordedPrice[name] = snapshot
+            changedPriceSnapshots.append(snapshot)
+            // `now` is normally the newest timestamp, so appending keeps the
+            // history sorted without re-sorting thousands of rows per symbol.
+            let needsSort = (priceSnapshots[name]?.last?.timestamp ?? .distantPast) > now
+            priceSnapshots[name, default: []].append(snapshot)
+            if needsSort {
+                priceSnapshots[name]?.sort { $0.timestamp < $1.timestamp }
+            }
         }
         
         guard hasValidData else {
@@ -598,24 +596,14 @@ class HistoricalDataManager {
         // Save data to legacy storage
         saveHistoricalData()
         
-        // Save data to Core Data (async in background)
+        // Read the positions now: by the time the save runs the holdings may
+        // have changed, and the snapshot must match the totals worked out above.
+        let portfolioComposition = Self.storedPositions(from: dataModel.realTimeTrades)
         Task {
-            await savePriceSnapshotsToCoreData(currentPriceSnapshots)
-            
-            // Convert legacy portfolio snapshot to enhanced format for Core Data
-            let portfolioComposition: [String: PositionSnapshot] = Dictionary(firstValuesFor: 
-                dataModel.realTimeTrades.map { trade in
-                    let positionSnapshot = PositionSnapshot(
-                        symbol: trade.trade.name,
-                        units: trade.trade.position.unitSize,
-                        priceAtDate: trade.realTimeInfo.currentPrice,
-                        valueAtDate: trade.realTimeInfo.currentPrice * trade.trade.position.unitSize,
-                        currency: trade.realTimeInfo.currency ?? "USD"
-                    )
-                    return (trade.trade.name, positionSnapshot)
-                }
-            )
-            
+            await savePriceSnapshotsToCoreData(changedPriceSnapshots)
+
+            // A portfolio of watch-only symbols has no value to record.
+            guard !portfolioComposition.isEmpty else { return }
             let enhancedPortfolioSnapshot = HistoricalPortfolioSnapshot(
                 date: now,
                 totalValue: totalValue,
@@ -629,6 +617,20 @@ class HistoricalDataManager {
         }
         
         Task { await logger.debug("Recorded portfolio snapshot: value=\(totalValue), gains=\(gains.amount) \(gains.currency)") }
+        runStoreMaintenanceIfDue(heldSymbols: dataModel.realTimeTrades.map(\.trade.name), now: now)
+    }
+
+    /// Starts the weekly database upkeep when it is due (see `StoreMaintenance`).
+    private func runStoreMaintenanceIfDue(heldSymbols: [String], now: Date) {
+        guard now >= nextStoreMaintenanceCheck else { return }
+        nextStoreMaintenanceCheck = now.addingTimeInterval(3600)
+        // With no holdings loaded there is no telling which symbols are in use.
+        let held: Set<String>? = heldSymbols.isEmpty ? nil : Set(
+            heldSymbols.flatMap { [$0] + instrumentAliasStore.aliases(for: $0) }.map { $0.uppercased() }
+        )
+        Task.detached(priority: .background) {
+            await StoreMaintenance.shared.runIfDue(heldSymbols: held, now: now)
+        }
     }
 
     /// Records a memory-only price point from live refresh/broker sync paths.
@@ -1638,14 +1640,23 @@ class HistoricalDataManager {
             // If CacheManager was used as a staging area before Core Data saving,
             // that logic would need to be more explicit.
 
-            // UserDefaults backup for metadata can remain for safety during transition
-            if let compositionData = try? currentPortfolioComposition.map({ try encoder.encode($0) }) {
-                 StockbarRuntimeStorage.userDefaults.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
-            } else if currentPortfolioComposition == nil { // Explicitly clear if nil
-                 StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+            // UserDefaults backup for metadata. This runs after every snapshot,
+            // so write only what changed: any write rewrites the whole file.
+            let defaults = StockbarRuntimeStorage.userDefaults
+            let compositionData = try? currentPortfolioComposition.map { try encoder.encode($0) }
+            if defaults.data(forKey: StorageKeys.currentPortfolioComposition) != compositionData {
+                if let compositionData {
+                    defaults.set(compositionData, forKey: StorageKeys.currentPortfolioComposition)
+                } else if currentPortfolioComposition == nil {
+                    defaults.removeObject(forKey: StorageKeys.currentPortfolioComposition)
+                }
             }
-            StockbarRuntimeStorage.userDefaults.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
-            StockbarRuntimeStorage.userDefaults.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+            if defaults.object(forKey: StorageKeys.lastRetroactiveCalculationDate) as? Date != currentRetroactiveCalculationDate {
+                defaults.set(currentRetroactiveCalculationDate, forKey: StorageKeys.lastRetroactiveCalculationDate)
+            }
+            if defaults.object(forKey: StorageKeys.lastPortfolioCalculationDate) as? Date != currentCalculationDate {
+                defaults.set(currentCalculationDate, forKey: StorageKeys.lastPortfolioCalculationDate)
+            }
             // Avoid saving large snapshot arrays to UserDefaults directly
             
             Task { await logger.debug("HistoricalDataManager: Saved metadata to CacheManager and UserDefaults backup.") }
@@ -1725,39 +1736,6 @@ class HistoricalDataManager {
         }
     }
     
-    func clearAllData() {
-        portfolioSnapshots.removeAll()
-        priceSnapshots.removeAll()
-        historicalPortfolioSnapshots.removeAll()
-        currentPortfolioComposition = nil
-        cachedHistoricalPortfolioValues.removeAll()
-        lastPortfolioCalculationDate = Date.distantPast
-        lastRetroactiveCalculationDate = Date.distantPast
-        earliestAvailableDates.removeAll()
-        
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.portfolioSnapshots)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.priceSnapshots)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.historicalPortfolioSnapshots)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.currentPortfolioComposition)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.lastRetroactiveCalculationDate)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.cachedHistoricalPortfolioValues)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.lastPortfolioCalculationDate)
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: StorageKeys.earliestAvailableDates)
-        
-        Task { await logger.info("Cleared all historical data including enhanced portfolio snapshots") }
-    }
-    
-    func clearInconsistentData() {
-        // Clear all portfolio snapshots since they were calculated with inconsistent methods
-        portfolioSnapshots.removeAll()
-        cachedHistoricalPortfolioValues.removeAll()
-        lastPortfolioCalculationDate = Date.distantPast
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "portfolioSnapshots")
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "cachedHistoricalPortfolioValues")
-        StockbarRuntimeStorage.userDefaults.removeObject(forKey: "lastPortfolioCalculationDate")
-        Task { await logger.info("Cleared inconsistent portfolio historical data and cache - will rebuild with correct calculations") }
-    }
-
     func earliestAvailableDate(for symbol: String) -> Date? {
         earliestAvailableDates[symbol.uppercased()]
     }
@@ -1782,49 +1760,6 @@ class HistoricalDataManager {
         Task { await logger.info("🔧 Forced snapshot complete. Portfolio snapshots: \(portfolioSnapshots.count), Price snapshots: \(priceSnapshots.count)") }
     }
     
-    func cleanAnomalousData() {
-        var removedCount = 0
-        
-        // Get current portfolio value for comparison
-        let currentValue = getCurrentPortfolioValue()
-        let reasonableRange = (currentValue * 0.6)...(currentValue * 1.4) // Allow 40% variance
-        
-        Task { await logger.info("🧹 Cleaning anomalous data. Current portfolio value: £\(String(format: "%.2f", currentValue))") }
-        Task { await logger.info("🧹 Acceptable range: £\(String(format: "%.2f", reasonableRange.lowerBound)) - £\(String(format: "%.2f", reasonableRange.upperBound))") }
-        
-        // Clean portfolio snapshots - be more aggressive with outliers
-        portfolioSnapshots = portfolioSnapshots.filter { snapshot in
-            // Remove snapshots that are way off from current value
-            let isReasonable = reasonableRange.contains(snapshot.totalValue)
-            let isNotZero = snapshot.totalValue > 1000 // Remove very low values
-            let isNotExcessive = snapshot.totalValue < 100000 // Remove excessive values
-            
-            let isValid = isReasonable && isNotZero && isNotExcessive
-            if !isValid {
-                removedCount += 1
-                Task { await logger.debug("🧹 Removing portfolio snapshot: £\(String(format: "%.2f", snapshot.totalValue)) at \(snapshot.timestamp)") }
-            }
-            return isValid
-        }
-        
-        // Clean individual stock price snapshots
-        for symbol in priceSnapshots.keys {
-            let originalCount = priceSnapshots[symbol]?.count ?? 0
-            priceSnapshots[symbol] = priceSnapshots[symbol]?.filter { snapshot in
-                isValidPriceData(price: snapshot.price, symbol: symbol)
-            }
-            let newCount = priceSnapshots[symbol]?.count ?? 0
-            removedCount += (originalCount - newCount)
-        }
-        
-        if removedCount > 0 {
-            saveHistoricalData()
-            Task { await logger.info("🧹 Cleaned \(removedCount) anomalous data points from historical data") }
-        } else {
-            Task { await logger.info("🧹 No anomalous data found during cleanup") }
-        }
-    }
-    
     private func getCurrentPortfolioValue() -> Double {
         // Use the most recent portfolio snapshot as current value
         // This is used for anomaly detection, so we need a reasonable baseline
@@ -1834,20 +1769,6 @@ class HistoricalDataManager {
         
         // Fallback based on logs showing portfolio value around £38-42k
         return 40000
-    }
-    
-    func clearDataForSymbol(_ symbol: String) {
-        priceSnapshots.removeValue(forKey: symbol)
-        saveHistoricalData()
-        Task { await logger.info("Cleared historical data for symbol: \(symbol) (all data tiers)") }
-    }
-    
-    func clearDataForSymbols(_ symbols: [String]) {
-        for symbol in symbols {
-            priceSnapshots.removeValue(forKey: symbol)
-        }
-        saveHistoricalData()
-        Task { await logger.info("Cleared historical data for \(symbols.count) symbols: \(symbols) (all data tiers)") }
     }
     
     /// Gets the date of the last recorded snapshot for historical data gap detection
@@ -2321,48 +2242,6 @@ class HistoricalDataManager {
         return getChartData(for: chartType, timeRange: timeRange, dataModel: nil)
     }
     
-    /// Performs batch operations for large data sets
-    public func performBatchDataInsertion(_ snapshots: [PriceSnapshot]) async throws {
-        await logger.info("⚡ Starting batch insertion of \(snapshots.count) price snapshots") 
-        
-        try await batchService.batchInsertPriceSnapshots(snapshots)
-        
-        // Update local cache after batch insertion
-        for snapshot in snapshots {
-            if var existingSnapshots = priceSnapshots[snapshot.symbol] {
-                existingSnapshots.append(snapshot)
-                priceSnapshots[snapshot.symbol] = existingSnapshots.sorted { $0.timestamp < $1.timestamp }
-            } else {
-                priceSnapshots[snapshot.symbol] = [snapshot]
-            }
-        }
-        
-        // Save snapshots handled by Core Data services
-        Task { await logger.info("⚡ Batch insertion completed") }
-    }
-    
-    /// Cleans up old data with performance optimizations
-    public func performOptimizedDataCleanup(olderThan cutoffDate: Date) async throws -> BatchDeletionResult {
-        await logger.info("⚡ Starting optimized data cleanup") 
-        
-        let result = try await batchService.batchDeleteOldData(olderThan: cutoffDate)
-        
-        // Update local caches
-        for (symbol, snapshots) in priceSnapshots {
-            let filteredSnapshots = snapshots.filter { $0.timestamp >= cutoffDate }
-            if filteredSnapshots.count != snapshots.count {
-                priceSnapshots[symbol] = filteredSnapshots
-            }
-        }
-        
-        portfolioSnapshots = portfolioSnapshots.filter { $0.timestamp >= cutoffDate }
-        
-        // Save snapshots handled by Core Data services
-        
-        Task { await logger.info("⚡ Optimized data cleanup completed - \(result.totalDeleted) items removed") }
-        return result
-    }
-    
     /// Configures performance optimization settings
     public func configurePerformanceSettings(
         maxCacheSize: Int? = nil,
@@ -2408,17 +2287,6 @@ class HistoricalDataManager {
         snapshotInterval = interval
         StockbarRuntimeStorage.userDefaults.set(interval, forKey: Self.snapshotIntervalDefaultsKey)
         Task { await logger.info("📊 Snapshot interval changed to \(interval) seconds") }
-    }
-    
-    /// Manually triggers data cleanup for all symbols
-    func optimizeAllDataStorage() {
-        Task { await logger.info("📊 MANUAL OPTIMIZATION: Starting data cleanup for all symbols") }
-        
-        // Simply clean up old data to ensure we stay within limits
-        cleanupOldData()
-        
-        saveHistoricalData()
-        Task { await logger.info("📊 MANUAL OPTIMIZATION: Completed data cleanup") }
     }
     
     /// Gets comprehensive data status

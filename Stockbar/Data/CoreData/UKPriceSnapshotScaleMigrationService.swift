@@ -18,6 +18,11 @@ actor UKPriceSnapshotScaleMigrationService {
 
     private static let migrationVersion = 1
     private static let markerKey = "priceSnapshots.uk-scale-repair.version"
+    private static let attemptsKey = "priceSnapshots.uk-scale-repair.attempts"
+    /// Launches on which symbols without a reference price are tried again. A
+    /// quote for them usually arrives after the first refresh; a symbol that
+    /// never gets one must not make every launch rescan the table.
+    static let maxAttempts = 5
 
     struct Row: Equatable, Sendable {
         var timestamp: Date
@@ -43,8 +48,16 @@ actor UKPriceSnapshotScaleMigrationService {
             return []
         }
         do {
-            let (rows, symbols) = try await repairStoredSnapshots(savedQuotes: savedQuotes)
-            defaults.set(Self.migrationVersion, forKey: Self.markerKey)
+            let (rows, symbols, skipped) = try await repairStoredSnapshots(savedQuotes: savedQuotes)
+            let attempts = defaults.integer(forKey: Self.attemptsKey) + 1
+            if skipped.isEmpty || attempts >= Self.maxAttempts {
+                defaults.set(Self.migrationVersion, forKey: Self.markerKey)
+                defaults.removeObject(forKey: Self.attemptsKey)
+            } else {
+                // Rows already repaired are within range of their reference, so
+                // another pass leaves them alone and only retries the skipped symbols.
+                defaults.set(attempts, forKey: Self.attemptsKey)
+            }
             await Logger.shared.info(
                 rows > 0
                     ? "🔄 MIGRATION: rescaled \(rows) UK price snapshots across \(symbols.count) symbols"
@@ -96,7 +109,9 @@ actor UKPriceSnapshotScaleMigrationService {
         var previousClose: Double
     }
 
-    private func repairStoredSnapshots(savedQuotes: [String: Double]) async throws -> (rows: Int, symbols: Set<String>) {
+    private func repairStoredSnapshots(
+        savedQuotes: [String: Double]
+    ) async throws -> (rows: Int, symbols: Set<String>, skipped: [String]) {
         let context = coreDataStack.newBackgroundContext()
         let backupDirectory = StockbarRuntimeStorage.stockbarApplicationSupportDirectory()
             .appendingPathComponent("Backups", isDirectory: true)
@@ -152,7 +167,7 @@ actor UKPriceSnapshotScaleMigrationService {
                 )
                 try context.save()
             }
-            return (changedRows, changedSymbols)
+            return (changedRows, changedSymbols, skippedSymbols)
         }
     }
 }
