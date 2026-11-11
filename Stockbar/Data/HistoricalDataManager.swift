@@ -1785,6 +1785,13 @@ class HistoricalDataManager {
             await performIncrementalPortfolioUpdate(using: dataModel)
         }
 
+        // A cancelled run stores nothing and is not recorded as done, so the
+        // next request starts it again.
+        guard !calculationManager.isCancellationRequested else {
+            await logger.info("🔄 RETROACTIVE: Calculation cancelled before its results were stored")
+            return
+        }
+
         // Update composition tracking
         calculationManager.updateProgress(completed: 90, status: "Finalizing calculation")
         await MainActor.run {
@@ -1847,6 +1854,7 @@ class HistoricalDataManager {
             composition: composition
         )
         
+        guard !calculationManager.isCancellationRequested else { return }
         calculationManager.updateProgress(completed: 85, status: "Storing portfolio snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots = Self.mergePortfolioHistory(
@@ -1916,6 +1924,7 @@ class HistoricalDataManager {
             composition: composition
         )
         
+        guard !calculationManager.isCancellationRequested else { return }
         calculationManager.updateProgress(completed: 80, status: "Adding new snapshots")
         await MainActor.run {
             self.historicalPortfolioSnapshots.append(contentsOf: newSnapshots)

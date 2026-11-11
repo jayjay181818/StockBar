@@ -310,10 +310,13 @@ class PortfolioCalculationService {
         let units = realTimeTrade.trade.position.unitSize
         let symbol = realTimeTrade.trade.name
         let averageCost = realTimeTrade.trade.position.getNormalizedAvgCost(for: symbol)
-        let currency = info.currency
+        // Amounts here are already in pounds for a pence-quoted holding, so a
+        // cost entered in pence must not label them "GBX" before a quote arrives.
+        let statedCurrency = info.currency
             ?? realTimeTrade.trade.position.currency
             ?? realTimeTrade.trade.position.costCurrency
             ?? ""
+        let currency = CurrencyConverter.isPenceCurrency(statedCurrency) ? "GBP" : statedCurrency
 
         let dayAmount: Double
         let dayPercent: Double
