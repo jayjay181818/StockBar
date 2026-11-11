@@ -46,7 +46,7 @@ Three sources coexist and must stay non-destructive to each other:
 ### UI layer
 - **Window**: `StockbarMainWindowController` hosts `Views/StockbarMainView.swift`, a sidebar over ten sections — Overview, Holdings, Alerts, Charts, Risk, Allocation, Backups, Data Health, Diagnostics, Settings. "Preferences" now just opens the Settings section.
 - **Menu bar**: `StockMenuBarController` + `StockStatusBar`, one `NSStatusItem` per visible symbol, Combine-driven; also handles external-display polling for status-item visibility.
-- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `VolumeChartView`, `MenuPriceChartView`, `SparklineView`.
+- **Charts**: Swift Charts — `PerformanceChartView`, `CandlestickChartView`, `MenuPriceChartView`, `SparklineView`.
 
 ### Persistence
 | Store | Location | Contents |

@@ -7,20 +7,21 @@ usage() {
   cat <<'HELP'
 Usage: bash script/develop.sh <action> [argument]
   build                       Compile only; no app launch or process termination
+  build-release               The same for the Release configuration
   test [Target/Class[/method]] Run XCTest (all tests if no filter)
   python-tests                Offline Python syntax and unit tests
   checks                      Lint and all invariant/documentation validators
   docs-check                  Documentation links, duplicates and size review
-  analyze                     Xcode static analysis
+  coverage                    Full XCTest run with coverage; prints the least-covered files
   acceptance <manifest.json>  Isolated harness; remains attached to its app
   run                         Explicit normal-app build and launch
-Environment: PYTHON, STOCKBAR_DERIVED_DATA, STOCKBAR_LOG_DIR
+Environment: PYTHON, STOCKBAR_DERIVED_DATA, STOCKBAR_LOG_DIR, STOCKBAR_RESULT_DIR
 HELP
 }
 action="${1:-help}"
 case "$action" in
   help|--help|-h) usage; exit 0 ;;
-  build|python-tests|checks|docs-check|analyze|run) [[ $# -eq 1 ]] || { usage >&2; exit 64; } ;;
+  build|build-release|python-tests|checks|docs-check|coverage|run) [[ $# -eq 1 ]] || { usage >&2; exit 64; } ;;
   test) [[ $# -le 2 ]] || { usage >&2; exit 64; }
     if [[ $# -eq 2 && ! "$2" =~ ^StockbarTests/[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
       echo 'Test filter must be StockbarTests/ClassName[/methodName].' >&2; exit 64
@@ -28,24 +29,48 @@ case "$action" in
   acceptance) [[ $# -eq 2 && -f "$2" ]] || { usage >&2; exit 64; } ;;
   *) usage >&2; exit 64 ;;
 esac
-python_bin="${PYTHON:-python3}"
+# Stockbar's own Python environment when it exists, so local runs use the
+# interpreter and pinned packages the app and CI use. PYTHON overrides it.
+app_python="$HOME/Library/Application Support/Stockbar/python-env/bin/python3"
+if [[ -n "${PYTHON:-}" ]]; then
+  python_bin="$PYTHON"
+elif [[ -x "$app_python" ]]; then
+  python_bin="$app_python"
+else
+  python_bin="python3"
+fi
 derived_data="${STOCKBAR_DERIVED_DATA:-$ROOT_DIR/build/DevelopmentDerivedData}"
 log_dir="${STOCKBAR_LOG_DIR:-$ROOT_DIR/build/logs}"
+result_dir="${STOCKBAR_RESULT_DIR:-$ROOT_DIR/build/results}"
 umask 077
 mkdir -p "$log_dir"
 log_file="$(mktemp "$log_dir/$action.XXXXXX")"
-# One array keeps build/test/analyze flags consistent between local work and CI.
-xcode_args=(-project "$ROOT_DIR/Stockbar.xcodeproj" -scheme Stockbar -configuration Debug
+# One array keeps build and test flags consistent between local work and CI.
+configuration=Debug
+[[ "$action" == build-release ]] && configuration=Release
+xcode_args=(-project "$ROOT_DIR/Stockbar.xcodeproj" -scheme Stockbar -configuration "$configuration"
   -destination 'platform=macOS' -derivedDataPath "$derived_data" CODE_SIGNING_ALLOWED=NO)
+# A fresh result bundle per run; CI uploads it when the tests fail.
+new_result_bundle() {
+  mkdir -p "$result_dir"
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)-$$"
+  printf '%s/%s-%s.xcresult' "$result_dir" "$1" "$stamp"
+}
 run_action() {
   case "$action" in
-    build|analyze) xcodebuild "$action" "${xcode_args[@]}" ;;
+    build|build-release) xcodebuild build "${xcode_args[@]}" ;;
     test)
       if [[ $# -eq 2 ]]; then
-        xcodebuild test "${xcode_args[@]}" "-only-testing:$2"
+        xcodebuild test "${xcode_args[@]}" -resultBundlePath "$(new_result_bundle test)" "-only-testing:$2"
       else
-        xcodebuild test "${xcode_args[@]}"
+        xcodebuild test "${xcode_args[@]}" -resultBundlePath "$(new_result_bundle test)"
       fi ;;
+    coverage)
+      bundle="$(new_result_bundle coverage)"
+      xcodebuild test "${xcode_args[@]}" -enableCodeCoverage YES -resultBundlePath "$bundle"
+      xcrun xccov view --report --json "$bundle" >"$result_dir/coverage.json"
+      "$python_bin" Scripts/coverage_summary.py "$result_dir/coverage.json" | tee "$result_dir/coverage.txt" ;;
     python-tests)
       PYTHONPYCACHEPREFIX="$ROOT_DIR/build/python-cache" "$python_bin" -m py_compile Stockbar/Resources/get_stock_data.py Stockbar/Resources/get_ohlc_data.py Stockbar/Resources/stockbar_worker.py
       PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m unittest discover -s PythonTests -p 'test_*.py' ;;
@@ -83,4 +108,7 @@ echo "$action passed. Full log: $log_file"
 # Documentation size warnings should remain visible without dumping successful build logs.
 if [[ "$action" == docs-check || "$action" == checks ]]; then
   sed -n '/^WARNING:/p' "$log_file"
+fi
+if [[ "$action" == coverage ]]; then
+  cat "$result_dir/coverage.txt"
 fi

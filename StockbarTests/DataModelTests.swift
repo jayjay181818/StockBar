@@ -60,12 +60,6 @@ class DataModelTests: XCTestCase {
         dataModel.refreshInterval = originalInterval
     }
     
-    func testStockDataHandling() {
-        // Test basic stock data structures
-        let trades = dataModel.realTimeTrades
-        XCTAssertGreaterThanOrEqual(trades.count, 0)
-    }
-    
     func testUserDefaultsPersistence() {
         // Test that intervals are persisted to UserDefaults
         let testRefreshInterval: TimeInterval = 420 // 7 minutes

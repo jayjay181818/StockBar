@@ -3,11 +3,6 @@ import XCTest
 
 class LoggerTests: XCTestCase {
     
-    func testLoggerInitialization() {
-        let logger = Logger.shared
-        XCTAssertNotNil(logger)
-    }
-    
     func testLogLevels() {
         XCTAssertEqual(LogLevel.debug.emoji, "🔍")
         XCTAssertEqual(LogLevel.info.emoji, "ℹ️")
@@ -15,30 +10,21 @@ class LoggerTests: XCTestCase {
         XCTAssertEqual(LogLevel.error.emoji, "🔴")
     }
     
-    func testTailModeTruncation() async {
-        let logger = Logger.shared
-        
-        // Test that very long log messages are properly truncated
-        _ = String(repeating: "A", count: 1500)
-        let logs = await logger.getTailLogs(maxLines: 10)
-        
-        // Should not crash and should return some result
-        XCTAssertTrue(logs.count >= 0)
-        
-        // Check that any individual log line is not excessively long
-        for log in logs {
-            XCTAssertTrue(log.count <= 1010, "Log line should be truncated: \(log.count) characters")
-        }
-    }
-    
-    func testLogFileHandling() async {
-        let logger = Logger.shared
-        
-        // Test basic logging functionality
-        await logger.info("Test log message")
-        
+    func testVeryLongLinesAreCutWhenReadBack() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LoggerTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let logger = Logger(fileURL: directory.appendingPathComponent("stockbar.log"))
+
+        await logger.info(String(repeating: "A", count: 1_500))
+        await logger.info("short")
         let logs = await logger.getRecentLogs(maxLines: 5)
-        XCTAssertTrue(logs.count > 0, "Should have at least one log entry")
+
+        XCTAssertEqual(logs.count, 2)
+        XCTAssertTrue(logs[0].hasSuffix(" ... [truncated]"), "A 1,500-character line is cut at 1,000")
+        XCTAssertEqual(logs[0].count, 1_000 + " ... [truncated]".count)
+        XCTAssertTrue(logs[1].hasSuffix("short"))
     }
 
     func testLoggerDoesNotPersistDuringXCTest() async {
