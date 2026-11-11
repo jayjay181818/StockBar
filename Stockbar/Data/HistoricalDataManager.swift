@@ -86,6 +86,7 @@ class HistoricalDataManager {
     private static let maxUnsavedRows = 5_000
     /// First check ten minutes after launch, then hourly; the work itself is weekly.
     @ObservationIgnored private var nextStoreMaintenanceCheck = Date().addingTimeInterval(600)
+    @ObservationIgnored private let storeMaintenanceStart = Date()
 
     /// A row repeating the previous price is recorded once an hour, enough to
     /// show the series is alive. 62% of stored rows repeated the row before.
@@ -402,7 +403,8 @@ class HistoricalDataManager {
         runStoreMaintenanceIfDue(heldSymbols: dataModel.realTimeTrades.map(\.trade.name), now: now)
     }
 
-    /// Starts the weekly database upkeep when it is due (see `StoreMaintenance`).
+    /// Starts the weekly database upkeep and the daily change-history trim
+    /// when they are due (see `StoreMaintenance`).
     private func runStoreMaintenanceIfDue(heldSymbols: [String], now: Date) {
         guard now >= nextStoreMaintenanceCheck else { return }
         nextStoreMaintenanceCheck = now.addingTimeInterval(3600)
@@ -410,8 +412,10 @@ class HistoricalDataManager {
         let held: Set<String>? = heldSymbols.isEmpty ? nil : Set(
             heldSymbols.flatMap { [$0] + instrumentAliasStore.aliases(for: $0) }.map { $0.uppercased() }
         )
+        let launchedAt = storeMaintenanceStart
         Task.detached(priority: .background) {
             await StoreMaintenance.shared.runIfDue(heldSymbols: held, now: now)
+            await StoreMaintenance.shared.purgeHistoryIfDue(launchedAt: launchedAt, now: now)
         }
     }
 
