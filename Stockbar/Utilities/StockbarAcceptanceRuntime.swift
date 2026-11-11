@@ -27,6 +27,7 @@ struct StockbarAcceptanceRuntime: Sendable {
     static let productionFolyncKeychainService = "com.stockbar.folync"
     static let productionTrading212KeychainService = "com.stockbar.trading212"
     static let productionMarketDataKeychainService = "com.stockbar.marketdata"
+    static let productionCredentialsKeychainService = "com.stockbar.credentials"
     static let markerName = ".stockbar-acceptance-run"
 
     let root: URL?
@@ -47,6 +48,14 @@ struct StockbarAcceptanceRuntime: Sendable {
     var marketDataKeychainService: String {
         guard let runID else { return Self.productionMarketDataKeychainService }
         return "\(Self.productionMarketDataKeychainService).acceptance.\(runID)"
+    }
+
+    /// The one item that now holds every credential (`CredentialVault`), kept
+    /// apart for acceptance and XCTest runs the same way. The three services
+    /// above are where earlier versions kept them and are only read to import.
+    var credentialsKeychainService: String {
+        guard let runID else { return Self.productionCredentialsKeychainService }
+        return "\(Self.productionCredentialsKeychainService).acceptance.\(runID)"
     }
 
     var applicationSupportRoot: URL? {
@@ -98,7 +107,7 @@ struct StockbarAcceptanceRuntime: Sendable {
     }
 
     /// Removes everything an automatic XCTest run created: temporary root, defaults
-    /// suite, and its Folync, Trading 212 and market-data Keychain items. Never touches
+    /// suite, and its Keychain items. Never touches
     /// explicit acceptance runs.
     func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
         guard isAutomaticXCTestIsolation else { return }
@@ -110,6 +119,7 @@ struct StockbarAcceptanceRuntime: Sendable {
             try? trading212Store.delete(environment: environment)
         }
         try? MarketDataKeyStore(service: marketDataKeychainService).deleteAll()
+        try? CredentialVault.named(credentialsKeychainService).deleteItem()
     }
 
     nonisolated(unsafe) private static var runtimePendingCleanup: Self?

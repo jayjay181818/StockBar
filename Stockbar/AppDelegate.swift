@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsTransferService().removeLeftoverStagedFiles()
         dataModel = DataModel()
         setupMainMenu()
+        AppUpdateService.shared.start()
 
         // Perform legacy cleanup on first launch
         LegacyCleanupService.shared.performCleanupIfNeeded()
@@ -127,6 +128,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stockMenuBarController?.showStockbarWindow(sender)
     }
 
+    @objc func checkForUpdates(_ sender: Any?) {
+        AppUpdateService.shared.checkForUpdates()
+    }
+
     private func setupMainMenu() {
         let mainMenu = NSMenu()
         mainMenu.addItem(submenuItem(makeApplicationMenu()))
@@ -158,6 +163,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        appMenu.addItem(updateItem)
         appMenu.addItem(.separator())
 
         let openItem = NSMenuItem(title: "Open Stockbar", action: #selector(showStockbarWindow(_:)), keyEquivalent: "o")
@@ -544,6 +556,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let requirements = requirementsPath.map(quoted) ?? "requirements.txt"
         return "\(quoted(interpreterPath)) -m pip install -r \(requirements)"
+    }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+    /// "Check for Updates…" is unavailable while a check is running, and in
+    /// builds where updates are off.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            return AppUpdateService.shared.canCheckForUpdates
+        }
+        return true
     }
 }
 

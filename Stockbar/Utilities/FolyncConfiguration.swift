@@ -108,17 +108,26 @@ enum FolyncCredentialStoreError: Error, LocalizedError, Equatable {
 }
 
 /// Keeps the Folync client token in the Keychain together with the server it
-/// was saved for. The token is only handed out for that server, so changing
-/// the endpoint (in Settings or through an imported settings file) can never
-/// send an existing token to a new host.
-final class FolyncCredentialStore: @unchecked Sendable {
+/// was saved for, in the item all credentials share (`CredentialVault`). The
+/// token is only handed out for that server, so changing the endpoint (in
+/// Settings or through an imported settings file) can never send an existing
+/// token to a new host.
+///
+/// Calls other than `hasToken()` can wait on a Keychain prompt; make them off
+/// the main actor.
+final class FolyncCredentialStore: Sendable {
     static let shared = FolyncCredentialStore()
-    private let service: String
-    private let account = "client-api-token.v1"
-    private let serverAccount = "client-api-token-server.v1"
+    private static let tokenKey = "folync.token"
+    private static let serverKey = "folync.server"
+    private let vault: CredentialVault
+    /// Where versions before the shared item kept the token and its server.
+    private let legacyToken: LegacyKeychainItem
+    private let legacyServer: LegacyKeychainItem
 
     init(service: String = StockbarRuntimeStorage.acceptance.folyncKeychainService) {
-        self.service = service
+        vault = .backing(storeService: service)
+        legacyToken = LegacyKeychainItem(service: service, account: "client-api-token.v1", setsAccessible: true)
+        legacyServer = LegacyKeychainItem(service: service, account: "client-api-token-server.v1", setsAccessible: true)
     }
 
     /// Scheme, host and port of an endpoint, for example `https://folync.example:443`.
@@ -142,19 +151,22 @@ final class FolyncCredentialStore: @unchecked Sendable {
     func save(token: String, server: String?) throws {
         let normalized = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw FolyncCredentialStoreError.missingToken }
-        // Drop the old server first so a failure part-way never leaves a new
-        // token paired with the previous server.
-        try remove(account: serverAccount)
-        try write(Data(normalized.utf8), account: account)
-        if let server {
-            try write(Data(server.utf8), account: serverAccount)
+        try keychain {
+            // One write, so a new token is never paired with the previous server.
+            try vault.update { values in
+                values[Self.tokenKey] = normalized
+                values[Self.serverKey] = server
+            }
         }
+        // The vault now holds the newer pair; the old items are never read again.
+        try? legacyToken.delete()
+        try? legacyServer.delete()
     }
 
     /// The stored token, whichever server it belongs to. For export and
     /// rollback only; requests use `load(for:)`.
     func load() throws -> String {
-        guard let token = try read(account: account) else { throw FolyncCredentialStoreError.missingToken }
+        guard let token = try value(Self.tokenKey) else { throw FolyncCredentialStoreError.missingToken }
         return token
     }
 
@@ -168,7 +180,7 @@ final class FolyncCredentialStore: @unchecked Sendable {
     }
 
     func savedServer() throws -> String? {
-        try read(account: serverAccount)
+        try value(Self.serverKey)
     }
 
     /// Tokens stored by earlier versions have no server recorded. Records the
@@ -177,71 +189,52 @@ final class FolyncCredentialStore: @unchecked Sendable {
         guard hasToken(), let server = Self.server(of: baseURL) else { return }
         do {
             guard try savedServer() == nil else { return }
-            try write(Data(server.utf8), account: serverAccount)
+            try vault.update { values in
+                if values[Self.tokenKey] != nil, values[Self.serverKey] == nil {
+                    values[Self.serverKey] = server
+                }
+            }
         } catch {
             // Left unrecorded: the token is then not sent until it is entered again.
         }
     }
 
     func delete() throws {
-        try remove(account: account)
-        try remove(account: serverAccount)
+        try keychain {
+            // First, so a token that was never imported cannot come back.
+            try legacyToken.delete()
+            try legacyServer.delete()
+            guard vault.storedKeys()?.isDisjoint(with: Self.keys) != true else { return }
+            try vault.update { values in
+                for key in Self.keys { values[key] = nil }
+            }
+        }
     }
 
+    /// Whether a token is stored. Does not read it, so never prompts.
     func hasToken() -> Bool {
-        var query = baseQuery(account: account)
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        let stored = vault.storedKeys() ?? []
+        if stored.contains(Self.tokenKey) { return true }
+        return stored.isDisjoint(with: Self.keys) && legacyToken.exists()
     }
 
-    private func write(_ data: Data, account: String) throws {
-        let query = baseQuery(account: account)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
-        if status == errSecSuccess { return }
-        guard status == errSecItemNotFound else { throw FolyncCredentialStoreError.keychainStatus(status) }
-        var add = query
-        add[kSecValueData as String] = data
-        let addStatus = SecItemAdd(add as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { throw FolyncCredentialStoreError.keychainStatus(addStatus) }
-    }
+    private static let keys = [tokenKey, serverKey]
 
-    private func read(account: String) throws -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw FolyncCredentialStoreError.keychainStatus(status)
-        }
-        return value
-    }
-
-    private func remove(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw FolyncCredentialStoreError.keychainStatus(status)
+    private func value(_ key: String) throws -> String? {
+        try keychain {
+            try vault.importLegacy(into: Self.keys) {
+                [.text(legacyToken, key: Self.tokenKey), .text(legacyServer, key: Self.serverKey)]
+            }
+            return try vault.values()[key]
         }
     }
 
-    /// Lookup/insert/delete predicate.
-    ///
-    /// `kSecAttrAccessible` must stay on **every** query here, not just the add.
-    /// On macOS its presence is what routes the call to the modern
-    /// data-protection keychain; removing it from lookups silently drops them to
-    /// the legacy file-based keychain (`SecKeychainSearchCopyNext`), which can
-    /// block the calling thread on an internal mutex. Pinning the store with
-    /// `kSecUseDataProtectionKeychain` instead is not an option either — it
-    /// needs a keychain-access-group entitlement the unsigned build lacks and
-    /// fails with errSecMissingEntitlement (-34018).
-    private func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
+    private func keychain<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CredentialVaultError {
+            throw FolyncCredentialStoreError.keychainStatus(error.status)
+        }
     }
 }
 

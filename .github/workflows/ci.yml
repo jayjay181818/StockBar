@@ -73,6 +73,14 @@ jobs:
     - name: Build (Release)
       run: bash script/develop.sh build-release
 
+    # What the release workflow does to that build: sign it, zip it, and check
+    # the unpacked app still starts with its frameworks. Nothing is published.
+    - name: Package the Release build
+      run: >
+        bash script/package_release.sh --build 0.0.1
+        --app build/DevelopmentDerivedData/Build/Products/Release/Stockbar.app
+        --output build/package-check
+
     - name: Retain test results on failure
       if: failure()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

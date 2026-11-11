@@ -1,0 +1,217 @@
+name: Release builds
+
+# Builds the app that people download and that Stockbar's updater installs.
+#
+#   push to testing          a testing build, published as a prerelease
+#   push of a tag vX.Y.Z     a stable release
+#   push to release-test/**  a dry run: built, signed and kept as a workflow
+#                            artifact for a week; nothing is published
+#
+# The update feed is appcast.xml on the `appcast` branch, which this workflow
+# creates and is the only writer of. See Docs/Development.md, "Release builds
+# and updates".
+
+on:
+  push:
+    branches: [ testing, 'release-test/**' ]
+    tags: [ 'v[0-9]+.[0-9]+.[0-9]+' ]
+
+# Testing builds run one at a time, and so do releases. A newer push to
+# testing replaces a run that is still queued, never one that has started.
+concurrency:
+  group: release-${{ github.ref_type == 'tag' && 'stable' || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan the build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      channel: ${{ steps.plan.outputs.channel }}
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      asset_name: ${{ steps.plan.outputs.asset_name }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        # The build number counts the commits since the last version tag.
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Decide the channel and build number
+      id: plan
+      run: |
+        describe="$(git describe --tags --long --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2>/dev/null || true)"
+        newest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n 1p)"
+        python3 Scripts/release_feed.py plan --ref-type "$GITHUB_REF_TYPE" --ref-name "$GITHUB_REF_NAME" \
+          --describe "$describe" --newest-tag "$newest_tag" \
+          --project Stockbar.xcodeproj/project.pbxproj | tee -a "$GITHUB_OUTPUT"
+        # A release is cut from the branches that pull requests are merged into.
+        if [[ "$GITHUB_REF_TYPE" == tag ]] \
+            && ! git merge-base --is-ancestor "$GITHUB_SHA" origin/testing \
+            && ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "::error::$GITHUB_REF_NAME is not on testing or main. Tag the merge commit of the release pull request."
+          exit 1
+        fi
+
+    - name: Nothing to build
+      if: steps.plan.outputs.mode == 'skip'
+      env:
+        REASON: ${{ steps.plan.outputs.reason }}
+      run: echo "::notice::$REASON"
+
+  release:
+    name: Build and publish
+    needs: plan
+    if: needs.plan.outputs.mode != 'skip'
+    # The Xcode used for development, so the build people install is the one
+    # that was run by hand.
+    runs-on: xcode-27
+    timeout-minutes: 45
+    permissions:
+      contents: write # creates the release and pushes the feed branch
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      BUILD: ${{ needs.plan.outputs.build }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      ASSET_NAME: ${{ needs.plan.outputs.asset_name }}
+      FEED_BRANCH: appcast
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        # The release notes of a testing build list the commits since the last build.
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Show Xcode version
+      run: xcodebuild -version
+
+    # Ad hoc signature, hardened runtime, and a start check on the packaged app.
+    - name: Build, sign and package
+      run: |
+        bash script/package_release.sh --build "$BUILD" --output build/release
+        if [[ "Stockbar-$BUILD.zip" != "$ASSET_NAME" ]]; then
+          mv "build/release/Stockbar-$BUILD.zip" "build/release/$ASSET_NAME"
+        fi
+
+    - name: Write the release notes
+      run: |
+        if [[ "$CHANNEL" == stable ]]; then
+          cp "Changelogs/release_notes_v$VERSION.md" build/release/notes.md
+        else
+          previous="$(git describe --tags --abbrev=0 --match 'testing-*' --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD^)"
+          {
+            echo "Testing build $BUILD of Stockbar $VERSION. Changes since $previous:"
+            echo
+            git log --no-merges --max-count=40 --format='- %s' "$previous..HEAD"
+          } > build/release/notes.md
+        fi
+        cat build/release/notes.md
+
+    - name: Publish the download
+      if: env.MODE == 'publish'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        asset="build/release/$ASSET_NAME"
+        if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          gh release upload "$RELEASE_TAG" "$asset" --clobber
+        elif [[ "$CHANNEL" == stable ]]; then
+          gh release create "$RELEASE_TAG" "$asset" --verify-tag \
+            --title "StockBar v$VERSION" --notes-file build/release/notes.md
+        else
+          gh release create "$RELEASE_TAG" "$asset" --target "$GITHUB_SHA" --prerelease \
+            --title "StockBar $VERSION testing build $BUILD" --notes-file build/release/notes.md
+        fi
+
+    # Signs the archive with the update key, lists it in the feed and signs the
+    # feed. The feed is pushed only after the download above exists. If another
+    # run moved the feed meanwhile, the entry is added again to the newer copy;
+    # the branch is never force-pushed.
+    - name: Sign the build and update the feed
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+      run: |
+        remote="https://github.com/$GITHUB_REPOSITORY.git"
+        download="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$ASSET_NAME"
+        page="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+        gh auth setup-git
+        for attempt in 1 2 3 4; do
+          rm -rf build/feed
+          if git ls-remote --exit-code --heads "$remote" "$FEED_BRANCH" >/dev/null; then
+            git clone --quiet --depth 1 --branch "$FEED_BRANCH" "$remote" build/feed
+          else
+            git init --quiet --initial-branch "$FEED_BRANCH" build/feed
+          fi
+          bash script/sign_release.sh --archive "build/release/$ASSET_NAME" --appcast build/feed/appcast.xml \
+            --channel "$CHANNEL" --url "$download" --notes-file build/release/notes.md --link "$page"
+          if [[ "$MODE" != publish ]]; then
+            echo "Dry run: the feed was not published."
+            exit 0
+          fi
+          git -C build/feed add appcast.xml
+          git -C build/feed -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "Stockbar $VERSION (build $BUILD) on the $CHANNEL channel"
+          if git -C build/feed push --quiet "$remote" "HEAD:refs/heads/$FEED_BRANCH"; then
+            exit 0
+          fi
+          echo "The feed changed while this build was being added; trying again."
+          sleep $((attempt * 5))
+        done
+        echo "::error::Could not publish the update feed."
+        exit 1
+
+    # A testing build the feed no longer lists can never be offered again, so
+    # its prerelease and tag are removed. Only `testing-*` prereleases are touched.
+    - name: Remove superseded testing builds
+      if: env.MODE == 'publish'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        listed="$(python3 Scripts/release_feed.py builds --appcast build/feed/appcast.xml --channel testing)"
+        gh release list --limit 200 --json tagName,isPrerelease \
+          --jq '.[] | select(.isPrerelease and (.tagName | startswith("testing-"))) | .tagName' \
+          > build/release/testing-tags.txt
+        while read -r tag; do
+          if ! grep -qxF "${tag#testing-}" <<<"$listed"; then
+            echo "Removing $tag: the feed no longer lists it."
+            gh release delete "$tag" --yes --cleanup-tag
+          fi
+        done < build/release/testing-tags.txt
+
+    - name: Keep the dry-run build
+      if: env.MODE == 'dry-run'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: stockbar-${{ env.BUILD }}
+        path: |
+          build/release/*.zip
+          build/release/notes.md
+          build/feed/appcast.xml
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Retain build logs on failure
+      if: failure()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: release-logs
+        path: build/logs/
+        if-no-files-found: ignore
+        retention-days: 14

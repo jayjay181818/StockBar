@@ -45,6 +45,10 @@ playground.xcworkspace
 #
 # Xcode automatically generates this directory with a .xcworkspacedata file and xcuserdata dir, do not check in.
 *.xcworkspace
+# Two files inside Stockbar.xcodeproj/project.xcworkspace are tracked all the
+# same (added with `git add -f`): contents.xcworkspacedata, and
+# xcshareddata/swiftpm/Package.resolved, which pins the Swift packages that
+# release builds are made from.
 
 # CocoaPods
 #

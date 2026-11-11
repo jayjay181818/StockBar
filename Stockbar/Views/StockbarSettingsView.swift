@@ -123,6 +123,8 @@ struct StockbarSettingsView: View {
         }
 
         exchangeRatesSection
+
+        UpdateSettingsSection()
     }
 
     @ViewBuilder
@@ -603,7 +605,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .general: "Currency, colours and exchange rates."
+        case .general: "Currency, colours, exchange rates and updates."
         case .menuBar: "What appears in the menu bar and how it's formatted."
         case .appearance: "Light, dark or match the system."
         case .dataSources: "Brokers, Folync and market-data providers."
