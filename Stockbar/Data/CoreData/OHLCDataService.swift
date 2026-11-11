@@ -123,7 +123,7 @@ actor OHLCDataService {
         startDate: Date?,
         endDate: Date?
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -146,7 +146,7 @@ actor OHLCDataService {
         startDate: Date? = nil,
         endDate: Date? = nil
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -199,7 +199,7 @@ actor OHLCDataService {
         from startDate: Date,
         to endDate: Date
     ) async throws -> [OHLCSnapshot] {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -230,7 +230,7 @@ actor OHLCDataService {
 
     /// Fetch the most recent OHLC snapshot for a symbol
     func fetchLatestSnapshot(symbol: String) async throws -> OHLCSnapshot? {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -292,7 +292,7 @@ actor OHLCDataService {
 
     /// Get count of OHLC snapshots for a symbol
     func getSnapshotCount(symbol: String) async throws -> Int {
-        let context = coreDataStack.viewContext
+        let context = coreDataStack.newBackgroundContext()
 
         return try await context.perform {
             let request = OHLCSnapshotEntity.fetchRequest()
@@ -351,20 +351,15 @@ actor OHLCDataService {
     ) throws {
         let request = OHLCSnapshotEntity.fetchRequest()
         request.predicate = NSPredicate(format: "symbol == %@", symbol)
-        request.sortDescriptors = [
-            NSSortDescriptor(key: "timestamp", ascending: false)
-        ]
+        // Counting is one indexed query; loading every row after each save was not.
+        guard try context.count(for: request) > maxSnapshotsPerSymbol else { return }
 
-        let entities = try context.fetch(request)
-
-        // Delete excess snapshots (keep newest)
-        if entities.count > maxSnapshotsPerSymbol {
-            let entitiesToDelete = entities.dropFirst(maxSnapshotsPerSymbol)
-            for entity in entitiesToDelete {
-                context.delete(entity)
-            }
-            try context.save()
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+        request.fetchOffset = maxSnapshotsPerSymbol
+        for entity in try context.fetch(request) {
+            context.delete(entity)
         }
+        try context.save()
     }
 }
 

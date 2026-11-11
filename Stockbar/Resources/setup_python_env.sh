@@ -47,7 +47,23 @@ export PATH
 [[ -f "$REQUIREMENTS" ]] || { echo "Requirements file not found: $REQUIREMENTS" >&2; exit 1; }
 
 mkdir -p "$SUPPORT_DIR"
-trap '[[ -L "$LINK" && "$(readlink "$LINK")" == "$BUILD_NAME" ]] || rm -rf "$BUILD"' EXIT
+cleanup() {
+  rm -f "$LINK.new"
+  [[ -L "$LINK" && "$(readlink "$LINK")" == "$BUILD_NAME" ]] || rm -rf "$BUILD"
+}
+trap cleanup EXIT
+
+# Long steps run through this so that stopping the script (Stockbar's timeout,
+# or Ctrl-C) stops the step too and removes the half-built environment. Bash
+# only handles a signal between commands unless it is waiting on a job.
+child=""
+trap '[[ -z "$child" ]] || kill "$child" 2>/dev/null || true; exit 143' TERM INT
+run() {
+  "$@" &
+  child=$!
+  wait "$child"
+  child=""
+}
 
 # Downloads the pinned uv into $SUPPORT_DIR/tools unless it is already there,
 # and prints its path. Refuses a download whose SHA-256 does not match.
@@ -120,14 +136,14 @@ fi
 
 if [[ -n "$uv_bin" ]]; then
   echo "Creating Python $PYTHON_VERSION environment with uv..."
-  "$uv_bin" venv --quiet --python "$PYTHON_VERSION" "$BUILD"
+  run "$uv_bin" venv --quiet --python "$PYTHON_VERSION" "$BUILD"
   echo "Installing packages..."
-  "$uv_bin" pip install --quiet --python "$BUILD/bin/python3" -r "$REQUIREMENTS"
+  run "$uv_bin" pip install --quiet --python "$BUILD/bin/python3" -r "$REQUIREMENTS"
 else
   echo "Creating environment with $base..."
-  "$base" -m venv "$BUILD"
+  run "$base" -m venv "$BUILD"
   echo "Installing packages..."
-  "$BUILD/bin/python3" -m pip install --quiet --disable-pip-version-check -r "$REQUIREMENTS"
+  run "$BUILD/bin/python3" -m pip install --quiet --disable-pip-version-check -r "$REQUIREMENTS"
 fi
 
 echo "Checking the environment..."
@@ -138,18 +154,22 @@ print(f"Python {sys.version.split()[0]}, {ssl.OPENSSL_VERSION}")
 PY
 
 # Switch the link atomically. An older setup may have left a real directory.
+moved=""
 if [[ -e "$LINK" && ! -L "$LINK" ]]; then
-  mv "$LINK" "$SUPPORT_DIR/python-env-previous-$(date +%Y%m%d%H%M%S)"
+  moved="python-env-previous-$(date +%Y%m%d%H%M%S)"
+  mv "$LINK" "$SUPPORT_DIR/$moved"
 fi
 previous="$( [[ -L "$LINK" ]] && readlink "$LINK" || true )"
+# A run that was killed outright can leave its temporary link behind.
+rm -f "$LINK.new"
 ln -s "$BUILD_NAME" "$LINK.new"
 # rename(2) replaces the link itself; mv would follow it into the old directory.
 "$BUILD/bin/python3" -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$LINK.new" "$LINK"
 
 # Keep the previous environment for a Stockbar still running on it; remove older ones.
-for old in "$SUPPORT_DIR"/python-env-[0-9]*; do
+for old in "$SUPPORT_DIR"/python-env-[0-9]* "$SUPPORT_DIR"/python-env-previous-*; do
   name="$(basename "$old")"
-  if [[ -d "$old" && "$name" != "$BUILD_NAME" && "$name" != "$previous" ]]; then
+  if [[ -d "$old" && ! -L "$old" && "$name" != "$BUILD_NAME" && "$name" != "$previous" && "$name" != "$moved" ]]; then
     rm -rf "$old"
   fi
 done

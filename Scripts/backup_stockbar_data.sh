@@ -57,6 +57,8 @@ file_size() {
     du -h "$1" | awk '{print $1}'
 }
 
+STATE_FOLDERS=("BrokerLinks" "AliasIdentityMigration" "Folync" "FolyncSupplemental")
+
 require_stockbar_stopped
 mkdir -p "${BACKUP_DIR}"
 if ! mkdir "${BACKUP_PATH}"; then
@@ -99,6 +101,17 @@ else
 fi
 echo
 
+echo "Backing up broker links, alias records and Folync data..."
+# These live beside the database and describe it: which broker account each
+# holding belongs to, renamed tickers, and Folync's saved portfolio.
+for folder in "${STATE_FOLDERS[@]}"; do
+    if [[ -d "${STOCKBAR_DATA_DIR}/${folder}" ]]; then
+        cp -R "${STOCKBAR_DATA_DIR}/${folder}" "${BACKUP_PATH}/${folder}"
+        echo "${folder} backed up"
+    fi
+done
+echo
+
 echo "[4/4] Backing up cache file..."
 SOURCE_CACHE_FILE="${CACHE_FILE}"
 [[ -f "${SOURCE_CACHE_FILE}" ]] || SOURCE_CACHE_FILE="${LEGACY_CACHE_FILE}"
@@ -124,6 +137,8 @@ Contents:
 2. StockbarDataModel.sqlite* - Historical price data and OHLC snapshots
 3. .stockbar_config.json - API keys and configuration (if present)
 4. .stockbar_cache.json - Price cache (optional)
+5. BrokerLinks, AliasIdentityMigration, Folync, FolyncSupplemental - broker
+   account links, renamed-ticker records and Folync data (if present)
 
 Keychain items are not included. This backup alone does not prove complete
 recovery of credentials or other data held outside these files.

@@ -5,6 +5,7 @@ import platform
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -128,6 +129,38 @@ class SetupPythonEnvTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Could not download uv', result.stderr)
         self.assertFalse((self.support / 'python-env').exists())
+
+    def test_removes_leftovers_but_keeps_the_previous_environment(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        previous = (self.support / 'python-env').resolve().name
+        for name in ('python-env-20200101000000', 'python-env-previous-20200101000000'):
+            (self.support / name / 'bin').mkdir(parents=True)
+        (self.support / 'python-env.new').symlink_to('python-env-20200101000000')
+        time.sleep(1.1)  # Build folders are named to the second.
+
+        result = self.run_setup()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        current = (self.support / 'python-env').resolve().name
+        self.assertNotEqual(current, previous)
+        self.assertEqual(sorted(p.name for p in self.support.glob('python-env*')),
+                         sorted(['python-env', previous, current]))
+
+    def test_stopping_the_script_stops_the_install_and_removes_the_build(self):
+        self.make_archive(FAKE_UV + 'if [[ "$1" == pip ]]; then touch "$TEST_CALLS.installing"; sleep 30; fi\n')
+        self.env['STOCKBAR_UV_SHA256'] = self.sha256(self.archive)
+        process = subprocess.Popen(['bash', str(SCRIPT)], env=self.env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        marker = Path(str(self.calls) + '.installing')
+        deadline = time.time() + 20
+        while not marker.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(marker.exists())
+
+        process.terminate()
+
+        self.assertEqual(process.wait(timeout=10), 143)
+        self.assertEqual(list(self.support.glob('python-env*')), [])
 
 
 if __name__ == '__main__':
