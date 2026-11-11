@@ -254,25 +254,56 @@ struct DataSourcesSettingsView: View {
     }
 
     private func removeKey(service: String) {
-        switch service {
-        case "fmp":
-            configManager.removeFMPAPIKey()
-            fmpApiKey = ""
-            fmpStatus = .none
-        case "twelvedata":
-            configManager.removeTwelveDataAPIKey()
-            twelveDataApiKey = ""
-            twelveDataStatus = .none
-        default:
-            return
+        guard let key = Self.apiKey(for: service) else { return }
+        let manager = configManager
+        Task {
+            do {
+                // The Keychain can wait on a prompt, so not on the main actor.
+                try await Task.detached { try manager.removeAPIKey(key) }.value
+            } catch {
+                showKeychainFailure("Stockbar couldn't remove the \(sourceName(for: service)) key from the Keychain.", error)
+                return
+            }
+            setKeyField("", for: key)
+            setStatus(.none, for: key)
+            setHasStoredKey(false, for: key)
+            Self.storeVerification(nil, for: service)
         }
-        Self.storeVerification(nil, for: service)
-        refreshStoredKeyFlags()
     }
 
-    private func refreshStoredKeyFlags() {
-        hasStoredFmpKey = !(configManager.getFMPAPIKey() ?? "").isEmpty
-        hasStoredTwelveDataKey = !(configManager.getTwelveDataAPIKey() ?? "").isEmpty
+    private static func apiKey(for service: String) -> MarketDataAPIKey? {
+        switch service {
+        case "fmp": return .fmp
+        case "twelvedata": return .twelveData
+        default: return nil
+        }
+    }
+
+    private func setKeyField(_ value: String, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: fmpApiKey = value
+        case .twelveData: twelveDataApiKey = value
+        }
+    }
+
+    private func setStatus(_ status: VerificationStatus, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: fmpStatus = status
+        case .twelveData: twelveDataStatus = status
+        }
+    }
+
+    private func setHasStoredKey(_ stored: Bool, for key: MarketDataAPIKey) {
+        switch key {
+        case .fmp: hasStoredFmpKey = stored
+        case .twelveData: hasStoredTwelveDataKey = stored
+        }
+    }
+
+    private func showKeychainFailure(_ message: String, _ error: Error) {
+        alertTitle = "Keychain Error"
+        alertMessage = "\(message) \(error.localizedDescription)"
+        showingAlert = true
     }
     
     private func statusIndicator(for status: VerificationStatus) -> some View {
@@ -335,18 +366,8 @@ struct DataSourcesSettingsView: View {
     }
     
     private func loadSettings() {
-        fmpApiKey = configManager.getFMPAPIKey() ?? ""
-        twelveDataApiKey = configManager.getTwelveDataAPIKey() ?? ""
-        refreshStoredKeyFlags()
-        // Show the last test result for a stored key, rather than "Not
-        // verified" every time the tab is opened.
-        if fmpStatus == .none, hasStoredFmpKey, let result = Self.storedVerification(for: "fmp") {
-            fmpStatus = result ? .success : .failure
-        }
-        if twelveDataStatus == .none, hasStoredTwelveDataKey, let result = Self.storedVerification(for: "twelvedata") {
-            twelveDataStatus = result ? .success : .failure
-        }
-        
+        loadStoredKeys()
+
         let savedPriority = configManager.getDataSourcePriority()
         if let saved = savedPriority, !saved.isEmpty {
             // Ensure all known sources are present (in case new ones added)
@@ -362,6 +383,29 @@ struct DataSourcesSettingsView: View {
         }
     }
     
+    /// Reads the keys off the main actor, because the Keychain can wait on a prompt.
+    private func loadStoredKeys() {
+        let manager = configManager
+        Task {
+            let stored = await Task.detached {
+                (fmp: manager.getFMPAPIKey() ?? "", twelveData: manager.getTwelveDataAPIKey() ?? "")
+            }.value
+            // Anything typed while the Keychain was being read stays.
+            if fmpApiKey.isEmpty { fmpApiKey = stored.fmp }
+            if twelveDataApiKey.isEmpty { twelveDataApiKey = stored.twelveData }
+            hasStoredFmpKey = !stored.fmp.isEmpty
+            hasStoredTwelveDataKey = !stored.twelveData.isEmpty
+            // Show the last test result for a stored key, rather than "Not
+            // verified" every time the tab is opened.
+            if fmpStatus == .none, hasStoredFmpKey, let result = Self.storedVerification(for: "fmp") {
+                fmpStatus = result ? .success : .failure
+            }
+            if twelveDataStatus == .none, hasStoredTwelveDataKey, let result = Self.storedVerification(for: "twelvedata") {
+                twelveDataStatus = result ? .success : .failure
+            }
+        }
+    }
+
     private func movePriority(from source: IndexSet, to destination: Int) {
         dataSourcePriority.move(fromOffsets: source, toOffset: destination)
         configManager.setDataSourcePriority(dataSourcePriority)
@@ -385,24 +429,25 @@ struct DataSourcesSettingsView: View {
 
     private func saveAndTestKey(service: String, key: String) {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else { return }
+        guard !trimmedKey.isEmpty, let apiKey = Self.apiKey(for: service) else { return }
         
         // A new key has not been tested yet, whatever the old one's result was.
         Self.storeVerification(nil, for: service)
+        setStatus(.verifying, for: apiKey)
 
-        // Save first
-        if service == "fmp" {
-            configManager.setFMPAPIKey(trimmedKey)
-            fmpStatus = .verifying
-        } else if service == "twelvedata" {
-            configManager.setTwelveDataAPIKey(trimmedKey)
-            twelveDataStatus = .verifying
-        }
-        
-        refreshStoredKeyFlags()
-
-        // Test
+        let manager = configManager
         Task {
+            // Save first, off the main actor: the Keychain can wait on a prompt.
+            do {
+                try await Task.detached { try manager.setAPIKey(trimmedKey, for: apiKey) }.value
+            } catch {
+                setStatus(.failure, for: apiKey)
+                showKeychainFailure("Stockbar couldn't save the \(sourceName(for: service)) key to the Keychain.", error)
+                return
+            }
+            setHasStoredKey(true, for: apiKey)
+
+            // Test
             do {
                 let isValid = try await dataModel.verifyAPIKey(service: service)
                 

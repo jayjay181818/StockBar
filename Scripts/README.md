@@ -24,7 +24,7 @@ Each backup may contain:
 
 - `UserDefaults.plist` — portfolio configuration and app preferences
 - `StockbarDataModel.sqlite`, plus any matching `-wal` and `-shm` files
-- `.stockbar_config.json` — API keys and provider settings
+- `.stockbar_config.json` — provider settings (API keys are in the Keychain and are not backed up; a file from an earlier version may still hold them)
 - `.stockbar_cache.json` — optional price cache (from `~/Library/Caches/stockbar-cache/quote_cache.json`, or the legacy `~/.stockbar_cache.json`)
 - `MANIFEST.txt` — captured contents, canonical paths, and restore prerequisites
 
@@ -65,7 +65,7 @@ Review the output and manifest before restarting Stockbar. Keychain items are no
 | Price cache | `~/Library/Caches/stockbar-cache/quote_cache.json` (legacy: `~/.stockbar_cache.json`) | Optional |
 | Keychain | macOS Keychain services | No |
 
-The scripts do not publish backups, upload them, or validate provider credentials. Keep backup directories private because the configuration file contains sensitive API keys.
+The scripts do not publish backups, upload them, or validate provider credentials. Keep backup directories private because a configuration file from an earlier version can contain API keys.
 
 ## Run the isolated checks
 

@@ -130,8 +130,10 @@ final class SettingsTransferService: Sendable {
         let configuration: ConfigurationTransferValues
         do {
             configuration = try dependencies.configuration.exportableValues()
+        } catch is MarketDataKeyStoreError {
+            throw SettingsTransferError.credentialUnreadable("market-data API keys")
         } catch {
-            throw SettingsTransferError.credentialUnreadable("market-data API key file")
+            throw SettingsTransferError.backupFailed("Stockbar couldn't read its market-data settings file.")
         }
         let credentials = try readCredentials(fmp: configuration.fmpAPIKey, twelveData: configuration.twelveDataAPIKey)
         let database = type == .everything ? try readDatabase() : nil
@@ -485,7 +487,7 @@ final class SettingsTransferService: Sendable {
         /// Outer nil: not in the file. Inner nil: no token before.
         var folyncToken: String??
         var folyncTokenServer: String?
-        var configurationFile: Data?
+        var configuration: ConfigurationRollbackState?
         var brokerLinks: Data?
         var includesDatabase = false
         var restoreStoreFrom: URL?
@@ -505,7 +507,13 @@ final class SettingsTransferService: Sendable {
         }
         try captureCredentials(for: prepared.credentials, into: &state)
         do {
-            state.configurationFile = try dependencies.configuration.configurationFileContents()
+            state.configuration = try dependencies.configuration.rollbackState()
+        } catch is MarketDataKeyStoreError {
+            throw SettingsTransferError.credentialUnreadable("current market-data API keys")
+        } catch {
+            throw SettingsTransferError.backupFailed("Stockbar couldn't read the current settings files.")
+        }
+        do {
             if prepared.includesDatabase {
                 state.includesDatabase = true
                 let url = dependencies.brokerLinksURL
@@ -558,10 +566,12 @@ final class SettingsTransferService: Sendable {
             }
         }
         complete = restoreCredentials(state) && complete
-        do {
-            try dependencies.configuration.restoreConfigurationFile(state.configurationFile)
-        } catch {
-            complete = false
+        if let configuration = state.configuration {
+            do {
+                try dependencies.configuration.restore(configuration)
+            } catch {
+                complete = false
+            }
         }
         if state.includesDatabase {
             do {

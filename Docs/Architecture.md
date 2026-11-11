@@ -53,8 +53,8 @@ Three sources coexist and must stay non-destructive to each other:
 |---|---|---|
 | UserDefaults | `com.stockbar` (via `StockbarRuntimeStorage.userDefaults`) | Trades, preferences, cache timestamps |
 | Core Data | `<App Support>/Stockbar/StockbarDataModel.sqlite` | Historical prices, OHLC, snapshots — model selected by `Stockbar/Data/StockbarDataModel.xcdatamodeld/.xccurrentversion`; data migration flags in `DataMigrationService`; `CoreDataStoreRecovery` handles corrupt stores |
-| Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | FMP + Twelve Data keys, `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path) |
-| Keychain | `com.stockbar.folync`, Trading 212 service | Persistent broker/Folync credentials; acceptance fixtures use a separate restricted token file |
+| Config JSON | `<App Support>/com.stockbar/.stockbar_config.json` | `DATA_SOURCE_PRIORITY` (auto-migrated from the legacy `com.fhl43211.Stockbar` path); FMP + Twelve Data keys an earlier version wrote here are moved to the Keychain on first use |
+| Keychain | `com.stockbar.folync`, Trading 212 service, `com.stockbar.marketdata` | Persistent broker/Folync credentials and the FMP + Twelve Data keys (`MarketDataKeyStore`, passed to the Python scripts as environment variables per run); acceptance fixtures use a separate restricted token file |
 
 Settings export/import (`SettingsTransferService`) seals an allowlist of defaults (`SettingsTransferKeys`), the config-file keys and Keychain credentials, and for Everything a Core Data copy, into one AES-GCM `.stockbarexport` file (`SettingsTransferContainer`). Imports validate everything first, snapshot the current state, and roll back on failure. `CoreDataStoreTransfer` copies and replaces stores through `replacePersistentStore`, and keeps the live store read-only until relaunch.
 

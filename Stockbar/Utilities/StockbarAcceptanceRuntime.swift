@@ -26,6 +26,7 @@ enum StockbarAcceptanceRuntimeError: Error, Equatable, LocalizedError {
 struct StockbarAcceptanceRuntime: Sendable {
     static let productionFolyncKeychainService = "com.stockbar.folync"
     static let productionTrading212KeychainService = "com.stockbar.trading212"
+    static let productionMarketDataKeychainService = "com.stockbar.marketdata"
     static let markerName = ".stockbar-acceptance-run"
 
     let root: URL?
@@ -40,6 +41,12 @@ struct StockbarAcceptanceRuntime: Sendable {
     var trading212KeychainService: String {
         guard let runID else { return Self.productionTrading212KeychainService }
         return "\(Self.productionTrading212KeychainService).acceptance.\(runID)"
+    }
+
+    /// The FMP and Twelve Data keys, kept apart for acceptance and XCTest runs the same way.
+    var marketDataKeychainService: String {
+        guard let runID else { return Self.productionMarketDataKeychainService }
+        return "\(Self.productionMarketDataKeychainService).acceptance.\(runID)"
     }
 
     var applicationSupportRoot: URL? {
@@ -91,7 +98,7 @@ struct StockbarAcceptanceRuntime: Sendable {
     }
 
     /// Removes everything an automatic XCTest run created: temporary root, defaults
-    /// suite, and its Folync and Trading 212 Keychain items. Never touches
+    /// suite, and its Folync, Trading 212 and market-data Keychain items. Never touches
     /// explicit acceptance runs.
     func removeAutomaticTestArtifacts(fileManager: FileManager = .default) {
         guard isAutomaticXCTestIsolation else { return }
@@ -102,6 +109,7 @@ struct StockbarAcceptanceRuntime: Sendable {
         for environment in Trading212Environment.allCases {
             try? trading212Store.delete(environment: environment)
         }
+        try? MarketDataKeyStore(service: marketDataKeychainService).deleteAll()
     }
 
     nonisolated(unsafe) private static var runtimePendingCleanup: Self?

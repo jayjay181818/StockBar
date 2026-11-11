@@ -175,8 +175,12 @@ RAW_SYMBOL_ALIASES = CONFIG.get("SYMBOL_ALIASES", {}) if isinstance(CONFIG, dict
 SYMBOL_ALIASES = {str(k).upper(): str(v).upper() for k, v in RAW_SYMBOL_ALIASES.items()}
 
 def get_api_key(key_name, env_name=None):
-    """Get API key from config or environment"""
-    # Try environment variable first
+    """Get API key from the environment, else the config file.
+
+    The app keeps the keys in the Keychain and passes them in the environment.
+    The file is read for a run by hand, and for a key an earlier version left
+    there that the app has not yet moved.
+    """
     if env_name:
         env_key = os.getenv(env_name)
         if env_key:
