@@ -494,6 +494,21 @@ final class RiskMetricsServiceTests: XCTestCase {
         XCTAssertEqual(series.currentValue, 550, accuracy: 0.001)
     }
 
+    func testFlowAdjustedSeries_AHundredfoldPriceJumpIsNotAReturn() throws {
+        let day1 = Date(timeIntervalSince1970: 1_699_920_000)
+        let snapshots = [
+            snapshot(day1, positions: [position("VOD.L", units: 10, price: 1), position("AAPL", units: 10, price: 100)]),
+            // VOD.L stored in pence on day two (a data slip); AAPL really rose 10%.
+            snapshot(day1 + 86_400, positions: [position("VOD.L", units: 10, price: 100), position("AAPL", units: 10, price: 110)])
+        ]
+
+        let series = try XCTUnwrap(RiskMetricsService.flowAdjustedDailySeries(
+            snapshots: snapshots, convert: { amount, _ in amount }, calendar: utcCalendar))
+
+        // Base 10 + 1000; only AAPL's +100 counts.
+        XCTAssertEqual(series.returns[0], 100.0 / 1010.0, accuracy: 0.0001)
+    }
+
     func testFlowAdjustedSeries_BuyingMoreIsNotAGain() throws {
         let day1 = Date(timeIntervalSince1970: 1_699_920_000)
         let snapshots = [

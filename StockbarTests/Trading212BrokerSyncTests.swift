@@ -365,6 +365,69 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
     }
 
+    func testARenamedTickerWithTheSameISINIsNotDeletedEvenWhenTheQuantityChanged() {
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        var renamed = makeLink(
+            instrumentId: "LSE:AV", providerTicker: "AVI_EQ", manualSymbol: "AV.L", manualCurrency: "GBX", linkedAt: linkedAt
+        )
+        renamed.isin = "GB00BPQY8M80"
+        let snapshot = BrokerLinkStoreSnapshot(
+            schemaVersion: 2, updatedAt: linkedAt, accounts: [makeLinkedAccount(linkedAt: linkedAt)], positions: [renamed]
+        )
+        let trades = [Trade(name: "AV.L", position: Position(unitSize: "300", positionAvgCost: "486.26", currency: "GBX", costCurrency: "GBX"))]
+        // Same instrument under a new ticker, and more shares than before.
+        var newTicker = makeBrokerOnlyRow(
+            instrumentId: "LSE:AVV", providerTicker: "AVVl_EQ", displaySymbol: "AVV", displayName: "Aviva",
+            quantity: 450, averagePrice: 486.26, brokerPrice: 620, currentValue: 2_790
+        )
+        newTicker.isin = " gb00bpqy8m80 "
+
+        let plan = Trading212BrokerSyncPlanner().plan(
+            existingTrades: trades,
+            tradingInfoBySymbol: [:],
+            links: snapshot,
+            preview: makePreview(rows: [newTicker]),
+            options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: true),
+            syncedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertTrue(plan.deletedManualSymbols.isEmpty)
+        XCTAssertEqual(plan.missingLinkedSymbols, ["AV.L"])
+    }
+
+    func testALinkSavedWithoutAnISINStillLoadsAndIsFilledInFromTheBrokerRow() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("broker_links.json")
+        let linkedAt = Date(timeIntervalSince1970: 100)
+        let link = makeLink(
+            instrumentId: "LSE:AV", providerTicker: "AVI_EQ", manualSymbol: "AV.L", manualCurrency: "GBX", linkedAt: linkedAt
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(BrokerLinkStoreSnapshot(
+            schemaVersion: 2, updatedAt: linkedAt, accounts: [makeLinkedAccount(linkedAt: linkedAt)], positions: [link]
+        ))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("isin"), "a link without an ISIN is saved as before")
+        try data.write(to: fileURL)
+
+        let store = BrokerLinkStore(fileURL: fileURL)
+        var row = makeBrokerOnlyRow(
+            instrumentId: "LSE:AV", providerTicker: "AVI_EQ", displaySymbol: "AV", displayName: "Aviva",
+            quantity: 500, averagePrice: 486.26, brokerPrice: 620, currentValue: 3_100
+        )
+        row.isin = "GB00BPQY8M80"
+
+        let changed = try await store.recordISINs(from: [row])
+        let secondPass = try await store.recordISINs(from: [row])
+        let saved = try await store.loadSnapshot()
+
+        XCTAssertTrue(changed)
+        XCTAssertFalse(secondPass)
+        XCTAssertEqual(saved.positions.first?.isin, "GB00BPQY8M80")
+    }
+
     func testRekeyedMovesLinksWhenAccountLabelOrAPIKeyChanges() throws {
         let linkedAt = Date(timeIntervalSince1970: 100)
         let link = makeLink(

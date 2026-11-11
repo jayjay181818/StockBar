@@ -181,7 +181,8 @@ struct InstrumentAliasRepairPlanner {
                 manualAverageCostAtLink: earliest.manualAverageCostAtLink,
                 manualCurrency: earliest.manualCurrency,
                 linkedAt: earliest.linkedAt,
-                updatedAt: latest.updatedAt
+                updatedAt: latest.updatedAt,
+                isin: latest.isin ?? earliest.isin
             )]
         }.sorted { $0.id < $1.id }
         return BrokerLinkStoreSnapshot(

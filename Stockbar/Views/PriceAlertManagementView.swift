@@ -145,6 +145,7 @@ struct PriceAlertRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: conditionIcon)
+                .accessibilityHidden(true)
                 .font(.title2)
                 .foregroundStyle(alert.isEnabled ? Color.accentColor : Color.secondary)
                 .frame(width: 30)

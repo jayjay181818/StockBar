@@ -211,6 +211,7 @@ struct RiskAnalyticsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: icon)
+                    .accessibilityHidden(true)
                     .foregroundColor(color)
                     .font(.title3)
                 Spacer()
@@ -387,6 +388,7 @@ struct RiskAnalyticsView: View {
                 if metrics.maxDrawdownDuration > 0 {
                     HStack {
                         Image(systemName: "clock.fill")
+                            .accessibilityHidden(true)
                             .foregroundColor(.orange)
                         Text("Peak to lowest point: \(metrics.maxDrawdownDuration) trading days. Recovery time is not included.")
                             .font(.subheadline)
@@ -491,6 +493,7 @@ struct RiskAnalyticsView: View {
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "chart.bar.xaxis")
+                .accessibilityHidden(true)
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
 
@@ -517,6 +520,7 @@ struct RiskAnalyticsView: View {
     private func errorView(message: String) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
+                .accessibilityHidden(true)
                 .font(.system(size: 48))
                 .foregroundColor(.orange)
 

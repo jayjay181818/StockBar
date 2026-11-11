@@ -299,6 +299,7 @@ struct RestoreBackupView: View {
             if availableBackups.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "archivebox")
+                        .accessibilityHidden(true)
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
                     Text("No backups available")

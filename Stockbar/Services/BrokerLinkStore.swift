@@ -48,6 +48,13 @@ struct BrokerLinkedPosition: Codable, Equatable, Identifiable {
     let manualCurrency: String?
     let linkedAt: Date
     let updatedAt: Date
+    /// Absent in links saved before ISINs were recorded; filled in at the next sync.
+    var isin: String? = nil
+
+    var normalizedISIN: String? {
+        let value = isin?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+        return value.isEmpty ? nil : value
+    }
 }
 
 struct BrokerLinkStoreSnapshot: Codable, Equatable {
@@ -92,7 +99,8 @@ struct BrokerLinkStoreSnapshot: Codable, Equatable {
                 manualAverageCostAtLink: position.manualAverageCostAtLink,
                 manualCurrency: position.manualCurrency,
                 linkedAt: position.linkedAt,
-                updatedAt: now
+                updatedAt: now,
+                isin: position.isin
             )
             // A link already saved under the current key wins.
             return currentIDs.contains(moved.id) ? nil : moved
@@ -177,6 +185,27 @@ actor BrokerLinkStore {
         guard let rekeyed = try loadSnapshot().rekeyed(to: account) else { return false }
         try save(rekeyed)
         return true
+    }
+
+    /// Fills in the ISIN on links that lack one, from the broker rows they match.
+    /// Returns true when a link changed, so callers reload the snapshot.
+    func recordISINs(from rows: [Trading212ImportPreviewRow]) throws -> Bool {
+        var isinByLinkID: [String: String] = [:]
+        for row in rows {
+            let isin = row.isin?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+            guard !isin.isEmpty, let instrumentId = row.instrumentId else { continue }
+            isinByLinkID["\(row.account.brokerAccountKey)|\(instrumentId)"] = isin
+        }
+        guard !isinByLinkID.isEmpty else { return false }
+        var snapshot = try loadSnapshot()
+        var changed = false
+        for index in snapshot.positions.indices where snapshot.positions[index].normalizedISIN == nil {
+            guard let isin = isinByLinkID[snapshot.positions[index].instrumentLinkID] else { continue }
+            snapshot.positions[index].isin = isin
+            changed = true
+        }
+        if changed { try save(snapshot) }
+        return changed
     }
 
     func linkExactMatches(
@@ -352,7 +381,8 @@ actor BrokerLinkStore {
             manualAverageCostAtLink: manualMatch.averageCost,
             manualCurrency: manualMatch.currency,
             linkedAt: linkedAt,
-            updatedAt: linkedAt
+            updatedAt: linkedAt,
+            isin: row.isin
         )
     }
 
@@ -374,7 +404,8 @@ actor BrokerLinkStore {
             manualAverageCostAtLink: existing?.manualAverageCostAtLink ?? position.manualAverageCostAtLink,
             manualCurrency: existing?.manualCurrency ?? position.manualCurrency,
             linkedAt: linkedAt,
-            updatedAt: position.updatedAt
+            updatedAt: position.updatedAt,
+            isin: position.isin ?? existing?.isin
         )
         snapshot.positions.removeAll { $0.id == position.id }
         snapshot.positions.append(updated)
@@ -399,7 +430,8 @@ actor BrokerLinkStore {
                 manualAverageCostAtLink: earliest.manualAverageCostAtLink,
                 manualCurrency: earliest.manualCurrency,
                 linkedAt: earliest.linkedAt,
-                updatedAt: latest.updatedAt
+                updatedAt: latest.updatedAt,
+                isin: latest.isin ?? earliest.isin
             )]
         }.sorted { $0.id < $1.id }
         return BrokerLinkStoreSnapshot(

@@ -182,7 +182,8 @@ struct Trading212BrokerOnlyImportPlanner {
                 manualAverageCostAtLink: average?.amount,
                 manualCurrency: positionCurrency,
                 linkedAt: importedAt,
-                updatedAt: importedAt
+                updatedAt: importedAt,
+                isin: row.isin
             )
 
             records.append(Trading212BrokerOnlyImportRecord(
@@ -351,6 +352,10 @@ struct Trading212BrokerSyncPlanner {
         // vanished and a new unlinked one of the same size. That holding is
         // reported as missing so it can be relinked, never deleted.
         func looksRenamed(_ link: BrokerLinkedPosition) -> Bool {
+            if let isin = link.normalizedISIN,
+               brokerOnlyRows.contains(where: { $0.isin?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == isin }) {
+                return true
+            }
             guard let trade = existingTrades.first(where: { $0.name.uppercased() == link.manualSymbol.uppercased() }),
                   trade.position.unitSize > 0 else { return false }
             let units = trade.position.unitSize

@@ -63,25 +63,34 @@ actor AttributionAnalysisService {
         }
 
         for symbol in allSymbols {
-            guard let startPosition = startSnapshot.portfolioComposition[symbol],
-                  let endPosition = endSnapshot.portfolioComposition[symbol],
-                  startPosition.priceAtDate.isFinite, startPosition.priceAtDate > 0,
-                  endPosition.priceAtDate.isFinite,
-                  startPosition.units.isFinite, startPosition.valueAtDate.isFinite,
-                  endPosition.valueAtDate.isFinite else {
+            // A holding opened or closed inside the period is measured from the first
+            // day it appears to the last day it appears, so its gain or loss is not lost.
+            func usable(_ snapshot: HistoricalPortfolioSnapshot) -> PositionSnapshot? {
+                guard let position = snapshot.portfolioComposition[symbol],
+                      position.priceAtDate.isFinite, position.priceAtDate > 0,
+                      position.units.isFinite, position.valueAtDate.isFinite else { return nil }
+                return position
+            }
+            guard let firstIndex = filteredData.firstIndex(where: { usable($0) != nil }),
+                  let lastIndex = filteredData.lastIndex(where: { usable($0) != nil }),
+                  firstIndex < lastIndex,
+                  let startPosition = usable(filteredData[firstIndex]),
+                  let endPosition = usable(filteredData[lastIndex]) else {
                 continue
             }
+            let heldAtStart = firstIndex == 0
+            let heldAtEnd = lastIndex == filteredData.count - 1
 
             let stockReturn = ((endPosition.priceAtDate - startPosition.priceAtDate) / startPosition.priceAtDate) * 100
 
             let startPositionValue = convert(startPosition.valueAtDate, startPosition.currency, baseCurrency)
             let endPositionValue = convert(endPosition.valueAtDate, endPosition.currency, baseCurrency)
-            let startWeight = (startPositionValue / startValue) * 100
-            let endWeight = endValue > 0 ? (endPositionValue / endValue) * 100 : 0
+            let startWeight = heldAtStart ? (startPositionValue / startValue) * 100 : 0
+            let endWeight = heldAtEnd && endValue > 0 ? (endPositionValue / endValue) * 100 : 0
             let avgWeight = (startWeight + endWeight) / 2.0
 
-            // Price effect on the units held at the start. Units bought or sold during
-            // the period are new money / withdrawals, not performance.
+            // Price effect on the units held when the holding first appears in the period.
+            // Units bought or sold later are new money / withdrawals, not performance.
             let nativeGain = startPosition.units * (endPosition.priceAtDate - startPosition.priceAtDate)
             let dollarContribution = convert(nativeGain, startPosition.currency, baseCurrency)
             let contribution = (dollarContribution / startValue) * 100
@@ -128,8 +137,9 @@ actor AttributionAnalysisService {
         let netCashFlow: Double? = hasCashFlows ? cashFlows.reduce(0) { $0 + $1.amount } : nil
 
         let result = AttributionAnalysisResult(
-            startDate: startDate,
-            endDate: endDate,
+            // The days actually measured, which can be fewer than the range asked for.
+            startDate: startSnapshot.date,
+            endDate: endSnapshot.date,
             portfolioReturn: portfolioReturn,
             stockContributions: stockContributions,
             sectorContributions: sectorContributions,

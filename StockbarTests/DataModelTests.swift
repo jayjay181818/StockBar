@@ -100,4 +100,58 @@ class DataModelTests: XCTestCase {
 
         XCTAssertEqual(menuBarTrades.map(\.trade.name), ["AAPL"])
     }
+
+    func testARefreshPassAppliesGoodQuotesAndKeepsTheOldPriceForAFailedOne() async throws {
+        let suiteName = TestDefaultsSuite.makeName("RefreshPass-")
+        defer { TestDefaultsSuite.remove(suiteName) }
+
+        let network = FakeQuoteNetwork(results: [
+            StockFetchResult(currency: "USD", symbol: "AAPL", shortName: "Apple", regularMarketTime: 1_700_000_000,
+                             exchangeTimezoneName: "America/New_York", regularMarketPrice: 190,
+                             regularMarketPreviousClose: 188, displayPrice: 190),
+            // A failed quote: the script reports NaN prices.
+            StockFetchResult(currency: nil, symbol: "MSFT", shortName: nil, regularMarketTime: nil,
+                             exchangeTimezoneName: nil, regularMarketPrice: .nan,
+                             regularMarketPreviousClose: .nan, displayPrice: .nan)
+        ])
+        let refresh = RefreshService(networkService: network, cacheCoordinator: CacheCoordinator(defaults: UserDefaults(suiteName: suiteName)!))
+        refresh.setDataModel(dataModel)
+
+        let failing = makeRealTimeTrade("MSFT")
+        failing.realTimeInfo.currentPrice = 400
+        failing.realTimeInfo.prevClosePrice = 395
+        // TSLA is held but not asked for, so it must not be fetched or touched.
+        dataModel.realTimeTrades = [makeRealTimeTrade("AAPL"), failing, makeRealTimeTrade("TSLA")]
+
+        await refresh.performRefreshAllTrades(limitedTo: ["aapl", "msft"], force: true)
+
+        let requested = await network.requestedSymbols
+        XCTAssertEqual(requested.map { Set($0) }, [["AAPL", "MSFT"]], "one batch request for the two symbols asked for")
+        let bySymbol = Dictionary(uniqueKeysWithValues: dataModel.realTimeTrades.map { ($0.trade.name, $0.realTimeInfo) })
+        XCTAssertEqual(try XCTUnwrap(bySymbol["AAPL"]).currentPrice, 190, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["AAPL"]).prevClosePrice, 188, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(bySymbol["MSFT"]).currentPrice, 400, accuracy: 0.0001, "a failed quote keeps the last price")
+        XCTAssertEqual(dataModel.quoteRefreshStatus.attemptedCount, 2)
+        XCTAssertEqual(dataModel.quoteRefreshStatus.failedCount, 1)
+    }
+}
+
+private actor FakeQuoteNetwork: NetworkService {
+    private let results: [StockFetchResult]
+    private(set) var requestedSymbols: [[String]] = []
+
+    init(results: [StockFetchResult]) { self.results = results }
+
+    func fetchQuote(for symbol: String) async throws -> StockFetchResult {
+        throw NetworkError.noData("not used")
+    }
+
+    func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {
+        requestedSymbols.append(symbols.map { $0.uppercased() })
+        return results.filter { result in symbols.contains { $0.uppercased() == result.symbol } }
+    }
+
+    func fetchHistoricalData(for symbol: String, from startDate: Date, to endDate: Date) async throws -> [PriceSnapshot] { [] }
+
+    func verifyAPIKey(service: String) async throws -> Bool { true }
 }

@@ -591,6 +591,7 @@ struct MenuPriceChartView: View {
     private func suspensionBanner(_ notice: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "pause.circle.fill")
+                .accessibilityHidden(true)
                 .foregroundStyle(.orange)
             Text(notice)
                 .font(.caption)
