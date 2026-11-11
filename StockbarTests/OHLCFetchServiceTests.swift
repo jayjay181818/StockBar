@@ -236,7 +236,7 @@ final class PythonNetworkServiceTests: XCTestCase {
           {
             "symbol": "BAD",
             "success": false,
-            "error": {"error_code": "NO_DATA", "message": "No data"}
+            "error": {"error_code": "RATE_LIMIT", "message": "Throttled"}
           },
           {
             "symbol": "MSFT",
@@ -269,11 +269,13 @@ final class PythonNetworkServiceTests: XCTestCase {
         XCTAssertEqual(results.count, 3)
         XCTAssertEqual(results[0].regularMarketPrice, 200)
         XCTAssertTrue(results[1].regularMarketPrice.isNaN)
+        XCTAssertEqual(results[1].failure, .rateLimited)
+        XCTAssertNil(results[0].failure)
         XCTAssertEqual(results[2].regularMarketPrice, 410)
         let capturedArguments = await runner.capturedArguments()
         XCTAssertEqual(
             capturedArguments,
-            ["/tmp/get_stock_data.py", "--json", "AAPL", "BAD", "MSFT"]
+            ["/tmp/get_stock_data.py", "--json", "--deadline-seconds", "30", "AAPL", "BAD", "MSFT"]
         )
     }
 
@@ -294,7 +296,7 @@ final class PythonNetworkServiceTests: XCTestCase {
 
         XCTAssertEqual(result.symbol, "AAPL")
         let capturedArguments = await runner.capturedArguments()
-        XCTAssertEqual(capturedArguments, ["/tmp/get_stock_data.py", "--json", "AAPL"])
+        XCTAssertEqual(capturedArguments, ["/tmp/get_stock_data.py", "--json", "--deadline-seconds", "30", "AAPL"])
     }
 
     func testMalformedSuccessfulQuoteBecomesPlaceholderWithoutFailingAdjacentSymbols() async throws {
@@ -343,6 +345,8 @@ final class PythonNetworkServiceTests: XCTestCase {
 
         XCTAssertEqual(results[0].regularMarketPrice, 200)
         XCTAssertTrue(results[1].regularMarketPrice.isNaN)
+        XCTAssertEqual(results[1].failure, .noData)
+        XCTAssertNil(results[0].failure)
         XCTAssertTrue(results[1].regularMarketPreviousClose.isNaN)
     }
 

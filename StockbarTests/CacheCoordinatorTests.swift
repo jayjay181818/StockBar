@@ -511,6 +511,119 @@ class CacheCoordinatorTests: XCTestCase {
         XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 60), 54, accuracy: 0.001)
         XCTAssertEqual(PythonConfiguration.quoteCacheSeconds(forRefreshInterval: 3_600), 300, accuracy: 0.001)
     }
+
+    func testRefreshIntervalIsClampedToTheSupportedRange() {
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(nil), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(0), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(-60), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(1), 300, "a stored boolean reads as 1")
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(.nan), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(.infinity), 300)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(5), 60)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(900), 900)
+        XCTAssertEqual(RefreshService.clampedRefreshInterval(86_400), 3_600)
+    }
+
+    func testProviderBackoffGrowsAndClearsOnSuccess() async {
+        let now = Date()
+
+        let idle = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let first = await cacheCoordinator.recordProviderFailure(at: now)
+        let second = await cacheCoordinator.recordProviderFailure(at: now)
+        for _ in 0..<10 { await cacheCoordinator.recordProviderFailure(at: now) }
+        let capped = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let expired = await cacheCoordinator.providerBackoffRemaining(at: now.addingTimeInterval(601))
+        await cacheCoordinator.recordProviderSuccess()
+        let cleared = await cacheCoordinator.providerBackoffRemaining(at: now)
+        let restarted = await cacheCoordinator.recordProviderFailure(at: now)
+
+        XCTAssertNil(idle)
+        XCTAssertEqual(first, 60)
+        XCTAssertEqual(second, 120)
+        XCTAssertEqual(capped, 600)
+        XCTAssertNil(expired)
+        XCTAssertNil(cleared)
+        XCTAssertEqual(restarted, 60)
+    }
+
+    func testProviderFailureDoesNotSuspendSymbols() async {
+        let now = Date()
+        for _ in 0..<10 { await cacheCoordinator.recordProviderFailure(at: now) }
+
+        let suspended = await cacheCoordinator.isSuspended(symbol: "AAPL", at: now)
+        let status = await cacheCoordinator.getCacheStatus(for: "AAPL", at: now)
+
+        XCTAssertFalse(suspended)
+        guard case .neverFetched = status else {
+            return XCTFail("Expected no per-symbol state, got \(status.description)")
+        }
+    }
+
+    func testFailuresAreSortedIntoSymbolAndProviderFaults() {
+        // One bad ticker among working ones is that ticker's fault.
+        var outcome = RefreshService.classifyFailures([.noData], anySucceeded: true)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertTrue(outcome.countsAgainstSymbols)
+
+        // A lone ticker with no data is still its own fault.
+        outcome = RefreshService.classifyFailures([.noData], anySucceeded: false)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertTrue(outcome.countsAgainstSymbols)
+
+        // A lone throttled ticker backs the provider off.
+        outcome = RefreshService.classifyFailures([.rateLimited], anySucceeded: false)
+        XCTAssertTrue(outcome.providerFailed)
+
+        // Everything failing together is never counted against the symbols.
+        outcome = RefreshService.classifyFailures([.noData, .noData, .timedOut], anySucceeded: false)
+        XCTAssertTrue(outcome.providerFailed)
+        XCTAssertFalse(outcome.countsAgainstSymbols)
+
+        outcome = RefreshService.classifyFailures([], anySucceeded: false)
+        XCTAssertFalse(outcome.providerFailed)
+        XCTAssertFalse(outcome.countsAgainstSymbols)
+    }
+
+    func testUnknownErrorCodesAreTreatedAsNoData() {
+        XCTAssertEqual(QuoteFailure(errorCode: "RATE_LIMIT"), .rateLimited)
+        XCTAssertEqual(QuoteFailure(errorCode: "TIMEOUT"), .timedOut)
+        XCTAssertEqual(QuoteFailure(errorCode: "NETWORK_ERROR"), .network)
+        XCTAssertEqual(QuoteFailure(errorCode: "SOMETHING_NEW"), .noData)
+        XCTAssertEqual(QuoteFailure(errorCode: nil), .noData)
+        XCTAssertFalse(QuoteFailure.noData.isProviderWide)
+        XCTAssertTrue(QuoteFailure.timedOut.isProviderWide)
+    }
+
+    func testClosedExchangesArePolledSlowly() throws {
+        func date(_ text: String) throws -> Date {
+            try XCTUnwrap(ISO8601DateFormatter().date(from: text))
+        }
+        let saturday = try date("2026-11-07T15:00:00Z")
+        let tuesdayLondonMorning = try date("2026-11-10T09:00:00Z")   // 04:00 New York, 09:00 London
+        let tuesdayUSAfternoon = try date("2026-11-10T19:00:00Z")     // 14:00 New York, 19:00 London
+        let tuesdayNight = try date("2026-11-11T03:00:00Z")           // 22:00 New York, 03:00 London
+
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: saturday), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: saturday), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: tuesdayLondonMorning), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: tuesdayLondonMorning), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "AAPL", at: tuesdayUSAfternoon), false)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "VOD.L", at: tuesdayUSAfternoon), true)
+        XCTAssertEqual(RefreshService.isExchangeClosed(for: "^GSPC", at: tuesdayNight), true)
+
+        // Hours are not known for these, so they always poll at the full rate.
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "BTC-USD", at: saturday))
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "EURUSD=X", at: saturday))
+        XCTAssertNil(RefreshService.isExchangeClosed(for: "SAP.DE", at: saturday))
+
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "AAPL", at: saturday), 1_800)
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "BTC-USD", at: saturday), 270)
+        XCTAssertEqual(
+            RefreshService.freshnessInterval(forRefreshInterval: 300, symbol: "AAPL", at: tuesdayUSAfternoon),
+            270
+        )
+        XCTAssertEqual(RefreshService.freshnessInterval(forRefreshInterval: 3_600, symbol: "AAPL", at: saturday), 3_240)
+    }
 }
 
 private extension CacheStatus {

@@ -27,6 +27,36 @@ actor CacheCoordinator {
     private var consecutiveFailures: [String: Int] = [:]  // Track consecutive failures per symbol
     private var suspendedSymbols: [String: Date] = [:]  // Circuit breaker: suspended symbols
 
+    // MARK: - Provider back-off
+    //
+    // When a whole refresh pass fails, or the provider reports throttling or a dead
+    // connection, the fault is not any one symbol's. Counting it per symbol tripped
+    // every circuit breaker together and stopped all quotes for an hour, so those
+    // failures share one short back-off instead. It is deliberately not persisted.
+    private let providerBackoffSteps: [TimeInterval] = [60, 120, 300, 600]
+    private var providerFailureCount = 0
+    private var providerBackoffUntil: Date?
+
+    /// Records a provider-wide failure and returns how long refreshes should wait.
+    @discardableResult
+    func recordProviderFailure(at time: Date) -> TimeInterval {
+        providerFailureCount += 1
+        let wait = providerBackoffSteps[min(providerFailureCount, providerBackoffSteps.count) - 1]
+        providerBackoffUntil = time.addingTimeInterval(wait)
+        return wait
+    }
+
+    func recordProviderSuccess() {
+        providerFailureCount = 0
+        providerBackoffUntil = nil
+    }
+
+    /// Seconds left before automatic refreshes may try the provider again, or nil.
+    func providerBackoffRemaining(at time: Date) -> TimeInterval? {
+        guard let until = providerBackoffUntil, until > time else { return nil }
+        return until.timeIntervalSince(time)
+    }
+
     // MARK: - Persistence
     //
     // Cache and breaker state used to live only in memory, so quitting the app

@@ -172,8 +172,16 @@ class DataModel {
 
     private let logger = Logger.shared
 
-    var refreshInterval: TimeInterval = StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval ?? 300 { // 5 minutes default
+    /// Seconds between automatic quote refreshes, always within the supported range.
+    var refreshInterval: TimeInterval = RefreshService.clampedRefreshInterval(
+        StockbarRuntimeStorage.userDefaults.object(forKey: "refreshInterval") as? TimeInterval
+    ) {
         didSet {
+            let clamped = RefreshService.clampedRefreshInterval(refreshInterval)
+            guard clamped == refreshInterval else {
+                refreshInterval = clamped
+                return
+            }
             StockbarRuntimeStorage.userDefaults.set(refreshInterval, forKey: "refreshInterval")
             // Update RefreshService interval when changed
             Task { @MainActor in

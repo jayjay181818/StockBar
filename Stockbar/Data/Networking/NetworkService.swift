@@ -333,9 +333,13 @@ actor PythonNetworkService: NetworkService {
         }
         guard !safeSymbols.isEmpty else { return [] }
 
-        let timeout = min(300, max(30, 20 + (Double(safeSymbols.count) * 5)))
+        // The script stops starting new symbols once its own budget runs out and reports
+        // them as timed out, so a slow provider no longer loses the quotes already fetched.
+        // The process timeout stays as the backstop for a script that hangs outright.
+        let timeout = min(300, max(45, 30 + (Double(safeSymbols.count) * 5)))
+        let scriptBudget = Int(timeout - 15)
         let (stdout, _, _) = try await runPythonProcess(
-            arguments: [scriptPath, "--json"] + safeSymbols,
+            arguments: [scriptPath, "--json", "--deadline-seconds", String(scriptBudget)] + safeSymbols,
             timeoutSeconds: timeout,
             logContext: "Quote batch (\(safeSymbols.count) symbols)"
         )
@@ -363,13 +367,20 @@ actor PythonNetworkService: NetworkService {
             guard envelope?["success"] as? Bool == true,
                   let quote = envelope?["quote"] as? [String: Any],
                   let parsed = try? parseEnhancedQuoteData(quote, symbol: symbol) else {
-                return placeholderQuote(for: symbol)
+                let errorCode = (envelope?["error"] as? [String: Any])?["error_code"] as? String
+                return placeholderQuote(for: symbol, failure: QuoteFailure(errorCode: errorCode))
             }
             return parsed
         }
     }
 
-    private func placeholderQuote(for symbol: String) -> StockFetchResult {
+    private func placeholderQuote(for symbol: String, failure: QuoteFailure) -> StockFetchResult {
+        var quote = unpricedQuote(for: symbol)
+        quote.failure = failure
+        return quote
+    }
+
+    private func unpricedQuote(for symbol: String) -> StockFetchResult {
         StockFetchResult(
             currency: SymbolMetadata.defaultCurrency(for: symbol),
             symbol: symbol,

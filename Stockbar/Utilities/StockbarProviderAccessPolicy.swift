@@ -1,7 +1,7 @@
 import Foundation
 
 enum StockbarProvider: String, CaseIterable, Sendable {
-    /// Covers the whole Python bridge. yfinance, FMP, Twelve Data and Stooq all
+    /// Covers the whole Python bridge. yfinance, FMP and Twelve Data all
     /// run *inside* `get_stock_data.py`, so they are gated transitively by this
     /// case rather than having cases of their own.
     case python

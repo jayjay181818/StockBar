@@ -221,7 +221,6 @@ struct InstrumentResolver {
         if exchange == "LSE" {
             providerSymbols["yfinance"] = "\(normalizedSymbol).L"
             providerSymbols["fmp"] = "\(normalizedSymbol).L"
-            providerSymbols["stooq"] = "\(normalizedSymbol).UK"
         } else {
             providerSymbols["yfinance"] = normalizedSymbol
             providerSymbols["fmp"] = normalizedSymbol

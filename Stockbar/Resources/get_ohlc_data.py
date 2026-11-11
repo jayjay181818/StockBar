@@ -88,7 +88,8 @@ def fetch_ohlc_data(symbol, period="1mo", interval="1d"):
         ticker = yf.Ticker(symbol)
 
         # Fetch historical data
-        hist = ticker.history(period=period, interval=interval)
+        # Unadjusted, like quotes and the line charts, so candles and lines agree.
+        hist = ticker.history(period=period, interval=interval, auto_adjust=False)
 
         # Ask the provider what currency it quoted in; fall back to the suffix.
         reported_currency = None

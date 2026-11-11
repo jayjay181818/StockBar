@@ -23,7 +23,10 @@ struct StockFetchResult: Sendable {
     
     // Market state indicator
     let marketState: MarketState?
-    
+
+    /// Why this quote has no usable price. Nil for a successful quote.
+    var failure: QuoteFailure?
+
     init(currency: String?, symbol: String, shortName: String?, regularMarketTime: Int?, exchangeTimezoneName: String?, regularMarketPrice: Double, regularMarketPreviousClose: Double, displayPrice: Double, preMarketPrice: Double? = nil, preMarketChange: Double? = nil, preMarketChangePercent: Double? = nil, preMarketTime: Int? = nil, postMarketPrice: Double? = nil, postMarketChange: Double? = nil, postMarketChangePercent: Double? = nil, postMarketTime: Int? = nil, marketState: MarketState? = nil) {
         self.currency = currency
         self.symbol = symbol
@@ -43,6 +46,22 @@ struct StockFetchResult: Sendable {
         self.postMarketTime = postMarketTime
         self.marketState = marketState
     }
+}
+
+/// The cause the quote script reported for one symbol.
+enum QuoteFailure: String, Sendable {
+    case rateLimited = "RATE_LIMIT"
+    case timedOut = "TIMEOUT"
+    case network = "NETWORK_ERROR"
+    case noData = "NO_DATA"
+
+    /// Anything the script did not classify is a symbol with no data.
+    init(errorCode: String?) {
+        self = errorCode.flatMap(QuoteFailure.init(rawValue:)) ?? .noData
+    }
+
+    /// True when the provider or connection failed, which says nothing about the symbol.
+    var isProviderWide: Bool { self != .noData }
 }
 
 enum MarketState: String, CaseIterable, Sendable {

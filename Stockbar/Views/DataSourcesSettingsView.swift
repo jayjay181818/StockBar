@@ -34,7 +34,7 @@ struct DataSourcesSettingsView: View {
     @State private var alertMessage: String = ""
     
     // Default priorities including all supported sources
-    private let allSources = ["yfinance", "fmp", "twelvedata", "stooq"]
+    private let allSources = ["yfinance", "fmp", "twelvedata"]
     
     private let configManager = ConfigurationManager.shared
     
@@ -314,10 +314,6 @@ struct DataSourcesSettingsView: View {
                 Text("(Recommended Primary)")
                     .font(.caption)
                     .foregroundColor(.green)
-            } else if source == "stooq" {
-                Text("(No Key Required)")
-                    .font(.caption)
-                    .foregroundColor(.blue)
             }
         }
     }
@@ -327,7 +323,6 @@ struct DataSourcesSettingsView: View {
         case "yfinance": return "Yahoo Finance (yfinance)"
         case "fmp": return "Financial Modeling Prep"
         case "twelvedata": return "Twelve Data"
-        case "stooq": return "Stooq"
         default: return source
         }
     }
@@ -340,7 +335,7 @@ struct DataSourcesSettingsView: View {
         let savedPriority = configManager.getDataSourcePriority()
         if let saved = savedPriority, !saved.isEmpty {
             // Ensure all known sources are present (in case new ones added)
-            var merged = saved
+            var merged = saved.filter { allSources.contains($0) }
             for source in allSources {
                 if !merged.contains(source) {
                     merged.append(source)

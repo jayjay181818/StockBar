@@ -315,7 +315,6 @@ final class Trading212ResolverTests: XCTestCase {
         // Then: The canonical identity keeps provider symbols separate from the instrument id.
         XCTAssertEqual(result.identity?.instrumentId, "LSE:AV")
         XCTAssertEqual(result.identity?.providerSymbols["yfinance"], "AV.L")
-        XCTAssertEqual(result.identity?.providerSymbols["stooq"], "AV.UK")
         XCTAssertEqual(result.confidence, .high)
     }
 
