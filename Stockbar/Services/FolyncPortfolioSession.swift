@@ -23,7 +23,7 @@ enum FolyncConnectionState: Equatable {
         case .stale(let asOf, let reasons):
             return "Stale\(asOf.map { " as of \($0)" } ?? ""): \(reasons.joined(separator: ", "))"
         case .rebuilding(_, let reasons): return "Folync is rebuilding: \(reasons.joined(separator: ", "))"
-        case .offlineCached(let message): return "Offline — showing last Folync data. \(message)"
+        case .offlineCached(let message): return "Showing the last Folync data. \(message)"
         case .unauthorized: return "Folync access token was rejected."
         case .rateLimited(let retryAfter):
             return FolyncPortfolioSourceError.rateLimited(retryAfter: retryAfter).errorDescription
@@ -442,12 +442,16 @@ extension DataModel {
         generation: UUID
     ) async -> Bool {
         let deps = folyncSessionDependencies
-        folyncConnectionState = .connecting
+        // With data on screen the status keeps saying how fresh it is; showing
+        // "Connecting…" for a moment every minute only made it flicker.
+        if folyncPortfolioSnapshot == nil {
+            folyncConnectionState = .connecting
+        }
         if folyncETag == nil {
             if let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
-                applyFolyncSnapshot(cached.snapshot)
+                applyFolyncSnapshot(cached.snapshot, evaluatingAlerts: false)
             } else {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
@@ -491,7 +495,7 @@ extension DataModel {
                let cached = try? await deps.snapshotCache.load(endpoint: settings.baseURL, scopeID: settings.scopeID) {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
                 folyncETag = cached.etag
-                applyFolyncSnapshot(cached.snapshot)
+                applyFolyncSnapshot(cached.snapshot, evaluatingAlerts: false)
             } else {
                 guard isFolyncSessionCurrent(generation: generation, settings: settings) else { return false }
             }
@@ -509,7 +513,10 @@ extension DataModel {
         }
     }
 
-    func applyFolyncSnapshot(_ snapshot: FolyncPortfolioSnapshot) {
+    /// `evaluatingAlerts` is false for a snapshot read back from disk: its
+    /// prices are as old as the last run, and an alert on them would announce
+    /// a crossing that may no longer hold.
+    func applyFolyncSnapshot(_ snapshot: FolyncPortfolioSnapshot, evaluatingAlerts: Bool = true) {
         if legacyPortfolioTrades == nil {
             legacyPortfolioTrades = realTimeTrades
         }
@@ -526,7 +533,9 @@ extension DataModel {
             preserving: legacyPortfolioTrades ?? [],
             overlays: folyncSessionDependencies.overlayStore.load()
         )
-        evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
+        if evaluatingAlerts {
+            evaluatePriceAlerts(for: realTimeTrades.filter { $0.sourceIdentity != nil })
+        }
     }
 
     func updateFolyncSupplementalSettings(_ supplemental: FolyncSupplementalSettings) async {
@@ -767,7 +776,7 @@ extension DataModel {
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         Task { await deps.supplementalCoordinator.clearInMemoryState() }
         if persistSetting {
-            restartTrading212LinkedSyncScheduler()
+            restartTrading212LinkedSyncScheduler(keepBackoff: true)
         }
     }
 

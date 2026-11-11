@@ -273,7 +273,7 @@ class DataModel {
             markInitialPortfolioSourceResolved()
             await MainActor.run {
                 if !self.isFolyncPortfolioActive {
-                    self.restartTrading212LinkedSyncScheduler()
+                    self.restartTrading212LinkedSyncScheduler(keepBackoff: true)
                 }
             }
         }
@@ -692,14 +692,24 @@ class DataModel {
         await performRefreshAllTrades()
     }
 
-    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true) {
+    /// While Folync supplies the portfolio the rows on screen are Folync's. A
+    /// Trading 212 sync planned against them would find every linked holding
+    /// missing and drop its link.
+    static let trading212SkippedForFolyncReason = "Folync is the portfolio source; Trading 212 sync is paused."
+
+    /// `keepBackoff` is for restarts Stockbar makes itself (launch, a finished
+    /// import, switching back from Folync). They must not cut short a wait
+    /// Trading 212 asked for; only a change the user saves starts afresh.
+    func restartTrading212LinkedSyncScheduler(runImmediately: Bool = true, keepBackoff: Bool = false) {
         trading212BrokerSyncTimer?.invalidate()
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
-        trading212NextScheduledAttempt = .distantPast
-        trading212ScheduledFailureCount = 0
-        trading212ScheduledSyncError = nil
+        if !keepBackoff {
+            trading212NextScheduledAttempt = .distantPast
+            trading212ScheduledFailureCount = 0
+            trading212ScheduledSyncError = nil
+        }
 
         guard !isFolyncPortfolioActive, !isBackgroundWorkPausedForImport else { return }
 
@@ -747,9 +757,6 @@ class DataModel {
         trading212BrokerSyncTimer = nil
         trading212BrokerSyncTask?.cancel()
         trading212BrokerSyncTask = nil
-        // A restart begins a fresh schedule instead of inheriting old backoff.
-        trading212NextScheduledAttempt = .distantPast
-        trading212ScheduledFailureCount = 0
     }
 
     private func runTrading212ScheduledCycle(reason: String) {
@@ -791,6 +798,15 @@ class DataModel {
                 self.trading212ScheduledSyncError = LogRedactor.redact(error.localizedDescription)
                 // Rejected credentials will not start working on their own. Stop until the
                 // scheduler is restarted, which saving new credentials does.
+                // A damaged links file does not mend itself either; retrying
+                // every cycle only repeats the same error in the log.
+                if error as? BrokerLinkStoreError == .unreadableFile {
+                    self.trading212NextScheduledAttempt = .distantFuture
+                    await Logger.shared.error(
+                        "Trading 212 scheduled cycle \(reason) stopped: the links file is damaged. Automatic sync is paused until Trading 212 settings are saved again."
+                    )
+                    return
+                }
                 if let providerError = error as? Trading212ProviderError,
                    providerError == .unauthorized || providerError == .forbidden {
                     self.trading212NextScheduledAttempt = .distantFuture
@@ -830,6 +846,15 @@ class DataModel {
                 missingCount: 0,
                 brokerOnlyCount: 0,
                 skippedReason: "Trading 212 sync is already running."
+            )
+        }
+        guard !isFolyncPortfolioActive else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
             )
         }
         isTrading212BrokerSyncInProgress = true
@@ -883,6 +908,16 @@ class DataModel {
             includeMetadata: false,
             useCache: false
         )
+        // Folync may have taken over while the request was in flight.
+        guard !isFolyncPortfolioActive else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
         if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
             links = try await trading212BrokerLinkStore.loadSnapshot()
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
@@ -940,6 +975,16 @@ class DataModel {
             )
         }
 
+        guard !isFolyncPortfolioActive else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
         isTrading212HoldingReconciliationInProgress = true
         defer { isTrading212HoldingReconciliationInProgress = false }
 
@@ -999,6 +1044,17 @@ class DataModel {
                 useCache: false
             )
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
+        }
+        // Folync may have taken over while the requests were in flight.
+        guard !isFolyncPortfolioActive else {
+            return Trading212HoldingReconciliationResult(
+                syncedCount: 0,
+                importedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
         }
         let linkedPositionsForAccount = links.positions.filter { $0.brokerAccountKey == preview.account.brokerAccountKey }
 
@@ -1117,7 +1173,7 @@ class DataModel {
             linkedAt: importedAt
         )
         persistPortfolioAfterUserEdit(allowEmptyPortfolio: true)
-        restartTrading212LinkedSyncScheduler(runImmediately: false)
+        restartTrading212LinkedSyncScheduler(runImmediately: false, keepBackoff: true)
 
         let result = Trading212BrokerOnlyImportResult(
             importedCount: plan.records.count,
@@ -1587,7 +1643,7 @@ class DataModel {
             await restartFolyncPortfolioScheduler(runImmediately: false)
         }
         if !isFolyncPortfolioActive {
-            restartTrading212LinkedSyncScheduler(runImmediately: false)
+            restartTrading212LinkedSyncScheduler(runImmediately: false, keepBackoff: true)
         }
         if mayStartRuntimeSchedulers {
             BackfillScheduler.shared.start(dataModel: self)
