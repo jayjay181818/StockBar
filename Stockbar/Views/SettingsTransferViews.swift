@@ -459,6 +459,7 @@ private struct SettingsImportPreview: View {
         var text = "\(preview.settingsCount)"
         if preview.includesDataSourcePriority { text += ", plus provider order" }
         if preview.ignoredSettingsCount > 0 { text += " (\(preview.ignoredSettingsCount) not used by this version)" }
+        if preview.keepsDestructiveOptionsOff { text += ". Deleting holdings missing from Trading 212 stays off" }
         return text
     }
 }
