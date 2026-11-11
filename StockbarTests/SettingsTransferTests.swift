@@ -201,6 +201,25 @@ final class SettingsTransferTests: XCTestCase {
         await assertImportFails(file, target: target, expected: .notAnExportFile)
     }
 
+    func testFileLargerThanTheImportLimitIsRefusedBeforeItIsRead() async throws {
+        let (file, _) = try await exportSettingsFile()
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber).int64Value
+        let exact = try makeSide("exact", maximumImportBytes: size)
+        _ = try await exact.service.prepareImport(from: file, password: password)
+
+        let small = try makeSide("small", maximumImportBytes: size - 1)
+        let expected = SettingsTransferError.unsupportedContents(
+            "the file is larger than \(ByteCountFormatter.string(fromByteCount: size - 1, countStyle: .file)), the most Stockbar can import."
+        )
+        await assertImportFails(file, target: small, expected: expected)
+        do {
+            try await small.service.checkImportFile(at: file)
+            XCTFail("An oversized file is refused before a password is asked for")
+        } catch {
+            XCTAssertEqual(error as? SettingsTransferError, expected)
+        }
+    }
+
     func testDatabaseFromAnIncompatibleModelIsRejectedWithNothingApplied() async throws {
         let foreignStore = root.appendingPathComponent("Foreign/StockbarDataModel.sqlite")
         try FileManager.default.createDirectory(at: foreignStore.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -665,11 +684,17 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertTrue(staging.isEmpty, file: sourceFile, line: line)
     }
 
-    private func makeSide(_ name: String, withStore: Bool = false, brokerLinksURL: URL? = nil) throws -> TransferSide {
+    private func makeSide(
+        _ name: String,
+        withStore: Bool = false,
+        brokerLinksURL: URL? = nil,
+        maximumImportBytes: Int64? = nil
+    ) throws -> TransferSide {
         let side = try TransferSide(
             root: root.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true),
             withStore: withStore,
-            brokerLinksURL: brokerLinksURL
+            brokerLinksURL: brokerLinksURL,
+            maximumImportBytes: maximumImportBytes
         )
         sides.append(side)
         return side
@@ -704,7 +729,7 @@ private final class TransferSide {
     let store: TemporaryStoreHost?
     let service: SettingsTransferService
 
-    init(root: URL, withStore: Bool, brokerLinksURL: URL?) throws {
+    init(root: URL, withStore: Bool, brokerLinksURL: URL?, maximumImportBytes: Int64?) throws {
         let id = UUID().uuidString
         let suite = TestDefaultsSuite.makeName("StockbarSettingsTransferTests-")
         let configDirectory = root.appendingPathComponent("com.stockbar", isDirectory: true)
@@ -730,7 +755,7 @@ private final class TransferSide {
         self.stagingRoot = stagingRoot
         self.recoveryRoot = recoveryRoot
         self.store = store
-        service = SettingsTransferService(dependencies: SettingsTransferDependencies(
+        var dependencies = SettingsTransferDependencies(
             // No fallback to the standard domain: a test that reached it
             // would rewrite the real settings of whoever runs the tests.
             defaults: {
@@ -747,7 +772,9 @@ private final class TransferSide {
             recoveryRoot: recoveryRoot,
             storeHost: store,
             appInfo: SettingsTransferAppInfo(version: "9.9.9", build: "99", macOSVersion: "test")
-        ))
+        )
+        if let maximumImportBytes { dependencies.maximumImportBytes = maximumImportBytes }
+        service = SettingsTransferService(dependencies: dependencies)
     }
 
     func removeArtifacts() {
