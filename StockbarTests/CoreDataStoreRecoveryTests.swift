@@ -379,6 +379,14 @@ final class HistoricalStoreCompactionTests: XCTestCase {
         XCTAssertTrue(StoreMaintenance.isDue(lastRun: now.addingTimeInterval(86_400), now: now), "clock set back")
     }
 
+    func testChangeHistoryIsTrimmedDailyCountingFromLaunch() {
+        let launch = now.addingTimeInterval(-23 * 3600)
+        XCTAssertFalse(StoreMaintenance.isHistoryPurgeDue(lastPurge: nil, launchedAt: launch, now: now), "the launch trim was under a day ago")
+        XCTAssertTrue(StoreMaintenance.isHistoryPurgeDue(lastPurge: nil, launchedAt: launch.addingTimeInterval(-3600), now: now))
+        XCTAssertFalse(StoreMaintenance.isHistoryPurgeDue(lastPurge: now.addingTimeInterval(-3600), launchedAt: launch.addingTimeInterval(-86_400), now: now))
+        XCTAssertTrue(StoreMaintenance.isHistoryPurgeDue(lastPurge: now.addingTimeInterval(3600), launchedAt: launch, now: now), "clock set back")
+    }
+
     func testAnUnchangedPriceIsRecordedOnceAnHour() {
         let last = price("AAA", daysAgo: 0, hour: 0)
         func next(after seconds: TimeInterval, price: Double = 10, previousClose: Double = 9) -> PriceSnapshot {
