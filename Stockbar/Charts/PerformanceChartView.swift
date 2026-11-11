@@ -3,53 +3,53 @@ import Charts
 import SwiftUI
 
 struct PerformanceChartView: View {
-    private let historicalDataManager = HistoricalDataManager.shared
+    let historicalDataManager = HistoricalDataManager.shared
     private let calculationManager = BackgroundCalculationManager.shared
-    @State private var selectedTimeRange: ChartTimeRange = .month
-    @State private var selectedChartType: ChartType = .portfolioValue
-    @State private var showingMetrics = true
+    @State var selectedTimeRange: ChartTimeRange = .month
+    @State var selectedChartType: ChartType = .portfolioValue
+    @State var showingMetrics = true
     @State private var hoveredDataPoint: ChartDataPoint?
-    @State private var showingExportOptions = false
-    @State private var selectedDataPoints: Set<UUID> = []
-    @State private var chartScale: Double = 1.0
-    @State private var chartOffset: CGSize = .zero
-    @State private var showingDataFilters = false
-    @State private var valueThreshold: Double = 0.0
-    @State private var dateFilterEnabled = false
-    @State private var customStartDate = Date().addingTimeInterval(-30 * 24 * 60 * 60) // 30 days ago
-    @State private var customEndDate = Date()
+    @State var showingExportOptions = false
+    @State var selectedDataPoints: Set<UUID> = []
+    @State var chartScale: Double = 1.0
+    @State var chartOffset: CGSize = .zero
+    @State var showingDataFilters = false
+    @State var valueThreshold: Double = 0.0
+    @State var dateFilterEnabled = false
+    @State var customStartDate = Date().addingTimeInterval(-30 * 24 * 60 * 60) // 30 days ago
+    @State var customEndDate = Date()
     // CRITICAL FIX: Replace caching with proper state management for UI responsiveness
     @State private var chartRequestGeneration = 0
-    @State private var displayableChartData: [ChartDataPoint] = []
+    @State var displayableChartData: [ChartDataPoint] = []
     /// Filtered but not downsampled; exports use this so they are never silently thinned.
-    @State private var fullResolutionChartData: [ChartDataPoint] = []
+    @State var fullResolutionChartData: [ChartDataPoint] = []
     /// Day-only sources (Folync daily history) are stamped at UTC midnight and shown in UTC.
     @State private var seriesIsDayGranular = false
     @State private var isLoadingData = false
     @State private var silentReloadTask: Task<Void, Never>?
     /// Period metrics for the series on screen. Kept outside observed state so
     /// a hover, which redraws the view, does not recompute them.
-    @State private var metricsCache = PeriodMetricsCache()
+    @State var metricsCache = PeriodMetricsCache()
 
     // Comparison Mode state variables
-    @State private var comparisonMode: Bool = false
-    @State private var selectedComparisonSymbols: Set<String> = []
-    @State private var comparisonChartData: [String: [ChartDataPoint]] = [:] // symbol -> data points
-    @State private var normalizedComparison: Bool = true // Normalize to percentage for fair comparison
+    @State var comparisonMode: Bool = false
+    @State var selectedComparisonSymbols: Set<String> = []
+    @State var comparisonChartData: [String: [ChartDataPoint]] = [:] // symbol -> data points
+    @State var normalizedComparison: Bool = true // Normalize to percentage for fair comparison
 
     // Visual Styling state variables
-    @State private var lineThickness: Double = 2.0 // 1-3pt
+    @State var lineThickness: Double = 2.0 // 1-3pt
     @State private var showGridLines: Bool = false
     @State private var useGradientFill: Bool = true
 
     // Chart visualization style
-    @State private var chartVisualizationStyle: ChartVisualizationStyle = .line
-    @State private var candlestickSettings = CandlestickChartSettings.load()
-    @State private var ohlcData: [OHLCDataPoint] = []
-    @State private var isLoadingOHLC = false
-    @State private var ohlcSourceStatus: FolyncSupplementalSourceStatus?
-    @State private var ohlcCoverageLabel: String?
-    @State private var ohlcRequestGeneration: Int = 0
+    @State var chartVisualizationStyle: ChartVisualizationStyle = .line
+    @State var candlestickSettings = CandlestickChartSettings.load()
+    @State var ohlcData: [OHLCDataPoint] = []
+    @State var isLoadingOHLC = false
+    @State var ohlcSourceStatus: FolyncSupplementalSourceStatus?
+    @State var ohlcCoverageLabel: String?
+    @State var ohlcRequestGeneration: Int = 0
 
     // Interaction features (v2.3.1)
 
@@ -57,8 +57,8 @@ struct PerformanceChartView: View {
 
     let availableSymbols: [String]
     let dataModel: DataModel?
-    private let exportManager = ExportManager.shared
-    private let ohlcFetchService = OHLCFetchService.shared
+    let exportManager = ExportManager.shared
+    let ohlcFetchService = OHLCFetchService.shared
     
     init(availableSymbols: [String] = [], dataModel: DataModel? = nil) {
         // The same ticker held twice would give two picker rows one identity.
@@ -253,19 +253,19 @@ struct PerformanceChartView: View {
     }
 
     /// Custom dates cover whole days: start of the first day up to the start of the day after the last.
-    private var customQueryRange: (from: Date, toExclusive: Date) {
+    var customQueryRange: (from: Date, toExclusive: Date) {
         ChartSeriesProcessing.normalizedCustomRange(start: customStartDate, end: customEndDate)
     }
 
-    private var queryCustomFrom: Date? { selectedTimeRange == .custom ? customQueryRange.from : nil }
-    private var queryCustomTo: Date? { selectedTimeRange == .custom ? customQueryRange.toExclusive : nil }
+    var queryCustomFrom: Date? { selectedTimeRange == .custom ? customQueryRange.from : nil }
+    var queryCustomTo: Date? { selectedTimeRange == .custom ? customQueryRange.toExclusive : nil }
 
     private var isComparisonActive: Bool {
         guard case .individualStock = selectedChartType else { return false }
         return comparisonMode
     }
 
-    private var isCandlestickActive: Bool {
+    var isCandlestickActive: Bool {
         guard case .individualStock = selectedChartType else { return false }
         return chartVisualizationStyle == .candlestick
     }
@@ -277,7 +277,7 @@ struct PerformanceChartView: View {
         }
     }
 
-    private func reloadAllSeries(showsLoading: Bool) async {
+    func reloadAllSeries(showsLoading: Bool) async {
         await loadChartData(showsLoading: showsLoading)
         guard isComparisonActive else { return }
         for symbol in selectedComparisonSymbols.sorted() {
@@ -479,121 +479,6 @@ struct PerformanceChartView: View {
         return "\(formatter.string(from: customStartDate)) - \(formatter.string(from: customEndDate))"
     }
 
-    // MARK: - Comparison Mode Controls
-
-    private var comparisonModeControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Toggle("Comparison Mode", isOn: $comparisonMode)
-                    .toggleStyle(SwitchToggleStyle())
-                    .onChange(of: comparisonMode) { _, newValue in
-                        if !newValue {
-                            // Clear selection when disabling comparison
-                            selectedComparisonSymbols.removeAll()
-                            comparisonChartData.removeAll()
-                        } else if case .individualStock(let symbol) = selectedChartType,
-                                  availableSymbols.contains(symbol) {
-                            // The stock on screen is the one being compared against.
-                            selectedComparisonSymbols.insert(symbol)
-                            Task { await loadComparisonData(for: symbol) }
-                        }
-                    }
-
-                Spacer()
-
-                if comparisonMode {
-                    Toggle("Normalized (%)", isOn: Binding(
-                        get: { usesNormalizedComparison },
-                        set: { normalizedComparison = $0 }
-                    ))
-                        .toggleStyle(SwitchToggleStyle())
-                        .disabled(comparisonMixesCurrencies)
-                        .help(comparisonMixesCurrencies
-                            ? "These stocks trade in different currencies, so only percentage change can be compared"
-                            : "Show as percentage change from the first date all selected stocks have")
-                }
-            }
-
-            if comparisonMode {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Select stocks to compare (max 5)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(availableSymbols, id: \.self) { symbol in
-                                comparisonSymbolChip(for: symbol)
-                            }
-                        }
-                    }
-
-                    if !selectedComparisonSymbols.isEmpty {
-                        HStack {
-                            Text("\(selectedComparisonSymbols.count) stock(s) selected")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-
-                            Spacer()
-
-                            Button("Clear All") {
-                                selectedComparisonSymbols.removeAll()
-                                comparisonChartData.removeAll()
-                            }
-                            .font(.caption)
-                            .buttonStyle(PlainButtonStyle())
-                            .foregroundColor(.blue)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(StockbarPalette.panelFill)
-                .cornerRadius(8)
-            }
-        }
-    }
-
-    private func comparisonSymbolChip(for symbol: String) -> some View {
-        let isSelected = selectedComparisonSymbols.contains(symbol)
-        let canSelect = selectedComparisonSymbols.count < 5 || isSelected
-
-        return Button {
-            if isSelected {
-                selectedComparisonSymbols.remove(symbol)
-                comparisonChartData.removeValue(forKey: symbol)
-            } else if canSelect {
-                selectedComparisonSymbols.insert(symbol)
-                // Load data for this symbol
-                Task {
-                    await loadComparisonData(for: symbol)
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 10))
-                Text(symbol)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : StockbarPalette.panelFill)
-            .foregroundColor(isSelected ? Color.accentColor : (canSelect ? Color.primary : Color.secondary))
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.accentColor : Color.primary.opacity(0.2), lineWidth: 1)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-        .disabled(!canSelect)
-        .accessibilityLabel("Compare \(symbol)")
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
-        .accessibilityHint(canSelect ? "" : "Up to 5 stocks can be compared")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    }
-
     // MARK: - Visual Styling Controls
 
     private var visualStylingControls: some View {
@@ -640,22 +525,7 @@ struct PerformanceChartView: View {
         .cornerRadius(6)
     }
 
-    // MARK: - Comparison Data Loading
-
-    private func loadComparisonData(for symbol: String) async {
-        let data = historicalDataManager.getChartData(
-            for: .individualStock(symbol),
-            timeRange: selectedTimeRange,
-            dataModel: dataModel,
-            customFrom: queryCustomFrom,
-            customTo: queryCustomTo
-        )
-
-        guard !Task.isCancelled, selectedComparisonSymbols.contains(symbol) else { return }
-        if let existing = comparisonChartData[symbol], ChartSeriesProcessing.isSameSeries(existing, data) { return }
-        comparisonChartData[symbol] = data
-        await Logger.shared.debug("📊 Loaded \(data.count) data points for comparison symbol: \(symbol)")
-    }
+    // MARK: - Data Loading
 
     /// Loads the selected series. `showsLoading` is false for background refreshes, which keep the
     /// current chart on screen and only replace it when the loaded series really differs.
@@ -693,127 +563,6 @@ struct PerformanceChartView: View {
         }
         isLoadingData = false
         await Logger.shared.debug("📊 Loaded \(processed.display.count) chart data points for \(chartTypeTitle) (\(timeRangeLabel))")
-    }
-
-    private func loadOHLCData() async {
-        ohlcRequestGeneration &+= 1
-        let requestGeneration = ohlcRequestGeneration
-        let configurationRevision = historicalDataManager.folyncSupplementalConfigurationRevision
-        guard case .individualStock(let symbol) = selectedChartType else {
-            ohlcData = []
-            ohlcSourceStatus = nil
-            ohlcCoverageLabel = nil
-            isLoadingOHLC = false
-            return
-        }
-
-        isLoadingOHLC = true
-
-        do {
-            // Map time range to yfinance period
-            let period = selectedTimeRange.yfinancePeriod
-            let interval = selectedTimeRange.suggestedInterval
-
-            let useFolyncRoute = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts)
-            // A custom range has no fixed period to validate the cache against, so it always refetches.
-            if !useFolyncRoute, selectedTimeRange != .custom {
-                // Existing local OHLC remains untouched and is used whenever the Folync route is off.
-                let cachedData = try await ohlcFetchService.getCachedOHLCData(
-                    symbol: symbol,
-                    period: period,
-                    interval: interval
-                )
-
-                if !cachedData.isEmpty {
-                    await MainActor.run {
-                        guard requestGeneration == ohlcRequestGeneration,
-                              configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
-                        ohlcData = ChartSeriesProcessing.aggregatedCandles(cachedData)
-                        ohlcSourceStatus = .legacy
-                        ohlcCoverageLabel = "\(cachedData.count) points · \(interval) · local cache"
-                        isLoadingOHLC = false
-                    }
-                    await Logger.shared.info("Loaded \(cachedData.count) cached OHLC data points for \(symbol)")
-                    return
-                }
-            }
-
-            // Fetch fresh data from yfinance
-            let result = try await ohlcFetchService.fetchOHLCDataWithSource(
-                symbol: symbol,
-                period: period,
-                interval: interval,
-                from: queryCustomFrom,
-                to: queryCustomTo
-            )
-
-            // Convert to OHLCDataPoint
-            let dataPoints = result.snapshots.map { snapshot in
-                OHLCDataPoint(
-                    timestamp: snapshot.timestamp,
-                    open: snapshot.open,
-                    high: snapshot.high,
-                    low: snapshot.low,
-                    close: snapshot.close,
-                    volume: snapshot.volume
-                )
-            }
-
-            await MainActor.run {
-                guard requestGeneration == ohlcRequestGeneration,
-                      configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
-                ohlcData = ChartSeriesProcessing.aggregatedCandles(dataPoints)
-                ohlcSourceStatus = result.sourceStatus
-                ohlcCoverageLabel = result.coverageLabel
-                isLoadingOHLC = false
-            }
-
-            await Logger.shared.info("Loaded \(dataPoints.count) OHLC data points for \(symbol)")
-        } catch {
-            // Offline or provider failure: older local candles beat an empty chart.
-            let staleData: [OHLCDataPoint]
-            if !FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts),
-               selectedTimeRange != .custom {
-                staleData = (try? await ohlcFetchService.getCachedOHLCData(
-                    symbol: symbol,
-                    period: selectedTimeRange.yfinancePeriod,
-                    interval: selectedTimeRange.suggestedInterval,
-                    allowStale: true
-                )) ?? []
-            } else {
-                staleData = []
-            }
-            await MainActor.run {
-                guard requestGeneration == ohlcRequestGeneration,
-                      configurationRevision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
-                isLoadingOHLC = false
-                if !staleData.isEmpty {
-                    ohlcData = ChartSeriesProcessing.aggregatedCandles(staleData)
-                    ohlcSourceStatus = .legacy
-                    ohlcCoverageLabel = "\(staleData.count) points · \(selectedTimeRange.suggestedInterval) · stale local cache"
-                    return
-                }
-                ohlcData = []
-                if FolyncSettingsStore.shared.load().isSupplementalRouteActive(.candlestickCharts) {
-                    ohlcSourceStatus = .unavailable
-                    ohlcCoverageLabel = nil
-                }
-            }
-            if error is CancellationError {
-                await Logger.shared.debug("OHLC load cancelled for \(symbol)")
-            } else {
-                await Logger.shared.warning("Failed to load OHLC data for \(symbol): \(error)")
-            }
-        }
-    }
-
-    /// Discards loaded candles and invalidates any load still in flight.
-    private func resetOHLCState() {
-        ohlcRequestGeneration &+= 1
-        ohlcData = []
-        ohlcSourceStatus = nil
-        ohlcCoverageLabel = nil
-        isLoadingOHLC = false
     }
 
     /// Line and comparison series reload through the load task; candles need an explicit reload.
@@ -1102,765 +851,50 @@ struct PerformanceChartView: View {
         .frame(height: 250)
     }
 
-    private var candlestickChartPlaceholder: some View {
-        Group {
-            if isLoadingOHLC {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                    Text("Loading OHLC data...")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .frame(height: 300)
-            } else if ohlcData.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "chart.bar")
-                        .accessibilityHidden(true)
-                        .font(.system(size: 48))
-                        .foregroundColor(.accentColor)
-
-                    Text("Candlestick Chart")
-                        .font(.headline)
-
-                    Text("No candlestick data is available for this selection.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    Button(action: {
-                        Task {
-                            await loadOHLCData()
-                        }
-                    }) {
-                        Label("Load Candlestick Data", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 8)
-
-                    Button(action: {
-                        chartVisualizationStyle = .line
-                    }) {
-                        Label("Switch to Line Chart", systemImage: "chart.xyaxis.line")
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .frame(height: 300)
-            } else {
-                    CandlestickChartView(
-                    data: ohlcData,
-                    currency: getDisplayCurrency(),
-                    settings: candlestickSettings,
-                    symbol: {
-                        if case .individualStock(let symbol) = selectedChartType {
-                            return symbol
-                        }
-                        return nil
-                    }()
-                )
-                .frame(height: 400)
-            }
-        }
-        .onChange(of: selectedChartType) {
-            if isCandlestickActive {
-                Task {
-                    await loadOHLCData()
-                }
-            }
-        }
-        .onChange(of: selectedTimeRange) {
-            if isCandlestickActive {
-                Task {
-                    await loadOHLCData()
-                }
-            }
-        }
-    }
-
-    // MARK: - Comparison Chart Content
-
-    private var comparisonChartContent: some View {
-        VStack(spacing: 12) {
-            comparisonChart
-                .frame(height: 300)
-
-            // Color Legend
-            comparisonLegend
-        }
-    }
-
-    private var comparisonChart: some View {
-        let sortedSymbols = Array(selectedComparisonSymbols).sorted()
-        let normalized = usesNormalizedComparison
-        let selected = comparisonChartData.filter { selectedComparisonSymbols.contains($0.key) }
-        let series = normalized ? ChartSeriesProcessing.rebasedToCommonStart(selected) : selected
-
-        return Chart {
-            ForEach(sortedSymbols, id: \.self) { symbol in
-                if let processedData = series[symbol] {
-                    let color = colorForSymbol(symbol)
-
-                    ForEach(processedData) { dataPoint in
-                        LineMark(
-                            x: .value("Date", dataPoint.date),
-                            y: .value("Value", dataPoint.value),
-                            series: .value("Symbol", symbol)
-                        )
-                        .foregroundStyle(color)
-                        .lineStyle(StrokeStyle(lineWidth: lineThickness))
-                    }
-                }
-            }
-        }
-        .accessibilityLabel("Comparison of \(sortedSymbols.joined(separator: ", ")), \(selectedTimeRange.description)")
-        .accessibilityValue(normalized ? "Normalised to percentage change" : "Absolute prices")
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6))
-        }
-        .chartYAxis {
-            AxisMarks(values: .automatic(desiredCount: 8)) { value in
-                AxisGridLine()
-                AxisTick()
-                if normalized {
-                    AxisValueLabel {
-                        if let doubleValue = value.as(Double.self) {
-                            Text(doubleValue.formatted(.percent.precision(.fractionLength(0))))
-                        }
-                    }
-                } else {
-                    AxisValueLabel()
-                }
-            }
-        }
-    }
-
-    private var comparisonLegend: some View {
-        // Read once for the legend, not once per entry.
-        let lineRouteActive = FolyncSettingsStore.shared.load().isSupplementalRouteActive(.historicalLineCharts)
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Legend")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 12) {
-                ForEach(Array(selectedComparisonSymbols).sorted(), id: \.self) { symbol in
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(colorForSymbol(symbol))
-                            .frame(width: 10, height: 10)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(symbol)
-                                .font(.caption)
-                                .foregroundColor(.primary)
-                            if let status = comparisonSourceStatus(for: symbol, lineRouteActive: lineRouteActive) {
-                                Text(status.label)
-                                    .font(.caption2)
-                                    .foregroundStyle(status == .unavailable ? .red : .secondary)
-                            } else {
-                                Text("Folync · loading")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let coverage = historicalDataManager.folyncCoverage(
-                                for: symbol,
-                                timeRange: selectedTimeRange,
-                                customFrom: queryCustomFrom,
-                                customTo: queryCustomTo
-                            ) {
-                                Text(coverage)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(StockbarPalette.sheetHeaderFill)
-        .cornerRadius(6)
-    }
-
-    // MARK: - Comparison Helper Functions
-
-    private func comparisonSourceStatus(for symbol: String, lineRouteActive: Bool) -> FolyncSupplementalSourceStatus? {
-        if let status = historicalDataManager.folyncSourceStatus(
-            for: symbol,
-            timeRange: selectedTimeRange,
-            customFrom: queryCustomFrom,
-            customTo: queryCustomTo
-        ) {
-            return status
-        }
-        guard lineRouteActive,
-              dataModel?.folyncCapabilities?.isTrackedOrAllowlisted(symbol) == true else {
-            return .legacy
-        }
-        return nil
-    }
-
-    /// Prices in different currencies cannot share one axis.
-    private var comparisonMixesCurrencies: Bool {
-        Set(selectedComparisonSymbols.map { symbol in
-            dataModel?.realTimeTrades.first { $0.trade.name == symbol }?.realTimeInfo.currency
-                ?? SymbolMetadata.defaultCurrency(for: symbol)
-        }).count > 1
-    }
-
-    private var usesNormalizedComparison: Bool { normalizedComparison || comparisonMixesCurrencies }
-
-
-    private func colorForSymbol(_ symbol: String) -> Color {
-        let colors: [Color] = [.blue, .green, .orange, .purple, .pink]
-        let sortedSymbols = Array(selectedComparisonSymbols).sorted()
-        guard let index = sortedSymbols.firstIndex(of: symbol) else { return .gray }
-        return colors[index % colors.count]
-    }
-
-    private var metricsSection: some View {
-        VStack {
-            Button(action: { showingMetrics.toggle() }) {
-                HStack {
-                    Text("Performance Metrics")
-                    Spacer()
-                    Image(systemName: showingMetrics ? "chevron.up" : "chevron.down")
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            if showingMetrics {
-                performanceMetricsView
-            }
-        }
-    }
-    
-    private var exportSection: some View {
-        VStack {
-            Button(action: { showingExportOptions.toggle() }) {
-                HStack {
-                    Text("Export Options")
-                    Spacer()
-                    Image(systemName: showingExportOptions ? "chevron.up" : "chevron.down")
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            if showingExportOptions {
-                exportOptionsView
-                    .onAppear {
-                        // Auto-resizing will handle layout changes
-                    }
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private var performanceMetricsView: some View {
-        if let metrics = getRelevantPerformanceMetrics() {
-            VStack(alignment: .leading, spacing: 12) {
-                // Basic Metrics Row
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading) {
-                        Text("Total Return")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(metrics.formattedTotalReturn)
-                            .font(.headline)
-                            .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    VStack(spacing: 2) {
-                        Text("Return %")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                        Text(metrics.formattedTotalReturnPercent)
-                            .font(.headline)
-                            .foregroundColor(metrics.totalReturnPercent >= 0 ? .green : .red)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    VStack(alignment: .trailing) {
-                        Text("Volatility")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(metrics.formattedVolatility)
-                            .font(.subheadline)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                
-                // Advanced Analytics Row 1
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading) {
-                        Text("Sharpe Ratio")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(metrics.formattedSharpeRatio)
-                            .font(.subheadline)
-                            .foregroundColor(getSharpeRatioColor(metrics.sharpeRatio))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    VStack(spacing: 2) {
-                        Text("Max Drawdown")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                        Text(metrics.formattedMaxDrawdown)
-                            .font(.subheadline)
-                            .foregroundColor(.red)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    VStack(alignment: .trailing) {
-                        Text("Win Rate")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(metrics.formattedWinRate)
-                            .font(.subheadline)
-                            .foregroundColor(getWinRateColor(metrics.winRate))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                
-                // Advanced Analytics Row 2
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading) {
-                        Text("Ann. Return")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(metrics.formattedAnnualizedReturn)
-                            .font(.subheadline)
-                            .foregroundColor(getAnnualizedReturnColor(metrics.annualizedReturn))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    VStack(spacing: 2) {
-                        Text("VaR (95%)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                        Text(metrics.formattedVaR)
-                            .font(.subheadline)
-                            .foregroundColor(.orange)
-                            .frame(maxWidth: .infinity)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    VStack(alignment: .trailing) {
-                        Text("Range")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("\(String(format: "%.2f", metrics.minValue)) - \(String(format: "%.2f", metrics.maxValue))")
-                            .font(.subheadline)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-            }
-            .padding()
-            .background(StockbarPalette.panelFill)
-            .cornerRadius(8)
-        }
-    }
-    
-    private var portfolioReturnAnalysisSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Return Analysis")
-                .font(.headline)
-                .foregroundColor(.primary)
-            
-            HStack(alignment: .top, spacing: 20) {
-                // Left: Total Portfolio Return vs Purchase Price
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Total Portfolio Return")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if let model = dataModel {
-                        let totalReturn = model.calculateNetGains()
-                        Text("\(formatCurrency(totalReturn.amount, currency: totalReturn.currency))")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(totalReturn.amount >= 0 ? .green : .red)
-                        
-                        let totalPurchaseValue = calculateTotalPurchaseValue()
-                        if totalPurchaseValue.amount > 0 {
-                            let percentage = (totalReturn.amount / totalPurchaseValue.amount) * 100
-                            Text("\(String(format: "%+.2f%%", percentage)) vs Purchase Price")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                
-                Spacer()
-                
-                // Center: Return for Selected Period
-                VStack(alignment: .center, spacing: 4) {
-                    Text("Period Return (\(selectedTimeRange.description))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if let metrics = portfolioPerformanceMetrics {
-                        Text(metrics.formattedTotalReturn)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
-                        
-                        Text(metrics.formattedTotalReturnPercent)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("Not enough history")
-                            .font(.title3)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Spacer()
-                
-                // Right: Current Value vs Average Price
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Portfolio Value")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if let model = dataModel {
-                        let netValue = model.calculateNetValue()
-                        Text("\(formatCurrency(netValue.amount, currency: netValue.currency))")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                    }
-                }
-            }
-            
-            // Additional insights row
-            HStack {
-                if let model = dataModel {
-                    let totalReturn = model.calculateNetGains()
-                    let netValue = model.calculateNetValue()
-                    let totalPurchase = calculateTotalPurchaseValue()
-                    
-                    if totalPurchase.amount > 0 && netValue.amount > 0 {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Investment Performance")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            let roiPercentage = (totalReturn.amount / totalPurchase.amount) * 100
-                            Text("ROI: \(String(format: "%.2f%%", roiPercentage))")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(roiPercentage >= 0 ? .green : .red)
-                        }
-                        
-                        Spacer()
-                        
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("Total Invested")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(formatCurrency(totalPurchase.amount, currency: totalPurchase.currency))")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                        }
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(12)
-    }
-    
-    @ViewBuilder
-    private func stockReturnAnalysisSection(for symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Stock Analysis - \(symbol)")
-                .font(.headline)
-                .foregroundColor(.primary)
-            
-            if let stockTrade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
-                HStack(alignment: .top, spacing: 20) {
-                    // Left: Current Price
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Current Price")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        let currentPrice = stockTrade.realTimeInfo.currentPrice
-                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
-                        Text(formatCurrency(currentPrice, currency: currency))
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                        
-                        // Day change
-                        let dayChange = currentPrice - stockTrade.realTimeInfo.prevClosePrice
-                        let dayChangePercent = stockTrade.realTimeInfo.prevClosePrice > 0 ? 
-                            (dayChange / stockTrade.realTimeInfo.prevClosePrice) * 100 : 0
-                        
-                        if !dayChange.isNaN && !dayChangePercent.isNaN {
-                            Text("\(String(format: "%+.2f", dayChange)) (\(String(format: "%+.2f%%", dayChangePercent)))")
-                                .font(.caption)
-                                .foregroundColor(dayChange >= 0 ? .green : .red)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Center: Period Return for selected time range
-                    VStack(alignment: .center, spacing: 4) {
-                        Text("Period Return (\(selectedTimeRange.description))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        if let metrics = stockPerformanceMetrics(for: symbol) {
-                            Text(formatCurrency(metrics.totalReturn, currency: metrics.currency))
-                                .font(.title2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
-                            
-                            Text(metrics.formattedTotalReturnPercent)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Not enough history")
-                                .font(.title3)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Right: Your Position (if you own this stock)
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("Your Position")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        // The linked source's own profit figure when there is one,
-                        // as in the Holdings table.
-                        let units = stockTrade.trade.position.unitSize
-                        let profitLoss = dataModel?.calculatePositionProfitLoss(for: stockTrade)
-                        let positionGain = profitLoss?.totalAmount ?? .nan
-                        let currency = profitLoss?.currency ?? stockTrade.realTimeInfo.currency ?? "USD"
-                        
-                        Text("\(units.formatted(.number.precision(.fractionLength(0...4)))) \(units == 1 ? "share" : "shares")")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                        
-                        if !positionGain.isNaN {
-                            Text("\(String(format: "%+.2f", positionGain)) \(currency)")
-                                .font(.caption)
-                                .foregroundColor(positionGain >= 0 ? .green : .red)
-                        }
-                    }
-                }
-                
-                // Additional stock insights row
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Avg Cost")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        let avgCost = stockTrade.trade.position.averageCost(
-                            for: symbol, inQuoteCurrency: stockTrade.realTimeInfo.currency
-                        )
-                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
-                        Text(formatCurrency(avgCost, currency: currency))
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                    
-                    Spacer()
-                    
-                    VStack(alignment: .center, spacing: 2) {
-                        Text("Market Value")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        let marketValue = stockTrade.realTimeInfo.currentPrice * stockTrade.trade.position.unitSize
-                        let currency = stockTrade.realTimeInfo.currency ?? "USD"
-                        Text(formatCurrency(marketValue, currency: currency))
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                    
-                    Spacer()
-                    
-                    if let metrics = stockPerformanceMetrics(for: symbol) {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("Volatility")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Text(metrics.formattedVolatility)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                        }
-                    }
-                }
-            } else {
-                Text("Stock information not available")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(12)
-    }
-    
-    private func calculateTotalPurchaseValue() -> (amount: Double, currency: String) {
-        guard let model = dataModel else { return (0, "USD") }
-        
-        let currencyConverter = CurrencyConverter.shared
-        var totalCostUSD = 0.0
-        
-        for trade in model.realTimeTrades {
-            // Use normalized average cost (handles GBX to GBP conversion automatically)
-            let adjustedCost = trade.trade.position.averageCost(
-                for: trade.trade.name, inQuoteCurrency: trade.realTimeInfo.currency
-            )
-            guard !adjustedCost.isNaN, adjustedCost > 0 else { 
-                continue 
-            }
-            
-            let units = trade.trade.position.unitSize
-            let currency = trade.realTimeInfo.currency ?? "USD"
-            
-            let totalPositionCost = adjustedCost * units
-            
-            // Convert to USD for aggregation using actual currency converter
-            var costInUSD = totalPositionCost
-            if currency == "GBP" {
-                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: "GBP", to: "USD")
-            } else if currency != "USD" {
-                costInUSD = currencyConverter.convert(amount: totalPositionCost, from: currency, to: "USD")
-            }
-            
-            totalCostUSD += costInUSD
-        }
-        
-        // Convert to preferred currency using actual currency converter
-        let preferredCurrency = model.preferredCurrency
-        var finalAmount = totalCostUSD
-        
-        if preferredCurrency == "GBX" || preferredCurrency == "GBp" {
-            let gbpAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: "GBP")
-            finalAmount = gbpAmount * 100.0 // Convert GBP to GBX
-        } else if preferredCurrency != "USD" { // Only convert if not already USD
-            finalAmount = currencyConverter.convert(amount: totalCostUSD, from: "USD", to: preferredCurrency)
-        }
-        
-        return (finalAmount, preferredCurrency)
-    }
-    
-    private func formatCurrency(_ amount: Double, currency: String) -> String {
+    /// Money for the chart's labels, written the same way as the holdings table.
+    /// A single holding is shown in its own currency; portfolio figures are
+    /// converted to the preferred currency, with the other of pounds and dollars
+    /// in brackets.
+    func formatCurrency(_ amount: Double, currency: String) -> String {
         guard amount.isFinite else { return "—" }
-        // For individual stock charts, don't apply currency conversion - just format with the native currency
-        switch selectedChartType {
-        case .individualStock:
-            // For individual stocks, always display in the stock's native currency without conversion
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .currency
-            formatter.currencyCode = currency == "GBX" ? "GBP" : currency
-            formatter.minimumFractionDigits = 2
-            formatter.maximumFractionDigits = 2
-            return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
-            
-        case .portfolioValue, .portfolioGains:
-            // For portfolio charts, apply currency conversion as before
-            guard let model = dataModel else {
-                let formatter = NumberFormatter()
-                formatter.numberStyle = .currency
-                formatter.currencyCode = currency == "GBX" ? "GBP" : currency
-                formatter.maximumFractionDigits = currency == "GBX" ? 0 : 2
-                return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f %@", amount, currency)
-            }
-            
-            let preferredCurrency = model.preferredCurrency
-            let currencyConverter = CurrencyConverter.shared
-            
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .currency
-            formatter.maximumFractionDigits = preferredCurrency == "GBX" ? 0 : 2
-            
-            // Determine what currency the amount is currently in (assume USD if not specified)
-            let sourceCurrency = currency.isEmpty ? "USD" : currency
-            
-            // Convert amount to preferred currency if needed
-            var convertedAmount: Double
-            if sourceCurrency == preferredCurrency || 
-               (sourceCurrency == "GBP" && preferredCurrency == "GBX") ||
-               (sourceCurrency == "GBX" && preferredCurrency == "GBP") {
-                // Handle GBX/GBP as same currency family
-                if sourceCurrency == "GBP" && preferredCurrency == "GBX" {
-                    convertedAmount = amount * 100.0
-                } else if sourceCurrency == "GBX" && preferredCurrency == "GBP" {
-                    convertedAmount = amount / 100.0
-                } else {
-                    convertedAmount = amount
-                }
-            } else {
-                convertedAmount = currencyConverter.convert(amount: amount, from: sourceCurrency, to: preferredCurrency == "GBX" ? "GBP" : preferredCurrency)
-                if preferredCurrency == "GBX" {
-                    convertedAmount *= 100.0
-                }
-            }
-            
-            // Primary display currency
-            guard convertedAmount.isFinite else { return "—" }
-            formatter.currencyCode = preferredCurrency == "GBX" ? "GBP" : preferredCurrency
-            let primaryString = formatter.string(from: NSNumber(value: convertedAmount)) ?? String(format: "%.2f %@", convertedAmount, preferredCurrency)
-            
-            // Secondary currency in brackets (opposite of preferred)
-            var secondaryString = ""
-            if preferredCurrency == "USD" {
-                // Show GBP in brackets
-                let gbpAmount = currencyConverter.convert(amount: convertedAmount, from: "USD", to: "GBP")
-                guard gbpAmount.isFinite else { return primaryString }
-                let gbpFormatter = NumberFormatter()
-                gbpFormatter.numberStyle = .currency
-                gbpFormatter.currencyCode = "GBP"
-                gbpFormatter.maximumFractionDigits = 2
-                secondaryString = gbpFormatter.string(from: NSNumber(value: gbpAmount)) ?? String(format: "%.2f GBP", gbpAmount)
-            } else if preferredCurrency == "GBP" || preferredCurrency == "GBX" {
-                // Show USD in brackets
-                let baseAmount = preferredCurrency == "GBX" ? convertedAmount / 100.0 : convertedAmount
-                let usdAmount = currencyConverter.convert(amount: baseAmount, from: "GBP", to: "USD")
-                guard usdAmount.isFinite else { return primaryString }
-                let usdFormatter = NumberFormatter()
-                usdFormatter.numberStyle = .currency
-                usdFormatter.currencyCode = "USD"
-                usdFormatter.maximumFractionDigits = 2
-                secondaryString = usdFormatter.string(from: NSNumber(value: usdAmount)) ?? String(format: "%.2f USD", usdAmount)
-            }
-            
-            if !secondaryString.isEmpty {
-                return "\(primaryString) (\(secondaryString))"
-            } else {
-                return primaryString
-            }
+        if case .individualStock = selectedChartType {
+            return HoldingsCurrencyFormatter.amount(amount, currency: currency)
         }
+        guard let model = dataModel else {
+            return HoldingsCurrencyFormatter.amount(amount, currency: currency)
+        }
+
+        let converter = CurrencyConverter.shared
+        let preferredCurrency = model.preferredCurrency
+        let prefersPence = CurrencyConverter.isPenceCurrency(preferredCurrency)
+        let preferredMajor = prefersPence ? "GBP" : preferredCurrency
+        let sourceCurrency = currency.isEmpty ? "USD" : currency
+        let sourceIsPence = CurrencyConverter.isPenceCurrency(sourceCurrency)
+        let sourceMajor = sourceIsPence ? "GBP" : sourceCurrency
+
+        // Work in whole units, then put pence back only for display.
+        let sourceMajorAmount = sourceIsPence ? amount / 100.0 : amount
+        let majorAmount = sourceMajor == preferredMajor
+            ? sourceMajorAmount
+            : converter.convert(amount: sourceMajorAmount, from: sourceMajor, to: preferredMajor)
+        guard majorAmount.isFinite else { return "—" }
+
+        let primary = HoldingsCurrencyFormatter.amount(
+            prefersPence ? majorAmount * 100.0 : majorAmount,
+            currency: preferredCurrency
+        )
+
+        let secondaryCurrency: String
+        switch preferredMajor {
+        case "USD": secondaryCurrency = "GBP"
+        case "GBP": secondaryCurrency = "USD"
+        default: return primary
+        }
+        let secondaryAmount = converter.convert(amount: majorAmount, from: preferredMajor, to: secondaryCurrency)
+        guard secondaryAmount.isFinite else { return primary }
+        return "\(primary) (\(HoldingsCurrencyFormatter.amount(secondaryAmount, currency: secondaryCurrency)))"
     }
-    
+
     private var chartColor: Color {
         switch selectedChartType {
         case .portfolioValue:
@@ -1929,7 +963,7 @@ struct PerformanceChartView: View {
     // MARK: - Helper Functions
     
     /// Gets the appropriate performance metrics based on the selected chart type
-    private var isFolyncPortfolioChart: Bool {
+    var isFolyncPortfolioChart: Bool {
         guard dataModel?.isFolyncPortfolioActive == true else { return false }
         switch selectedChartType {
         case .portfolioValue, .portfolioGains: return true
@@ -1937,89 +971,6 @@ struct PerformanceChartView: View {
         }
     }
 
-    /// Changes whenever the range or the loaded series does.
-    private func metricsKey(_ subject: String) -> String {
-        let range = selectedTimeRange == .custom
-            ? "\(customQueryRange.from.timeIntervalSince1970)-\(customQueryRange.toExclusive.timeIntervalSince1970)"
-            : selectedTimeRange.rawValue
-        let last = fullResolutionChartData.last
-        return [
-            subject, range, dataModel?.preferredCurrency ?? "",
-            String(fullResolutionChartData.count),
-            String(last?.date.timeIntervalSince1970 ?? 0), String(last?.value ?? 0)
-        ].joined(separator: "|")
-    }
-
-    /// Period metrics over the same range the portfolio chart shows.
-    private var portfolioPerformanceMetrics: PerformanceMetrics? {
-        metricsCache.value(for: metricsKey("portfolio")) {
-            historicalDataManager.getPerformanceMetrics(
-                for: selectedTimeRange,
-                customFrom: queryCustomFrom,
-                customTo: queryCustomTo,
-                currency: dataModel?.preferredCurrency
-            )
-        }
-    }
-
-    private func stockPerformanceMetrics(for symbol: String) -> PerformanceMetrics? {
-        metricsCache.value(for: metricsKey("stock:" + symbol)) {
-            historicalDataManager.getStockPerformanceMetrics(
-                for: symbol,
-                timeRange: selectedTimeRange,
-                customFrom: queryCustomFrom,
-                customTo: queryCustomTo
-            )
-        }
-    }
-
-    private func getRelevantPerformanceMetrics() -> PerformanceMetrics? {
-        // Legacy snapshot metrics are not returns on the authoritative Folync series.
-        guard !isFolyncPortfolioChart else { return nil }
-        switch selectedChartType {
-        case .portfolioValue, .portfolioGains:
-            return portfolioPerformanceMetrics
-        case .individualStock(let symbol):
-            return stockPerformanceMetrics(for: symbol)
-        }
-    }
-    
-    /// Gets color for Sharpe ratio display
-    private func getSharpeRatioColor(_ sharpeRatio: Double?) -> Color {
-        guard let ratio = sharpeRatio else { return .secondary }
-        if ratio > 1.0 {
-            return .green
-        } else if ratio > 0.5 {
-            return .orange
-        } else {
-            return .red
-        }
-    }
-    
-    /// Gets color for win rate display
-    private func getWinRateColor(_ winRate: Double?) -> Color {
-        guard let rate = winRate else { return .secondary }
-        if rate >= 60.0 {
-            return .green
-        } else if rate >= 45.0 {
-            return .orange
-        } else {
-            return .red
-        }
-    }
-    
-    /// Gets color for annualized return display
-    private func getAnnualizedReturnColor(_ annualizedReturn: Double?) -> Color {
-        guard let returnValue = annualizedReturn else { return .secondary }
-        if returnValue > 10.0 {
-            return .green
-        } else if returnValue > 0.0 {
-            return .orange
-        } else {
-            return .red
-        }
-    }
-    
     
     
     /// Sets up keyboard shortcuts for chart interactions
@@ -2028,299 +979,7 @@ struct PerformanceChartView: View {
         // For now, the shortcuts are handled in the EnhancedChartView
     }
     
-    @ViewBuilder
-    private var dataFiltersSection: some View {
-        VStack {
-            Button(action: { showingDataFilters.toggle() }) {
-                HStack {
-                    Text("Data Filters")
-                    Spacer()
-                    Image(systemName: showingDataFilters ? "chevron.up" : "chevron.down")
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            if showingDataFilters {
-                dataFiltersView
-                    .onAppear {
-                        // Auto-resizing will handle layout changes
-                    }
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private var dataFiltersView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Value threshold filter
-            HStack {
-                Text("Value Threshold:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                TextField("0.0", value: $valueThreshold, format: .number)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .frame(width: 80)
-                
-                Button("Apply") {
-                    // The load task also restarts when the threshold changes; Apply makes it explicit.
-                    Task { await reloadAllSeries(showsLoading: false) }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.blue)
-            }
-            
-            // Date range filter
-            HStack {
-                Toggle("Custom Date Range", isOn: $dateFilterEnabled)
-                    .font(.caption)
-                
-                if dateFilterEnabled {
-                    DatePicker("From", selection: $customStartDate, displayedComponents: .date)
-                        .labelsHidden()
-                        .datePickerStyle(CompactDatePickerStyle())
-                    
-                    Text("to")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    DatePicker("To", selection: $customEndDate, displayedComponents: .date)
-                        .labelsHidden()
-                        .datePickerStyle(CompactDatePickerStyle())
-                }
-            }
-            
-            // Selection tools
-            HStack {
-                Button("Select All") {
-                    selectedDataPoints = Set(displayableChartData.map { $0.id })
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.blue)
-                
-                Button("Clear Selection") {
-                    selectedDataPoints.removeAll()
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.red)
-                
-                if !selectedDataPoints.isEmpty {
-                    Text("\(selectedDataPoints.count) selected")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-            }
-            
-            // Chart zoom controls
-            HStack {
-                Text("Zoom:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Button("-") {
-                    chartScale = max(1.0, chartScale - 0.25)
-                    if chartScale <= 1 { chartOffset = .zero }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.blue)
-                .disabled(chartScale <= 1)
-                .accessibilityLabel("Zoom out")
-                
-                Text(String(format: "%.0f%%", chartScale * 100))
-                    .font(.caption)
-                    .frame(width: 44)
-                    .accessibilityLabel("Zoom \(Int((chartScale * 100).rounded())) percent")
-                
-                Button("+") {
-                    chartScale = min(ChartSeriesProcessing.maxZoom, chartScale + 0.25)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.blue)
-                .disabled(chartScale >= ChartSeriesProcessing.maxZoom)
-                .accessibilityLabel("Zoom in")
-                
-                Button("Reset") {
-                    chartScale = 1.0
-                    chartOffset = .zero
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.caption)
-                .foregroundColor(.orange)
-                .disabled(chartScale <= 1)
-                .accessibilityLabel("Reset zoom")
-                .help("Option-scroll or pinch to zoom, Option-drag to move")
-                
-                Spacer()
-            }
-        }
-        .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-    }
-    
-    @ViewBuilder
-    private var exportOptionsView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Export Chart Data")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            HStack(spacing: 16) {
-                // CSV Export Button
-                Button(action: exportToCSV) {
-                    HStack {
-                        Image(systemName: "doc.text")
-                        Text("Export CSV")
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(6)
-                .foregroundColor(.blue)
-                
-                // PDF Export Button
-                Button(action: exportToPDF) {
-                    HStack {
-                        Image(systemName: "doc.richtext")
-                        Text("Export PDF")
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.green.opacity(0.1))
-                .cornerRadius(6)
-                .foregroundColor(.green)
-                
-                Spacer()
-            }
-            
-            // Additional export options for portfolio data
-            if case .portfolioValue = selectedChartType, !historicalDataManager.historicalPortfolioSnapshots.isEmpty {
-                HStack {
-                    Button(action: exportDetailedPortfolioCSV) {
-                        HStack {
-                            Image(systemName: "tablecells")
-                            Text("Detailed Portfolio CSV")
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.orange.opacity(0.1))
-                    .cornerRadius(6)
-                    .foregroundColor(.orange)
-                    
-                    Spacer()
-                }
-            }
-            
-            // Export selected data only
-            if !selectedDataPoints.isEmpty {
-                HStack {
-                    Text("Export \(selectedDataPoints.count) selected points only")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-            }
-        }
-        .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-    }
-    
-    // MARK: - Export Actions
-    
-    /// Full-resolution, filtered series (never the downsampled display copy), narrowed to the selection.
-    private func exportSeries() -> [ChartDataPoint] {
-        ChartSeriesProcessing.exportSeries(
-            full: fullResolutionChartData,
-            displayed: displayableChartData,
-            selected: selectedDataPoints
-        )
-    }
-
-    /// Notes the filters that narrowed the exported series, so a file is never
-    /// mistaken for the full history.
-    private var exportFilterNotes: [String] {
-        ExportManager.filterNotes(
-            valueThreshold: valueThreshold,
-            dateWindow: (selectedTimeRange == .custom || dateFilterEnabled) ? customQueryRange : nil,
-            selectedPoints: selectedDataPoints.count
-        )
-    }
-
-    private func exportToCSV() {
-        let metrics = getRelevantPerformanceMetrics()
-        let dataToExport = exportSeries()
-        
-        exportManager.exportToCSV(
-            chartData: dataToExport,
-            chartType: selectedChartType,
-            timeRange: selectedTimeRange,
-            metrics: metrics,
-            filterNotes: exportFilterNotes
-        )
-    }
-    
-    private func exportToPDF() {
-        let metrics = getRelevantPerformanceMetrics()
-        let chartImage = captureChartAsImage()
-        let dataToExport = exportSeries()
-        
-        exportManager.exportToPDF(
-            chartData: dataToExport,
-            chartType: selectedChartType,
-            timeRange: selectedTimeRange,
-            metrics: metrics,
-            chartImage: chartImage,
-            filterNotes: exportFilterNotes
-        )
-    }
-    
-    private func exportDetailedPortfolioCSV() {
-        let startDate = queryCustomFrom ?? selectedTimeRange.startDate()
-        let endDate = queryCustomTo ?? Date()
-        let timeRange = selectedTimeRange
-        Task {
-            // Read every stored snapshot: the in-memory history keeps only one per
-            // day for older dates.
-            let snapshots = await historicalDataManager.fetchHistoricalPortfolioSnapshots(from: startDate, to: endDate)
-                .sorted { $0.date < $1.date }
-            exportManager.exportPortfolioSnapshotsToCSV(snapshots: snapshots, timeRange: timeRange)
-        }
-    }
-    
-    /// A plain line chart of the exported series for the PDF.
-    private func captureChartAsImage() -> NSImage? {
-        let points = exportSeries().filter { $0.value.isFinite }
-        guard points.count > 1 else { return nil }
-        let domain = ChartSeriesProcessing.paddedDomain(points.map(\.value))
-        let snapshot = Chart(points) { point in
-            LineMark(x: .value("Date", point.date), y: .value("Value", point.value))
-                .foregroundStyle(Color.blue)
-        }
-        .chartYScale(domain: domain)
-        .frame(width: 720, height: 320)
-        .padding(12)
-        .background(Color.white)
-        .environment(\.colorScheme, .light)
-        let renderer = ImageRenderer(content: snapshot)
-        renderer.scale = 2
-        return renderer.nsImage
-    }
-    
-    private func getDisplayCurrency() -> String {
+    func getDisplayCurrency() -> String {
         switch selectedChartType {
         case .individualStock(let symbol):
             if let trade = dataModel?.realTimeTrades.first(where: { $0.trade.name == symbol }) {
