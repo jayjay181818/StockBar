@@ -649,6 +649,7 @@ private struct HoldingsEditableRow: View {
     let onDelete: () -> Void
     let onMove: (Int) -> Void
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var symbolFieldFocused: Bool
     /// The symbol when its field gained focus, to detect a rename on commit.
     @State private var symbolAtFocus: String?
@@ -812,7 +813,7 @@ private struct HoldingsEditableRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovered ? StockbarPalette.hoverFill : Color.clear)
         .onHover { hovering in
-            withAnimation(StockbarMotion.quick) { isHovered = hovering }
+            withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) { isHovered = hovering }
         }
     }
 
