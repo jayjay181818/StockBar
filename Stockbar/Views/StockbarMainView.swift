@@ -920,9 +920,14 @@ private struct ProfitLossCell: View {
     }
 
     private var helpText: String {
-        switch displayMode {
-        case .amount: "Show percentage"
-        case .percent: "Show amount"
+        let toggle = switch displayMode {
+        case .amount: "Click to show the percentage."
+        case .percent: "Click to show the amount."
+        }
+        switch kind {
+        case .day: return toggle
+        case .total:
+            return "Unrealised gain or loss against the average cost; sales and dividends are not included. \(toggle)"
         }
     }
 }

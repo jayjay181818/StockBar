@@ -405,6 +405,7 @@ struct StockbarOverviewView: View {
                         valueColor: StockbarPalette.signed(profit.totalAmount, neutral: .primary),
                         showsDivider: false
                     )
+                    .help("Unrealised gain or loss against the average cost. Sales and dividends are not included.")
                 }
                 .id(trade.trade.name)
                 .transition(.opacity)

@@ -428,4 +428,68 @@ final class ChartAuditFixTests: XCTestCase {
         XCTAssertTrue(stale(minutesOld: 160, interval: 3_600))
         XCTAssertFalse(MenuBarStaleness.isStale(lastUpdate: nil, now: now, refreshInterval: 300))
     }
+
+    // MARK: - Squeezed time axis
+
+    /// Two sessions of five-minute points with a 17-hour night between them.
+    private func twoSessions() -> [Date] {
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let first = (0..<10).map { start.addingTimeInterval(Double($0) * 300) }
+        let second = (0..<10).map { start.addingTimeInterval(17 * 3_600 + Double($0) * 300) }
+        return first + second
+    }
+
+    func testTimeCompressionSqueezesALongGapAndKeepsOrdinarySteps() throws {
+        let dates = twoSessions()
+        let compression = ChartTimeCompression(dates: dates)
+        XCTAssertFalse(compression.isIdentity)
+
+        let plotted = dates.map(compression.plotDate(for:))
+        XCTAssertEqual(plotted[0], dates[0])
+        // Inside a session the five-minute steps are untouched.
+        XCTAssertEqual(plotted[9].timeIntervalSince(plotted[0]), 9 * 300, accuracy: 0.001)
+        XCTAssertEqual(plotted[19].timeIntervalSince(plotted[10]), 9 * 300, accuracy: 0.001)
+        // The night is drawn as three steps wide.
+        XCTAssertEqual(plotted[10].timeIntervalSince(plotted[9]), 900, accuracy: 0.001)
+        // Order is kept, and every point maps back to its own time.
+        XCTAssertEqual(plotted, plotted.sorted())
+        for (date, plot) in zip(dates, plotted) {
+            XCTAssertEqual(
+                compression.realDate(forPlot: plot).timeIntervalSince(date), 0, accuracy: 0.001
+            )
+        }
+        XCTAssertEqual(compression.sessionStarts, [plotted[0], plotted[10]])
+    }
+
+    func testTimeCompressionLeavesAnEvenOrShortSeriesAlone() {
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let even = (0..<50).map { start.addingTimeInterval(Double($0) * 300) }
+        XCTAssertTrue(ChartTimeCompression(dates: even).isIdentity)
+        XCTAssertTrue(ChartTimeCompression(dates: Array(twoSessions().prefix(5))).isIdentity)
+        XCTAssertTrue(ChartTimeCompression(dates: []).isIdentity)
+        XCTAssertTrue(ChartTimeCompression.identity.sessionStarts.isEmpty)
+
+        let date = start.addingTimeInterval(1_234)
+        XCTAssertEqual(ChartTimeCompression.identity.plotDate(for: date), date)
+        XCTAssertEqual(ChartTimeCompression.identity.realDate(forPlot: date), date)
+    }
+
+    func testTimeCompressionHandlesTimesOutsideAndBetweenPoints() {
+        let dates = twoSessions()
+        let compression = ChartTimeCompression(dates: dates.shuffled() + [dates[3]])
+        // Before the first point and after the last, time runs at its normal rate.
+        XCTAssertEqual(
+            compression.plotDate(for: dates[0].addingTimeInterval(-600)),
+            dates[0].addingTimeInterval(-600)
+        )
+        let lastPlot = compression.plotDate(for: dates[19])
+        XCTAssertEqual(
+            compression.plotDate(for: dates[19].addingTimeInterval(600)).timeIntervalSince(lastPlot),
+            600, accuracy: 0.001
+        )
+        // Half-way through the night sits half-way across the squeezed gap.
+        let midnight = dates[9].addingTimeInterval(dates[10].timeIntervalSince(dates[9]) / 2)
+        let gapStart = compression.plotDate(for: dates[9])
+        XCTAssertEqual(compression.plotDate(for: midnight).timeIntervalSince(gapStart), 450, accuracy: 0.001)
+    }
 }

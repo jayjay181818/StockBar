@@ -236,6 +236,10 @@ struct PerformanceChartView: View {
         let dateFilterEnabled: Bool
         let filterFrom: Date?
         let filterToExclusive: Date?
+        /// A portfolio chart is Folync's series while Folync is connected and
+        /// the local one otherwise. Without this, a chart opened before
+        /// Folync connected kept the local series under the Folync caption.
+        let folyncPortfolioActive: Bool
     }
 
     /// Everything that changes which points the chart shows.
@@ -248,7 +252,8 @@ struct PerformanceChartView: View {
             valueThreshold: valueThreshold,
             dateFilterEnabled: dateFilterEnabled,
             filterFrom: usesDates ? range.from : nil,
-            filterToExclusive: usesDates ? range.toExclusive : nil
+            filterToExclusive: usesDates ? range.toExclusive : nil,
+            folyncPortfolioActive: dataModel?.isFolyncPortfolioActive ?? false
         )
     }
 
@@ -659,18 +664,78 @@ struct PerformanceChartView: View {
         guard let visible = visibleXDomain else {
             return ChartSeriesProcessing.paddedDomain(displayableChartData.map(\.value))
         }
-        let shown = displayableChartData.filter { visible.contains($0.date) }.map(\.value)
+        let compression = timeCompression
+        let shown = displayableChartData
+            .filter { visible.contains(compression.plotDate(for: $0.date)) }
+            .map(\.value)
         return ChartSeriesProcessing.paddedDomain(shown.isEmpty ? displayableChartData.map(\.value) : shown)
     }
 
-    /// The dates on screen when zoomed in, or nil at normal size.
+    /// On the 1D and 1W ranges, nights and weekends are squeezed so the hours
+    /// with prices fill the chart. Longer ranges are drawn to scale.
+    private var timeCompression: ChartTimeCompression {
+        switch selectedTimeRange {
+        case .day, .week:
+            return ChartTimeCompression(dates: displayableChartData.map(\.date))
+        case .month, .threeMonths, .sixMonths, .year, .all, .custom:
+            return .identity
+        }
+    }
+
+    /// The part of the x-axis on screen when zoomed in, or nil at normal size.
+    /// In plot times: see `timeCompression`.
     private var visibleXDomain: ClosedRange<Date>? {
         guard let first = displayableChartData.first?.date, let last = displayableChartData.last?.date else {
             return nil
         }
+        let compression = timeCompression
         return ChartSeriesProcessing.zoomedDomain(
-            first: first, last: last, scale: chartScale, panFraction: Double(chartOffset.width)
+            first: compression.plotDate(for: first),
+            last: compression.plotDate(for: last),
+            scale: chartScale,
+            panFraction: Double(chartOffset.width)
         )
+    }
+
+    /// X-axis marks for a squeezed axis: one per session when that gives a
+    /// sensible number, otherwise evenly spaced. Nil leaves the choice to the chart.
+    private func compressedAxisMarks(_ compression: ChartTimeCompression) -> [Date]? {
+        guard !compression.isIdentity,
+              let first = displayableChartData.first?.date,
+              let last = displayableChartData.last?.date else { return nil }
+        let shown = visibleXDomain
+            ?? compression.plotDate(for: first)...compression.plotDate(for: max(first, last))
+        // One mark per day: a break in the middle of a day would repeat its label.
+        var calendar = Calendar.current
+        if seriesIsDayGranular { calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt }
+        var daysMarked = Set<Date>()
+        let sessions = compression.sessionStarts.filter { start in
+            shown.contains(start)
+                && daysMarked.insert(calendar.startOfDay(for: compression.realDate(forPlot: start))).inserted
+        }
+        if (3...8).contains(sessions.count) { return sessions }
+        let span = shown.upperBound.timeIntervalSince(shown.lowerBound)
+        guard span > 0 else { return nil }
+        let realSpan = compression.realDate(forPlot: shown.upperBound)
+            .timeIntervalSince(compression.realDate(forPlot: shown.lowerBound))
+        // Evenly spaced across the chart, then moved to the nearest round
+        // time so the labels read 14:30, not 14:24.
+        let step: TimeInterval
+        switch realSpan {
+        case ..<7_200: step = 300
+        case ..<21_600: step = 900
+        case ..<129_600: step = 1_800
+        default: step = 3_600
+        }
+        var marks: [Date] = []
+        for index in 0..<6 {
+            let even = shown.lowerBound.addingTimeInterval(span * (Double(index) + 0.5) / 6)
+            let real = compression.realDate(forPlot: even).timeIntervalSinceReferenceDate
+            let rounded = Date(timeIntervalSinceReferenceDate: (real / step).rounded() * step)
+            let mark = compression.plotDate(for: rounded)
+            if shown.contains(mark), marks.last.map({ mark > $0 }) ?? true { marks.append(mark) }
+        }
+        return marks.isEmpty ? nil : marks
     }
     
     private var chartView: some View {
@@ -690,9 +755,13 @@ struct PerformanceChartView: View {
             } else {
                 // SINGLE SERIES: Standard line chart
                 let domain = yAxisDomain
+                let compression = timeCompression
+                let axisMarks = compressedAxisMarks(compression)
+                let axisDateFormat = dateFormat
                 Chart(displayableChartData) { dataPoint in
+                        let plotDate = compression.plotDate(for: dataPoint.date)
                         LineMark(
-                            x: .value("Date", dataPoint.date),
+                            x: .value("Date", plotDate),
                             y: .value("Value", dataPoint.value)
                         )
                         .foregroundStyle(chartColor)
@@ -700,7 +769,7 @@ struct PerformanceChartView: View {
 
                         if useGradientFill {
                             AreaMark(
-                                x: .value("Date", dataPoint.date),
+                                x: .value("Date", plotDate),
                                 yStart: .value("Baseline", domain.lowerBound),
                                 yEnd: .value("Value", dataPoint.value)
                             )
@@ -713,7 +782,7 @@ struct PerformanceChartView: View {
                             )
                         } else {
                             AreaMark(
-                                x: .value("Date", dataPoint.date),
+                                x: .value("Date", plotDate),
                                 yStart: .value("Baseline", domain.lowerBound),
                                 yEnd: .value("Value", dataPoint.value)
                             )
@@ -724,7 +793,7 @@ struct PerformanceChartView: View {
                         if let hoveredPoint = hoveredDataPoint,
                            hoveredPoint.date == dataPoint.date {
                             PointMark(
-                                x: .value("Date", dataPoint.date),
+                                x: .value("Date", plotDate),
                                 y: .value("Value", dataPoint.value)
                             )
                             .foregroundStyle(chartColor)
@@ -734,7 +803,7 @@ struct PerformanceChartView: View {
                         // Add selection indicators
                         if selectedDataPoints.contains(dataPoint.id) {
                             PointMark(
-                                x: .value("Date", dataPoint.date),
+                                x: .value("Date", plotDate),
                                 y: .value("Value", dataPoint.value)
                             )
                             .foregroundStyle(.orange)
@@ -754,12 +823,27 @@ struct PerformanceChartView: View {
                         }
                     }
                     .chartXAxis {
-                        AxisMarks(values: .automatic(desiredCount: 6)) { _ in
-                            if showGridLines {
-                                AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                        if let axisMarks {
+                            // The axis is in plot times; label each mark with the real time there.
+                            AxisMarks(values: axisMarks) { value in
+                                if showGridLines {
+                                    AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                                }
+                                AxisTick()
+                                AxisValueLabel {
+                                    if let plotted = value.as(Date.self) {
+                                        Text(compression.realDate(forPlot: plotted), format: axisDateFormat)
+                                    }
+                                }
                             }
-                            AxisTick()
-                            AxisValueLabel(format: dateFormat)
+                        } else {
+                            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                                if showGridLines {
+                                    AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                                }
+                                AxisTick()
+                                AxisValueLabel(format: axisDateFormat)
+                            }
                         }
                     }
                     .chartYAxis {
@@ -786,11 +870,15 @@ struct PerformanceChartView: View {
                                         chartOffset: $chartOffset,
                                         chartProxy: chartProxy,
                                         plotOrigin: chartProxy.plotFrame.map { geometry[$0].origin } ?? .zero,
-                                        selectedTimeRange: selectedTimeRange
+                                        selectedTimeRange: selectedTimeRange,
+                                        timeCompression: compression
                                     )
                                 )
                         }
                     }
+                    // The chart's own spoken description reads positions along
+                    // the axis as dates, which are wrong on a squeezed axis.
+                    .chartAccessibilityChildrenHidden(!compression.isIdentity)
                     .accessibilityLabel("\(selectedChartType.title), \(selectedTimeRange.description)")
                     .accessibilityValue(chartAccessibilitySummary)
                     // Zooming narrows the dates shown and redraws at full
@@ -915,7 +1003,12 @@ struct PerformanceChartView: View {
     /// Chosen from the dates actually on screen. The selected range is a poor
     /// guide: "All" may hold two weeks of history, and zooming shortens any range.
     private var baseDateFormat: Date.FormatStyle {
-        let shown = visibleXDomain ?? displayableChartData.first.flatMap { first in
+        // The zoomed domain is in plot times; the label format goes by real time.
+        let compression = timeCompression
+        let shown = visibleXDomain.map { visible -> ClosedRange<Date> in
+            let start = compression.realDate(forPlot: visible.lowerBound)
+            return start...max(start, compression.realDate(forPlot: visible.upperBound))
+        } ?? displayableChartData.first.flatMap { first in
             displayableChartData.last.map { first.date...max(first.date, $0.date) }
         }
         guard let shown else { return .dateTime.day().month(.abbreviated) }
@@ -1043,6 +1136,17 @@ struct PerformanceChartView: View {
 }
 
 private extension View {
+    /// Presents the chart to assistive technology as one element, without
+    /// the per-mark children, when `hidden` is true.
+    @ViewBuilder
+    func chartAccessibilityChildrenHidden(_ hidden: Bool) -> some View {
+        if hidden {
+            accessibilityElement(children: .ignore)
+        } else {
+            self
+        }
+    }
+
     /// Pins the x-axis to `domain`, or leaves it automatic when nil.
     @ViewBuilder
     func chartXDomain(_ domain: ClosedRange<Date>?) -> some View {

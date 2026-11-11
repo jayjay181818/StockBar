@@ -14,6 +14,9 @@ struct EnhancedChartInteractionView: NSViewRepresentable {
     /// Origin of the plot area inside the interaction view; `ChartProxy` positions are relative to it.
     let plotOrigin: CGPoint
     let selectedTimeRange: ChartTimeRange
+    /// How the chart places times along its x-axis; points are drawn at
+    /// `timeCompression.plotDate(for:)`, not at their own dates.
+    var timeCompression: ChartTimeCompression = .identity
     
     func makeNSView(context: Context) -> NSView {
         let view = EnhancedChartView()
@@ -27,6 +30,7 @@ struct EnhancedChartInteractionView: NSViewRepresentable {
             plotOrigin: plotOrigin,
             selectedTimeRange: selectedTimeRange
         )
+        view.updateProxy(chartProxy: chartProxy, plotOrigin: plotOrigin, timeCompression: timeCompression)
         view.onSelectionChanged = { newSelection in
             selectedDataPoints = newSelection
         }
@@ -55,7 +59,7 @@ struct EnhancedChartInteractionView: NSViewRepresentable {
                 chartScale: chartScale,
                 chartOffset: chartOffset
             )
-            chartView.updateProxy(chartProxy: chartProxy, plotOrigin: plotOrigin)
+            chartView.updateProxy(chartProxy: chartProxy, plotOrigin: plotOrigin, timeCompression: timeCompression)
         }
     }
 }
@@ -75,6 +79,7 @@ class EnhancedChartView: NSView {
     private var chartProxy: ChartProxy?
     private var plotOrigin: CGPoint = .zero
     private var selectedTimeRange: ChartTimeRange = .month
+    private var timeCompression: ChartTimeCompression = .identity
 
     /// SwiftUI and `ChartProxy` use a top-left origin; match it so box selection is not upside down.
     override var isFlipped: Bool { true }
@@ -119,9 +124,10 @@ class EnhancedChartView: NSView {
     }
     
     /// The proxy and plot frame change whenever the chart relays out; a stale one maps to the wrong point.
-    func updateProxy(chartProxy: ChartProxy, plotOrigin: CGPoint) {
+    func updateProxy(chartProxy: ChartProxy, plotOrigin: CGPoint, timeCompression: ChartTimeCompression) {
         self.chartProxy = chartProxy
         self.plotOrigin = plotOrigin
+        self.timeCompression = timeCompression
     }
 
     override func updateTrackingAreas() {
@@ -297,7 +303,9 @@ class EnhancedChartView: NSView {
         let plotX = ChartHitTesting.plotPoint(fromViewPoint: location, plotOrigin: plotOrigin).x
         guard let pointerDate: Date = chartProxy.value(atX: plotX) else { return }
 
-        let timeDifference = abs(closest.date.timeIntervalSince(pointerDate))
+        // Measured along the axis as drawn, so a squeezed overnight gap does
+        // not count as hours away from the nearest point.
+        let timeDifference = abs(timeCompression.plotDate(for: closest.date).timeIntervalSince(pointerDate))
         let tolerance: TimeInterval = {
             switch selectedTimeRange {
             case .day: return 3600
@@ -325,7 +333,10 @@ class EnhancedChartView: NSView {
         guard let chartProxy = chartProxy else { return nil }
         let plotX = ChartHitTesting.plotPoint(fromViewPoint: location, plotOrigin: plotOrigin).x
         guard let date: Date = chartProxy.value(atX: plotX),
-              let index = ChartSeriesProcessing.nearestIndex(in: chartData.map(\.date), to: date) else { return nil }
+              let index = ChartSeriesProcessing.nearestIndex(
+                in: chartData.map { timeCompression.plotDate(for: $0.date) },
+                to: date
+              ) else { return nil }
         return chartData[index]
     }
     
@@ -333,7 +344,7 @@ class EnhancedChartView: NSView {
         guard let chartProxy = chartProxy else { return [] }
 
         let positions: [(id: UUID, point: CGPoint)] = chartData.compactMap { dataPoint in
-            guard let x: CGFloat = chartProxy.position(forX: dataPoint.date),
+            guard let x: CGFloat = chartProxy.position(forX: timeCompression.plotDate(for: dataPoint.date)),
                   let y: CGFloat = chartProxy.position(forY: dataPoint.value) else {
                 return nil
             }
