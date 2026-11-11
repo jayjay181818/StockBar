@@ -145,11 +145,15 @@ def get_config():
     if configured_path:
         candidate_paths.append(configured_path)
 
-    home_dir = os.path.expanduser("~")
-    candidate_paths.extend([
-        os.path.join(home_dir, "Library", "Application Support", "com.stockbar", ".stockbar_config.json"),
-        os.path.join(home_dir, ".stockbar_config.json"),
-    ])
+    # The app always names its config file. Only a run by hand, with no file
+    # named, looks in the usual places; a file dropped in the home folder must
+    # not be able to supply keys or symbol aliases to the app.
+    if not configured_path:
+        home_dir = os.path.expanduser("~")
+        candidate_paths.extend([
+            os.path.join(home_dir, "Library", "Application Support", "com.stockbar", ".stockbar_config.json"),
+            os.path.join(home_dir, ".stockbar_config.json"),
+        ])
 
     for config_file in candidate_paths:
         if not config_file:

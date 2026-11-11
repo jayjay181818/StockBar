@@ -170,7 +170,11 @@ final class ExportManager {
         filterNotes: [String]
     ) -> Data {
         let pdfData = NSMutableData()
-        let pageSize = CGSize(width: 612, height: 792) // US Letter size
+        // The layout below is drawn for US Letter; on another paper size it is
+        // kept at the top of the page and centred across it.
+        let layoutSize = CGSize(width: 612, height: 792)
+        let paper = NSPrintInfo.shared.paperSize
+        let pageSize = paper.width >= 500 && paper.height >= 700 ? paper : layoutSize
         
         guard let consumer = CGDataConsumer(data: pdfData) else {
             return Data()
@@ -182,6 +186,10 @@ final class ExportManager {
         }
         
         context.beginPDFPage(nil)
+        context.translateBy(
+            x: (pageSize.width - layoutSize.width) / 2,
+            y: pageSize.height - layoutSize.height
+        )
         
         // Draw title
         let title = "\(chartType.title) - \(timeRange.description)"
