@@ -30,6 +30,7 @@ final class OHLCFetchService: Sendable {
     private let processRunner: any PythonProcessRunning
     private let ohlcDataStore: any OHLCDataStoring
     private let supplementalProvider: any FolyncSupplementalOHLCProviding
+    private let closedMarketFetches = OHLCClosedMarketFetchLog()
 
     init(
         pythonScriptPath: String? = nil,
@@ -143,6 +144,11 @@ final class OHLCFetchService: Sendable {
             // Save to Core Data
             try await ohlcDataStore.saveSnapshots(snapshots)
 
+            let fetchedAt = Date()
+            if RefreshService.isExchangeClosed(for: symbol, at: fetchedAt) == true {
+                await closedMarketFetches.record(symbol: symbol, interval: interval, at: fetchedAt)
+            }
+
             await Logger.shared.info("Successfully fetched \(snapshots.count) OHLC data points for \(symbol)")
             return OHLCFetchResult(
                 snapshots: snapshots,
@@ -150,8 +156,15 @@ final class OHLCFetchService: Sendable {
                 coverageLabel: "\(snapshots.count) points · \(interval) · local provider"
             )
         } catch NetworkError.timeout {
-            await Logger.shared.error("OHLC fetch timed out for \(symbol)")
+            await Logger.shared.warning("OHLC fetch timed out for \(symbol)")
             throw OHLCFetchError.timeout
+        } catch is CancellationError {
+            // The chart was closed or switched; nothing went wrong.
+            await Logger.shared.debug("OHLC fetch cancelled for \(symbol)")
+            throw CancellationError()
+        } catch let error as ProviderAccessError {
+            await Logger.shared.debug("OHLC fetch skipped for \(symbol): \(error.localizedDescription)")
+            throw OHLCFetchError.fetchFailed(error.localizedDescription)
         } catch {
             await Logger.shared.error("Failed to fetch OHLC data for \(symbol): \(error)")
             throw OHLCFetchError.fetchFailed(error.localizedDescription)
@@ -178,11 +191,19 @@ final class OHLCFetchService: Sendable {
             endDate: nil
         )
 
+        // While the exchange is shut there are no new candles, so candles fetched
+        // after the close stay complete until it opens again.
+        var fetchedSinceClose = false
+        if let fetchedAt = await closedMarketFetches.lastFetch(symbol: symbol, interval: interval) {
+            fetchedSinceClose = OHLCCachePolicy.stayedClosed(symbol: symbol, from: fetchedAt, to: now)
+        }
+
         guard allowStale || OHLCCachePolicy.isUsable(
             snapshots: snapshots,
             period: period,
             interval: interval,
-            now: now
+            now: now,
+            fetchedSinceClose: fetchedSinceClose
         ) else {
             return []
         }
@@ -226,7 +247,12 @@ final class OHLCFetchService: Sendable {
                 throw OHLCFetchError.fetchFailed(response.error ?? "Unknown error")
             }
 
-            return response.data.map { item in
+            // A candle with a missing or impossible price would break the chart's axis.
+            let candles = response.data.filter { item in
+                [item.open, item.high, item.low, item.close].allSatisfy { $0.isFinite && $0 > 0 }
+                    && item.high >= item.low
+            }
+            return candles.map { item in
                 OHLCSnapshot(
                     symbol: symbol,
                     timestamp: item.timestamp,
@@ -293,7 +319,8 @@ enum OHLCCachePolicy {
         snapshots: [OHLCSnapshot],
         period: String,
         interval: String,
-        now: Date
+        now: Date,
+        fetchedSinceClose: Bool = false
     ) -> Bool {
         guard let intervalLength = intervalSeconds(interval),
               let oldest = snapshots.map(\.timestamp).min(),
@@ -301,7 +328,7 @@ enum OHLCCachePolicy {
             return false
         }
 
-        if now.timeIntervalSince(newest) > intervalLength {
+        if !fetchedSinceClose, now.timeIntervalSince(newest) > intervalLength {
             return false
         }
 
@@ -312,6 +339,34 @@ enum OHLCCachePolicy {
             }
         }
         return true
+    }
+}
+
+extension OHLCCachePolicy {
+    /// True when the symbol's exchange was shut at `start` and has not opened
+    /// since, checked every half hour over at most four days. Exchanges whose
+    /// hours are unknown never qualify.
+    static func stayedClosed(symbol: String, from start: Date, to end: Date) -> Bool {
+        guard end >= start, end.timeIntervalSince(start) <= 4 * 86_400 else { return false }
+        var moment = start
+        while moment < end {
+            guard RefreshService.isExchangeClosed(for: symbol, at: moment) == true else { return false }
+            moment = moment.addingTimeInterval(1_800)
+        }
+        return RefreshService.isExchangeClosed(for: symbol, at: end) == true
+    }
+}
+
+/// When candles were last fetched while the symbol's exchange was shut.
+private actor OHLCClosedMarketFetchLog {
+    private var fetches: [String: Date] = [:]
+
+    func record(symbol: String, interval: String, at date: Date) {
+        fetches["\(symbol.uppercased())|\(interval)"] = date
+    }
+
+    func lastFetch(symbol: String, interval: String) -> Date? {
+        fetches["\(symbol.uppercased())|\(interval)"]
     }
 }
 

@@ -637,3 +637,102 @@ private extension CacheStatus {
         return false
     }
 }
+
+final class RefreshStatusAndEnvironmentTests: XCTestCase {
+    private let time = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testFailedPassIsReportedWithoutLosingTheLastSuccess() {
+        var status = QuoteRefreshStatus()
+        XCTAssertNil(status.problemSummary)
+        XCTAssertFalse(status.lastAttemptFailed)
+
+        status.record(attempted: 3, failures: [], at: time)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertNil(status.problemSummary)
+
+        let later = time.addingTimeInterval(300)
+        status.record(attempted: 3, failures: [.rateLimited, .rateLimited, .noData], at: later)
+        XCTAssertTrue(status.lastAttemptFailed)
+        XCTAssertEqual(status.lastAttempt, later)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertEqual(status.problemSummary, "Last refresh failed: the provider is limiting requests")
+    }
+
+    func testPartFailedPassCountsTheSymbolsLeftBehind() {
+        var status = QuoteRefreshStatus()
+        status.record(attempted: 4, failures: [.noData], at: time)
+        XCTAssertFalse(status.lastAttemptFailed)
+        XCTAssertEqual(status.lastSuccess, time)
+        XCTAssertEqual(status.problemSummary, "1 of 4 not refreshed: the provider returned no price")
+    }
+
+    func testPassThatAskedForNothingChangesNothing() {
+        var status = QuoteRefreshStatus()
+        status.record(attempted: 0, failures: [], at: time)
+        XCTAssertNil(status.lastAttempt)
+    }
+
+    func testSetupProblemIsNewOnceAndClearsOnTheNextRealAttempt() {
+        var status = QuoteRefreshStatus()
+        XCTAssertTrue(status.recordSetupProblem("Python is not set up", attempted: 2, at: time))
+        XCTAssertFalse(status.recordSetupProblem("Python is not set up", attempted: 2, at: time))
+        XCTAssertTrue(status.lastAttemptFailed)
+        XCTAssertEqual(status.problemSummary, "Python is not set up")
+
+        status.record(attempted: 2, failures: [], at: time)
+        XCTAssertNil(status.problemSummary)
+    }
+
+    func testScriptEnvironmentDropsEverythingNotNeeded() {
+        let environment = PythonConfiguration.childEnvironment(
+            adding: ["STOCKBAR_CACHE_FILE": "/cache/quote_cache.json"],
+            base: [
+                "PATH": "/usr/bin",
+                "HOME": "/Users/example",
+                "HTTPS_PROXY": "http://proxy.example:8080",
+                "PYTHONPATH": "/somewhere/else",
+                "PYTHONSTARTUP": "/somewhere/start.py",
+                "DYLD_INSERT_LIBRARIES": "/somewhere/lib.dylib",
+                "AWS_SECRET_ACCESS_KEY": "not-for-scripts"
+            ]
+        )
+        XCTAssertEqual(environment, [
+            "PATH": "/usr/bin",
+            "HOME": "/Users/example",
+            "HTTPS_PROXY": "http://proxy.example:8080",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "STOCKBAR_CACHE_FILE": "/cache/quote_cache.json"
+        ])
+    }
+
+    func testCandlesFetchedAfterTheCloseStayUsableUntilTheOpen() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        func newYork(_ day: Int, _ hour: Int) throws -> Date {
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: day, hour: hour)))
+        }
+        // Friday 24 July 2026 21:00 to Sunday: shut throughout.
+        XCTAssertTrue(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(24, 21), to: try newYork(26, 12)))
+        // Monday 03:00 to Monday 21:00 spans a whole session.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(27, 3), to: try newYork(27, 21)))
+        // Fetched while open.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "AAPL", from: try newYork(24, 12), to: try newYork(24, 21)))
+        // Unknown exchange hours never qualify.
+        XCTAssertFalse(OHLCCachePolicy.stayedClosed(symbol: "BTC-USD", from: try newYork(25, 1), to: try newYork(25, 2)))
+
+        let friday = try newYork(24, 15)
+        let sunday = try newYork(26, 12)
+        let candles = (0..<5).map { index in
+            OHLCSnapshot(
+                symbol: "AAPL",
+                timestamp: friday.addingTimeInterval(Double(index - 4) * 86_400),
+                open: 1, high: 2, low: 1, close: 2, volume: 10, interval: "1d"
+            )
+        }
+        XCTAssertFalse(OHLCCachePolicy.isUsable(snapshots: candles, period: "5d", interval: "1d", now: sunday))
+        XCTAssertTrue(OHLCCachePolicy.isUsable(
+            snapshots: candles, period: "5d", interval: "1d", now: sunday, fetchedSinceClose: true
+        ))
+    }
+}

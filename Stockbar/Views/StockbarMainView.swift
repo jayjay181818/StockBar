@@ -1028,7 +1028,8 @@ private struct StockbarDataHealthView: View {
                         value: pricesValue(now: context.date),
                         detail: pricesDetail(now: context.date),
                         systemImage: "clock",
-                        valueColor: pricesAreStale(now: context.date) ? .orange : .primary
+                        valueColor: pricesAreStale(now: context.date) || dataModel.quoteRefreshStatus.lastAttemptFailed
+                            ? .orange : .primary
                     )
                     StockbarMetricTile(
                         title: "Exchange Rates",
@@ -1102,6 +1103,12 @@ private struct StockbarDataHealthView: View {
 
     private func pricesDetail(now: Date) -> String {
         let base = "Oldest of \(pricedTrades.count) · refreshes every \(refreshIntervalText)"
+        let status = dataModel.quoteRefreshStatus
+        if let problem = status.problemSummary, let tried = status.lastAttempt {
+            let tried = StockbarRelativeTime.updatedText(tried, now: now)
+                .replacingOccurrences(of: "Updated ", with: "")
+            return "\(problem) (tried \(tried)) · \(base)"
+        }
         return pricesAreStale(now: now) && !pricedTrades.isEmpty ? "Stale · \(base)" : base
     }
 

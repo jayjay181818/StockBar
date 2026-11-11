@@ -58,11 +58,7 @@ actor PythonProcessRunner: PythonProcessRunning {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: config.interpreterPath)
         process.arguments = arguments
-        var processEnvironment = ProcessInfo.processInfo.environment
-        config.environment.forEach { key, value in
-            processEnvironment[key] = value
-        }
-        process.environment = processEnvironment
+        process.environment = PythonConfiguration.childEnvironment(adding: config.environment)
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
