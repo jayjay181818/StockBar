@@ -7,47 +7,48 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
-      <title>3.7.0 (360.17)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.17</link>
-      <pubDate>Wed, 11 Nov 2026 16:06:49 +0000</pubDate>
-      <sparkle:version>360.17</sparkle:version>
+      <title>3.7.0 (370)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.7.0</link>
+      <pubDate>Wed, 11 Nov 2026 17:51:18 +0000</pubDate>
+      <sparkle:version>370</sparkle:version>
       <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
       <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 360.17 of Stockbar 3.7.0. Changes since testing-360.15:
+      <description sparkle:format="markdown"># StockBar v3.7.0 Release Notes
 
-- Release 3.7.0</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-360.17/Stockbar-360.17.zip" length="8234989" type="application/octet-stream" sparkle:edSignature="5ljM7w2OP4g69+e3oEFblSQAImEi8BMD43YalLfCKZ7yK6GprzABCADG2qhDjBBTVwWepWKHLJMcq8A5AtnGCg=="></enclosure>
-    </item>
-    <item>
-      <title>3.6.0 (360.15)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.15</link>
-      <pubDate>Wed, 11 Nov 2026 15:43:09 +0000</pubDate>
-      <sparkle:version>360.15</sparkle:version>
-      <sparkle:shortVersionString>3.6.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 360.15 of Stockbar 3.6.0. Changes since testing-360.13:
+**Status:** Implemented  
+**Date:** 2026-11-11
 
-- Keep every credential in one Keychain item</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-360.15/Stockbar-360.15.zip" length="8234991" type="application/octet-stream" sparkle:edSignature="SO2hnyZ/d75vKFt/4kIUCwDThK2BRzdQuy6QDQN77f2AUSPHaFaQ4keZbuiT7JFcSTbOnCl1PSH0DRvM55PYCg=="></enclosure>
-    </item>
-    <item>
-      <title>3.6.0 (360.13)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-360.13</link>
-      <pubDate>Wed, 11 Nov 2026 15:03:02 +0000</pubDate>
-      <sparkle:version>360.13</sparkle:version>
-      <sparkle:shortVersionString>3.6.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 360.13 of Stockbar 3.6.0. Changes since v3.6.0:
+Stockbar now updates itself, and keeps every credential in one Keychain item so macOS asks for access once after an update, not once per credential. Figures, charts, the Python pins and the database model are the same as in 3.6.0.
 
-- Add self-updating through GitHub releases
-- Add a repository preview image; stop a chart test leaving preference files</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-360.13/Stockbar-360.13.zip" length="8214912" type="application/octet-stream" sparkle:edSignature="1bZ15ecZ1J+gzbtXG8wBikkCX07MfsVFJHGzMVza7EDR4FaSCV6anIFKmbuXwwC6YMYb234CMbI8ujQ0yx5wCw=="></enclosure>
+## After updating
+
+- **This update is installed by hand**, as before: 3.6.0 and earlier have no updater. Download `Stockbar-3.7.0.zip` from the release page, unzip it and move Stockbar to Applications. Later versions arrive through **Settings → General → Updates**.
+- **First launch of a downloaded copy**: macOS blocks it until you choose **Open Anyway** in System Settings → Privacy &amp; Security. This is needed once per Mac. Updates installed by Stockbar are not blocked.
+- **Keychain prompts**: the first launch asks for access to each credential saved by the earlier version, to move it into the new single item. Choose **Always Allow** each time. After later updates macOS asks once.
+- **Going back to an earlier version** means entering the Folync token, Trading 212 credentials and API keys again: earlier versions do not read the new item.
+
+## Updates
+
+- Stockbar checks for new versions and installs them, using [Sparkle](https://sparkle-project.org). Downloads come from this repository's GitHub releases. An update is installed only if it is signed with Stockbar's update key.
+- **Settings → General → Updates** has the channel, a switch for automatic checks and **Check Now**.
+- Two channels: **Stable** receives released versions. **Testing** also receives a build of every change as it is merged, before it is released. Moving from Testing back to Stable takes effect at the next released version.
+- No profile of your Mac is sent when checking.
+- Builds are made by GitHub Actions and signed without an Apple developer account. That is why a downloaded copy needs **Open Anyway** once, and why macOS asks for Keychain access again after each update.
+
+## Keychain
+
+- The Folync token and its server, the FMP and Twelve Data API keys and the Trading 212 credentials are kept in one Keychain item, "Stockbar credentials". One item means one prompt after an update.
+- Credentials saved by earlier versions are imported the first time they are needed. The old items are removed only after the new item has been written and read back. If a prompt is refused, nothing is removed and Stockbar tries again at the next launch.
+- Checking whether a credential is stored still does not read it, so it never raises a prompt.
+
+## For developers
+
+- A release workflow builds a testing build for every merge into `testing` and a stable release for every version tag, and keeps the signed update feed on the `appcast` branch. See "Release builds and updates" in `Docs/Development.md`.
+- CI packages the Release build the same way the release workflow does.</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/v3.7.0/Stockbar-3.7.0.zip" length="8234986" type="application/octet-stream" sparkle:edSignature="Xp634e1AKEq3ABdVAU+aq5IKn1mU8oB0Br7J3diavT/Omyv48OXq7teGux7EIEivMkdIT92KqvU8M9aWZbv4Bw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 1Q5WE0m08Fvghp0yXazerw5MfYR07pMmtaFsVGva5EWh1JLNtwu1OpScMlStz+ftB1Lafx1ytwmytvBNY0miCg==
-length: 3339
+edSignature: 70d58qPd6nvKiBOWx1JY1t1I35L0hdLqydrRftZryFPEeytp0E5jwMbShs5OWK7RrNsFVZighS8o2I1LZ1STBw==
+length: 4175
 -->
