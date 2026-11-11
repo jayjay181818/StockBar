@@ -11,6 +11,11 @@ struct StockbarSettingsView: View {
     @State private var refreshInterval: TimeInterval
     @State private var snapshotInterval: TimeInterval
     @State private var showingRestoreSheet = false
+    @State private var isRefreshingNow = false
+    @State private var isSavingSnapshot = false
+    /// What "Refresh Now" or "Save Chart Snapshot" last did. Both used to
+    /// give no sign that anything had happened.
+    @State private var nowStatus: String?
     @State private var showingBackupAlert = false
     @State private var backupAlertMessage = ""
     @State private var retentionDays = BackupService.shared.retentionDays
@@ -271,15 +276,27 @@ struct StockbarSettingsView: View {
         Section("Now") {
             HStack(spacing: 12) {
                 Button {
-                    NotificationCenter.default.post(name: .refreshRequested, object: nil)
+                    refreshNow()
                 } label: {
                     Label("Refresh Now", systemImage: "arrow.clockwise")
                 }
+                .disabled(isRefreshingNow)
                 Button {
-                    dataModel.historicalDataManager.forceSnapshot(from: dataModel)
+                    saveChartSnapshot()
                 } label: {
                     Label("Save Chart Snapshot", systemImage: "chart.xyaxis.line")
                 }
+                .disabled(isSavingSnapshot)
+                if isRefreshingNow || isSavingSnapshot {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(isRefreshingNow ? "Refreshing prices" : "Saving snapshot")
+                }
+            }
+            if let nowStatus {
+                Text(nowStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -397,10 +414,10 @@ struct StockbarSettingsView: View {
         case .running(let progress):
             Text(progress)
         case .succeeded:
-            Text("Ready. Prices use it from the next refresh.")
+            Label("Ready. Prices use it from the next refresh.", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .failed(let message):
-            Text(message)
+            Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
         }
     }
@@ -410,8 +427,15 @@ struct StockbarSettingsView: View {
         Section {
             LabeledContent("Last Updated") {
                 HStack(spacing: 8) {
-                    Text(dataModel.currencyConverter.getTimeSinceRefresh())
-                        .foregroundStyle(dataModel.currencyConverter.lastRefreshSuccess ? Color.secondary : Color.orange)
+                    if dataModel.currencyConverter.lastRefreshSuccess {
+                        Text(dataModel.currencyConverter.getTimeSinceRefresh())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Said in words and with a symbol, not by colour alone.
+                        Label("Last update failed · \(dataModel.currencyConverter.getTimeSinceRefresh())",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                     Button {
                         dataModel.currencyConverter.refreshRates(force: true)
                     } label: {
@@ -422,7 +446,7 @@ struct StockbarSettingsView: View {
                     .accessibilityLabel("Refresh exchange rates")
                 }
             }
-            ForEach(["GBP", "EUR", "JPY"], id: \.self) { currency in
+            ForEach(exchangeRateCurrencies, id: \.self) { currency in
                 if let rate = dataModel.currencyConverter.exchangeRates[currency] {
                     LabeledContent("1 USD in \(currency)") {
                         Text(String(format: "%.4f", rate)).monospacedDigit()
@@ -436,6 +460,20 @@ struct StockbarSettingsView: View {
         }
     }
 
+    /// The usual three, plus the display currency and every currency held, so
+    /// the rate behind each converted total can be checked here.
+    private var exchangeRateCurrencies: [String] {
+        var currencies = ["GBP", "EUR", "JPY", dataModel.preferredCurrency]
+        currencies += dataModel.realTimeTrades.compactMap { $0.realTimeInfo.currency }
+        var seen = Set<String>()
+        return currencies
+            .map { code -> String in
+                let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed == "GBp" || trimmed.uppercased() == "GBX" ? "GBP" : trimmed.uppercased()
+            }
+            .filter { !$0.isEmpty && $0 != "USD" && seen.insert($0).inserted }
+    }
+
     @ViewBuilder
     private var templateValidation: some View {
         if let template = dataModel.menuBarDisplaySettings.customTemplate {
@@ -446,11 +484,12 @@ struct StockbarSettingsView: View {
             )
             .font(.caption)
             .foregroundStyle(validation.isValid ? .green : .orange)
-        } else {
-            Text("Tokens: {symbol} {price} {change} {changePct} {dayPL} {currency} {arrow}")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+        // Always listed: the tokens are most needed while a template is being typed.
+        Text("Tokens: \(MenuBarDisplaySettings.templateTokenList)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
     }
 
     private var menuBarVisibilityStatusText: String {
@@ -491,11 +530,45 @@ struct StockbarSettingsView: View {
         lastBackupDate = BackupService.shared.lastBackupDate
     }
 
+    private func refreshNow() {
+        guard !isRefreshingNow else { return }
+        isRefreshingNow = true
+        nowStatus = nil
+        Task {
+            await dataModel.refreshAllTrades()
+            isRefreshingNow = false
+            let time = Date().formatted(date: .omitted, time: .shortened)
+            if let problem = dataModel.quoteRefreshStatus.problemSummary {
+                nowStatus = "Refresh at \(time) had a problem: \(problem)"
+            } else {
+                nowStatus = "Prices refreshed at \(time)."
+            }
+        }
+    }
+
+    private func saveChartSnapshot() {
+        guard !isSavingSnapshot else { return }
+        isSavingSnapshot = true
+        nowStatus = nil
+        let manager = dataModel.historicalDataManager
+        let before = manager.portfolioSnapshots.count + manager.historicalPortfolioSnapshots.count
+        manager.forceSnapshot(from: dataModel)
+        Task {
+            // Recording finishes on a later turn of the main actor.
+            try? await Task.sleep(for: .seconds(1.5))
+            let after = manager.portfolioSnapshots.count + manager.historicalPortfolioSnapshots.count
+            isSavingSnapshot = false
+            nowStatus = after > before
+                ? "Snapshot saved at \(Date().formatted(date: .omitted, time: .shortened))."
+                : "No snapshot was saved. Stockbar needs a current price for every holding first; try Refresh Now."
+        }
+    }
+
     private func performManualBackup() {
         Task {
-            let success = await BackupService.shared.performManualBackup(trades: dataModel.localPortfolioTradesForBackup)
+            let outcome = await BackupService.shared.performManualBackupReportingOutcome(trades: dataModel.localPortfolioTradesForBackup)
             refreshBackupState()
-            backupAlertMessage = success ? "Backup completed." : "Backup failed. See Diagnostics for details."
+            backupAlertMessage = outcome.userMessage
             showingBackupAlert = true
         }
     }

@@ -364,7 +364,7 @@ struct PerformanceChartView: View {
 
     private func buttonBackground(for isSelected: Bool) -> some View {
         Capsule()
-            .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(NSColor.controlBackgroundColor))
+            .fill(isSelected ? Color.accentColor.opacity(0.12) : StockbarPalette.panelFill)
     }
 
     private func buttonBorderColor(isSelected: Bool) -> Color {
@@ -427,7 +427,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -524,7 +524,7 @@ struct PerformanceChartView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(StockbarPalette.panelFill)
             .cornerRadius(8)
         }
     }
@@ -604,7 +604,7 @@ struct PerformanceChartView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Color(NSColor.controlBackgroundColor))
+                .background(StockbarPalette.panelFill)
                 .cornerRadius(8)
             }
         }
@@ -634,7 +634,7 @@ struct PerformanceChartView: View {
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+            .background(isSelected ? Color.accentColor.opacity(0.15) : StockbarPalette.panelFill)
             .foregroundColor(isSelected ? Color.accentColor : (canSelect ? Color.primary : Color.secondary))
             .cornerRadius(12)
             .overlay(
@@ -692,7 +692,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .background(StockbarPalette.sheetHeaderFill)
         .cornerRadius(6)
     }
 
@@ -1333,7 +1333,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .background(StockbarPalette.sheetHeaderFill)
         .cornerRadius(6)
     }
 
@@ -1524,7 +1524,7 @@ struct PerformanceChartView: View {
                 }
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(StockbarPalette.panelFill)
             .cornerRadius(8)
         }
     }
@@ -2229,7 +2229,7 @@ struct PerformanceChartView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
     }
     
@@ -2303,7 +2303,7 @@ struct PerformanceChartView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
     }
     
@@ -2445,7 +2445,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
         .shadow(radius: 2)
     }

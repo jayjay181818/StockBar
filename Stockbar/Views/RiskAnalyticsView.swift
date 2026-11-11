@@ -7,6 +7,8 @@ struct RiskAnalyticsView: View {
     let dataModel: DataModel
 
     @State private var isCalculating = false
+    /// Counts requests so a superseded calculation can tell it is out of date.
+    @State private var requestGeneration = 0
     @State private var riskMetrics: RiskMetricsService.RiskMetrics?
     @State private var drawdownPeriods: [RiskMetricsService.DrawdownPeriod] = []
     @State private var errorMessage: String?
@@ -227,7 +229,7 @@ struct RiskAnalyticsView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(8)
     }
 
@@ -279,7 +281,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -337,7 +339,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -393,7 +395,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -404,7 +406,9 @@ struct RiskAnalyticsView: View {
             Text("Significant Drawdown Periods")
                 .font(.headline)
 
-            Text("All drawdowns exceeding 5%")
+            Text(drawdownPeriods.count > 5
+                 ? "Falls of more than 5% from a peak. Showing 5 of \(drawdownPeriods.count)."
+                 : "Falls of more than 5% from a peak")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -415,7 +419,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(StockbarPalette.panelFill)
         .cornerRadius(12)
     }
 
@@ -463,7 +467,7 @@ struct RiskAnalyticsView: View {
             .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .background(StockbarPalette.sheetHeaderFill)
         .cornerRadius(8)
     }
 
@@ -531,6 +535,10 @@ struct RiskAnalyticsView: View {
     // MARK: - Calculation Logic
 
     private func calculateRiskMetrics() {
+        // Two ranges picked quickly run two calculations; only the latest may
+        // write its answer, or the slower, older one would overwrite it.
+        requestGeneration += 1
+        let generation = requestGeneration
         Task {
             await MainActor.run {
                 isCalculating = true
@@ -558,6 +566,7 @@ struct RiskAnalyticsView: View {
 
             guard !snapshots.isEmpty else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics appear once Stockbar has recorded portfolio values for this time range."
                     isCalculating = false
                 }
@@ -589,6 +598,7 @@ struct RiskAnalyticsView: View {
                 convert: { converter.convert(amount: $0, from: $1, to: preferredCurrency) }
             ) else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "Risk metrics need portfolio values from at least two different days."
                     isCalculating = false
                 }
@@ -608,6 +618,7 @@ struct RiskAnalyticsView: View {
                 )
 
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     self.riskMetrics = metrics
                     self.drawdownPeriods = periods
                     self.currencyNotice = notice
@@ -615,6 +626,7 @@ struct RiskAnalyticsView: View {
                 }
             } else {
                 await MainActor.run {
+                    guard generation == requestGeneration else { return }
                     insufficientDataMessage = "At least two recorded portfolio values are needed in this time range."
                     isCalculating = false
                 }
