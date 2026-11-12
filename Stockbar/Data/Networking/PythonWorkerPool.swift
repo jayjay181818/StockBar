@@ -201,6 +201,9 @@ actor PythonWorkerPool {
 
     /// Stops expired workers; returns true (and ends the reaper) once none are idle.
     private func reapAndCheckEmpty() -> Bool {
+        // A reaper that `idleTimeoutChanged` replaced while it was waiting for
+        // the pool ends here: `reaper` now holds its successor.
+        guard !Task.isCancelled else { return true }
         reapIdleWorkers { !$0.isRunning }
         guard idleWorkers.isEmpty else { return false }
         reaper = nil
