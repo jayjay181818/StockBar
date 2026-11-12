@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Four changes are merged.
+Five changes are merged.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -26,6 +26,10 @@ Four changes are merged.
   dictionary (pull request 90). The memory the app holds allocated at idle is
   10.7 MB lower, 52.2 MB against 62.9 MB, and idle memory is 14.2 MB lower,
   95.8 MB against 110.0 MB, measured in turns.
+- The chart of the portfolio's value reads stored history without each
+  snapshot's positions (pull request 92). Its read of a week of history
+  takes 2 ms against 24 ms, each time the chart reloads. None of the fifteen
+  standard rows moved.
 
 Waiting for a decision:
 
@@ -92,7 +96,8 @@ Figures from either side of a break are not compared with each other.
 3. Done in pull request 87: portfolio history read in batches.
 4. Done in pull request 89: stored history read at launch away from the main
    actor.
-5. Popover chart reads values without positions (`perf/chart-values-read`).
+5. Done in pull request 92: the chart of the portfolio's value reads stored
+   history without each snapshot's positions.
 6. Price history arrays sized to fit (`perf/fitted-price-arrays`).
 7. Done in pull request 90: compact storage for the positions kept with every
    portfolio snapshot, which were the largest single block of the idle heap.
@@ -563,7 +568,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   test runs the script against a stand-in for the
   app that exits at once, and a paragraph in `Scripts/README_PERFORMANCE.md`
   describes it.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `248280a`.
 - Benchmark: not run. No file that goes into the app changes (nothing under
   `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so before and after
   are the same app and all fifteen rows are "not measured".
@@ -581,6 +586,102 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   benchmark's small measuring tool into `build/`, which takes a few seconds.
 - Verdict: retained. It does not explain the failure that prompted it; it
   means the next one can be explained.
+
+### 92: Read the portfolio chart's history without each snapshot's positions
+
+- What: the chart of the portfolio's value, in the menu bar popover and the
+  Overview window, draws one point per stored snapshot from its date, total
+  and currency. For any range longer than a day, unless the value comes from
+  Folync, it read whole snapshots from Core Data, each with the positions held at that moment: one more row per
+  holding for every row it used, fifteen in the benchmark's portfolio. It now
+  asks Core Data for those three columns only
+  (`fetchPortfolioValues`, returning `StoredPortfolioValue`). The rows, their
+  order and the defaults for a missing date or currency are the same. The
+  chart reloads whenever the stored prices or portfolio history change while
+  it is on screen, three or four times during a launch, so the read recurs.
+  The function the chart used to call and the overload that turned whole
+  snapshots into chart points had no other caller and are removed. The only
+  difference to see is in the log, where the chart's read now says
+  "portfolio values" where it said "portfolio snapshots".
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `248280a`, after `42fea1f`, six launches a side in turns
+  on 2026-11-12 from 13:43 to 14:16 UTC, macOS 27.2.1, mains power, all
+  twelve launches with the screen unlocked and the display awake. Named in
+  advance: the chart's own read of a week of stored history, timed from the
+  app's log and expected several times shorter than about 25 ms; no standard
+  row was expected to move. The Mac was busy with other work throughout
+  (load average 7.9 at the start, after waiting 80 s for it to fall below
+  8).
+
+  | Change-specific row | Before | After | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | The chart's read of a week of stored history (730 or 731 snapshots): median (range) | 24 (21 to 30) ms, 20 reads | 2 (1 to 3) ms, 19 reads | -22 ms, about a twelfth of the time | lower: the longest read after is shorter than the shortest before |
+
+  That row is the time between the two lines the read writes to the app's
+  log, taken from the measured launches of the same comparison.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 89.7 (87.5 to 99.3) MB | 87.8 (83.0 to 92.0) MB | -1.8 MB, -2.1% | no measurable change (p = 0.225) |
+  | Idle memory the app holds allocated | 50.5 (46.9 to 51.6) MB | 51.4 (43.8 to 56.4) MB | +0.8 MB, +1.6% | no measurable change (p = 0.515) |
+  | Peak memory, launch and history load | 238.1 (235.1 to 245.8) MB | 240.0 (237.9 to 242.5) MB | +1.9 MB, +0.8% | no measurable change (p = 0.186) |
+  | Idle memory growth across the window | 0.0 (-1.7 to 5.9) MB | 0.0 (-0.2 to 3.2) MB | +0.0 MB | no measurable change (p = 0.879) |
+  | Idle CPU | 0.093 (0.076 to 1.724) s/min | 0.091 (0.087 to 0.398) s/min | -0.003 s/min, -2.7% | no measurable change (p = 0.732) |
+  | Idle CPU wake-ups | 28 (26 to 501) /min | 30 (25 to 43) /min | +2 /min, +5.4% | no measurable change (p = 0.972) |
+  | Idle CPU power | 4.54 (4.40 to 89.35) mW | 4.67 (3.97 to 12.87) mW | +0.13 mW, +3.0% | no measurable change (p = 0.818) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.14 (0.94 to 1.25) s | 1.08 (0.86 to 1.36) s | -0.06 s, -5.3% | no measurable change (p = 0.660) |
+  | Launch to history loaded | 1.08 (0.89 to 1.20) s | 1.06 (0.85 to 1.34) s | -0.03 s, -2.8% | no measurable change (p = 0.894) |
+  | CPU from launch to the idle window | 2.06 (1.93 to 2.16) s | 2.08 (1.99 to 2.14) s | +0.02 s, +0.7% | no measurable change (p = 0.712) |
+  | CPU energy from launch to the idle window | 6.09 (6.01 to 6.44) J | 6.30 (5.64 to 6.50) J | +0.21 J, +3.5% | no measurable change (p = 0.485) |
+  | Python helper start to ready, no network | 0.31 (0.30 to 0.74) s | 0.37 (0.31 to 0.71) s | +0.06 s, +19.4% | no measurable change (p = 0.455) |
+  | Python helper start, CPU | 0.30 (0.29 to 0.42) s | 0.35 (0.30 to 0.43) s | +0.04 s, +14.8% | no measurable change (p = 0.251) |
+  | Python helper memory once started | 71.0 (69.9 to 71.1) MB | 71.0 (71.0 to 71.3) MB | -0.0 MB, -0.1% | no measurable change (p = 0.760) |
+
+  The read fell as expected and no standard row moved, also as expected:
+  three or four reads of 24 ms come to less than 0.1 s, away from the main
+  thread, in a launch that uses 2 s of CPU.
+
+  Not measured, so theoretical: the saving for longer ranges and over a day
+  of use. In these twelve launches the app's own launch read of all 7000
+  snapshots with their positions took a median of 246 ms (222 to 332 ms).
+  That is what the chart's read cost for the range "All" before this change;
+  the new read was not timed at that size. How often the chart reloads in
+  real use was not counted: the benchmark runs without market data.
+
+  One launch on each side had a busier idle window than the rest (501 CPU
+  wake-ups a minute before and 43 after, against 25 to 31 in the other ten).
+  The cause is not established. The verdicts compare ranks, so a single
+  launch does not decide a row. Launch times are longer than in pull request
+  90's comparison for the same reason as the load average: the first window
+  took 1.14 s here with the same app sources that took 0.58 s there.
+
+  A first comparison, of an earlier head of the branch (`d6a5f96`), was
+  stopped part of the way through its first round when the session running
+  it restarted. It
+  left the app's log behind, as pull request 91 arranged, and the log showed
+  a fault in that version: over seven reads in two launches the new read
+  took a median of 21 ms, between 5 and 53 ms, no better than the old one.
+  It ran on the main actor and went back to it between its steps, waiting
+  its turn each time while the launch kept the main actor busy. The read
+  now runs clear of the main actor, as the read it replaces did
+  (`readPortfolioValues`), and the figures above are of that version.
+- Testing: 703 XCTest tests with 0 failures (two new: the values read
+  returns the same snapshots in the same order as the read with positions,
+  on a SQLite store, and it returns nothing when the fetch fails). `checks`,
+  `docs-check` and `build-release` pass at `42fea1f`. The 66 Python helper
+  tests and 75 script tests were run at `d6a5f96`, one commit earlier, and
+  pass; that last commit changed two Swift files only. Every measured launch
+  on both sides logged the same 7000 portfolio snapshots loaded, and the
+  chart's reads returned the same 730 or 731 rows on both sides.
+- Review: read by the author of the change after `experimental` was merged
+  into the branch; no independent review, for a change of about a hundred
+  lines with a test that sets the new read against the old one. The fault
+  above was found by measuring, not by reading.
+- Known issues: none.
+- Verdict: retained. The gain is small and confined to the chart: 22 ms of
+  background work less each time it reloads, more for longer ranges. No
+  standard row improved and none got worse.
 
 ## Rust evaluation, 2026-11-12
 
@@ -783,6 +884,7 @@ launch.
 | Pull request 89 | Fable (orchestrator), with two independent reviews by Opus | Worth it. The first review found a real defect: a slow launch read could undo the UK price scale repair for the session. It was fixed, with tests, before the comparison. The second review, of the fix, found no defect and pointed out a behaviour change the description had missed |
 | Pull request 90 | Fable (orchestrator), with one independent review by Opus | Worth it. The change was written before the transition. The review read the branch after `experimental` was merged into it and caught that the tests no longer compiled, before a build had been spent finding out |
 | Pull request 91 | Fable (orchestrator) | Done directly: a dozen lines of shell and one test |
+| Pull request 92 | Fable (orchestrator) | Done directly. The change was written before the transition; it was re-read, trimmed of the code it replaces and corrected after its first measurement |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is

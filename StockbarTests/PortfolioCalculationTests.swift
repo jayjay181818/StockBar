@@ -676,15 +676,12 @@ class PortfolioCalculationTests: XCTestCase {
 
     func testPortfolioHistoryRejectsCurrencyMixingAndPartialWeekReturn() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let snapshots = [
-            HistoricalPortfolioSnapshot(date: now.addingTimeInterval(-7200), totalValue: 214981,
-                totalGains: 0, totalCost: 0, currency: "USD", portfolioComposition: [:]),
-            HistoricalPortfolioSnapshot(date: now.addingTimeInterval(-3600), totalValue: 165525,
-                totalGains: 0, totalCost: 0, currency: "GBP", portfolioComposition: [:]),
-            HistoricalPortfolioSnapshot(date: now, totalValue: 165525,
-                totalGains: 0, totalCost: 0, currency: "GBP", portfolioComposition: [:])
+        let values = [
+            StoredPortfolioValue(date: now.addingTimeInterval(-7200), totalValue: 214981, currency: "USD"),
+            StoredPortfolioValue(date: now.addingTimeInterval(-3600), totalValue: 165525, currency: "GBP"),
+            StoredPortfolioValue(date: now, totalValue: 165525, currency: "GBP")
         ]
-        let stored = PortfolioMenuChartDataBuilder.matchingCurrencyPoints(snapshots, currency: "GBP")
+        let stored = PortfolioMenuChartDataBuilder.matchingCurrencyPoints(values, currency: "GBP")
         XCTAssertEqual(stored.count, 2)
         XCTAssertTrue(stored.allSatisfy { $0.value == 165525 })
         let partial = stored.map { MenuChartDataPoint(date: $0.date, price: $0.value, symbol: "Portfolio") }

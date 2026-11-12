@@ -204,6 +204,14 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
     }
 }
 
+/// One stored portfolio snapshot without its positions: all a chart of the
+/// portfolio's value reads.
+struct StoredPortfolioValue: Sendable, Equatable {
+    let date: Date
+    let totalValue: Double
+    let currency: String
+}
+
 struct PositionSnapshot: Codable, Sendable {
     let symbol: String
     let units: Double

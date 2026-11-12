@@ -75,6 +75,13 @@ final class StoredPriceHistoryAdoptionTests: XCTestCase {
         XCTAssertTrue(snapshots.isEmpty)
     }
 
+    func testThePortfolioValuesReadIsEmptyWhenTheFetchFails() async {
+        let values = await HistoricalDataManager.readPortfolioValues(
+            timeRange: .all, from: StoredHistoryStub(portfolio: nil)
+        )
+        XCTAssertTrue(values.isEmpty)
+    }
+
     // MARK: - Taking the read into memory
 
     func testWithNothingInMemoryTheStoredSeriesIsTakenAsItIsAndEachSymbolIsNoted() async {
@@ -202,6 +209,11 @@ private struct StoredHistoryStub: HistoricalDataServiceProtocol {
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot] {
         guard let portfolio else { throw Unavailable() }
         return portfolio
+    }
+
+    func fetchPortfolioValues(from startDate: Date, to endDate: Date) async throws -> [StoredPortfolioValue] {
+        guard let portfolio else { throw Unavailable() }
+        return portfolio.map { StoredPortfolioValue(date: $0.date, totalValue: $0.totalValue, currency: $0.currency) }
     }
 
     // The launch read uses none of these.
