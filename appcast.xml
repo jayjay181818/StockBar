@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Stockbar</title>
+    <link>https://github.com/jayjay181818/StockBar</link>
+    <description>Stockbar updates.</description>
+    <language>en</language>
+    <item>
+      <title>3.7.0 (370.0.12)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.12</link>
+      <pubDate>Thu, 12 Nov 2026 22:35:44 +0000</pubDate>
+      <sparkle:version>370.0.12</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.0.12 of Stockbar 3.7.0. Changes since v3.7.0:
+
+- Add an Experimental update channel that follows the experimental branch (#97)
+- Record milestone 1: every merged change measured against the baseline (#96)
+- Keep the popover chart's line from doubling back at a gap in time (#95)
+- Size the in-memory price history arrays to fit (#93)
+- Read the portfolio chart's history without each snapshot's positions (#92)
+- Keep the app's log when a benchmark launch fails (#91)
+- Keep each portfolio snapshot's positions in a sorted array (#90)
+- Read the stored history at launch away from the main thread (#89)
+- Record the Rust evaluation and add the script behind its figures (#88)
+- Read stored portfolio history in batches (#87)
+- Stop building test-coverage counters into release builds (#85)
+- Add the benchmark procedure, the baseline and the experimental log (#84)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.0.12/Stockbar-370.0.12.zip" length="7164147" type="application/octet-stream" sparkle:edSignature="Ip7WIh5+dU8TVZgMp4B15TbtQVwsxdu05TJrddiDXrFlZpc3zRkmyCEAsq/Ho29cmAM1XKBmy/XYVqPa8cvRCg=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: korIvhYPQKvPPpj9rmDDJqV0aHGB2p8xqSeFSag5iiHANB2NL5aqO59PlUZanzBossN6yYm+vfkrItamCTstBA==
+length: 2279
+-->
