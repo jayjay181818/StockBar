@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Six changes are merged.
+Seven changes are merged.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -33,11 +33,20 @@ Six changes are merged.
 - The price history held in memory is kept in arrays sized to their points
   (pull request 93). Those arrays hold 5.25 MB against 8.69 MB, 3.44 MB
   less, in every launch.
+- The popover charts no longer draw their line doubling back to the left
+  either side of a gap in time, such as the night between two trading days
+  (pull request 95). A bug fix, not an optimisation: the benchmark does not
+  run its code, and no row moved in both of the two runs made for it.
 
 Waiting for a decision:
 
 - Pull request 86, where the idle Python helper exits after 90 seconds. It
   trades memory for CPU.
+- Pull request 94, where `script/package_release.sh` refuses to package an
+  app built with test-coverage counters. It changes the release packaging
+  step, and it has to reach `testing` and `main` together with pull request
+  85's scheme change: without that change every build carries the counters
+  and would be refused.
 - Whether the market data fetch should leave Python. The
   [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
   component was moved to Rust.
@@ -81,7 +90,7 @@ Figures from either side of a break are not compared with each other.
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
 | Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
-| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 is open for a decision, and the packaging check from plan item 1 is still to be opened |
+| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull requests 86 and 94 are open for a decision |
 | Stage 3 changes | After the carried-over changes |
 | First checkpoint tag and soak run against the baseline | After the carried-over changes |
 | Recommendation to promote to `testing` | Not yet |
@@ -91,8 +100,7 @@ Figures from either side of a break are not compared with each other.
 1. Done in pull request 85: release builds without test-coverage counters.
    The branch also carried a check in `script/package_release.sh` that refuses
    an instrumented binary. That is a change to the release packaging step, so
-   it came off the branch and becomes a separate pull request that stays open
-   for a decision.
+   it came off the branch and is open as pull request 94 for a decision.
 2. Open as pull request 86, waiting for a decision: the idle Python helper
    exits after 90 seconds. It trades memory for CPU, and its effect shows only
    on real data.
@@ -710,7 +718,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   did not have this part; it was added before anything was measured.
 
   The points kept and their order are the same.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `c4f4cff`
 - Benchmark: before `f0fdcc3`, after `a18eda4`, six launches a side in turns
   on 2026-11-12 from 14:31 to 15:04 UTC, macOS 27.2.1, mains power, all
   twelve launches with the screen unlocked and the display awake. Named in
@@ -780,6 +788,168 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   recorded as plan item 11.
 - Verdict: retained, for 3.44 MB less allocated memory at idle with nothing
   given up.
+
+### 95: Keep the popover chart's line from doubling back at a gap in time
+
+- What: a bug fix. The owner reported it from a second Mac running 3.7.0: in
+  the popover's chart of the last 24 hours, the line swung back to the left
+  just before the night between two trading sessions and overshot just after
+  it.
+
+  The two popover charts, the portfolio's and each stock's, smooth their
+  line with a curve whose direction at each point comes from the points
+  either side of it. Prices five minutes apart sit about a pixel apart, and
+  the first price of the next morning sits more than a hundred pixels
+  further on. That far neighbour set a pull over twenty pixels long on a
+  piece of curve one pixel wide, so the curve ran backwards before the gap
+  and past its end point after it.
+
+  The pull is now shortened, keeping its direction, to reach no further
+  than a third of the way across its own piece of the line. The line then
+  only ever moves forward in time.
+
+  Behaviour change, deliberate: evenly spaced points give a pull of exactly
+  a third, so their curves are the same as before, to the last digit. Where
+  a piece of the line sits beside a wider one, around a night or a weekend,
+  its curve is tighter at that end. Nothing else changes: the same points,
+  the same scale, the same hover. The main window's charts are drawn by
+  Swift Charts and never had the fault.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `c4f4cff`, after `4ba6ea8`, measured twice on
+  2026-11-12, each time six launches a side in turns on macOS 27.2.1 and
+  mains power, all twelve launches with the screen unlocked and the display
+  awake. Named in advance: no row expected to move, because the benchmark
+  opens the main window and never the popover.
+
+  That reason was checked, and it holds. A temporary copy of the branch,
+  not committed, left an empty file behind whenever the popover chart was
+  built, drew, or worked out a curve. Built and started the way the
+  benchmark starts the app, for a warm-up launch and a measured one, it
+  left none of the three files, and its binary did hold the three file
+  names. The code this pull request changes does not run in the benchmark,
+  so no row below can have moved because of what that code does.
+
+  | Change-specific row | Before | After | Change | How measured |
+  | --- | --- | --- | --- | --- |
+  | Furthest the drawn line moves back to the left: a made-up day of two sessions with a night between, 158 points on a chart 300 points wide | 9.4 points | 0.0 points | -9.4 points | Each piece of the curve stepped through at 200 positions; exact arithmetic, one run |
+  | Working out the control points of that whole line | 0.26 (0.24 to 0.38) µs | 0.51 (0.49 to 0.61) µs | +0.25 µs | A copy of both formulas compiled with `-O`, 25 timings of 2,000 lines each, in turns; a second run gave 0.26 and 0.50 |
+
+  That is a quarter of a microsecond more for each line drawn, where one
+  frame at 60 a second is 16,667 µs.
+
+  First run, 16:06 to 16:40 UTC. The load average was 7.3 at the start,
+  after waiting 80 s for it to fall below 8.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 99.8 (99.2 to 102.1) MB | 96.5 (92.4 to 102.6) MB | -3.2 MB, -3.2% | no measurable change (p = 0.457) |
+  | Idle memory the app holds allocated | 54.6 (53.8 to 55.6) MB | 52.0 (48.3 to 55.3) MB | -2.6 MB, -4.7% | no measurable change (p = 0.292) |
+  | Peak memory, launch and history load | 244.4 (241.5 to 251.6) MB | 243.9 (234.4 to 250.8) MB | -0.5 MB, -0.2% | no measurable change (p = 0.818) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.5) MB | 0.0 (0.0 to 0.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.085 (0.081 to 0.087) s/min | 0.089 (0.075 to 0.100) s/min | +0.005 s/min, +5.9% | no measurable change (p = 0.563) |
+  | Idle CPU wake-ups | 27 (24 to 31) /min | 31 (24 to 43) /min | +4 /min, +14.8% | no measurable change (p = 0.121) |
+  | Idle CPU power | 4.09 (3.97 to 4.22) mW | 4.33 (4.17 to 4.51) mW | +0.25 mW, +6.0% | higher (p = 0.006) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.47 (0.45 to 0.52) s | 0.63 (0.49 to 1.16) s | +0.16 s, +34.0% | higher (p = 0.004) |
+  | Launch to history loaded | 0.58 (0.57 to 0.62) s | 0.77 (0.57 to 1.15) s | +0.19 s, +31.6% | no measurable change (p = 0.087) |
+  | CPU from launch to the idle window | 1.89 (1.87 to 1.99) s | 1.96 (1.89 to 2.24) s | +0.07 s, +3.7% | no measurable change (p = 0.089) |
+  | CPU energy from launch to the idle window | 6.21 (5.80 to 6.29) J | 6.07 (4.39 to 6.44) J | -0.14 J, -2.3% | no measurable change (p = 0.699) |
+  | Python helper start to ready, no network | 0.36 (0.31 to 0.70) s | 0.29 (0.28 to 0.59) s | -0.07 s, -19.2% | no measurable change (p = 0.167) |
+  | Python helper start, CPU | 0.34 (0.31 to 0.43) s | 0.29 (0.28 to 0.36) s | -0.05 s, -14.7% | no measurable change (p = 0.063) |
+  | Python helper memory once started | 71.0 (70.9 to 71.2) MB | 71.0 (70.9 to 71.0) MB | -0.1 MB, -0.1% | no measurable change (p = 0.297) |
+
+  Repeat, 17:34 to 18:06 UTC. The Mac had been asleep. It woke at 17:27 UTC
+  on battery and was on mains by 17:32; the run waited until three checks
+  in a row found it on mains with a load average below 8. The load average
+  over the five minutes before the start was 28.6, and the battery charged
+  from 47 to 68 percent while the run went on.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 102.6 (101.8 to 103.6) MB | 101.6 (101.3 to 102.5) MB | -1.0 MB, -1.0% | possibly lower (p = 0.013) |
+  | Idle memory the app holds allocated | 57.0 (56.4 to 57.4) MB | 56.3 (55.2 to 57.0) MB | -0.8 MB, -1.3% | no measurable change (p = 0.071) |
+  | Peak memory, launch and history load | 249.3 (247.5 to 251.4) MB | 248.9 (245.1 to 261.0) MB | -0.4 MB, -0.2% | no measurable change (p = 0.556) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.190 (0.144 to 0.194) s/min | 0.198 (0.193 to 0.205) s/min | +0.009 s/min, +4.5% | higher (p = 0.006) |
+  | Idle CPU wake-ups | 25 (24 to 27) /min | 24 (23 to 25) /min | -1 /min, -4.0% | possibly lower (p = 0.037) |
+  | Idle CPU power | 3.69 (3.56 to 4.07) mW | 3.70 (3.61 to 4.27) mW | +0.01 mW, +0.3% | no measurable change (p = 0.665) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.55 (0.54 to 0.61) s | 0.59 (0.53 to 0.76) s | +0.04 s, +7.3% | no measurable change (p = 0.281) |
+  | Launch to history loaded | 0.58 (0.56 to 0.72) s | 0.66 (0.55 to 0.74) s | +0.08 s, +12.8% | no measurable change (p = 0.561) |
+  | CPU from launch to the idle window | 2.08 (2.04 to 2.13) s | 2.12 (2.07 to 2.24) s | +0.04 s, +1.9% | no measurable change (p = 0.130) |
+  | CPU energy from launch to the idle window | 6.07 (5.98 to 6.36) J | 6.36 (6.30 to 6.54) J | +0.28 J, +4.6% | possibly higher (p = 0.017) |
+  | Python helper start to ready, no network | 0.29 (0.27 to 0.56) s | 0.31 (0.27 to 0.87) s | +0.01 s, +3.4% | no measurable change (p = 0.983) |
+  | Python helper start, CPU | 0.29 (0.27 to 0.36) s | 0.30 (0.27 to 0.38) s | +0.01 s, +3.4% | no measurable change (p = 0.814) |
+  | Python helper memory once started | 71.0 (70.9 to 71.1) MB | 71.0 (70.9 to 71.2) MB | +0.0 MB, +0.1% | no measurable change (p = 0.374) |
+
+  Three rows were marked "higher" across the two runs, none of them in
+  both. Each follows a step in the Mac's state part of the way through a
+  run:
+
+  - Launch to first window, first run. The six launches of this branch
+    were measured in two rounds of three. The first round took 0.70, 1.16
+    and 1.04 s and the second 0.56, 0.56 and 0.49 s, against 0.45 to 0.52 s
+    for `experimental` either side of them. In the repeat the two sides
+    took 0.54 to 0.61 s and 0.53 to 0.76 s: no measurable change
+    (p = 0.281).
+  - Idle CPU power, first run: 4.33 mW against 4.09 mW. In the repeat, 3.70
+    mW against 3.69 mW: no measurable change (p = 0.665).
+  - Idle CPU, repeat. The first two launches of the run, both of
+    `experimental`, used 0.150 and 0.144 s/min. The other ten used 0.189 to
+    0.205 s/min: `experimental` 0.189 to 0.194 in four launches and this
+    branch 0.193 to 0.205 in six. The verdict rests on those first two
+    launches. In the first run the row was 0.085 against 0.089 s/min, no
+    measurable change (p = 0.563). Every launch of the repeat, on both
+    sides, used about twice the CPU that the same two builds had used
+    ninety minutes earlier on the same workload, so that difference is the
+    Mac, which had just woken and was charging.
+
+  The three rows marked "possibly" in the repeat (idle memory 1.0 MB lower,
+  wake-ups 1 a minute lower, launch energy 0.28 J higher) were "no
+  measurable change" in the first run, two of them with the opposite sign.
+
+  So this pull request made no measurable change. What the two runs do
+  show is a limit of the benchmark: its verdict treats twelve launches as
+  twelve independent measurements, and when the Mac changes state in a
+  step during a run, launches measured together share that state. A row
+  that moves without having been named in advance is therefore repeated
+  before it counts, whatever its p value. "How this branch works" now says
+  so.
+
+  Not measured: the popover's drawing time in the running app, and energy
+  while the popover is open. The benchmark has no step that opens the
+  popover, and the arithmetic in the first table is the only part of the
+  drawing that changed.
+- Testing: 710 XCTest tests with 0 failures (five new), 66 Python helper
+  tests and 75 script tests pass, and `checks`, `docs-check` and
+  `build-release` pass, all at `4ba6ea8`. With the old formula put back,
+  four of the five new tests fail: the line moves back, a pull reaches
+  outside its own piece, the pull before the night is 22.8 points long
+  where a third of the piece is 0.33, and two points at the same time are
+  not joined by a straight line. The fifth, that evenly spaced points keep
+  the curve they had, passes either way, as it should.
+
+  The app's own chart view was also drawn to a picture by a temporary test,
+  not committed, for a made-up day of two sessions: with the old formula it
+  shows the hook before the night and the overshoot after it, as in the
+  report, and with the fix neither. Six other made-up shapes were drawn
+  both ways from a copy of the two formulas. Evenly spaced points and two
+  points come out identical; daily closes with weekends differ by control
+  points moved at most 2.3 points, with no visible change of shape; six
+  unevenly spaced points, three sessions with two nights, and three points
+  each lose a backward movement of 15.1, 7.3 and 1.3 points.
+
+  Not checked on real data: the Mac that showed the fault runs the released
+  3.7.0, and the fix reaches an installed app only through a release.
+- Review: read by the author of the change, together with the arithmetic
+  for why the line cannot turn back (a piece of curve whose two control
+  points lie in order between its end points only moves forward). No
+  independent review, for about twenty lines of drawing arithmetic whose
+  result was looked at directly in seven shapes.
+- Known issues: none in the change. The benchmark marked rows for code it
+  never ran; see the record above.
+- Verdict: retained. It is a correctness fix, the benchmark does not run
+  its code, and no row moved in both of its two runs.
 
 ## Rust evaluation, 2026-11-12
 
@@ -910,6 +1080,9 @@ them starts without the repository owner's decision.
   request. A row counts as "lower" or "higher" below p = 0.01. Between 0.01
   and 0.05 it is "possibly" and needs a repeat. Anything else is "no
   measurable change". Each pull request names the rows it is meant to move.
+  A row that moves without having been named is repeated before it counts,
+  whatever its p value: pull request 95 had three such rows across two runs,
+  for code the benchmark never runs.
 - Merge bar: the app builds cleanly, no new test failures, the affected
   behaviour still works, the benchmark record is complete, no known
   regression. A change that trades one metric for another stays open for a
@@ -984,6 +1157,8 @@ launch.
 | Pull request 91 | Fable (orchestrator) | Done directly: a dozen lines of shell and one test |
 | Pull request 92 | Fable (orchestrator) | Done directly. The change was written before the transition; it was re-read, trimmed of the code it replaces and corrected after its first measurement |
 | Pull request 93 | Fable (orchestrator) | Done directly. The carried-over change was nine lines; reading the append path before measuring showed it would undo itself in use, and the step growth and two tests were added |
+| Pull request 94, open for a decision | Fable (orchestrator) | Done directly: seven lines of shell, two tests and a paragraph of documentation, tried by hand on a build with the counters and one without |
+| Pull request 95 | Fable (orchestrator) | Done directly: found from the owner's screenshot and the drawing code, then checked by drawing the app's own chart view with the old formula and the new. A probe build showed the benchmark never draws that chart, which settled three rows the benchmark had marked |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
