@@ -183,19 +183,24 @@ struct HistoricalPortfolioSnapshot: Codable, Identifiable, Sendable {
     let totalGains: Double
     let totalCost: Double // Initial investment amount
     let currency: String
-    let portfolioComposition: [String: PositionSnapshot] // Track individual positions
+    let portfolioComposition: PositionSnapshots // Track individual positions
 
     private enum CodingKeys: String, CodingKey {
         case date, totalValue, totalGains, totalCost, currency, portfolioComposition
     }
     
-    init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: [String: PositionSnapshot]) {
+    init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: PositionSnapshots) {
         self.date = date
         self.totalValue = totalValue
         self.totalGains = totalGains
         self.totalCost = totalCost
         self.currency = currency
         self.portfolioComposition = portfolioComposition
+    }
+
+    init(date: Date, totalValue: Double, totalGains: Double, totalCost: Double, currency: String, portfolioComposition: [String: PositionSnapshot]) {
+        self.init(date: date, totalValue: totalValue, totalGains: totalGains, totalCost: totalCost,
+                  currency: currency, portfolioComposition: PositionSnapshots(portfolioComposition))
     }
 }
 
@@ -205,6 +210,92 @@ struct PositionSnapshot: Codable, Sendable {
     let priceAtDate: Double
     let valueAtDate: Double
     let currency: String
+}
+
+/// The positions held at one moment, looked up by symbol.
+///
+/// Every portfolio snapshot kept in memory carries one of these and there are
+/// thousands of snapshots, so the positions are an array sorted by symbol
+/// instead of a dictionary: 56 bytes a position, where a dictionary's hash
+/// table for 15 holdings takes about three times that. A lookup is a binary
+/// search. It is still written to and read from JSON as a dictionary keyed by
+/// symbol.
+struct PositionSnapshots: Sendable {
+    /// Ascending by symbol, one position per symbol.
+    private let positions: [PositionSnapshot]
+
+    private init(sortedBySymbol positions: [PositionSnapshot]) {
+        self.positions = positions
+    }
+
+    /// From a dictionary keyed by symbol. A position filed under a key other
+    /// than its own symbol takes the key as its symbol, so it is still found
+    /// under that key.
+    init(_ positionsBySymbol: [String: PositionSnapshot] = [:]) {
+        var positions = positionsBySymbol.map { symbol, position in
+            position.symbol == symbol ? position : PositionSnapshot(
+                symbol: symbol, units: position.units, priceAtDate: position.priceAtDate,
+                valueAtDate: position.valueAtDate, currency: position.currency
+            )
+        }
+        positions.sort { $0.symbol < $1.symbol }
+        self.init(sortedBySymbol: positions)
+    }
+
+    /// From positions in any order. A repeated symbol keeps its first position.
+    init(firstValuesFor positions: some Collection<PositionSnapshot>) {
+        var sorted = Array(positions)
+        sorted.sort { $0.symbol < $1.symbol }
+        if zip(sorted, sorted.dropFirst()).contains(where: { $0.symbol == $1.symbol }) {
+            // Sorting may have reordered the repeats, so pick the first of each
+            // symbol from the order given.
+            var seen = Set<String>()
+            sorted = positions.filter { seen.insert($0.symbol).inserted }.sorted { $0.symbol < $1.symbol }
+        }
+        self.init(sortedBySymbol: sorted)
+    }
+
+    /// The position in `symbol`, or nil when it was not held.
+    subscript(symbol: String) -> PositionSnapshot? {
+        var low = 0
+        var high = positions.count
+        while low < high {
+            let middle = (low + high) / 2
+            if positions[middle].symbol < symbol {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        guard low < positions.count, positions[low].symbol == symbol else { return nil }
+        return positions[low]
+    }
+
+    /// The symbols held, in ascending order.
+    var symbols: [String] { positions.map(\.symbol) }
+
+    /// The positions that satisfy `isIncluded`, still looked up by symbol.
+    func filter(_ isIncluded: (PositionSnapshot) throws -> Bool) rethrows -> PositionSnapshots {
+        PositionSnapshots(sortedBySymbol: try positions.filter(isIncluded))
+    }
+}
+
+/// The positions themselves, in ascending order of symbol.
+extension PositionSnapshots: RandomAccessCollection {
+    var startIndex: Int { positions.startIndex }
+    var endIndex: Int { positions.endIndex }
+    subscript(index: Int) -> PositionSnapshot { positions[index] }
+}
+
+extension PositionSnapshots: Codable {
+    init(from decoder: Decoder) throws {
+        self.init(try decoder.singleValueContainer().decode([String: PositionSnapshot].self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(Dictionary(positions.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first }))
+    }
 }
 
 // MARK: - Portfolio Composition Tracking

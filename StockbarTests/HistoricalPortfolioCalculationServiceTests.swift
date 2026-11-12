@@ -64,7 +64,7 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(snapshots.count, 1)
         let snapshot = try XCTUnwrap(snapshots.first)
         XCTAssertEqual(snapshot.totalValue, 250, accuracy: 0.01)
-        XCTAssertEqual(snapshot.portfolioComposition.keys.sorted(), ["GOOD"])
+        XCTAssertEqual(snapshot.portfolioComposition.symbols, ["GOOD"])
     }
 
     func testGainsUseOnlyValuedPositionsWithAReadableCost() async throws {
