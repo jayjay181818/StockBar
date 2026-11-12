@@ -1370,9 +1370,37 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Fourteen rows show no measurable change. Idle CPU wake-ups came out
   "possibly higher", 26 a minute against 24 (p = 0.022). Nothing this pull
   request adds runs while the benchmark's app idles, and a "possibly" row
-  needs a repeat before it counts either way. The repeat was started as
-  this entry was written; its table is added here before the pull request
-  is merged.
+  needs a repeat before it counts either way.
+
+  Repeat, 21:46 to 22:19 UTC, with the same two commits under the same
+  conditions:
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 100.2 (97.9 to 103.7) MB | 99.1 (98.1 to 100.4) MB | -1.1 MB, -1.0% | no measurable change (p = 0.554) |
+  | Idle memory the app holds allocated | 54.9 (45.6 to 57.5) MB | 54.8 (54.3 to 55.5) MB | -0.1 MB, -0.1% | no measurable change (p = 0.974) |
+  | Peak memory, launch and history load | 245.6 (240.1 to 256.1) MB | 244.8 (243.3 to 245.7) MB | -0.8 MB, -0.3% | no measurable change (p = 0.777) |
+  | Idle memory growth across the window | 0.0 (-0.0 to -0.0) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.079 (0.070 to 0.191) s/min | 0.079 (0.068 to 0.084) s/min | +0.001 s/min, +0.6% | no measurable change (p = 0.630) |
+  | Idle CPU wake-ups | 26 (23 to 28) /min | 24 (24 to 25) /min | -2 /min, -7.7% | possibly lower (p = 0.050) |
+  | Idle CPU power | 4.21 (4.08 to 4.50) mW | 4.09 (3.95 to 4.41) mW | -0.12 mW, -2.9% | no measurable change (p = 0.329) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.55 (0.51 to 0.55) s | 0.55 (0.53 to 0.56) s | +0.00 s, +0.0% | no measurable change (p = 0.387) |
+  | Launch to history loaded | 0.59 (0.54 to 0.62) s | 0.59 (0.57 to 0.61) s | +0.01 s, +0.8% | no measurable change (p = 0.524) |
+  | CPU from launch to the idle window | 1.97 (1.81 to 2.12) s | 1.82 (1.81 to 1.87) s | -0.15 s, -7.6% | possibly lower (p = 0.043) |
+  | CPU energy from launch to the idle window | 6.19 (5.97 to 6.46) J | 5.97 (5.90 to 6.12) J | -0.21 J, -3.4% | possibly lower (p = 0.026) |
+  | Python helper start to ready, no network | 0.28 (0.28 to 0.54) s | 0.28 (0.28 to 0.46) s | +0.00 s, +0.0% | no measurable change (p = 0.697) |
+  | Python helper start, CPU | 0.28 (0.28 to 0.34) s | 0.28 (0.28 to 0.32) s | +0.00 s, +0.0% | no measurable change (p = 0.697) |
+  | Python helper memory once started | 71.0 (71.0 to 71.4) MB | 71.0 (70.9 to 71.0) MB | +0.0 MB, +0.0% | no measurable change (p = 0.273) |
+
+  In the repeat idle CPU wake-ups came out "possibly lower", 24 a minute
+  against 26 (p = 0.050), the opposite of the first run. CPU and CPU energy
+  from launch to the idle window came out "possibly lower" as well (p =
+  0.043 and 0.026); in the first run both were "no measurable change" (p =
+  0.290 and 0.193). No row moved in both runs, so this pull request made no
+  measurable change, as named in advance. The first run's launches used
+  about two and a half times the idle CPU of the repeat's, 0.20 against
+  0.08 s/min on both sides, which is the Mac's state and not the build.
 
   An earlier attempt, started at 20:43 UTC, was cut short after six of its
   twelve launches when the tool that had started it restarted. Its launches
