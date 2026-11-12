@@ -30,20 +30,57 @@ final class AppUpdateServiceTests: XCTestCase {
         XCTAssertEqual(UpdateChannel.stored(in: defaults), .stable)
     }
 
-    func testOnlyTheTestingChannelSeesTestingBuilds() {
+    func testEachChannelSeesOnlyItsOwnBuildsBesidesReleasedOnes() {
         XCTAssertTrue(UpdateChannel.stable.allowedFeedChannels.isEmpty)
         XCTAssertEqual(UpdateChannel.testing.allowedFeedChannels, [UpdateChannel.testingFeedChannel])
+        XCTAssertEqual(UpdateChannel.experimental.allowedFeedChannels, [UpdateChannel.experimentalFeedChannel])
     }
 
-    /// The feed is written by a Python script and read by the app; a testing
-    /// build is only offered when both use the same channel name.
-    func testFeedScriptWritesTheChannelNameTheAppAllows() throws {
-        let script = try String(
+    func testStoredExperimentalChannelIsRead() throws {
+        let defaults = try makeDefaults()
+        defaults.set(UpdateChannel.experimental.rawValue, forKey: UpdateChannel.defaultsKey)
+
+        XCTAssertEqual(UpdateChannel.stored(in: defaults), .experimental)
+    }
+
+    func testOnlyTheExperimentalChannelReadsTheExperimentalFeed() {
+        let feed = "https://example.com/experimental/appcast.xml"
+
+        XCTAssertEqual(UpdateChannel.experimental.feedOverride(experimentalFeed: feed, liveRequestsAllowed: true), feed)
+        for channel in [UpdateChannel.stable, .testing] {
+            XCTAssertNil(channel.feedOverride(experimentalFeed: feed, liveRequestsAllowed: true), channel.rawValue)
+        }
+    }
+
+    func testExperimentalChannelWithoutAUsableFeedReadsTheOrdinaryOne() {
+        for feed in [nil, "", "appcast.xml"] {
+            XCTAssertNil(UpdateChannel.experimental.feedOverride(experimentalFeed: feed, liveRequestsAllowed: true))
+        }
+    }
+
+    func testIsolatedRunReadsAnExperimentalFeedOnlyOnThisMac() {
+        XCTAssertNil(UpdateChannel.experimental.feedOverride(
+            experimentalFeed: "https://example.com/experimental/appcast.xml",
+            liveRequestsAllowed: false
+        ))
+        let local = "http://127.0.0.1:8123/appcast.xml"
+        XCTAssertEqual(UpdateChannel.experimental.feedOverride(experimentalFeed: local, liveRequestsAllowed: false), local)
+    }
+
+    /// The feeds are written by a Python script and read by the app; a testing
+    /// or experimental build is only offered when both use the same channel name.
+    func testFeedScriptWritesTheChannelNamesTheAppAllows() throws {
+        let script = try releaseFeedScript()
+
+        XCTAssertTrue(script.contains("TESTING = \"\(UpdateChannel.testingFeedChannel)\""))
+        XCTAssertTrue(script.contains("EXPERIMENTAL = \"\(UpdateChannel.experimentalFeedChannel)\""))
+    }
+
+    private func releaseFeedScript() throws -> String {
+        try String(
             contentsOf: Self.repositoryRoot.appendingPathComponent("Scripts/release_feed.py"),
             encoding: .utf8
         )
-
-        XCTAssertTrue(script.contains("TESTING = \"\(UpdateChannel.testingFeedChannel)\""))
     }
 
     // MARK: Availability
@@ -120,5 +157,26 @@ final class AppUpdateServiceTests: XCTestCase {
         XCTAssertEqual(info["SURequireSignedFeed"] as? Bool, true)
         XCTAssertEqual(info["SUVerifyUpdateBeforeExtraction"] as? Bool, true)
         XCTAssertEqual(info["SUEnableSystemProfiling"] as? Bool, false)
+    }
+
+    /// The app reads each feed from the branch the release workflow publishes
+    /// it to, and the script names both branches.
+    func testShippedFeedsAreTheBranchesTheFeedScriptPublishes() throws {
+        let data = try Data(contentsOf: Self.repositoryRoot.appendingPathComponent("Stockbar/Info.plist"))
+        let info = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        let script = try releaseFeedScript()
+        let repository = "https://raw.githubusercontent.com/jayjay181818/StockBar"
+
+        for (key, constant) in [("SUFeedURL", "FEED_BRANCH"), (UpdateChannel.experimentalFeedKey, "EXPERIMENTAL_FEED_BRANCH")] {
+            let assignment = try XCTUnwrap(
+                script.split(separator: "\n").first { $0.hasPrefix("\(constant) = \"") },
+                constant
+            )
+            let branch = assignment.dropFirst("\(constant) = \"".count).dropLast()
+            XCTAssertEqual(info[key] as? String, "\(repository)/\(branch)/appcast.xml", key)
+        }
+        XCTAssertNotEqual(info["SUFeedURL"] as? String, info[UpdateChannel.experimentalFeedKey] as? String)
     }
 }

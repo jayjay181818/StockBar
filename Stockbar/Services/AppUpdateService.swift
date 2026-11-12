@@ -8,11 +8,20 @@ enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
     case stable
     /// Every build of the `testing` branch, as well as released versions.
     case testing
+    /// Every build of the `experimental` branch, which are listed in a feed of
+    /// their own. A release or a testing build arrives once that branch has it.
+    case experimental
 
     static let defaultsKey = "updates.channel"
     /// The name testing builds carry in the feed (`<sparkle:channel>`).
     /// `Scripts/release_feed.py` writes the same name.
     static let testingFeedChannel = "testing"
+    /// The name experimental builds carry in their feed, also written by
+    /// `Scripts/release_feed.py`.
+    static let experimentalFeedChannel = "experimental"
+    /// The bundle's key for the address of the feed experimental builds are
+    /// listed in. `SUFeedURL` is the feed of the other two channels.
+    static let experimentalFeedKey = "StockbarExperimentalFeedURL"
 
     var id: String { rawValue }
 
@@ -20,6 +29,7 @@ enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .stable: "Stable"
         case .testing: "Testing"
+        case .experimental: "Experimental"
         }
     }
 
@@ -27,12 +37,30 @@ enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .stable: "Released versions only."
         case .testing: "Every change as it lands, before it is released. May be rough."
+        case .experimental: "Work in progress from the experimental branch, before it reaches Testing. Things may break."
         }
     }
 
     /// Feed channels offered besides the default one, which is always offered.
     var allowedFeedChannels: Set<String> {
-        self == .testing ? [Self.testingFeedChannel] : []
+        switch self {
+        case .stable: []
+        case .testing: [Self.testingFeedChannel]
+        case .experimental: [Self.experimentalFeedChannel]
+        }
+    }
+
+    /// The feed this channel reads in place of the bundle's `SUFeedURL`, or nil
+    /// to read that one. Only Experimental has its own, and only where the
+    /// process may reach it: a test or acceptance run reads nothing beyond this
+    /// Mac. Without it the channel is offered what Stable is.
+    func feedOverride(experimentalFeed: String?, liveRequestsAllowed: Bool) -> String? {
+        guard self == .experimental, let experimentalFeed,
+              let host = URL(string: experimentalFeed)?.host, !host.isEmpty,
+              liveRequestsAllowed || UpdaterAvailability.isLoopback(host: host) else {
+            return nil
+        }
+        return experimentalFeed
     }
 
     static func stored(in defaults: UserDefaults) -> UpdateChannel {
@@ -111,6 +139,8 @@ final class AppUpdateService {
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let experimentalFeed: String?
+    @ObservationIgnored private let liveRequestsAllowed: Bool
     @ObservationIgnored private var controller: SPUStandardUpdaterController?
     @ObservationIgnored private var updaterDelegate: UpdaterDelegate?
     @ObservationIgnored private var observation: NSKeyValueObservation?
@@ -122,12 +152,14 @@ final class AppUpdateService {
         #else
         let isDevelopmentBuild = false
         #endif
+        liveRequestsAllowed = StockbarProviderAccessPolicy.current.liveRequestsAllowed
         availability = UpdaterAvailability.resolve(
             isDevelopmentBuild: isDevelopmentBuild,
-            liveRequestsAllowed: StockbarProviderAccessPolicy.current.liveRequestsAllowed,
+            liveRequestsAllowed: liveRequestsAllowed,
             feedURL: info?["SUFeedURL"] as? String,
             publicKey: info?["SUPublicEDKey"] as? String
         )
+        experimentalFeed = info?[UpdateChannel.experimentalFeedKey] as? String
         defaults = StockbarRuntimeStorage.userDefaults
         channel = UpdateChannel.stored(in: defaults)
         automaticallyChecks = info?["SUEnableAutomaticChecks"] as? Bool ?? false
@@ -149,7 +181,11 @@ final class AppUpdateService {
             }
             return
         }
-        let delegate = UpdaterDelegate { [weak self] in self?.channel ?? .stable }
+        let delegate = UpdaterDelegate(
+            currentChannel: { [weak self] in self?.channel ?? .stable },
+            experimentalFeed: experimentalFeed,
+            liveRequestsAllowed: liveRequestsAllowed
+        )
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: delegate,
@@ -175,16 +211,29 @@ final class AppUpdateService {
     }
 }
 
-/// Tells Sparkle which feed channels the chosen update channel may see.
+/// Tells Sparkle which feed the chosen update channel reads and which of its
+/// channels it may see.
 @MainActor
 private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
     private let currentChannel: @MainActor () -> UpdateChannel
+    private let experimentalFeed: String?
+    private let liveRequestsAllowed: Bool
 
-    init(currentChannel: @escaping @MainActor () -> UpdateChannel) {
+    init(
+        currentChannel: @escaping @MainActor () -> UpdateChannel,
+        experimentalFeed: String?,
+        liveRequestsAllowed: Bool
+    ) {
         self.currentChannel = currentChannel
+        self.experimentalFeed = experimentalFeed
+        self.liveRequestsAllowed = liveRequestsAllowed
     }
 
     func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         currentChannel().allowedFeedChannels
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        currentChannel().feedOverride(experimentalFeed: experimentalFeed, liveRequestsAllowed: liveRequestsAllowed)
     }
 }

@@ -30,14 +30,60 @@ def item(build, channel='testing', **changes):
 
 class PlanTests(unittest.TestCase):
     def plan(self, ref_type='branch', ref_name='testing', describe='v3.6.0-14-gabc1234',
-             version='3.6.0', build='360', newest_tag=''):
-        return feed.plan(ref_type, ref_name, describe, version, build, newest_tag)
+             version='3.6.0', build='360', newest_tag='', ahead_of_testing=None, behind_branch=False):
+        return feed.plan(ref_type, ref_name, describe, version, build, newest_tag, ahead_of_testing, behind_branch)
 
     def test_a_push_to_testing_is_numbered_after_the_release_it_follows(self):
         plan = self.plan()
         self.assertEqual((plan.mode, plan.channel, plan.build, plan.version),
                          ('publish', 'testing', '360.14', '3.6.0'))
         self.assertEqual((plan.release_tag, plan.asset_name), ('testing-360.14', 'Stockbar-360.14.zip'))
+        self.assertEqual(plan.feed_branch, 'appcast')
+        # What an experimental build needs changes nothing here.
+        self.assertEqual(self.plan(ahead_of_testing=5, behind_branch=True), plan)
+
+    def test_a_push_to_experimental_is_numbered_after_the_testing_build_it_contains(self):
+        plan = self.plan(ref_name='experimental', ahead_of_testing=5)
+        self.assertEqual((plan.mode, plan.channel, plan.build, plan.version),
+                         ('publish', 'experimental', '360.9.5', '3.6.0'))
+        self.assertEqual((plan.release_tag, plan.asset_name, plan.feed_branch),
+                         ('experimental-360.9.5', 'Stockbar-360.9.5.zip', 'appcast-experimental'))
+        # None of its commits in testing yet, and all of them.
+        self.assertEqual(self.plan(ref_name='experimental', ahead_of_testing=14).build, '360.0.14')
+        self.assertEqual(self.plan(ref_name='experimental', ahead_of_testing=0).build, '360.14.0')
+
+    def test_experimental_builds_sort_between_the_testing_builds_around_them(self):
+        # Two commits, testing brought in (three of its commits and a merge), one more commit,
+        # then the branch promoted and testing brought back in.
+        history = [(1, 1), (2, 2), (6, 3), (7, 4), (9, 0)]
+        builds = [self.plan(ref_name='experimental', describe=f'v3.6.0-{count}-gabc1234',
+                            ahead_of_testing=ahead).build for count, ahead in history]
+        self.assertEqual(builds, ['360.0.1', '360.0.2', '360.3.3', '360.3.4', '360.9.0'])
+        self.assertEqual(sorted(builds + ['360', '360.3', '360.4', '360.9', '360.10', '370'], key=feed.build_key),
+                         ['360', '360.0.1', '360.0.2', '360.3', '360.3.3', '360.3.4', '360.4',
+                          '360.9', '360.9.0', '360.10', '370'])
+
+    def test_an_experimental_build_needs_to_know_how_far_it_is_from_testing(self):
+        for ahead in (None, -1, 15):
+            with self.subTest(ahead=ahead), self.assertRaisesRegex(feed.ReleaseError, 'does not have'):
+                self.plan(ref_name='experimental', ahead_of_testing=ahead)
+
+    def test_an_experimental_commit_the_branch_has_moved_on_from_is_not_published(self):
+        plan = self.plan(ref_name='experimental', ahead_of_testing=5, behind_branch=True)
+        self.assertEqual(plan.mode, 'skip')
+        self.assertIn('moved on', plan.reason)
+
+    def test_experimental_keeps_the_rules_of_a_testing_build(self):
+        self.assertEqual(self.plan(ref_name='experimental', describe='v3.6.0-0-gabc1234', ahead_of_testing=0).mode,
+                         'skip')
+        with self.assertRaisesRegex(feed.ReleaseError, 'v3.7.0 is not in the history of experimental'):
+            self.plan(ref_name='experimental', ahead_of_testing=5, newest_tag='v3.7.0')
+
+    def test_a_dry_run_of_an_experimental_build_publishes_nothing(self):
+        plan = self.plan(ref_name='release-test/experimental-first', ahead_of_testing=5, behind_branch=True,
+                         newest_tag='v3.7.0')
+        self.assertEqual((plan.mode, plan.channel, plan.build, plan.feed_branch),
+                         ('dry-run', 'experimental', '360.9.5', 'appcast-experimental'))
 
     def test_a_testing_build_keeps_the_old_base_until_the_new_version_is_tagged(self):
         # release.sh has moved the project to 3.7.0, but v3.7.0 does not exist yet.
@@ -60,19 +106,21 @@ class PlanTests(unittest.TestCase):
 
     def test_any_other_branch_is_a_dry_run(self):
         self.assertEqual(self.plan(ref_name='release-test/first').mode, 'dry-run')
+        self.assertEqual(self.plan(ref_name='release-test/first').channel, 'testing')
         self.assertEqual(self.plan(ref_name='release-test/first', describe='v3.6.0-0-gabc1234').build, '360.0')
 
     def test_a_version_tag_is_a_stable_release(self):
         plan = self.plan(ref_type='tag', ref_name='v3.6.0', describe='')
         self.assertEqual((plan.mode, plan.channel, plan.build, plan.version, plan.release_tag, plan.asset_name),
                          ('publish', 'stable', '360', '3.6.0', 'v3.6.0', 'Stockbar-3.6.0.zip'))
+        self.assertEqual(plan.feed_branch, 'appcast')
 
     def test_a_tag_that_disagrees_with_the_project_is_refused(self):
         with self.assertRaisesRegex(feed.ReleaseError, 'release.sh'):
             self.plan(ref_type='tag', ref_name='v3.7.0', describe='')
 
     def test_tags_the_build_number_cannot_express_are_refused(self):
-        for tag in ('v3.10.0', 'v3.6', 'testing-360.14', '3.6.0'):
+        for tag in ('v3.10.0', 'v3.6', 'testing-360.14', 'experimental-360.9.5', '3.6.0'):
             with self.subTest(tag=tag), self.assertRaises(feed.ReleaseError):
                 self.plan(ref_type='tag', ref_name=tag, describe='')
 
@@ -108,8 +156,9 @@ class FeedTests(unittest.TestCase):
         self.path.write_text(feed.render_feed(items, 'https://example.com/repo'), encoding='utf-8')
 
     def test_builds_sort_the_way_the_updater_compares_them(self):
-        builds = ['370.2', '360', '360.14', '370', '360.2']
-        self.assertEqual(sorted(builds, key=feed.build_key), ['360', '360.2', '360.14', '370', '370.2'])
+        builds = ['370.2', '360', '360.14', '370', '360.2', '360.2.0', '360.2.11', '360.0.3']
+        self.assertEqual(sorted(builds, key=feed.build_key),
+                         ['360', '360.0.3', '360.2', '360.2.0', '360.2.11', '360.14', '370', '370.2'])
 
     def test_a_feed_survives_being_written_and_read_back(self):
         items = [item('360.2', notes='Fixed <b> & "quotes" ]]> done\n\n- second line', link='https://example.com/r'),
@@ -117,10 +166,14 @@ class FeedTests(unittest.TestCase):
         self.write(items)
         self.assertEqual(feed.read_feed(self.path), items)
 
-    def test_only_testing_builds_carry_a_channel(self):
+    def test_every_build_but_a_released_one_carries_its_channel(self):
         self.write([item('360.2'), item('360', channel='stable')])
         elements = ET.parse(self.path).getroot().findall('channel/item')
         self.assertEqual([element.findtext(SPARKLE + 'channel') for element in elements], ['testing', None])
+        self.write([item('360.2.1', channel='experimental')])
+        self.assertEqual(ET.parse(self.path).getroot().findtext('channel/item/' + SPARKLE + 'channel'),
+                         'experimental')
+        self.assertEqual(feed.read_feed(self.path), [item('360.2.1', channel='experimental')])
         self.assertEqual(elements[0].find('description').get(SPARKLE + 'format'), 'markdown')
         self.assertEqual(elements[0].find('enclosure').get(SPARKLE + 'edSignature'), SIGNATURE)
 
@@ -165,6 +218,42 @@ class FeedTests(unittest.TestCase):
         self.assertEqual([entry.build for entry in items], ['370', '360'])
         items = feed.add(items, item('370.1', version='3.7.0'))
         self.assertEqual([entry.build for entry in items], ['370.1', '370', '360'])
+
+    def test_experimental_builds_have_a_feed_to_themselves(self):
+        own = feed.add([item('360.0.1', channel='experimental')], item('360.0.2', channel='experimental'))
+        self.assertEqual([entry.build for entry in own], ['360.0.2', '360.0.1'])
+        for listed, added in ((item('360.1'), item('360.1.1', channel='experimental')),
+                              (item('360', channel='stable'), item('360.0.1', channel='experimental')),
+                              (item('360.0.1', channel='experimental'), item('360.1')),
+                              (item('360.0.1', channel='experimental'), item('370', channel='stable'))):
+            with self.subTest(added=added.build), self.assertRaisesRegex(feed.ReleaseError, 'feed of their own'):
+                feed.add([listed], added)
+
+    def test_only_the_newest_experimental_builds_are_kept(self):
+        items = [item(f'360.2.{number}', channel='experimental') for number in range(1, 15)]
+        self.assertEqual([entry.build for entry in feed.prune(items)],
+                         [f'360.2.{number}' for number in range(14, 4, -1)])
+
+    def test_superseded_names_only_builds_of_the_channel_the_feed_has_dropped(self):
+        testing = [item('360.3'), item('360.2'), item('360', channel='stable')]
+        tags = ['testing-360.3', 'testing-360.1', 'testing-360.02', 'testing-350.9', 'testing-notes', 'testing-',
+                'v3.5.0', 'experimental-360.0.1', 'experimental-checkpoint-2026-11-12-milestone-1']
+        self.assertEqual(feed.superseded(tags, testing, 'testing'), ['testing-360.1', 'testing-350.9'])
+        experimental = [item('360.2.4', channel='experimental'), item('360.2.3', channel='experimental')]
+        tags += ['experimental-360.2.3', 'experimental-360.2.4', 'experimental-360.2']
+        self.assertEqual(feed.superseded(tags, experimental, 'experimental'),
+                         ['experimental-360.0.1', 'experimental-360.2'])
+        # A release retires every testing build before it.
+        self.assertEqual(feed.superseded(['testing-360.3'], [item('370', channel='stable')], 'testing'),
+                         ['testing-360.3'])
+
+    def test_superseded_refuses_a_feed_that_is_not_the_channels_own(self):
+        testing = [item('360.3'), item('360', channel='stable')]
+        experimental = [item('360.2.4', channel='experimental')]
+        for items, channel in ((experimental, 'testing'), (testing, 'experimental'), ([], 'testing'),
+                               ([], 'experimental'), (testing, 'stable')):
+            with self.subTest(channel=channel, items=len(items)), self.assertRaises(feed.ReleaseError):
+                feed.superseded(['testing-360.1', 'experimental-360.0.1'], items, channel)
 
     def test_bad_entries_are_refused(self):
         bad = [
@@ -220,7 +309,26 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(dict(line.split('=', 1) for line in out.splitlines()), {
             'mode': 'publish', 'channel': 'testing', 'build': '360.2', 'version': '3.6.0',
-            'release_tag': 'testing-360.2', 'asset_name': 'Stockbar-360.2.zip', 'reason': ''})
+            'release_tag': 'testing-360.2', 'asset_name': 'Stockbar-360.2.zip', 'feed_branch': 'appcast',
+            'reason': ''})
+
+    def test_plan_reads_what_an_experimental_build_needs(self):
+        project = self.root / 'project.pbxproj'
+        project.write_text('MARKETING_VERSION = 3.6.0;\nCURRENT_PROJECT_VERSION = 360;\n')
+        arguments = ('plan', '--ref-type', 'branch', '--ref-name', 'experimental',
+                     '--describe', 'v3.6.0-7-gabc1234', '--project', project, '--ahead-of-testing', 4)
+        status, out, _ = self.run_command(*arguments)
+        self.assertEqual(status, 0)
+        self.assertEqual(dict(line.split('=', 1) for line in out.splitlines()), {
+            'mode': 'publish', 'channel': 'experimental', 'build': '360.3.4', 'version': '3.6.0',
+            'release_tag': 'experimental-360.3.4', 'asset_name': 'Stockbar-360.3.4.zip',
+            'feed_branch': 'appcast-experimental', 'reason': ''})
+        status, out, _ = self.run_command(*arguments, '--behind-branch')
+        self.assertEqual(status, 0)
+        self.assertIn('mode=skip\n', out)
+        status, _, err = self.run_command(*arguments[:-2])
+        self.assertEqual(status, 1)
+        self.assertIn('does not have', err)
 
     def test_a_refused_plan_explains_itself_and_fails(self):
         project = self.root / 'project.pbxproj'
@@ -230,16 +338,44 @@ class CommandTests(unittest.TestCase):
         self.assertEqual((status, out), (1, ''))
         self.assertIn('v3.7.0', err)
 
-    def test_add_then_builds_lists_each_channel(self):
+    def superseded(self, channel, tags):
+        stdin = sys.stdin
+        sys.stdin = io.StringIO(tags)
+        try:
+            return self.run_command('superseded', '--appcast', self.root / 'appcast.xml', '--channel', channel)
+        finally:
+            sys.stdin = stdin
+
+    def test_add_then_superseded_names_the_builds_to_remove(self):
         self.assertEqual(self.add('360', 'stable')[0], 0)
         self.assertEqual(self.add('360.1', 'testing')[0], 0)
         self.assertEqual(self.add('360.2', 'testing', notes='')[0], 0)
-        appcast = self.root / 'appcast.xml'
-        self.assertEqual(self.run_command('builds', '--appcast', appcast, '--channel', 'testing')[1],
-                         '360.2\n360.1\n')
-        self.assertEqual(self.run_command('builds', '--appcast', appcast, '--channel', 'stable')[1], '360\n')
-        newest = feed.read_feed(appcast)[0]
+        tags = 'testing-360.2\ntesting-360.1\n\ntesting-350.4\nv3.6.0\nexperimental-360.0.1\n'
+        self.assertEqual(self.superseded('testing', tags), (0, 'testing-350.4\n', ''))
+        newest = feed.read_feed(self.root / 'appcast.xml')[0]
         self.assertEqual((newest.notes, newest.minimum_system), ('No release notes.', '15.4.0'))
+
+    def test_superseded_names_nothing_without_the_channels_own_feed(self):
+        tags = 'testing-360.1\nexperimental-360.0.1\n'
+        # No feed at all.
+        status, out, err = self.superseded('testing', tags)
+        self.assertEqual((status, out), (1, ''))
+        self.assertIn('Refusing', err)
+        self.assertEqual(self.add('360.0.2', 'experimental')[0], 0)
+        self.assertEqual(self.superseded('experimental', tags), (0, 'experimental-360.0.1\n', ''))
+        status, out, err = self.superseded('testing', tags)
+        self.assertEqual((status, out), (1, ''))
+        self.assertIn('Refusing', err)
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            feed._main(['superseded', '--appcast', str(self.root / 'appcast.xml'), '--channel', 'stable'])
+
+    def test_an_experimental_build_is_refused_in_the_feed_of_released_builds(self):
+        self.add('360', 'stable')
+        before = (self.root / 'appcast.xml').read_text()
+        status, _, err = self.add('360.0.1', 'experimental')
+        self.assertEqual(status, 1)
+        self.assertIn('feed of their own', err)
+        self.assertEqual((self.root / 'appcast.xml').read_text(), before)
 
     def test_a_refused_entry_leaves_the_feed_as_it_was(self):
         self.add('360.1', 'testing')
