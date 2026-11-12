@@ -110,10 +110,11 @@ What this says about reading later tables:
   repeated before it counts. A pull request also names in advance the rows it
   is meant to move.
 
-Where the memory is, from the heap listing of one baseline launch (62.6 MB
-allocated): the position dictionaries of the 7,000 portfolio snapshots 17.9
-MB, the price history arrays 9.1 MB, allocations without a type name 13.5 MB,
-Swift type metadata 3.6 MB. Of that launch's 103 MB idle footprint, 75 MB is the
+Where the memory is, from the heap listing of one baseline launch (59.7 MB
+allocated): the position dictionaries of the 7,000 portfolio snapshots 17.1
+MB, the price history arrays 8.7 MB, allocations without a type name 12.9 MB,
+Swift type metadata 3.4 MB. (MB is 1,048,576 bytes throughout, as the tools
+report it.) Of that launch's 103 MB idle footprint, 75 MB is the
 malloc heap and about 13 MB is graphics and window memory. The peak, about
 275 MB, is reached before the idle window starts; this tooling does not yet
 say what it is made of (item 9 of the plan).

@@ -15,7 +15,8 @@
 # The sides take turns (before, after, then after, before, and so on), so a
 # slow change in the state of the Mac falls on both alike. Each turn is --runs
 # launches; a side ends up with --rounds times --runs of them. With fewer than
-# four launches a side, no difference can be told from noise.
+# four launches a side no difference can be told from noise, and a firm
+# verdict needs five or more (see compare_report.py).
 #
 # Comparing a commit with itself gives the noise of the measurement.
 #
@@ -73,8 +74,9 @@ prepare() {
     rm -rf "$source" "$derived"
     mkdir -p "$source"
     git archive "$sha" | tar -x -C "$source"
+    # Only the folder name may reach this function's output.
     STOCKBAR_DERIVED_DATA="$derived" bash "$PERF_DIR/benchmark.sh" --source "$source" \
-      --commit-label "${sha:0:7}" --build-only
+      --commit-label "${sha:0:7}" --build-only >&2
     touch "$derived/.built"
   fi
   printf '%s\n' "$derived"
