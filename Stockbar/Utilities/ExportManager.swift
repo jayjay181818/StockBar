@@ -423,7 +423,7 @@ enum CSVExportFormatter {
     }
 
     static func portfolioSnapshotsCSV(_ snapshots: [HistoricalPortfolioSnapshot]) -> String {
-        let allSymbols = Set(snapshots.flatMap { $0.portfolioComposition.keys }).sorted()
+        let allSymbols = Set(snapshots.flatMap { $0.portfolioComposition.symbols }).sorted()
 
         var header = ["Date", "Total Value", "Total Gains", "Total Cost", "Currency"]
         for symbol in allSymbols {

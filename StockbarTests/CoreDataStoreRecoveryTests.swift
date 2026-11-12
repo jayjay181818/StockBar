@@ -424,7 +424,7 @@ final class HistoricalStoreCompactionTests: XCTestCase {
             trade("HELD", units: "2"), trade("ZERO", units: "0"), trade("WATCH", units: "3", watchOnly: true)
         ])
 
-        XCTAssertEqual(Array(stored.keys), ["HELD"])
+        XCTAssertEqual(stored.symbols, ["HELD"])
         XCTAssertEqual(stored["HELD"]?.valueAtDate, 10)
     }
 }
@@ -594,9 +594,9 @@ final class PortfolioHistoryFetchTests: XCTestCase {
             XCTAssertEqual(snapshot.totalGains, expected.totalGains, file: file, line: line)
             XCTAssertEqual(snapshot.totalCost, expected.totalCost, file: file, line: line)
             XCTAssertEqual(snapshot.currency, expected.currency, file: file, line: line)
-            XCTAssertEqual(Set(snapshot.portfolioComposition.keys), ["AAA", "BBB"], file: file, line: line)
-            for (symbol, position) in expected.portfolioComposition {
-                let stored = snapshot.portfolioComposition[symbol]
+            XCTAssertEqual(snapshot.portfolioComposition.symbols, ["AAA", "BBB"], file: file, line: line)
+            for position in expected.portfolioComposition {
+                let stored = snapshot.portfolioComposition[position.symbol]
                 XCTAssertEqual(stored?.symbol, position.symbol, file: file, line: line)
                 XCTAssertEqual(stored?.units, position.units, file: file, line: line)
                 XCTAssertEqual(stored?.priceAtDate, position.priceAtDate, file: file, line: line)

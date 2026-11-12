@@ -59,7 +59,7 @@ actor AttributionAnalysisService {
 
         var allSymbols = Set<String>()
         for snapshot in filteredData {
-            allSymbols.formUnion(snapshot.portfolioComposition.keys.filter { !SymbolMetadata.isBenchmarkSymbol($0) })
+            allSymbols.formUnion(snapshot.portfolioComposition.symbols.filter { !SymbolMetadata.isBenchmarkSymbol($0) })
         }
 
         for symbol in allSymbols {

@@ -380,16 +380,15 @@ final class DataMigrationService: @unchecked Sendable {
     }
     
     private func convertLegacyPortfolioSnapshot(_ legacy: PortfolioSnapshot) -> HistoricalPortfolioSnapshot {
-        let portfolioComposition = Dictionary(firstValuesFor: 
+        let portfolioComposition = PositionSnapshots(firstValuesFor:
             legacy.priceSnapshots.map { snapshot in
-                let positionSnapshot = PositionSnapshot(
+                PositionSnapshot(
                     symbol: snapshot.symbol,
                     units: 1.0, // Default units since legacy doesn't have this
                     priceAtDate: snapshot.price,
                     valueAtDate: snapshot.price,
                     currency: "USD" // Default currency
                 )
-                return (snapshot.symbol, positionSnapshot)
             }
         )
         
