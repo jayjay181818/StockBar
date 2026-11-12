@@ -201,7 +201,6 @@ Figures from either side of a break are not compared with each other.
     system's cache of drawn glyphs, filled when the main window's figures
     roll in. See "What the idle memory is made of" under
     [Milestone 1](#milestone-1-2026-11-12).
-
 13. Asked for by the owner on 2026-11-12, not started: an update channel in
     the app that follows `experimental`. It is a feature, not an
     optimisation. It needs the release workflow to build and publish each
