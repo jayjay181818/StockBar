@@ -14,6 +14,7 @@
 		04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000017 /* LoggerTests.swift */; };
 		04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */; };
 		04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */; };
+		04C0FFEE0000000000C4A006 /* StoredPriceHistoryAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */; };
 		04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */; };
 		04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003F /* PythonRequirementsTests.swift */; };
 		04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */; };
@@ -53,6 +54,7 @@
 		04C0FFEE0000000000000017 /* LoggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggerTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPublisherTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonWorkerPoolTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredPriceHistoryAdoptionTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonEnvironmentSetupTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003F /* PythonRequirementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRequirementsTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarFormattingServiceTests.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				04C0FFEE0000000000000017 /* LoggerTests.swift */,
 				04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */,
 				04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */,
+				04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */,
 				04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */,
 				04C0FFEE000000000000003F /* PythonRequirementsTests.swift */,
 				04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */,
@@ -327,6 +330,7 @@
 				04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */,
 				04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */,
 				04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */,
+				04C0FFEE0000000000C4A006 /* StoredPriceHistoryAdoptionTests.swift in Sources */,
 				04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */,
 				04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */,
 				04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */,
