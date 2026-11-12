@@ -1255,6 +1255,30 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained. It is a correctness fix, the benchmark does not run
   its code, and no row moved in both of its two runs.
 
+### 96: Record milestone 1: every merged change measured against the baseline
+
+- What: the [Milestone 1](#milestone-1-2026-11-12) section above, the
+  measured results of plan items 8, 9, 11 and 12, plan item 13, four rows
+  in "Tried and rejected", and the merge line of pull request 95. Only this
+  file changes.
+- Merged: the date and squash commit are filled in by the next pull request.
+- Benchmark: no before/after run. No file that goes into the app changes
+  (nothing under `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so
+  before, `c3c21ec`, and after build the same app. What this pull request
+  records are the milestone's own measurements: the comparison of `47c1bda`
+  with `c4f4cff` and the two soak runs, all under Milestone 1.
+- Testing: 710 XCTest tests with 0 failures, 66 Python helper tests and 75
+  script tests pass, and `checks`, `docs-check` and `build-release` pass, on
+  this pull request's branch.
+- Review: read by its author, with each figure checked again against the
+  result files it comes from. No independent review, for a record of
+  measurements that changes no code.
+- Known issues: two things in the soak runs are not explained. The baseline
+  held 6.8 MB more allocated than in its soak of the night before, and both
+  runs used about four times the CPU of that earlier soak. See the notes
+  under the soak's table.
+- Verdict: retained.
+
 ## Rust evaluation, 2026-11-12
 
 No component was moved to Rust, and none is recommended. The one place where
