@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Five changes are merged.
+Six changes are merged.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -30,6 +30,9 @@ Five changes are merged.
   snapshot's positions (pull request 92). Its read of a week of history
   takes 2 ms against 24 ms, each time the chart reloads. None of the fifteen
   standard rows moved.
+- The price history held in memory is kept in arrays sized to their points
+  (pull request 93). Those arrays hold 5.25 MB against 8.69 MB, 3.44 MB
+  less, in every launch.
 
 Waiting for a decision:
 
@@ -78,7 +81,7 @@ Figures from either side of a break are not compared with each other.
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
 | Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
-| Carried-over changes re-measured and merged one by one | Next |
+| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 is open for a decision, and the packaging check from plan item 1 is still to be opened |
 | Stage 3 changes | After the carried-over changes |
 | First checkpoint tag and soak run against the baseline | After the carried-over changes |
 | Recommendation to promote to `testing` | Not yet |
@@ -98,7 +101,7 @@ Figures from either side of a break are not compared with each other.
    actor.
 5. Done in pull request 92: the chart of the portfolio's value reads stored
    history without each snapshot's positions.
-6. Price history arrays sized to fit (`perf/fitted-price-arrays`).
+6. Done in pull request 93: price history arrays sized to fit.
 7. Done in pull request 90: compact storage for the positions kept with every
    portfolio snapshot, which were the largest single block of the idle heap.
 8. The Python helper's start-up cost: precompiled bytecode, and retiring the
@@ -121,6 +124,12 @@ Figures from either side of a break are not compared with each other.
    peak: 250 MB, for 52 MB kept.
 10. Done in pull request 88: Rust evaluated, no migration recommended. See
     the [Rust evaluation](#rust-evaluation-2026-11-12).
+11. A candidate seen while reading for pull request 93, not measured:
+    after every recorded snapshot `cleanupOldData` thins every symbol's
+    price series again on the main actor, which sorts and copies each one
+    and works out the calendar day of every older point, and then keeps the
+    result only if its length changed. The benchmark records no prices, so
+    measuring this needs a timed test of its own.
 
 ## Baseline
 
@@ -603,7 +612,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   snapshots into chart points had no other caller and are removed. The only
   difference to see is in the log, where the chart's read now says
   "portfolio values" where it said "portfolio snapshots".
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `f0fdcc3`.
 - Benchmark: before `248280a`, after `42fea1f`, six launches a side in turns
   on 2026-11-12 from 13:43 to 14:16 UTC, macOS 27.2.1, mains power, all
   twelve launches with the screen unlocked and the display awake. Named in
@@ -682,6 +691,94 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained. The gain is small and confined to the chart: 22 ms of
   background work less each time it reloads, more for longer ranges. No
   standard row improved and none got worse.
+
+### 93: Size the in-memory price history arrays to fit
+
+- What: the app keeps each symbol's price history in memory as one array,
+  which `thinnedPriceHistory` built a point at a time. An array that grows
+  that way doubles each time it fills, so each one ended with room for far
+  more points than it held: in the benchmark's store, a 384 KB block for
+  3181 points that need 224 KB. The thinning now reserves its room once and,
+  if it dropped more than an eighth of what it reserved, copies the result
+  into an array of the right size.
+
+  A fitted array is full, and a full array doubles at the next append. Each
+  held symbol gains a point with every recorded price, so the fit would
+  have been undone at the first one. New prices are therefore added through
+  `appendToPriceHistory`, which makes room for 256 more points (18 KB) when
+  a series is full instead of doubling it. The branch as it was carried over
+  did not have this part; it was added before anything was measured.
+
+  The points kept and their order are the same.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `f0fdcc3`, after `a18eda4`, six launches a side in turns
+  on 2026-11-12 from 14:31 to 15:04 UTC, macOS 27.2.1, mains power, all
+  twelve launches with the screen unlocked and the display awake. Named in
+  advance: the memory held by the price history arrays, read from each
+  launch's heap listing, expected to fall from 8.69 MB to about 5.2 MB; of
+  the standard rows, the idle memory the app holds allocated expected about
+  3.5 MB lower and idle memory possibly lower by a similar amount; no other
+  row expected to move. The Mac was busy with other work (load average 7.1
+  at the start, after waiting 60 s for it to fall below 8).
+
+  | Change-specific row | Before | After | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Memory held by the price history arrays (69,982 points for 22 symbols) | 8.69 MB in all six launches | 5.25 MB in all six launches | -3.44 MB, -39.6% | lower: the same figure in every launch on each side |
+
+  That row is the line for `_ContiguousArrayStorage<PriceSnapshot>` in the
+  `heap` listing saved with every measured launch.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 94.6 (87.4 to 99.2) MB | 90.0 (87.7 to 94.0) MB | -4.6 MB, -4.9% | no measurable change (p = 0.240) |
+  | Idle memory the app holds allocated | 53.2 (50.5 to 57.5) MB | 47.8 (46.7 to 50.9) MB | -5.4 MB, -10.1% | lower (p = 0.004) |
+  | Peak memory, launch and history load | 241.2 (230.3 to 244.1) MB | 238.6 (227.1 to 245.8) MB | -2.6 MB, -1.1% | no measurable change (p = 0.818) |
+  | Idle memory growth across the window | 0.0 (-0.8 to 0.1) MB | 0.0 (-4.7 to 0.0) MB | +0.0 MB | no measurable change (p = 0.273) |
+  | Idle CPU | 0.094 (0.088 to 0.103) s/min | 0.099 (0.090 to 0.170) s/min | +0.005 s/min, +5.3% | no measurable change (p = 0.240) |
+  | Idle CPU wake-ups | 28 (27 to 31) /min | 31 (22 to 39) /min | +3 /min, +10.7% | no measurable change (p = 0.452) |
+  | Idle CPU power | 4.53 (4.22 to 4.65) mW | 4.59 (3.65 to 5.26) mW | +0.06 mW, +1.4% | no measurable change (p = 0.390) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.00 (0.55 to 1.57) s | 1.19 (0.68 to 1.88) s | +0.19 s, +18.5% | no measurable change (p = 0.589) |
+  | Launch to history loaded | 0.99 (0.65 to 1.48) s | 1.18 (0.81 to 1.88) s | +0.19 s, +19.2% | no measurable change (p = 0.420) |
+  | CPU from launch to the idle window | 2.05 (1.86 to 2.13) s | 2.29 (1.98 to 2.65) s | +0.24 s, +11.7% | no measurable change (p = 0.180) |
+  | CPU energy from launch to the idle window | 6.13 (4.87 to 6.40) J | 5.93 (5.14 to 6.56) J | -0.21 J, -3.3% | no measurable change (p = 0.937) |
+  | Python helper start to ready, no network | 0.33 (0.30 to 0.66) s | 0.33 (0.31 to 0.65) s | +0.00 s, +0.0% | no measurable change (p = 1.000) |
+  | Python helper start, CPU | 0.32 (0.30 to 0.42) s | 0.32 (0.31 to 0.41) s | +0.00 s, +0.0% | no measurable change (p = 0.749) |
+  | Python helper memory once started | 71.0 (70.9 to 71.2) MB | 71.0 (70.9 to 71.2) MB | +0.0 MB, +0.0% | no measurable change (p = 0.866) |
+
+  The arrays fell as predicted. The idle memory the app holds allocated is
+  lower, by 5.4 MB between the medians. Only 3.44 MB of that is this change:
+  between two launches of the same build in this run, untyped allocations
+  alone differed by 5.9 MB, and that is the spread of the row. Idle memory
+  as a whole came out 4.6 MB lower, which is not distinguishable from no
+  change (p = 0.240).
+
+  The launch rows did not change. The Mac slowed down over the half hour,
+  for both builds alike: the first window took 0.55 to 0.79 s in the first
+  three "before" launches and 1.21 to 1.57 s in the last three, with the
+  "after" launches in between in time and in speed. Measuring in turns is
+  what keeps that drift out of the verdict.
+
+  Not measured in the running app: growth by a step when prices are
+  recorded. The benchmark has no market data, so nothing is appended. It is
+  checked by a test instead, which is a count and not a timing: a fitted
+  series of 3000 points given 1000 more never has room for more than 1000
+  spare, and with the old behaviour it had room for 3185 after the first.
+- Testing: 705 XCTest tests with 0 failures (two new), 66 Python helper
+  tests and 75 script tests pass, and `checks`, `docs-check` and
+  `build-release` pass, all at `a18eda4`. Both new tests fail when the old
+  behaviour is put back (5460 points of room for 3000 kept) and pass with
+  the change. Every measured launch on both sides logged the same 22
+  symbols with 69,982 points in memory and the same 7000 portfolio snapshots.
+- Review: read by the author of the change after `experimental` was merged
+  into the branch, together with every place that assigns or appends to a
+  price series. That reading found the doubling at the first append. No
+  independent review, for about twenty lines of app code with tests that
+  count capacity directly.
+- Known issues: none in this change. One thing seen and left alone is
+  recorded as plan item 11.
+- Verdict: retained, for 3.44 MB less allocated memory at idle with nothing
+  given up.
 
 ## Rust evaluation, 2026-11-12
 
@@ -885,6 +982,7 @@ launch.
 | Pull request 90 | Fable (orchestrator), with one independent review by Opus | Worth it. The change was written before the transition. The review read the branch after `experimental` was merged into it and caught that the tests no longer compiled, before a build had been spent finding out |
 | Pull request 91 | Fable (orchestrator) | Done directly: a dozen lines of shell and one test |
 | Pull request 92 | Fable (orchestrator) | Done directly. The change was written before the transition; it was re-read, trimmed of the code it replaces and corrected after its first measurement |
+| Pull request 93 | Fable (orchestrator) | Done directly. The carried-over change was nine lines; reading the append path before measuring showed it would undo itself in use, and the step growth and two tests were added |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
