@@ -755,15 +755,16 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   The launch rows did not change. The Mac slowed down over the half hour,
   for both builds alike: the first window took 0.55 to 0.79 s in the first
-  three "before" launches and 1.21 to 1.57 s in the last three, with the
-  "after" launches in between in time and in speed. Measuring in turns is
-  what keeps that drift out of the verdict.
+  three "before" launches and 1.21 to 1.57 s in the last three; the six
+  "after" launches, run between them, took 0.68 to 1.88 s. Measuring in
+  turns is what keeps that drift out of the verdict.
 
   Not measured in the running app: growth by a step when prices are
   recorded. The benchmark has no market data, so nothing is appended. It is
   checked by a test instead, which is a count and not a timing: a fitted
   series of 3000 points given 1000 more never has room for more than 1000
-  spare, and with the old behaviour it had room for 3185 after the first.
+  spare, and with the old behaviour it had room for 3185 once it had
+  doubled.
 - Testing: 705 XCTest tests with 0 failures (two new), 66 Python helper
   tests and 75 script tests pass, and `checks`, `docs-check` and
   `build-release` pass, all at `a18eda4`. Both new tests fail when the old
