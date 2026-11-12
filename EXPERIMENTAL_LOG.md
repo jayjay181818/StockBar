@@ -337,7 +337,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Python helper's imports holds beside two compiled programs that start and
   wait (`native_floor.swift`, `native_floor.rs`). `helper_cost.py` now shares
   its process-starting code with the new script; three starts before and
-  three after gave the same figures (0.28 to 0.30 s, 70.8 to 71.1 MB). A
+  three after gave the same figures (0.28 to 0.30 s, 70.8 to 71.1 MB). Its
+  one visible difference: the message when the started program exits without
+  answering now names the program instead of saying "The worker". A
   section in `Scripts/README_PERFORMANCE.md` and four script tests.
 - Merged: the date and squash commit are filled in by the next pull request
 - Benchmark: not run. No file that goes into the app changes (nothing under
@@ -365,7 +367,7 @@ that start and wait.
 | Candidate | What Rust could save | Finding |
 | --- | --- | --- |
 | The Python helper: `stockbar_worker.py` running `get_stock_data.py` and `get_ohlc_data.py` | At most what the helper holds: 92.1 MB on real data, all of the time (pull request 86) | Measured below. A compiled helper starts from 1 to 3 MB in either language |
-| Arithmetic inside the app: history thinning, risk and attribution figures | Nothing found | The app is compiled Swift. Rust would run the same arithmetic over the same data and add a C boundary with copies across it. Idle CPU is 0.09 s/min, so there is nothing to win at idle; what the 2.8 s of launch CPU is spent on is not profiled yet (planned item 9). This row is reasoning, not a measurement, and is reopened if that profile finds a loop of the app's own |
+| Arithmetic inside the app: history thinning, risk and attribution figures | Nothing found | The app is compiled Swift. Rust would run the same arithmetic over the same data and add a C boundary with copies across it. Idle CPU is 0.082 s/min, so there is nothing to win at idle; what the 2.29 s of launch CPU is spent on is not profiled yet (planned item 9). Both figures are the "after" side of pull request 87's comparison, which is the current `experimental`. This row is reasoning, not a measurement, and is reopened if that profile finds a loop of the app's own |
 | Reading and storing history | Nothing found | The cost is in Core Data and in what the app keeps of what it reads. The carried-over changes cut both in Swift. Rust cannot replace the store without replacing Core Data |
 
 ### What the helper's memory is made of
@@ -447,7 +449,7 @@ The options:
 
 | | Option | Memory, app and helper | Risk |
 | --- | --- | --- | --- |
-| A | Keep Python and take pull request 86 | about 114 MB on average (expected) | Smallest. One constant |
+| A | Keep Python and take pull request 86 | about 114 MB on average (expected) | Smallest: one timeout value to tune |
 | B | Fetch in Swift, with the Python helper kept as the fallback when a native fetch fails | about 83 MB while the native fetch works (expected) | Two implementations to keep until the native one has earned trust |
 | C | Fetch in Swift and remove Python | about 83 MB (expected) | Largest: no fallback if Yahoo turns the native client away |
 | D | A Rust helper on `yfinance-rs` | a few MB more than C (not measured) | Yahoo upkeep shared with the crate's one maintainer; the build and release costs above |
