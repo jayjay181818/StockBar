@@ -5,10 +5,13 @@
 
 The folder holds before-<round>/ and after-<round>/ as benchmark.sh writes
 them. Each metric gets the median and the range of each side, the change in
-the median, and a verdict. A change counts as measurable when an exact
-two-sided rank-sum permutation test over the launches puts it below 5%: when
-fewer than one in twenty ways of dealing the same figures out between the two
-sides would separate them as far. Anything else is "no measurable change".
+the median, and a verdict from an exact two-sided rank-sum permutation test
+over the launches: of all the ways of dealing the same figures out between the
+two sides, how many separate them as far. Below 1% the row is "lower" or
+"higher". Between 1% and 5% it is "possibly lower" or "possibly higher":
+with fifteen rows, a commit measured against itself lands there on some row
+in a good share of comparisons, so such a row wants repeating before it
+counts. Anything else is "no measurable change".
 """
 import argparse
 import glob
@@ -42,7 +45,9 @@ CONDITIONS = [
     ("display_asleep", "ran with the display asleep"),
     ("screen_locked", "ran with the screen locked"),
 ]
-SIGNIFICANCE = 0.05
+SIGNIFICANCE = 0.01
+SUGGESTIVE = 0.05
+# Four a side can reach "possibly" at best; a firm verdict needs five or more.
 MINIMUM_LAUNCHES = 4
 EXACT_LIMIT = 400_000
 
@@ -82,9 +87,10 @@ def verdict(before, after):
     if min(len(before), len(after)) < MINIMUM_LAUNCHES:
         return change, None, "too few launches to tell"
     p_value = rank_sum_p(before, after)
-    if p_value > SIGNIFICANCE or change == 0:
+    if p_value > SUGGESTIVE or change == 0:
         return change, p_value, "no measurable change"
-    return change, p_value, "lower" if change < 0 else "higher"
+    direction = "lower" if change < 0 else "higher"
+    return change, p_value, direction if p_value <= SIGNIFICANCE else f"possibly {direction}"
 
 
 def read_side(folder, side):
@@ -142,6 +148,9 @@ def report(folder, before_commit, after_commit):
             f"| {name} | {spread(before[key], digits)} {unit} | {spread(after[key], digits)} {unit} "
             f"| {shown} | {note} | {method} |"
         )
+    if any("| possibly " in line for line in lines):
+        lines += ["", "A \"possibly\" row lies between p = 0.01 and p = 0.05. A commit measured against "
+                  "itself reaches that on some row often enough that it needs a repeat before it counts."]
     for key, meaning in CONDITIONS:
         counts = [int(sum(side.get(key, []))) for side in (before, after)]
         if any(counts):

@@ -36,7 +36,15 @@ class VerdictTests(unittest.TestCase):
         change, p_value, word = compare.verdict([128, 131, 127, 134, 129, 130], [101, 99, 103, 100, 102, 101])
         self.assertEqual(word, 'lower')
         self.assertAlmostEqual(change, -28.5)
-        self.assertLess(p_value, 0.05)
+        self.assertLess(p_value, 0.01)
+
+    def test_a_separation_that_chance_reaches_now_and_then_is_only_possible(self):
+        # Four a side, fully apart: 2 of the 70 ways to deal them out, p = 0.029.
+        _, p_value, word = compare.verdict([7, 8, 9, 10], [1, 2, 3, 4])
+        self.assertEqual(word, 'possibly lower')
+        self.assertGreater(p_value, 0.01)
+        _, _, word = compare.verdict([1, 2, 3, 4], [7, 8, 9, 10])
+        self.assertEqual(word, 'possibly higher')
 
     def test_a_difference_inside_the_spread_is_no_measurable_change(self):
         _, _, word = compare.verdict([101, 134, 102, 128, 133, 104], [103, 130, 101, 127, 135, 102])
@@ -74,7 +82,8 @@ class ReportTests(unittest.TestCase):
         self.assertIn('131.8 (131.2 to 132.4) MB', row)
         self.assertIn('101.8 (101.2 to 102.4) MB', row)
         self.assertIn('-30.0 MB, -22.8%', row)
-        self.assertIn('lower (p = 0.029)', row)
+        self.assertIn('| possibly lower (p = 0.029) |', row)
+        self.assertIn('A "possibly" row lies between p = 0.01 and p = 0.05', text)
         self.assertIn('| Launch to history loaded | not measured | not measured |', text)
         self.assertIn('0 launch(es) before and 1 after ran with the display asleep', text)
 

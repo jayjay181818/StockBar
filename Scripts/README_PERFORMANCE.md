@@ -76,10 +76,14 @@ bash Scripts/perf/compare.sh experimental HEAD --label my-change
 Exports and builds each commit (never the uncommitted working tree), then
 measures them in turns: before, after, after, before. It prints the table a
 pull request carries: for every figure the median and range of each side, the
-change, and a verdict. A change counts only when a rank-sum permutation test
-over the launches tells it from run-to-run noise at 5%; otherwise the verdict
-is "no measurable change". The default is six launches a side and takes about
-35 minutes; with fewer than four a side nothing can be told apart.
+change, and a verdict from a rank-sum permutation test over the launches.
+Below p = 0.01 a row is "lower" or "higher". Between 0.01 and 0.05 it is
+"possibly lower" or "possibly higher": the table has fifteen rows, and the
+same commit measured against itself reaches that on some row often enough
+(it did in the baseline) that such a row needs a repeat before it counts.
+Anything else is "no measurable change". The default is six launches a side
+and takes about 35 minutes. Four a side can reach "possibly" at best, and
+with fewer nothing can be told apart.
 
 Comparing a commit with itself shows the noise of the method.
 
