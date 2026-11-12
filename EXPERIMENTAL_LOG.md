@@ -10,10 +10,17 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-One change is merged: release builds no longer carry test-coverage counters
-(pull request 85). It made the executable 6.7 MB smaller and moved none of the
-fifteen measured rows, so the figures under [Baseline](#baseline) still
-describe how `experimental` runs.
+Two changes are merged.
+
+- Release builds no longer carry test-coverage counters (pull request 85).
+  The executable is 6.7 MB smaller and none of the fifteen measured rows
+  moved.
+- Stored portfolio history is read in batches (pull request 87). The peak
+  memory of launch and history load is 16.4 MB lower: 267.4 MB against 283.8
+  MB, measured in turns.
+
+Waiting for a decision: pull request 86, where the idle Python helper exits
+after 90 seconds. It trades memory for CPU.
 
 This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
@@ -55,9 +62,10 @@ Figures from either side of a break are not compared with each other.
    an instrumented binary. That is a change to the release packaging step, so
    it came off the branch and becomes a separate pull request that stays open
    for a decision.
-2. Idle Python helper exits after 90 seconds (`perf/helper-idle-exit`). Its
-   benefit shows only on real data; see [Not measured](#not-measured).
-3. Portfolio history read in batches (`perf/batched-history-read`).
+2. Open as pull request 86, waiting for a decision: the idle Python helper
+   exits after 90 seconds. It trades memory for CPU, and its effect shows only
+   on real data.
+3. Done in pull request 87: portfolio history read in batches.
 4. Read the stored history at launch off the main actor
    (`perf/launch-history-off-main`; it builds and passes every test, and is
    not yet measured).
@@ -72,7 +80,8 @@ Figures from either side of a break are not compared with each other.
 8. The Python helper's start-up cost: precompiled bytecode, and retiring the
    helper straight after a refresh.
 9. The graphics memory of the first window, and AppKit's Writing Tools check
-   during launch.
+   during launch. Also why one and the same build idles near 105 MB after
+   some launches and near 130 MB after others (see pull request 87).
 10. Rust: evaluate honestly whether any component earns a language boundary.
 
 ## Baseline
@@ -219,7 +228,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   carried coverage counters and maps: the installed 3.7.0 has nine such
   sections. No app code. `develop.sh coverage` asks for coverage explicitly
   and still reports it.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `bd56486`.
 - Benchmark: before `4f475ea`, after `88383b8`, six launches a side in turns
   on 2026-11-12 from 09:17 to 09:41 UTC, macOS 27.2.1, mains power with the
   battery charging from 12 percent.
@@ -263,6 +272,57 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   if the scheme is edited there.
 - Verdict: retained, for the smaller executable. It changes no measured
   runtime figure.
+
+### 87: Read stored portfolio history in batches
+
+- What: `CoreDataHistoricalDataService` fetched the whole portfolio history
+  at once, so every snapshot's managed objects, with their positions, were
+  alive together beside the values built from them. It now lists the
+  snapshots oldest first and converts 500 at a time, letting go of each batch
+  before the next. Both `fetchPortfolioSnapshots(from:to:)` and
+  `fetchAllPortfolioSnapshots()` read this way. Three new tests.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `bd56486`, after `1dd6455`, six launches a side in turns
+  on 2026-11-12 from 10:39 to 11:09 UTC, macOS 27.2.1, mains power. The row
+  it was meant to move is the peak memory of launch and history load. The Mac
+  was not quiet: a system file-syncing process and the window server kept
+  between one and two cores busy throughout (load average about 6), for both
+  sides alike.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 128.9 (104.3 to 132.2) MB | 113.1 (100.0 to 116.2) MB | -15.8 MB, -12.3% | possibly lower (p = 0.026) |
+  | Idle memory the app holds allocated | 60.2 (55.1 to 61.5) MB | 61.5 (60.1 to 62.1) MB | +1.3 MB, +2.2% | no measurable change (p = 0.087) |
+  | Peak memory, launch and history load | 283.8 (277.0 to 300.3) MB | 267.4 (265.2 to 269.7) MB | -16.4 MB, -5.8% | lower (p = 0.002) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (0.0 to 0.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.075 (0.065 to 0.086) s/min | 0.082 (0.072 to 0.099) s/min | +0.007 s/min, +8.6% | no measurable change (p = 0.333) |
+  | Idle CPU wake-ups | 28 (23 to 31) /min | 30 (28 to 32) /min | +1 /min, +3.5% | no measurable change (p = 0.348) |
+  | Idle CPU power | 4.58 (4.20 to 5.14) mW | 4.46 (4.00 to 5.60) mW | -0.13 mW, -2.8% | no measurable change (p = 0.615) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.86 (0.50 to 1.24) s | 0.58 (0.52 to 1.54) s | -0.28 s, -32.9% | no measurable change (p = 0.556) |
+  | Launch to history loaded | 1.75 (1.56 to 2.17) s | 1.47 (1.13 to 2.48) s | -0.28 s, -16.2% | no measurable change (p = 0.381) |
+  | CPU from launch to the idle window | 2.47 (2.20 to 3.30) s | 2.29 (1.91 to 3.29) s | -0.18 s, -7.3% | no measurable change (p = 0.331) |
+  | CPU energy from launch to the idle window | 7.95 (7.48 to 8.37) J | 6.68 (5.55 to 8.38) J | -1.27 J, -15.9% | no measurable change (p = 0.093) |
+  | Python helper start to ready, no network | 0.35 (0.30 to 0.73) s | 0.34 (0.29 to 0.62) s | -0.01 s, -4.3% | no measurable change (p = 0.673) |
+  | Python helper start, CPU | 0.33 (0.30 to 0.44) s | 0.34 (0.29 to 0.40) s | +0.01 s, +1.5% | no measurable change (p = 0.931) |
+  | Python helper memory once started | 71.1 (71.0 to 71.2) MB | 71.0 (70.8 to 71.2) MB | -0.1 MB, -0.2% | no measurable change (p = 0.080) |
+
+  Idle memory came out "possibly lower". That needs a repeat before it
+  counts, and it is not claimed. The six "before" launches idled at 104.3,
+  126.7, 128.0, 129.8, 130.8 and 132.2 MB and the six "after" launches at
+  100.0, 102.4, 111.9, 114.3, 115.4 and 116.2 MB. The "before" build idles
+  near 105 MB after some launches and near 130 MB after others: it did so in
+  pull request 86's comparison too, on both sides, which ran the same code at
+  launch. Six launches a side cannot separate that from an effect of this
+  size. Later comparisons have this change on their "before" side and will
+  show whether it holds.
+- Testing: 685 XCTest tests with 0 failures (three new), 66 Python helper
+  tests and 70 script tests pass. `checks`, `docs-check` and `build-release`
+  pass. The new tests read a history longer than one batch, compare batch
+  sizes against each other, and read from an SQLite store whose rows are not
+  in date order.
+- Known issues: none.
+- Verdict: retained, for the lower peak.
 
 ## Tried and rejected
 
@@ -351,6 +411,7 @@ launch.
 | Transition, benchmark tooling, baseline, this log | Fable (orchestrator) | Done directly: git work and measuring, nothing to hand off |
 | Before the transition: independent reviews of the helper change and of the history-read changes | Opus | Worth it both times. No defects; each found a real gap in the tests, since closed |
 | Pull request 85 | Fable (orchestrator) | Done directly: a one-line scheme change, reviewed by reading the diff and inspecting the two builds |
+| Pull request 87 | Fable (orchestrator) | Re-measured and re-read directly. The change itself was reviewed by Opus before the transition |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
