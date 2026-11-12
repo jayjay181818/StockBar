@@ -177,12 +177,8 @@ class HistoricalDataManager {
     
     // MARK: - Core Data Integration
     
-    /// Load portfolio snapshots from Core Data
-    func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
-        await Self.readPortfolioSnapshots(timeRange: timeRange, from: coreDataService)
-    }
-
-    /// The read itself, which needs nothing from the main actor.
+    /// Reads portfolio snapshots from Core Data, positions included. Needs
+    /// nothing from the main actor.
     nonisolated static func readPortfolioSnapshots(
         timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
     ) async -> [HistoricalPortfolioSnapshot] {
@@ -202,7 +198,10 @@ class HistoricalDataManager {
     /// The stored portfolio values in a range, without each snapshot's positions.
     func loadPortfolioValuesFromCoreData(timeRange: ChartTimeRange) async -> [StoredPortfolioValue] {
         do {
-            let values = try await coreDataService.fetchPortfolioValues(from: timeRange.startDate(), to: Date())
+            let startDate = timeRange.startDate()
+            let endDate = Date()
+            await logger.info("📈 Loading portfolio values from Core Data: startDate=\(startDate), endDate=\(endDate)")
+            let values = try await coreDataService.fetchPortfolioValues(from: startDate, to: endDate)
             await logger.info("📈 Loaded \(values.count) portfolio values from Core Data")
             return values
         } catch {

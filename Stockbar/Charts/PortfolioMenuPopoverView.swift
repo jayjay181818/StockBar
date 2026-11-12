@@ -117,13 +117,6 @@ enum PortfolioMenuChartDataBuilder {
         return MenuChartDataBuilder.downsample(points, maxPoints: defaultMaxPoints)
     }
 
-    static func matchingCurrencyPoints(_ snapshots: [HistoricalPortfolioSnapshot], currency: String) -> [ChartDataPoint] {
-        matchingCurrencyPoints(
-            snapshots.map { StoredPortfolioValue(date: $0.date, totalValue: $0.totalValue, currency: $0.currency) },
-            currency: currency
-        )
-    }
-
     static func matchingCurrencyPoints(_ values: [StoredPortfolioValue], currency: String) -> [ChartDataPoint] {
         values.filter { $0.currency.uppercased() == currency.uppercased() }
             .map { ChartDataPoint(date: $0.date, value: $0.totalValue) }
