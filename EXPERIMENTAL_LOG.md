@@ -55,8 +55,9 @@ Figures from either side of a break are not compared with each other.
    an instrumented binary. That is a change to the release packaging step, so
    it came off the branch and becomes a separate pull request that stays open
    for a decision.
-2. Idle Python helper exits after 90 seconds (`perf/helper-idle-exit`). Its
-   benefit shows only on real data; see [Not measured](#not-measured).
+2. Open as pull request 86, waiting for a decision: the idle Python helper
+   exits after 90 seconds. It trades memory for CPU, and its effect shows only
+   on real data.
 3. Portfolio history read in batches (`perf/batched-history-read`).
 4. Read the stored history at launch off the main actor
    (`perf/launch-history-off-main`; it builds and passes every test, and is
@@ -219,7 +220,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   carried coverage counters and maps: the installed 3.7.0 has nine such
   sections. No app code. `develop.sh coverage` asks for coverage explicitly
   and still reports it.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `bd56486`.
 - Benchmark: before `4f475ea`, after `88383b8`, six launches a side in turns
   on 2026-11-12 from 09:17 to 09:41 UTC, macOS 27.2.1, mains power with the
   battery charging from 12 percent.
@@ -263,6 +264,73 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   if the scheme is edited there.
 - Verdict: retained, for the smaller executable. It changes no measured
   runtime figure.
+
+### 86: Let the idle Python helper exit after 90 seconds
+
+- What: the idle timeout of `PythonWorkerPool` goes from 15 minutes to 90
+  seconds. A helper then serves one refresh pass or backfill burst and exits,
+  where before it lived from one refresh to the next at every refresh
+  interval up to 15 minutes. Three new tests, and the architecture note
+  follows.
+- Merged: not merged. Open for a decision, because it trades memory for CPU.
+- Benchmark, isolated: before `bd56486`, after `23bacbb`, six launches a side
+  in turns on 2026-11-12 from 10:00 to 10:25 UTC, macOS 27.2.1, mains power.
+  The isolated benchmark never starts the helper, so no row was expected to
+  move.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 127.7 (105.0 to 134.2) MB | 110.5 (103.7 to 130.4) MB | -17.2 MB, -13.4% | no measurable change (p = 0.240) |
+  | Idle memory the app holds allocated | 61.2 (59.4 to 63.9) MB | 63.1 (60.7 to 65.0) MB | +1.9 MB, +3.0% | no measurable change (p = 0.143) |
+  | Peak memory, launch and history load | 282.2 (271.0 to 290.3) MB | 279.6 (277.7 to 289.9) MB | -2.6 MB, -0.9% | no measurable change (p = 0.370) |
+  | Idle memory growth across the window | 0.0 (-15.3 to 0.5) MB | 0.0 (-0.3 to 0.4) MB | +0.0 MB | no measurable change (p = 0.682) |
+  | Idle CPU | 0.088 (0.070 to 0.126) s/min | 0.087 (0.069 to 0.103) s/min | -0.001 s/min, -1.1% | no measurable change (p = 0.851) |
+  | Idle CPU wake-ups | 28 (23 to 32) /min | 29 (25 to 33) /min | +2 /min, +5.5% | no measurable change (p = 0.526) |
+  | Idle CPU power | 4.29 (3.42 to 4.78) mW | 5.08 (4.34 to 5.85) mW | +0.79 mW, +18.3% | possibly higher (p = 0.017) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.03 (0.62 to 1.15) s | 0.87 (0.56 to 2.68) s | -0.16 s, -15.5% | no measurable change (p = 0.310) |
+  | Launch to history loaded | 1.79 (1.73 to 2.22) s | 1.60 (1.20 to 3.51) s | -0.19 s, -10.4% | no measurable change (p = 0.071) |
+  | CPU from launch to the idle window | 2.81 (2.26 to 3.33) s | 2.95 (2.55 to 3.72) s | +0.13 s, +4.6% | no measurable change (p = 0.589) |
+  | CPU energy from launch to the idle window | 7.94 (6.93 to 9.04) J | 8.25 (6.71 to 8.53) J | +0.31 J, +3.9% | no measurable change (p = 0.937) |
+  | Python helper start to ready, no network | 0.59 (0.29 to 0.97) s | 0.30 (0.29 to 0.62) s | -0.29 s, -48.7% | no measurable change (p = 0.457) |
+  | Python helper start, CPU | 0.43 (0.29 to 0.56) s | 0.30 (0.29 to 0.38) s | -0.13 s, -30.2% | no measurable change (p = 0.286) |
+  | Python helper memory once started | 71.0 (70.3 to 71.2) MB | 71.0 (70.9 to 71.0) MB | +0.0 MB, +0.0% | no measurable change (p = 0.859) |
+
+  One row is "possibly higher": idle CPU power. It was not repeated. The
+  changed code cannot run in the benchmark, where no helper ever starts and
+  the pool's timer therefore never does either, and some row of the fifteen
+  lands between p = 0.01 and 0.05 in about half of all comparisons of
+  identical apps.
+- On real data, before only: the installed 3.7.0, which has the 15 minute
+  timeout, sampled every 10 seconds for 33 minutes from 09:49 UTC with
+  `bash Scripts/measure_performance.sh --duration 1980`.
+
+  | Metric | Installed 3.7.0 on real data |
+  | --- | --- |
+  | App memory | 82.9 MB (78.5 to 92.3) |
+  | Helper memory while running | 92.1 MB |
+  | Helper running | in 100 percent of 199 samples |
+  | App and helper together | 175.1 MB on average, 184.5 MB at most |
+  | App CPU | 0.18 s/min |
+  | Helper CPU | 0.02 s/min |
+  | App wake-ups | 34 /min |
+
+  The helper holds more than the app and never exits.
+- On real data, after: not measured. It needs this build run on the real
+  portfolio in place of the installed app, which is not done unattended.
+  Expected, and theoretical until measured: at the default five minute
+  refresh the helper would be running about a third of the time (see
+  [Before the transition](#before-the-transition)), so app and helper would
+  average about 114 MB in place of 175 MB. Each pass would start a new helper,
+  0.30 s of CPU by the isolated measurement, which is 0.06 s/min on top of
+  the 0.20 s/min the two processes use now.
+- Testing: 685 XCTest tests with 0 failures (three new), 66 Python helper
+  tests and 70 script tests pass. `checks`, `docs-check` and `build-release`
+  pass.
+- Known issues: none known. The idle CPU power row above has not been
+  repeated.
+- Verdict: open. Recommended to retain if memory matters more than a small
+  rise in CPU.
 
 ## Tried and rejected
 
@@ -351,6 +419,7 @@ launch.
 | Transition, benchmark tooling, baseline, this log | Fable (orchestrator) | Done directly: git work and measuring, nothing to hand off |
 | Before the transition: independent reviews of the helper change and of the history-read changes | Opus | Worth it both times. No defects; each found a real gap in the tests, since closed |
 | Pull request 85 | Fable (orchestrator) | Done directly: a one-line scheme change, reviewed by reading the diff and inspecting the two builds |
+| Pull request 86 | Fable (orchestrator) | Re-measured directly. The change itself was reviewed by Opus before the transition |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
