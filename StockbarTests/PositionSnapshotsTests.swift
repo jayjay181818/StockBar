@@ -116,4 +116,19 @@ final class PositionSnapshotsTests: XCTestCase {
         let asDictionary = try encoder.encode(JSONDecoder().decode(DictionaryShape.self, from: json))
         XCTAssertEqual(String(decoding: written, as: UTF8.self), String(decoding: asDictionary, as: UTF8.self))
     }
+
+    func testASnapshotWithNoPositionsIsWrittenWithAnEmptyDictionary() throws {
+        let snapshot = HistoricalPortfolioSnapshot(
+            date: Date(timeIntervalSinceReferenceDate: 0), totalValue: 0, totalGains: 0, totalCost: 0,
+            currency: "USD", portfolioComposition: PositionSnapshots()
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+
+        let written = String(decoding: try encoder.encode(snapshot), as: UTF8.self)
+        let readBack = try JSONDecoder().decode(HistoricalPortfolioSnapshot.self, from: Data(written.utf8))
+
+        XCTAssertTrue(written.contains("\"portfolioComposition\":{}"), written)
+        XCTAssertTrue(readBack.portfolioComposition.isEmpty)
+    }
 }
