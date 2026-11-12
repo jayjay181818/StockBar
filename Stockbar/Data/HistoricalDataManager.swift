@@ -388,7 +388,7 @@ class HistoricalDataManager {
             // `now` is normally the newest timestamp, so appending keeps the
             // history sorted without re-sorting thousands of rows per symbol.
             let needsSort = (priceSnapshots[name]?.last?.timestamp ?? .distantPast) > now
-            priceSnapshots[name, default: []].append(snapshot)
+            Self.appendToPriceHistory(snapshot, &priceSnapshots[name, default: []])
             if needsSort {
                 priceSnapshots[name]?.sort { $0.timestamp < $1.timestamp }
             }

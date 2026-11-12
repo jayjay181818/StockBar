@@ -40,6 +40,20 @@ extension HistoricalDataManager {
         return fitted
     }
 
+    /// How many more points a full price series makes room for.
+    nonisolated static let priceHistoryGrowthStep = 256
+
+    /// Adds a point to a series held in memory. A series gains a point at a
+    /// time for as long as the app runs, and an array that is full doubles
+    /// when it is appended to, which would undo the fit above at the first
+    /// new price. A full series grows by a fixed step instead.
+    nonisolated static func appendToPriceHistory(_ snapshot: PriceSnapshot, _ series: inout [PriceSnapshot]) {
+        if series.count == series.capacity {
+            series.reserveCapacity(series.count + priceHistoryGrowthStep)
+        }
+        series.append(snapshot)
+    }
+
     /// Recorded snapshots are the record of what the portfolio was actually
     /// worth, so a recalculation only fills calendar days that have none. It
     /// must never replace them: it is limited by the price history available
