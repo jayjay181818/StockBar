@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Two changes are merged.
+Three changes are merged.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -18,6 +18,10 @@ Two changes are merged.
 - Stored portfolio history is read in batches (pull request 87). The peak
   memory of launch and history load is 16.4 MB lower: 267.4 MB against 283.8
   MB, measured in turns.
+- Stored history is read at launch away from the main thread (pull request
+  89). History is loaded 0.43 s sooner after launch, 0.60 s against 1.03 s,
+  and the launch uses a quarter less CPU, 1.67 s against 2.23 s, measured in
+  turns with the screen locked.
 
 Waiting for a decision:
 
@@ -48,6 +52,15 @@ Figures from either side of a break are not compared with each other.
   memory, allocated heap and peak memory were 2 to 3 percent higher and idle
   CPU 14 percent lower. A figure is therefore read against the "before"
   column measured beside it, never against the baseline table.
+- 2026-11-12, from some time between 11:09 and 11:23 UTC: the Mac's screen is locked and its
+  display mostly asleep, because its owner is away. The comparisons of pull
+  requests 85 to 87 ran unlocked with the display awake; pull request 89's
+  ran locked. Both sides of a comparison are still measured under the same
+  conditions, in turns. Locked, the build that showed its first window in
+  0.58 s in pull request 87's comparison shows it in 0.42 s, draws 1.4 mW of
+  idle CPU power against 4.5 mW, and uses 0.16 s/min of idle CPU against
+  0.08. A figure from a locked comparison is therefore not set beside one
+  from an unlocked comparison.
 
 ### Milestones
 
@@ -71,22 +84,23 @@ Figures from either side of a break are not compared with each other.
    exits after 90 seconds. It trades memory for CPU, and its effect shows only
    on real data.
 3. Done in pull request 87: portfolio history read in batches.
-4. Read the stored history at launch off the main actor
-   (`perf/launch-history-off-main`; it builds and passes every test, and is
-   not yet measured).
-   Before the transition, the changes below it left history ready about 0.3 s
-   later at launch because the read waits on a busy main thread; this is meant
-   to remove the wait.
+4. Done in pull request 89: stored history read at launch away from the main
+   actor.
 5. Popover chart reads values without positions (`perf/chart-values-read`).
 6. Price history arrays sized to fit (`perf/fitted-price-arrays`).
 7. Compact storage for the positions kept with every portfolio snapshot, the
-   largest single block of the idle heap (`perf/compact-positions`; it builds
-   and passes every test, and is not yet measured).
+   largest single block of the idle heap (`perf/compact-positions`;
+   independently reviewed, not yet measured).
 8. The Python helper's start-up cost: precompiled bytecode, and retiring the
    helper straight after a refresh.
 9. The graphics memory of the first window, and AppKit's Writing Tools check
    during launch. Also why one and the same build idles near 105 MB after
-   some launches and near 130 MB after others (see pull request 87).
+   some launches and near 130 MB after others (see pull request 87). Across
+   the 36 launches of the comparisons of pull requests 85 to 87, ten idled
+   above 120 MB and 26 below, and the heap the app holds allocated was the
+   same at both levels (medians of 61.0 MB and 61.8 MB). The extra 22 MB or
+   so is therefore memory outside the allocated heap. What it is has not been
+   looked at.
 10. Done in pull request 88: Rust evaluated, no migration recommended. See
     the [Rust evaluation](#rust-evaluation-2026-11-12).
 
@@ -341,7 +355,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   one visible difference: the message when the started program exits without
   answering now names the program instead of saying "The worker". A
   section in `Scripts/README_PERFORMANCE.md` and four script tests.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `4ff7566`.
 - Benchmark: not run. No file that goes into the app changes (nothing under
   `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so before and after
   are the same app and all fifteen rows are "not measured". The figures this
@@ -351,6 +365,94 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   build changes.
 - Known issues: none.
 - Verdict: retained as a record. No Rust was adopted.
+
+### 89: Read the stored history at launch away from the main thread
+
+- What: at launch the app read each symbol's stored price history and took
+  it into memory one symbol at a time on the main actor, then read the
+  portfolio history, while the main thread was also building the first
+  window. A detached task now reads and thins every symbol's history away
+  from the main actor and reads the portfolio history without waiting for the
+  prices to be taken. Only taking the results into memory runs on the main
+  actor. A stored series is taken as it is when nothing is in memory for its
+  symbol, without the merge every series used to go through.
+- The defect this found and closes: because every symbol is now read before
+  any is taken, the launch read could finish after the UK price scale repair
+  had rewritten, invalidated and reloaded a symbol, and put the old rows back
+  for the session. `invalidatePriceData` now counts its calls, and a read that
+  began before a symbol was invalidated is not taken for that symbol. Eight
+  new tests cover the read, the taking into memory, and both orders of a
+  stale read and the reload.
+- Behaviour change: stored price history used to appear symbol by symbol as
+  it was read. It now appears for every symbol together, once all are read.
+  All of it is in memory sooner (the table below). How much later the first
+  symbol's history arrives than it used to was not measured; it is in memory
+  within the 0.60 s the whole load now takes.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `4ff7566`, after `6925741`, ten launches a side in turns
+  on 2026-11-12 from 11:23 to 12:13 UTC, macOS 27.2.1, mains power. The rows
+  it was meant to move are launch to history loaded and launch to first
+  window. All twenty launches ran with the screen locked and eighteen with
+  the display asleep; the last two "before" launches had the display awake.
+  See "Breaks in the measuring environment". When the run began a system
+  media-analysis process was using more than two cores (load average 3.9).
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 123.2 (117.5 to 129.9) MB | 116.2 (113.4 to 122.4) MB | -6.9 MB, -5.6% | lower (p = 0.000) |
+  | Idle memory the app holds allocated | 63.0 (62.5 to 63.4) MB | 63.3 (62.9 to 63.5) MB | +0.3 MB, +0.6% | possibly higher (p = 0.020) |
+  | Peak memory, launch and history load | 261.8 (259.9 to 269.7) MB | 253.0 (251.5 to 259.2) MB | -8.8 MB, -3.3% | lower (p = 0.000) |
+  | Idle memory growth across the window | 0.0 (-0.2 to -0.0) MB | 0.0 (0.0 to 0.2) MB | +0.0 MB | no measurable change (p = 0.263) |
+  | Idle CPU | 0.162 (0.089 to 0.198) s/min | 0.168 (0.154 to 0.223) s/min | +0.006 s/min, +3.7% | no measurable change (p = 0.210) |
+  | Idle CPU wake-ups | 25 (23 to 31) /min | 28 (22 to 30) /min | +2 /min, +10.0% | no measurable change (p = 0.298) |
+  | Idle CPU power | 1.38 (1.29 to 4.21) mW | 1.31 (1.25 to 1.50) mW | -0.08 mW, -5.8% | no measurable change (p = 0.117) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.42 (0.37 to 0.95) s | 0.42 (0.38 to 0.66) s | +0.01 s, +1.2% | no measurable change (p = 0.959) |
+  | Launch to history loaded | 1.03 (0.85 to 1.70) s | 0.60 (0.51 to 0.86) s | -0.43 s, -41.3% | lower (p = 0.000) |
+  | CPU from launch to the idle window | 2.23 (1.98 to 3.00) s | 1.67 (1.59 to 1.87) s | -0.56 s, -24.9% | lower (p = 0.000) |
+  | CPU energy from launch to the idle window | 7.12 (6.47 to 8.14) J | 5.32 (5.04 to 5.65) J | -1.80 J, -25.3% | lower (p = 0.000) |
+  | Python helper start to ready, no network | 0.31 (0.23 to 0.61) s | 0.25 (0.24 to 0.48) s | -0.06 s, -19.4% | no measurable change (p = 0.835) |
+  | Python helper start, CPU | 0.29 (0.23 to 0.38) s | 0.24 (0.24 to 0.28) s | -0.04 s, -14.0% | no measurable change (p = 0.331) |
+  | Python helper memory once started | 71.0 (70.9 to 71.1) MB | 71.0 (70.9 to 71.0) MB | +0.0 MB, +0.0% | no measurable change (p = 1.000) |
+
+  Of the two rows it was meant to move, launch to history loaded is lower by
+  0.43 s and launch to first window did not move. So history is ready
+  sooner, but the first window does not appear sooner, at least with the
+  screen locked.
+
+  Four rows moved that were not predicted: CPU and CPU energy from launch to
+  the idle window (a quarter lower), peak memory (8.8 MB lower) and idle
+  memory (6.9 MB lower). The likely reason, from reading the code and not
+  measured separately: the old path built a set of every stored row's
+  timestamp and merged before thinning, for every symbol, and the new path
+  thins once and skips the merge when nothing is in memory. That is work
+  removed, not only work moved. Idle memory has shown two levels for one
+  build before (pull request 87), so that row carries less weight than the
+  others.
+
+  Without the two launches that had the display awake, the eight remaining
+  "before" launches give the same picture: history loaded in 0.96 s against
+  0.60 s, launch CPU 2.20 s against 1.67 s, peak memory 261.3 MB against
+  253.0 MB.
+
+  The heap the app holds allocated came out "possibly higher", by 0.3 MB.
+  That needs a repeat before it counts and was not repeated. If it is real,
+  it is 0.3 MB inside an idle memory figure that fell by 6.9 MB. The
+  milestone comparison against the baseline will show the heap row again.
+- Testing: 693 XCTest tests with 0 failures (eight new), 66 Python helper
+  tests and 74 script tests pass. `checks`, `docs-check` and `build-release`
+  pass. Every launch on both sides of the comparison logged the same 7000
+  portfolio snapshots loaded.
+- Reviews: two independent reviews by Opus. The first found the defect
+  above. The second, of the corrected branch, found no defect and pointed out
+  the behaviour change above, which the description had not mentioned.
+- Known issues: two small ones, left as they are. No test pins that a read
+  notes the invalidation count before it starts and not after; the manager
+  cannot be built around a stand-in store in a test. And a symbol skipped
+  because it was invalidated is not logged, while the "Loaded stored price
+  history for N symbols" line still counts it.
+- Verdict: retained, for history loaded 0.43 s sooner and a quarter less CPU
+  at launch.
 
 ## Rust evaluation, 2026-11-12
 
@@ -550,6 +652,7 @@ launch.
 | Pull request 85 | Fable (orchestrator) | Done directly: a one-line scheme change, reviewed by reading the diff and inspecting the two builds |
 | Pull request 87 | Fable (orchestrator) | Re-measured and re-read directly. The change itself was reviewed by Opus before the transition |
 | Pull request 88, the Rust evaluation | Fable (orchestrator) | Done directly: measuring, two web searches and the write-up |
+| Pull request 89 | Fable (orchestrator), with two independent reviews by Opus | Worth it. The first review found a real defect: a slow launch read could undo the UK price scale repair for the session. It was fixed, with tests, before the comparison. The second review, of the fix, found no defect and pointed out a behaviour change the description had missed |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
