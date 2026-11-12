@@ -85,6 +85,8 @@ fi
 temp_base="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
 work="$(mktemp -d "${temp_base%/}/stockbar-bench-work.XXXXXX")"
 root=""
+app_log=""
+log_saved=0
 app_pid=""
 stop_app() {
   [[ -n "$app_pid" ]] || return 0
@@ -98,6 +100,15 @@ stop_app() {
 }
 cleanup() {
   stop_app
+  # A run that fails or is stopped part of the way keeps what the app logged,
+  # which is otherwise deleted with the isolated storage, so that it can be
+  # explained afterwards.
+  if [[ "$log_saved" -eq 0 && -n "$app_log" && -f "$app_log" ]]; then
+    if mkdir -p "$results" 2>/dev/null && cp "$app_log" "$results/app-failed.log" 2>/dev/null; then
+      echo "The run did not finish. The app's log is kept in $results/app-failed.log" >&2
+    fi
+    [[ -s "$work/app-output.log" ]] && cp "$work/app-output.log" "$results/app-output-failed.log" 2>/dev/null || true
+  fi
   [[ -n "$root" && "$root" == "${temp_base%/}"/stockbar-bench.* ]] && rm -rf "$root"
   rm -rf "$work"
 }
@@ -163,14 +174,14 @@ elapsed() { "$python_bin" -c 'import sys; print(f"{float(sys.argv[2]) - float(sy
 wait_for_log() {
   local pattern="$1" seconds="$2" line
   for _ in $(seq 1 $((seconds * 10))); do
-    kill -0 "$app_pid" 2>/dev/null || { echo "Stockbar exited during the benchmark; see $app_log" >&2; return 1; }
+    kill -0 "$app_pid" 2>/dev/null || { echo "Stockbar exited during the benchmark." >&2; return 1; }
     if [[ -f "$app_log" ]] && line="$(tail -n "+$((log_start + 1))" "$app_log" | grep -m 1 -- "$pattern")"; then
       printf '%s\n' "$line"
       return 0
     fi
     sleep 0.1
   done
-  echo "Timed out waiting for \"$pattern\" in $app_log" >&2
+  echo "Timed out after $seconds s waiting for the app to log \"$pattern\"." >&2
   return 1
 }
 
@@ -213,6 +224,7 @@ print(datetime.datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=d
   stop_app
 done
 cp "$app_log" "$results/app.log"
+log_saved=1
 
 # --- Python helper ----------------------------------------------------------
 worker="$app_bundle/Contents/Resources/stockbar_worker.py"

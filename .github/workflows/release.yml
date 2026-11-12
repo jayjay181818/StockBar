@@ -3,21 +3,26 @@ name: Release builds
 # Builds the app that people download and that Stockbar's updater installs.
 #
 #   push to testing          a testing build, published as a prerelease
+#   push to experimental     an experimental build, published as a prerelease
 #   push of a tag vX.Y.Z     a stable release
 #   push to release-test/**  a dry run: built, signed and kept as a workflow
-#                            artifact for a week; nothing is published
+#                            artifact for a week; nothing is published. A name
+#                            that starts release-test/experimental is a dry
+#                            run of an experimental build.
 #
-# The update feed is appcast.xml on the `appcast` branch, which this workflow
-# creates and is the only writer of. See Docs/Development.md, "Release builds
-# and updates".
+# The update feed is appcast.xml on the `appcast` branch. Experimental builds
+# have a feed of their own, appcast.xml on the `appcast-experimental` branch.
+# This workflow creates both branches and is their only writer. See
+# Docs/Development.md, "Release builds and updates".
 
 on:
   push:
-    branches: [ testing, 'release-test/**' ]
+    branches: [ testing, experimental, 'release-test/**' ]
     tags: [ 'v[0-9]+.[0-9]+.[0-9]+' ]
 
-# Testing builds run one at a time, and so do releases. A newer push to
-# testing replaces a run that is still queued, never one that has started.
+# Testing builds run one at a time, and so do experimental builds and releases.
+# A newer push to a branch replaces a run that is still queued, never one that
+# has started.
 concurrency:
   group: release-${{ github.ref_type == 'tag' && 'stable' || github.ref_name }}
   cancel-in-progress: false
@@ -41,6 +46,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       release_tag: ${{ steps.plan.outputs.release_tag }}
       asset_name: ${{ steps.plan.outputs.asset_name }}
+      feed_branch: ${{ steps.plan.outputs.feed_branch }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -53,8 +59,21 @@ jobs:
       run: |
         describe="$(git describe --tags --long --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2>/dev/null || true)"
         newest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n 1p)"
+        # An experimental build is numbered by how many of its commits
+        # `testing` does not have. That depends on where `testing` is now, so a
+        # commit the branch has already moved on from is not built.
+        experimental=()
+        if [[ "$GITHUB_REF_NAME" == experimental || "$GITHUB_REF_NAME" == release-test/experimental* ]]; then
+          ahead="$(git rev-list --count HEAD --not origin/testing)"
+          newest_commit="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" \
+            | awk -v ref="refs/heads/$GITHUB_REF_NAME" '$2 == ref { print $1 }')"
+          experimental=(--ahead-of-testing "$ahead")
+          if [[ "$newest_commit" != "$GITHUB_SHA" ]]; then
+            experimental+=(--behind-branch)
+          fi
+        fi
         python3 Scripts/release_feed.py plan --ref-type "$GITHUB_REF_TYPE" --ref-name "$GITHUB_REF_NAME" \
-          --describe "$describe" --newest-tag "$newest_tag" \
+          --describe "$describe" --newest-tag "$newest_tag" "${experimental[@]}" \
           --project Stockbar.xcodeproj/project.pbxproj | tee -a "$GITHUB_OUTPUT"
         # A release is cut from the branches that pull requests are merged into.
         if [[ "$GITHUB_REF_TYPE" == tag ]] \
@@ -87,11 +106,11 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
       ASSET_NAME: ${{ needs.plan.outputs.asset_name }}
-      FEED_BRANCH: appcast
+      FEED_BRANCH: ${{ needs.plan.outputs.feed_branch }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
-        # The release notes of a testing build list the commits since the last build.
+        # The release notes of a testing or experimental build list the commits since the last build.
         fetch-depth: 0
         persist-credentials: false
 
@@ -111,9 +130,12 @@ jobs:
         if [[ "$CHANNEL" == stable ]]; then
           cp "Changelogs/release_notes_v$VERSION.md" build/release/notes.md
         else
-          previous="$(git describe --tags --abbrev=0 --match 'testing-*' --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD^)"
+          # Build tags only: `experimental-[0-9]*` leaves out that branch's checkpoint tags.
+          previous="$(git describe --tags --abbrev=0 --match "$CHANNEL-[0-9]*" --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD^)"
+          kind=Testing
+          if [[ "$CHANNEL" == experimental ]]; then kind=Experimental; fi
           {
-            echo "Testing build $BUILD of Stockbar $VERSION. Changes since $previous:"
+            echo "$kind build $BUILD of Stockbar $VERSION. Changes since $previous:"
             echo
             git log --no-merges --max-count=40 --format='- %s' "$previous..HEAD"
           } > build/release/notes.md
@@ -134,7 +156,7 @@ jobs:
             --title "StockBar v$VERSION" --notes-file build/release/notes.md
         else
           gh release create "$RELEASE_TAG" "$asset" --target "$GITHUB_SHA" --prerelease \
-            --title "StockBar $VERSION testing build $BUILD" --notes-file build/release/notes.md
+            --title "StockBar $VERSION $CHANNEL build $BUILD" --notes-file build/release/notes.md
         fi
 
     # Signs the archive with the update key, lists it in the feed and signs the
@@ -176,24 +198,26 @@ jobs:
         echo "::error::Could not publish the update feed."
         exit 1
 
-    # A testing build the feed no longer lists can never be offered again, so
-    # its prerelease and tag are removed. Only `testing-*` prereleases are touched.
-    - name: Remove superseded testing builds
+    # A testing or experimental build its feed no longer lists can never be
+    # offered again, so its prerelease and tag are removed. The feed this run
+    # wrote decides: an experimental run touches only `experimental-<build>`
+    # prereleases, every other run only `testing-<build>` ones.
+    - name: Remove superseded builds
       if: env.MODE == 'publish'
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
       run: |
-        listed="$(python3 Scripts/release_feed.py builds --appcast build/feed/appcast.xml --channel testing)"
+        prereleases=testing
+        if [[ "$CHANNEL" == experimental ]]; then prereleases=experimental; fi
         gh release list --limit 200 --json tagName,isPrerelease \
-          --jq '.[] | select(.isPrerelease and (.tagName | startswith("testing-"))) | .tagName' \
-          > build/release/testing-tags.txt
+          --jq '.[] | select(.isPrerelease) | .tagName' > build/release/prerelease-tags.txt
+        python3 Scripts/release_feed.py superseded --appcast build/feed/appcast.xml --channel "$prereleases" \
+          < build/release/prerelease-tags.txt > build/release/superseded-tags.txt
         while read -r tag; do
-          if ! grep -qxF "${tag#testing-}" <<<"$listed"; then
-            echo "Removing $tag: the feed no longer lists it."
-            gh release delete "$tag" --yes --cleanup-tag
-          fi
-        done < build/release/testing-tags.txt
+          echo "Removing $tag: the feed no longer lists it."
+          gh release delete "$tag" --yes --cleanup-tag
+        done < build/release/superseded-tags.txt
 
     - name: Keep the dry-run build
       if: env.MODE == 'dry-run'

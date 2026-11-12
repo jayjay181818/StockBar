@@ -6,6 +6,10 @@
 	     build setting for live here: the software-update settings. -->
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/jayjay181818/StockBar/appcast/appcast.xml</string>
+	<!-- The feed the Experimental update channel reads in place of the one
+	     above. Stockbar's own key, not Sparkle's: see UpdateChannel. -->
+	<key>StockbarExperimentalFeedURL</key>
+	<string>https://raw.githubusercontent.com/jayjay181818/StockBar/appcast-experimental/appcast.xml</string>
 	<!-- Public half of the key every update is signed with. The private half
 	     is a GitHub Actions secret; see Docs/Development.md. -->
 	<key>SUPublicEDKey</key>
