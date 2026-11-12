@@ -86,6 +86,7 @@ temp_base="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
 work="$(mktemp -d "${temp_base%/}/stockbar-bench-work.XXXXXX")"
 root=""
 app_log=""
+log_saved=0
 app_pid=""
 stop_app() {
   [[ -n "$app_pid" ]] || return 0
@@ -98,13 +99,13 @@ stop_app() {
   app_pid=""
 }
 cleanup() {
-  local status=$?
   stop_app
-  # A run that stops early keeps what the app logged, which is otherwise
-  # deleted with the isolated storage, so that the failure can be explained.
-  if [[ "$status" -ne 0 && -n "$app_log" && -f "$app_log" ]]; then
+  # A run that fails or is stopped part of the way keeps what the app logged,
+  # which is otherwise deleted with the isolated storage, so that it can be
+  # explained afterwards.
+  if [[ "$log_saved" -eq 0 && -n "$app_log" && -f "$app_log" ]]; then
     if mkdir -p "$results" 2>/dev/null && cp "$app_log" "$results/app-failed.log" 2>/dev/null; then
-      echo "The run failed. The app's log is kept in $results/app-failed.log" >&2
+      echo "The run did not finish. The app's log is kept in $results/app-failed.log" >&2
     fi
     [[ -s "$work/app-output.log" ]] && cp "$work/app-output.log" "$results/app-output-failed.log" 2>/dev/null || true
   fi
@@ -223,6 +224,7 @@ print(datetime.datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=d
   stop_app
 done
 cp "$app_log" "$results/app.log"
+log_saved=1
 
 # --- Python helper ----------------------------------------------------------
 worker="$app_bundle/Contents/Resources/stockbar_worker.py"

@@ -555,9 +555,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   and deletes that storage when it ends, the app's log with it. A run that
   failed therefore left nothing to explain the failure, which is what
   happened to the first attempt at pull request 90's comparison. A run that
-  ends with an error now copies the log to `app-failed.log` in its results
-  folder, with anything the app printed as `app-output-failed.log`, and says
-  where. The temporary storage is still deleted. The script's two error
+  does not finish, whether it fails or is stopped, now copies the log to
+  `app-failed.log` in its results folder, with anything the app printed as
+  `app-output-failed.log`, and says where. The temporary storage is still deleted. The script's two error
   messages for a launch that exits or times out no longer name the log file
   that is about to be deleted. A successful run is unchanged. One new script
   test runs the script against a stand-in for the
@@ -569,7 +569,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   are the same app and all fifteen rows are "not measured".
 - Testing: 75 script tests pass (one new). The new test fails against the
   script as it was and passes with the change. `checks` and `docs-check`
-  pass. One real run of the changed script on its normal path (one launch of
+  pass. A run stopped with a termination signal during its warm-up, tried by
+  hand against a stand-in that stays running, kept the log as well; no
+  script test covers that case. One real run of the changed script on its normal path (one launch of
   the build of `3f50c11`) ended without error, saved `app.log` and its
   figures as before, wrote no `app-failed.log`, and left no temporary
   storage or app process behind. The app's own tests were not run again: no
