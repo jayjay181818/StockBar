@@ -123,18 +123,18 @@ class HistoricalDataManager {
 
     /// The positions worth storing with a portfolio snapshot: those actually
     /// held. Watch-only and zero-unit rows were 13% of the position table.
-    nonisolated static func storedPositions(from trades: [RealTimeTrade]) -> [String: PositionSnapshot] {
-        Dictionary(firstValuesFor: trades.compactMap { trade -> (String, PositionSnapshot)? in
+    nonisolated static func storedPositions(from trades: [RealTimeTrade]) -> PositionSnapshots {
+        PositionSnapshots(firstValuesFor: trades.compactMap { trade -> PositionSnapshot? in
             let units = trade.trade.position.unitSize
             guard !trade.trade.isWatchlistOnly, units.isFinite, units > 0 else { return nil }
             let price = trade.realTimeInfo.currentPrice
-            return (trade.trade.name, PositionSnapshot(
+            return PositionSnapshot(
                 symbol: trade.trade.name,
                 units: units,
                 priceAtDate: price,
                 valueAtDate: price * units,
                 currency: trade.realTimeInfo.currency ?? "USD"
-            ))
+            )
         })
     }
     @ObservationIgnored private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
@@ -231,14 +231,14 @@ class HistoricalDataManager {
 
             // Convert HistoricalPortfolioSnapshot to PortfolioSnapshot format
             let portfolioSnapshots: [PortfolioSnapshot] = historicalSnapshots.map { historical in
-                // Convert PositionSnapshot dictionary to PriceSnapshot array
-                let priceSnapshots = historical.portfolioComposition.map { (symbol, position) -> PriceSnapshot in
+                // Convert the positions to a PriceSnapshot array
+                let priceSnapshots = historical.portfolioComposition.map { position -> PriceSnapshot in
                     PriceSnapshot(
                         timestamp: historical.date,
                         price: position.priceAtDate,
                         previousClose: position.priceAtDate, // We don't have previous close in PositionSnapshot
                         volume: nil,
-                        symbol: symbol
+                        symbol: position.symbol
                     )
                 }
 

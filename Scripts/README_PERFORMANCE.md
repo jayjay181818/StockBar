@@ -62,6 +62,11 @@ Beside the summary it keeps the app's log and, for each launch, the figures,
 the memory samples, a breakdown by kind of memory (`footprint`) and the largest
 heap classes (`heap`), in `build/bench/results/`.
 
+A run that does not finish, because a launch never reached the point the
+script waits for or because the script was stopped, has no summary. It keeps
+the app's log as `app-failed.log` in the same place, so that what happened can
+be explained; the isolated storage the log was written to is deleted as usual.
+
 A soak run is the same thing with one long window:
 
 ```bash
