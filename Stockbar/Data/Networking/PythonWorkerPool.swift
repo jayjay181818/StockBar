@@ -42,9 +42,9 @@ enum PythonWorkerError: Error, Equatable {
 actor PythonWorkerPool {
     static let shared = PythonWorkerPool()
 
-    /// An idle worker holds about 80 MB, as much as the app itself, so it is
-    /// kept for one burst of work (a refresh pass, or a backfill whose
-    /// requests are seconds apart) and not from one refresh to the next.
+    /// An idle worker holds about 70 MB, so it is kept for one burst of work
+    /// (a refresh pass, or a backfill whose requests are seconds apart) and
+    /// not from one refresh to the next.
     /// 90 seconds outlasts the shortest refresh interval, one minute, which
     /// therefore still reuses its worker; longer intervals start a new worker
     /// for each pass, about a third of a second of CPU.
