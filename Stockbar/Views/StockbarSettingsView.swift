@@ -361,7 +361,7 @@ struct StockbarSettingsView: View {
         Section("Memory") {
             Toggle(isOn: $quitPythonHelperWhenIdle) {
                 Text("Quit Python Helper When Idle")
-                Text("Prices are fetched by a Python helper that holds 70 MB or more and stays running for 15 minutes after a refresh. Turned on, it quits after 90 seconds, and each refresh starts it again: about a third of a second of processor time. Refreshing every minute keeps it running either way.")
+                Text("Prices are fetched by a Python helper that holds 70 MB or more and stays running for 15 minutes after its last request. Turned on, it quits about 90 seconds after its last request, and each refresh starts it again: about a third of a second of processor time. While markets are open, refreshing every minute keeps it running either way.")
             }
             .onChange(of: quitPythonHelperWhenIdle) {
                 Task { await PythonWorkerPool.shared.idleTimeoutChanged() }

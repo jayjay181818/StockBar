@@ -53,12 +53,14 @@ actor PythonWorkerPool {
     /// How long a worker nobody is using is kept. An idle worker holds about
     /// 70 MB.
     ///
-    /// Off, it is kept for 15 minutes, so at a refresh interval up to 15
-    /// minutes the next refresh finds it running. On, it is kept for one
-    /// burst of work (a refresh pass, or a backfill whose requests are seconds
+    /// Off, it is kept for 15 minutes, so at a refresh interval shorter than
+    /// that the next refresh finds it running. On, it is kept for one burst
+    /// of work (a refresh pass, or a backfill whose requests are seconds
     /// apart) and each later pass starts a new one, about a third of a second
     /// of CPU. 90 seconds outlasts the shortest refresh interval, one minute,
-    /// which therefore reuses its worker either way.
+    /// which therefore reuses its worker either way while its markets are
+    /// open. A closed London or US listing is refetched every 30 minutes
+    /// (`RefreshService.closedMarketFreshness`), longer than either timeout.
     static func idleTimeout(quitWhenIdle: Bool) -> Duration {
         quitWhenIdle ? .seconds(90) : .seconds(15 * 60)
     }
