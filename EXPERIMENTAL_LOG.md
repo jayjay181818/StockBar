@@ -10,8 +10,10 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-No optimisation is merged yet, so `experimental` is the baseline: the figures
-under [Baseline](#baseline) are the current ones.
+One change is merged: release builds no longer carry test-coverage counters
+(pull request 85). It made the executable 6.7 MB smaller and moved none of the
+fifteen measured rows, so the figures under [Baseline](#baseline) still
+describe how `experimental` runs.
 
 This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
@@ -21,12 +23,26 @@ different days are not set side by side, because the machine's state drifts.
 | --- | --- | --- | --- |
 | 2026-11-11 | see [Baseline](#baseline) | the same commit | none |
 
+### Breaks in the measuring environment
+
+Figures from either side of a break are not compared with each other.
+
+- 2026-11-12, macOS 27.2 to 27.2.1. The Mac installed the update and
+  restarted at 08:58 UTC, after the baseline and before pull request 85.
+  `experimental` at `4f475ea`, whose app sources are the baseline's, was
+  measured again after the update: it is the "before" column of pull request
+  85. With the same app, launch to first window was 0.99 s against 1.38 s the
+  night before and launch to history loaded 1.64 s against 2.34 s. Idle
+  memory, allocated heap and peak memory were 2 to 3 percent higher and idle
+  CPU 14 percent lower. A figure is therefore read against the "before"
+  column measured beside it, never against the baseline table.
+
 ### Milestones
 
 | Milestone | State |
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
-| Benchmark procedure and baseline in the repository | Pull request 84 |
+| Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
 | Carried-over changes re-measured and merged one by one | Next |
 | Stage 3 changes | After the carried-over changes |
 | First checkpoint tag and soak run against the baseline | After the carried-over changes |
@@ -34,25 +50,25 @@ different days are not set side by side, because the machine's state drifts.
 
 ### Planned next, in order
 
-1. Release builds without test-coverage counters (`perf/release-without-coverage`).
-   First, so that everything after it is measured on the kind of build that
-   ships. The branch also carried a check in `script/package_release.sh` that
-   refuses an instrumented binary. That is a change to the release packaging
-   step, so it comes off this branch and becomes a separate pull request that
-   stays open for a decision.
+1. Done in pull request 85: release builds without test-coverage counters.
+   The branch also carried a check in `script/package_release.sh` that refuses
+   an instrumented binary. That is a change to the release packaging step, so
+   it came off the branch and becomes a separate pull request that stays open
+   for a decision.
 2. Idle Python helper exits after 90 seconds (`perf/helper-idle-exit`). Its
    benefit shows only on real data; see [Not measured](#not-measured).
 3. Portfolio history read in batches (`perf/batched-history-read`).
 4. Read the stored history at launch off the main actor
-   (`perf/launch-history-off-main`, written, not yet built or measured).
+   (`perf/launch-history-off-main`; it builds and passes every test, and is
+   not yet measured).
    Before the transition, the changes below it left history ready about 0.3 s
    later at launch because the read waits on a busy main thread; this is meant
    to remove the wait.
 5. Popover chart reads values without positions (`perf/chart-values-read`).
 6. Price history arrays sized to fit (`perf/fitted-price-arrays`).
 7. Compact storage for the positions kept with every portfolio snapshot, the
-   largest single block of the idle heap (`perf/compact-positions`, written,
-   not yet built or measured).
+   largest single block of the idle heap (`perf/compact-positions`; it builds
+   and passes every test, and is not yet measured).
 8. The Python helper's start-up cost: precompiled bytecode, and retiring the
    helper straight after a refresh.
 9. The graphics memory of the first window, and AppKit's Writing Tools check
@@ -181,7 +197,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `Scripts/perf/compare.sh` (two commits in turns, with the before/after
   table), their tests, a rewritten `Scripts/README_PERFORMANCE.md`, the
   read-only sampler for a running app, and this log. No app code.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `4f475ea`.
 - Benchmark: the baseline above. The two sides are untouched `experimental`
   and this branch, whose app sources are identical, so the table shows the
   noise of the method.
@@ -194,6 +210,59 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   soak, every one with the display awake and unlocked.
 - Known issues: none.
 - Verdict: retained.
+
+### 85: Stop building test-coverage counters into release builds
+
+- What: one line of `Stockbar.xcscheme`. The scheme's test action no longer
+  auto-creates a test plan. With that setting Xcode turned code coverage on
+  for every build of the scheme, Release included, so the shipped executable
+  carried coverage counters and maps: the installed 3.7.0 has nine such
+  sections. No app code. `develop.sh coverage` asks for coverage explicitly
+  and still reports it.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `4f475ea`, after `88383b8`, six launches a side in turns
+  on 2026-11-12 from 09:17 to 09:41 UTC, macOS 27.2.1, mains power with the
+  battery charging from 12 percent.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Executable size | 24,982,936 bytes | 17,966,360 bytes | -7,016,576 bytes, -28.1% | lower: one build a side, no spread |
+  | App bundle size | 29,116 KiB | 22,264 KiB | -6,852 KiB, -23.5% | lower: one build a side, no spread |
+  | Coverage sections in the executable | 9, holding 1,125,163 bytes | 0 | removed | removed |
+  | Idle memory (physical footprint) | 106.7 (104.9 to 110.6) MB | 105.5 (100.7 to 110.2) MB | -1.2 MB, -1.1% | no measurable change (p = 0.394) |
+  | Idle memory the app holds allocated | 61.8 (61.5 to 62.7) MB | 61.6 (59.7 to 63.3) MB | -0.2 MB, -0.4% | no measurable change (p = 0.509) |
+  | Peak memory, launch and history load | 282.7 (276.2 to 299.8) MB | 282.6 (275.9 to 287.4) MB | -0.1 MB, -0.0% | no measurable change (p = 0.937) |
+  | Idle memory growth across the window | 0.0 (-3.6 to 0.0) MB | 0.0 (-0.1 to 0.1) MB | +0.0 MB | no measurable change (p = 0.727) |
+  | Idle CPU | 0.086 (0.076 to 0.099) s/min | 0.092 (0.091 to 0.913) s/min | +0.006 s/min, +7.0% | no measurable change (p = 0.130) |
+  | Idle CPU wake-ups | 26 (25 to 28) /min | 28 (25 to 221) /min | +2 /min, +5.7% | no measurable change (p = 0.517) |
+  | Idle CPU power | 3.96 (3.47 to 4.94) mW | 4.28 (3.55 to 29.15) mW | +0.33 mW, +8.2% | no measurable change (p = 0.420) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.99 (0.90 to 1.39) s | 0.81 (0.49 to 1.05) s | -0.18 s, -18.2% | no measurable change (p = 0.132) |
+  | Launch to history loaded | 1.64 (1.54 to 2.46) s | 1.65 (1.02 to 1.86) s | +0.01 s, +0.9% | no measurable change (p = 0.589) |
+  | CPU from launch to the idle window | 2.62 (2.41 to 3.40) s | 2.52 (2.01 to 2.95) s | -0.11 s, -4.0% | no measurable change (p = 0.258) |
+  | CPU energy from launch to the idle window | 7.92 (7.57 to 8.26) J | 7.56 (6.34 to 8.09) J | -0.35 J, -4.4% | no measurable change (p = 0.195) |
+  | Python helper start to ready, no network | 0.32 (0.28 to 0.59) s | 0.30 (0.28 to 0.61) s | -0.01 s, -3.2% | no measurable change (p = 0.981) |
+  | Python helper start, CPU | 0.30 (0.28 to 0.36) s | 0.30 (0.28 to 0.37) s | -0.01 s, -1.6% | no measurable change (p = 0.907) |
+  | Python helper memory once started | 71.0 (70.9 to 71.0) MB | 71.0 (70.9 to 71.1) MB | +0.0 MB, +0.0% | no measurable change (p = 1.000) |
+
+  The sizes are of the two apps the comparison built (`stat`, `du -sk` and
+  `otool -l`). The rows this change was expected to move were the launch
+  rows, since counters are updated on every code path. None moved by more
+  than the noise: the benefit measured is the size alone.
+- Testing: 682 XCTest tests with 0 failures, run plainly and again under
+  `develop.sh coverage`, which still produced its report (30.54 percent of the
+  app's lines). 66 Python helper tests and 70 script tests pass. `checks`,
+  `docs-check` and `build-release` pass, and the Release executable from
+  `build-release` has no coverage sections.
+- Known issues: one "after" launch idled at 0.913 s/min with 221 wake-ups a
+  minute. Its log shows the same events as every other launch and the cause
+  was not found; the Mac had restarted after a macOS update 25 minutes
+  earlier. Later comparisons show whether it recurs. Separately, running the
+  tests from Xcode's own interface no longer gathers coverage unless it is
+  turned on in the scheme's test options, and Xcode can write the setting back
+  if the scheme is edited there.
+- Verdict: retained, for the smaller executable. It changes no measured
+  runtime figure.
 
 ## Tried and rejected
 
@@ -281,6 +350,7 @@ launch.
 | --- | --- | --- |
 | Transition, benchmark tooling, baseline, this log | Fable (orchestrator) | Done directly: git work and measuring, nothing to hand off |
 | Before the transition: independent reviews of the helper change and of the history-read changes | Opus | Worth it both times. No defects; each found a real gap in the tests, since closed |
+| Pull request 85 | Fable (orchestrator) | Done directly: a one-line scheme change, reviewed by reading the diff and inspecting the two builds |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
