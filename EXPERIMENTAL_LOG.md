@@ -19,8 +19,13 @@ Two changes are merged.
   memory of launch and history load is 16.4 MB lower: 267.4 MB against 283.8
   MB, measured in turns.
 
-Waiting for a decision: pull request 86, where the idle Python helper exits
-after 90 seconds. It trades memory for CPU.
+Waiting for a decision:
+
+- Pull request 86, where the idle Python helper exits after 90 seconds. It
+  trades memory for CPU.
+- Whether the market data fetch should leave Python. The
+  [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
+  component was moved to Rust.
 
 This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
@@ -82,7 +87,8 @@ Figures from either side of a break are not compared with each other.
 9. The graphics memory of the first window, and AppKit's Writing Tools check
    during launch. Also why one and the same build idles near 105 MB after
    some launches and near 130 MB after others (see pull request 87).
-10. Rust: evaluate honestly whether any component earns a language boundary.
+10. Done in pull request 88: Rust evaluated, no migration recommended. See
+    the [Rust evaluation](#rust-evaluation-2026-11-12).
 
 ## Baseline
 
@@ -281,7 +287,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   snapshots oldest first and converts 500 at a time, letting go of each batch
   before the next. Both `fetchPortfolioSnapshots(from:to:)` and
   `fetchAllPortfolioSnapshots()` read this way. Three new tests.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `3f59dc6`.
 - Benchmark: before `bd56486`, after `1dd6455`, six launches a side in turns
   on 2026-11-12 from 10:39 to 11:09 UTC, macOS 27.2.1, mains power. The row
   it was meant to move is the peak memory of launch and history load. The Mac
@@ -324,11 +330,142 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Known issues: none.
 - Verdict: retained, for the lower peak.
 
+### 88: Record the Rust evaluation and add the script behind its figures
+
+- What: the [Rust evaluation](#rust-evaluation-2026-11-12) below, and
+  `Scripts/perf/helper_layers.py`, which measures what each layer of the
+  Python helper's imports holds beside two compiled programs that start and
+  wait (`native_floor.swift`, `native_floor.rs`). `helper_cost.py` now shares
+  its process-starting code with the new script; three starts before and
+  three after gave the same figures (0.28 to 0.30 s, 70.8 to 71.1 MB). Its
+  one visible difference: the message when the started program exits without
+  answering now names the program instead of saying "The worker". A
+  section in `Scripts/README_PERFORMANCE.md` and four script tests.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: not run. No file that goes into the app changes (nothing under
+  `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so before and after
+  are the same app and all fifteen rows are "not measured". The figures this
+  pull request does carry are the layer table in the evaluation.
+- Testing: 74 script tests pass (four new), and `checks` and
+  `docs-check` pass. The app's own tests were not run again: no file they
+  build changes.
+- Known issues: none.
+- Verdict: retained as a record. No Rust was adopted.
+
+## Rust evaluation, 2026-11-12
+
+No component was moved to Rust, and none is recommended. The one place where
+a rewrite would save a large amount is the Python helper, and that saving
+comes from leaving Python, not from arriving at Rust: Swift reaches the same
+floor with the toolchain the app already has. Whether the market data fetch
+should leave Python at all is a larger question, set out at the end for the
+repository owner. Nothing here has been built beyond two ten-line programs
+that start and wait.
+
+### Candidates
+
+| Candidate | What Rust could save | Finding |
+| --- | --- | --- |
+| The Python helper: `stockbar_worker.py` running `get_stock_data.py` and `get_ohlc_data.py` | At most what the helper holds: 92.1 MB on real data, all of the time (pull request 86) | Measured below. A compiled helper starts from 1 to 3 MB in either language |
+| Arithmetic inside the app: history thinning, risk and attribution figures | Nothing found | The app is compiled Swift. Rust would run the same arithmetic over the same data and add a C boundary with copies across it. Idle CPU is 0.082 s/min, so there is nothing to win at idle; what the 2.29 s of launch CPU is spent on is not profiled yet (planned item 9). Both figures are the "after" side of pull request 87's comparison, which is the current `experimental`. This row is reasoning, not a measurement, and is reopened if that profile finds a loop of the app's own |
+| Reading and storing history | Nothing found | The cost is in Core Data and in what the app keeps of what it reads. The carried-over changes cut both in Swift. Rust cannot replace the store without replacing Core Data |
+
+### What the helper's memory is made of
+
+`Scripts/perf/helper_layers.py` against the helper's own interpreter (Python
+3.13, yfinance 1.8.0), five starts a row, 10:33 UTC, nothing fetched:
+
+| Process | Memory held: median (range) of 5 starts | CPU to ready | Time to ready |
+| --- | --- | --- | --- |
+| Interpreter only | 6.5 (6.5 to 6.6) MB | 0.01 (0.01 to 0.02) s | 0.01 (0.01 to 0.04) s |
+| + the standard library modules the helper uses | 12.1 (11.9 to 12.1) MB | 0.03 (0.03 to 0.03) s | 0.03 (0.03 to 0.05) s |
+| + requests | 20.4 (20.4 to 20.4) MB | 0.06 (0.06 to 0.07) s | 0.07 (0.06 to 0.09) s |
+| + pandas | 57.2 (57.1 to 57.4) MB | 0.22 (0.21 to 0.25) s | 0.22 (0.21 to 0.36) s |
+| + yfinance: everything the helper imports | 70.6 (70.5 to 70.6) MB | 0.29 (0.29 to 0.30) s | 0.29 (0.29 to 0.34) s |
+| Compiled Swift program with a URLSession and a JSON decoder ready | 2.4 (2.4 to 2.5) MB | 0.01 (0.01 to 0.01) s | 0.01 (0.01 to 0.18) s |
+| Compiled Rust program, standard library only | 1.2 (1.2 to 1.2) MB | 0.00 (0.00 to 0.00) s | 0.00 (0.00 to 0.15) s |
+
+- pandas accounts for 36.8 MB and yfinance for a further 13.4 MB: 50.2 MB of
+  the 70.6 MB. The helper uses pandas only through the tables yfinance
+  returns.
+- After real fetches the helper holds more than it does straight after its
+  imports: 92.1 MB in the sample of the installed app.
+- The Rust program has no HTTP client, so a real Rust helper holds more than
+  1.2 MB. That is not measured: it needs third-party crates, which were not
+  downloaded. Neither floor has fetched anything.
+
+### Why not Rust for the helper
+
+- The two floors are 1.2 MB apart. Leaving Python saves 68 MB or more in
+  either language.
+- Swift code can do the fetch inside the app with `URLSession`, as the app
+  already does for exchange rates, Folync and Trading 212. There is then no
+  helper process, no 0.29 s of CPU to start one, and no second executable to
+  sign. Rust would be a second process, or a library behind a C bridge with
+  its own networking runtime inside the app.
+- Rust adds a second toolchain to every build. `rustc` 1.99.1 is installed on
+  this Mac through `rustup` but is not on the `PATH`; the GitHub workflows
+  would need it as well, and the release workflow is outside what this branch
+  may change. It also adds third-party crates to keep current.
+- One point does favour Rust. Yahoo has no official interface, and maintained
+  Yahoo clients exist as crates: `yfinance-rs`, which describes itself as a
+  port of the Python library (0.9.1 on docs.rs), and `yahoo_finance_api`
+  (4.1.0, with cookie and crumb handling in its source). For Swift a search
+  found one package, SwiftYFinance, last released in March 2025. This comes
+  from a web search on 2026-11-12. Neither crate was built or run, and how
+  quickly they follow Yahoo's changes was not checked.
+
+### The larger question: should the fetch leave Python?
+
+What it would bring, on real data. The "now" figures are measured (pull
+request 86); the rest is expected, not measured.
+
+- Memory: the app and helper together hold 175.1 MB on average now, 92.1 MB
+  of it the helper. Pull request 86 brings that to about 114 MB. With no
+  helper it is about 83 MB plus whatever the fetch adds to the app.
+- No Python environment: 123 MB in 5,013 files under Application Support
+  today, with its set-up step, its missing-package alert and its own security
+  updates.
+- About 890 lines of Swift that exist to run Python (`PythonWorkerPool`,
+  `PythonProcessRunner`, `PythonEnvironmentSetup`) would go.
+
+What it would cost.
+
+- 1,712 lines in `get_stock_data.py` and 213 in `get_ohlc_data.py`, with 759
+  lines of tests, rewritten and shown to give the same answers. Twelve Data
+  and Financial Modeling Prep are documented JSON interfaces and carry little
+  risk.
+- Yahoo is the risk. The helper asks yfinance for daily and intraday history,
+  and for the market state and the pre-market and after-hours prices, which
+  come from an endpoint that wants a session cookie and a token. yfinance
+  1.8.0 requires `curl_cffi`, a library for making requests with a browser's
+  network fingerprint. A native client takes that upkeep over from yfinance's
+  maintainers. Whether Yahoo accepts `URLSession` as it is can only be found
+  out against the live service.
+- The tests here must not contact live providers, so equivalence needs
+  recorded responses plus a supervised comparison against the live services.
+
+The options:
+
+| | Option | Memory, app and helper | Risk |
+| --- | --- | --- | --- |
+| A | Keep Python and take pull request 86 | about 114 MB on average (expected) | Smallest: one timeout value to tune |
+| B | Fetch in Swift, with the Python helper kept as the fallback when a native fetch fails | about 83 MB while the native fetch works (expected) | Two implementations to keep until the native one has earned trust |
+| C | Fetch in Swift and remove Python | about 83 MB (expected) | Largest: no fallback if Yahoo turns the native client away |
+| D | A Rust helper on `yfinance-rs` | a few MB more than C (not measured) | Yahoo upkeep shared with the crate's one maintainer; the build and release costs above |
+
+Recommended: A now. Then B in stages if the remaining 30 MB or so and the
+end of the Python set-up are wanted, starting with a supervised trial of a
+Swift fetch against Yahoo, since that settles whether C is reachable or D is
+the candidate. B, C and D change where every price comes from, so none of
+them starts without the repository owner's decision.
+
 ## Tried and rejected
 
 | Idea | When | What was measured | Why dropped |
 | --- | --- | --- | --- |
 | Hand freed launch memory back to the system with `malloc_zone_pressure_relief` after the launch load | 2026-11-11, before the transition | It released 0 bytes in all 11 calls, and idle footprint stayed inside its usual spread | The allocator does not return those pages on request. Idle footprint comes down by lowering what the launch allocates, not by asking afterwards. Never committed |
+| Move a component to Rust | 2026-11-12, pull request 88 | A compiled helper starts from 1.2 MB in Rust (standard library only) and 2.4 MB in Swift (with `URLSession` ready), against 70.6 MB for the Python helper after its imports | The saving comes from leaving Python, and Swift reaches it with the app's own toolchain and without a helper process. Nothing inside the app was found that Rust would make faster or smaller. See [Rust evaluation](#rust-evaluation-2026-11-12) |
 
 ## How this branch works
 
@@ -412,6 +549,7 @@ launch.
 | Before the transition: independent reviews of the helper change and of the history-read changes | Opus | Worth it both times. No defects; each found a real gap in the tests, since closed |
 | Pull request 85 | Fable (orchestrator) | Done directly: a one-line scheme change, reviewed by reading the diff and inspecting the two builds |
 | Pull request 87 | Fable (orchestrator) | Re-measured and re-read directly. The change itself was reviewed by Opus before the transition |
+| Pull request 88, the Rust evaluation | Fable (orchestrator) | Done directly: measuring, two web searches and the write-up |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
