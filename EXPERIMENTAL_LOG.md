@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Three changes are merged.
+Four changes are merged.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -22,6 +22,10 @@ Three changes are merged.
   89). History is loaded 0.43 s sooner after launch, 0.60 s against 1.03 s,
   and the launch uses a quarter less CPU, 1.67 s against 2.23 s, measured in
   turns with the screen locked.
+- Each portfolio snapshot's positions are kept in a sorted array instead of a
+  dictionary (pull request 90). The memory the app holds allocated at idle is
+  10.7 MB lower, 52.2 MB against 62.9 MB, and idle memory is 14.2 MB lower,
+  95.8 MB against 110.0 MB, measured in turns.
 
 Waiting for a decision:
 
@@ -52,10 +56,12 @@ Figures from either side of a break are not compared with each other.
   memory, allocated heap and peak memory were 2 to 3 percent higher and idle
   CPU 14 percent lower. A figure is therefore read against the "before"
   column measured beside it, never against the baseline table.
-- 2026-11-12, from some time between 11:09 and 11:23 UTC: the Mac's screen is locked and its
-  display mostly asleep, because its owner is away. The comparisons of pull
-  requests 85 to 87 ran unlocked with the display awake; pull request 89's
-  ran locked. Both sides of a comparison are still measured under the same
+- 2026-11-12, from some time between 11:09 and 11:23 UTC until some time
+  between 12:13 and 12:33 UTC: the Mac's screen was locked and its display
+  mostly asleep, because its owner was away. The comparisons of pull requests
+  85 to 87 ran unlocked with the display awake; pull request 89's ran locked;
+  pull request 90's ran unlocked again, with the display awake for all twelve
+  launches. Both sides of a comparison are still measured under the same
   conditions, in turns. Locked, the build that showed its first window in
   0.58 s in pull request 87's comparison shows it in 0.42 s, draws 1.4 mW of
   idle CPU power against 4.5 mW, and uses 0.16 s/min of idle CPU against
@@ -88,9 +94,8 @@ Figures from either side of a break are not compared with each other.
    actor.
 5. Popover chart reads values without positions (`perf/chart-values-read`).
 6. Price history arrays sized to fit (`perf/fitted-price-arrays`).
-7. Compact storage for the positions kept with every portfolio snapshot, the
-   largest single block of the idle heap (`perf/compact-positions`;
-   independently reviewed, not yet measured).
+7. Done in pull request 90: compact storage for the positions kept with every
+   portfolio snapshot, which were the largest single block of the idle heap.
 8. The Python helper's start-up cost: precompiled bytecode, and retiring the
    helper straight after a refresh.
 9. The graphics memory of the first window, and AppKit's Writing Tools check
@@ -99,8 +104,16 @@ Figures from either side of a break are not compared with each other.
    the 36 launches of the comparisons of pull requests 85 to 87, ten idled
    above 120 MB and 26 below, and the heap the app holds allocated was the
    same at both levels (medians of 61.0 MB and 61.8 MB). The extra 22 MB or
-   so is therefore memory outside the allocated heap. What it is has not been
-   looked at.
+   so is therefore memory outside the allocated heap. The memory breakdowns
+   saved with those launches show what it is: the small-allocation zone held
+   101.0 MB at the high level and 79.5 MB at the low one, 21.5 MB apart, and
+   apart from 1.6 MB of large allocations no other kind of memory differed by
+   as much as 0.1 MB. So it is memory the launch freed that the allocator has
+   not handed back, and the allocator does not hand it back on request (see
+   "Tried and rejected"). In pull request 90's comparison that zone held 80.5
+   MB against 62.9 MB allocated before, and 67.0 MB against 52.2 MB after.
+   What is left to work on is therefore what the launch allocates at its
+   peak: 250 MB, for 52 MB kept.
 10. Done in pull request 88: Rust evaluated, no migration recommended. See
     the [Rust evaluation](#rust-evaluation-2026-11-12).
 
@@ -388,7 +401,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   All of it is in memory sooner (the table below). How much later the first
   symbol's history arrives than it used to was not measured; it is in memory
   within the 0.60 s the whole load now takes.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `8140395`.
 - Benchmark: before `4ff7566`, after `6925741`, ten launches a side in turns
   on 2026-11-12 from 11:23 to 12:13 UTC, macOS 27.2.1, mains power. The rows
   it was meant to move are launch to history loaded and launch to first
@@ -453,6 +466,88 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   history for N symbols" line still counts it.
 - Verdict: retained, for history loaded 0.43 s sooner and a quarter less CPU
   at launch.
+
+### 90: Keep each portfolio snapshot's positions in a sorted array
+
+- What: every portfolio snapshot the app keeps in memory carries the
+  positions held at that moment, and the app keeps thousands of snapshots.
+  The positions were a dictionary keyed by symbol, whose hash table for 15
+  holdings takes about 2.3 KB. They are now `PositionSnapshots`, an array
+  sorted by symbol that is searched by halving: 56 bytes a position, about
+  0.9 KB for 15. It is still written to and read from JSON as a dictionary
+  keyed by symbol, and what is stored in Core Data does not change.
+- Behaviour differences, none of them reachable from what the app writes
+  today. Positions are now walked in order of symbol where a dictionary's
+  order was arbitrary, so the risk figures add their terms in a fixed order.
+  If one stored snapshot ever held the same symbol twice, the first is now
+  kept, where the survivor used to depend on the order of an unordered set;
+  nothing writes such a snapshot. A dictionary entry filed under a key other
+  than its position's own symbol takes the key as its symbol, so it is still
+  found under that key.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: before `8140395`, after `3f50c11`, six launches a side in turns
+  on 2026-11-12 from 12:32 to 13:04 UTC, macOS 27.2.1, mains power. The row
+  it was meant to move is the idle memory the app holds allocated, expected
+  about 11 MB lower. All twelve launches ran with the screen unlocked and
+  the display awake. When the run began Spotlight indexing and the file
+  provider were using about three cores between them (load average 9.6,
+  falling to about 6 by the end).
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 110.0 (108.0 to 111.6) MB | 95.8 (92.4 to 102.3) MB | -14.2 MB, -13.0% | lower (p = 0.002) |
+  | Idle memory the app holds allocated | 62.9 (61.9 to 63.3) MB | 52.2 (51.6 to 53.4) MB | -10.7 MB, -17.0% | lower (p = 0.002) |
+  | Peak memory, launch and history load | 271.1 (258.4 to 273.8) MB | 250.2 (240.7 to 261.0) MB | -20.8 MB, -7.7% | lower (p = 0.004) |
+  | Idle memory growth across the window | 0.0 (-4.2 to 0.0) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.079 (0.067 to 0.091) s/min | 0.082 (0.067 to 0.085) s/min | +0.003 s/min, +3.2% | no measurable change (p = 0.911) |
+  | Idle CPU wake-ups | 28 (25 to 33) /min | 28 (24 to 30) /min | +0 /min, +1.8% | no measurable change (p = 1.000) |
+  | Idle CPU power | 4.41 (3.88 to 4.95) mW | 4.04 (3.88 to 4.35) mW | -0.38 mW, -8.5% | no measurable change (p = 0.097) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.63 (0.46 to 1.00) s | 0.58 (0.48 to 1.32) s | -0.05 s, -7.9% | no measurable change (p = 0.974) |
+  | Launch to history loaded | 0.75 (0.56 to 1.00) s | 0.62 (0.53 to 1.30) s | -0.13 s, -17.3% | no measurable change (p = 0.942) |
+  | CPU from launch to the idle window | 1.83 (1.71 to 1.99) s | 1.77 (1.60 to 2.08) s | -0.06 s, -3.6% | no measurable change (p = 0.701) |
+  | CPU energy from launch to the idle window | 5.59 (5.29 to 6.12) J | 5.47 (5.14 to 6.23) J | -0.12 J, -2.1% | no measurable change (p = 0.613) |
+  | Python helper start to ready, no network | 0.33 (0.28 to 0.63) s | 0.28 (0.27 to 0.56) s | -0.05 s, -16.7% | no measurable change (p = 0.173) |
+  | Python helper start, CPU | 0.30 (0.28 to 0.39) s | 0.28 (0.27 to 0.35) s | -0.03 s, -9.8% | no measurable change (p = 0.180) |
+  | Python helper memory once started | 71.0 (71.0 to 71.1) MB | 71.0 (70.9 to 71.0) MB | -0.1 MB, -0.1% | possibly lower (p = 0.043) |
+
+  The row it was meant to move fell by 10.7 MB, a sixth of the allocated
+  heap. Two rows moved that were not predicted. Idle memory fell by 14.2 MB,
+  more than the allocated heap did. Peak memory fell by 20.8 MB: the history
+  load now builds an array for each snapshot where it built a dictionary.
+  No CPU, energy or launch-time row moved.
+
+  The helper's memory came out "possibly lower", by 0.1 MB. The helper is
+  the same code on both sides, so that row is chance.
+
+  A first attempt at 12:19 UTC stopped before measuring anything. The
+  warm-up launch of the "before" build did not finish its first history
+  calculation within the 180 s the script allows. The Mac's load average was
+  between 46 and 64 at the time, from system work (the file provider, media
+  analysis, on-device inference, a backup and Spotlight) on top of a test
+  run and two builds for this pull request that had just finished. The
+  script deleted the app's log with its temporary storage, so the cause is
+  not established. Afterwards the same build completed a warm-up launch in
+  62 s at 12:26 UTC, and all four warm-up launches of the second attempt
+  completed. No crash report was written.
+- Testing: 701 XCTest tests with 0 failures (eight new), 66 Python helper
+  tests and 74 script tests pass. `checks`, `docs-check` and `build-release`
+  pass. Every launch on both sides of the comparison logged the same 7000
+  portfolio snapshots loaded.
+- Review: one independent review by Opus, of the branch after
+  `experimental` was merged into it and before anything was built. It found
+  that the tests no longer compiled: two lines added by pull request 87
+  still used the dictionary. Fixed before the test run. It found no defect
+  in the change, confirmed that nothing else uses the dictionary's
+  interface, and checked the memory arithmetic.
+- Known issues: two small ones, left as they are. `symbols` builds an array
+  where the dictionary's `keys` was a view; its two callers each use it once
+  per snapshot for an export or an analysis. And no test pins the
+  `compositionHash` text written with each stored snapshot. It is built from
+  the same strings in the same sorted order as before, and nothing in the
+  app reads it back.
+- Verdict: retained, for 10.7 MB less allocated memory at idle and 20.8 MB
+  less at the launch peak, with nothing given up.
 
 ## Rust evaluation, 2026-11-12
 
@@ -653,6 +748,7 @@ launch.
 | Pull request 87 | Fable (orchestrator) | Re-measured and re-read directly. The change itself was reviewed by Opus before the transition |
 | Pull request 88, the Rust evaluation | Fable (orchestrator) | Done directly: measuring, two web searches and the write-up |
 | Pull request 89 | Fable (orchestrator), with two independent reviews by Opus | Worth it. The first review found a real defect: a slow launch read could undo the UK price scale repair for the session. It was fixed, with tests, before the comparison. The second review, of the fix, found no defect and pointed out a behaviour change the description had missed |
+| Pull request 90 | Fable (orchestrator), with one independent review by Opus | Worth it. The change was written before the transition. The review read the branch after `experimental` was merged into it and caught that the tests no longer compiled, before a build had been spent finding out |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
