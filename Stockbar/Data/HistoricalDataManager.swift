@@ -177,12 +177,8 @@ class HistoricalDataManager {
     
     // MARK: - Core Data Integration
     
-    /// Load portfolio snapshots from Core Data
-    func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
-        await Self.readPortfolioSnapshots(timeRange: timeRange, from: coreDataService)
-    }
-
-    /// The read itself, which needs nothing from the main actor.
+    /// Reads portfolio snapshots from Core Data, positions included. Needs
+    /// nothing from the main actor.
     nonisolated static func readPortfolioSnapshots(
         timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
     ) async -> [HistoricalPortfolioSnapshot] {
@@ -195,6 +191,29 @@ class HistoricalDataManager {
             return snapshots
         } catch {
             await Logger.shared.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            return []
+        }
+    }
+
+    /// The stored portfolio values in a range, without each snapshot's positions.
+    func loadPortfolioValuesFromCoreData(timeRange: ChartTimeRange) async -> [StoredPortfolioValue] {
+        await Self.readPortfolioValues(timeRange: timeRange, from: coreDataService)
+    }
+
+    /// The read itself. Like `readPortfolioSnapshots` it needs nothing from the
+    /// main actor, so it does not wait for it between its steps.
+    nonisolated static func readPortfolioValues(
+        timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
+    ) async -> [StoredPortfolioValue] {
+        do {
+            let startDate = timeRange.startDate()
+            let endDate = Date()
+            await Logger.shared.info("📈 Loading portfolio values from Core Data: startDate=\(startDate), endDate=\(endDate)")
+            let values = try await service.fetchPortfolioValues(from: startDate, to: endDate)
+            await Logger.shared.info("📈 Loaded \(values.count) portfolio values from Core Data")
+            return values
+        } catch {
+            await Logger.shared.error("❌ Failed to load portfolio values from Core Data: \(error)")
             return []
         }
     }

@@ -539,8 +539,8 @@ final class StoreModelMigrationTests: XCTestCase {
     }
 }
 
-/// Stored portfolio history is read a batch at a time. That must return what
-/// a single read of everything did.
+/// Stored portfolio history is read a batch at a time, and for value charts
+/// without positions. Both must return what a single read of everything did.
 final class PortfolioHistoryFetchTests: XCTestCase {
     private let base = Date(timeIntervalSince1970: 1_790_000_000)
 
@@ -631,7 +631,7 @@ final class PortfolioHistoryFetchTests: XCTestCase {
 
     /// The app's store is SQLite, which returns a batch in row order rather
     /// than date order and reads its positions with a second query.
-    func testBatchedReadOnASQLiteStore() throws {
+    func testBatchedReadAndValuesOnASQLiteStore() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("stockbar-history-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -651,7 +651,7 @@ final class PortfolioHistoryFetchTests: XCTestCase {
         let bareDate = date(9)
         let from = date(2)
 
-        let (everything, later) = try context.performAndWait {
+        let (everything, later, laterValues) = try context.performAndWait {
             for snapshot in stored {
                 _ = PortfolioSnapshotEntity.fromHistoricalPortfolioSnapshot(snapshot, in: context)
             }
@@ -664,7 +664,8 @@ final class PortfolioHistoryFetchTests: XCTestCase {
                 try CoreDataHistoricalDataService.portfolioSnapshots(
                     matching: NSPredicate(format: "timestamp >= %@ AND timestamp <= %@", from as NSDate, bareDate as NSDate),
                     batchSize: 3, in: context
-                )
+                ),
+                try CoreDataHistoricalDataService.portfolioValues(from: from, to: bareDate, in: context)
             )
         }
 
@@ -678,5 +679,23 @@ final class PortfolioHistoryFetchTests: XCTestCase {
             XCTAssertEqual(bare?.currency, "USD")
             XCTAssertEqual(bare?.portfolioComposition.isEmpty, true)
         }
+        XCTAssertEqual(laterValues, later.map {
+            StoredPortfolioValue(date: $0.date, totalValue: $0.totalValue, currency: $0.currency)
+        }, "without positions, the same rows with the same defaults for missing values")
+        XCTAssertEqual(laterValues.last, StoredPortfolioValue(date: bareDate, totalValue: 0, currency: "USD"))
+    }
+
+    func testValuesWithoutPositionsAreTheSameSnapshotsInTheSameOrder() async throws {
+        let service = CoreDataHistoricalDataService()
+        try await store(hours: [4, 2, 6, 1, 5, 3], using: service)
+
+        let values = try await service.fetchPortfolioValues(from: date(2), to: date(5))
+        let snapshots = try await service.fetchPortfolioSnapshots(from: date(2), to: date(5))
+
+        XCTAssertEqual(values, snapshots.map {
+            StoredPortfolioValue(date: $0.date, totalValue: $0.totalValue, currency: $0.currency)
+        })
+        XCTAssertEqual(values.map(\.date), (2...5).map(date))
+        XCTAssertEqual(values.map(\.currency), ["GBP", "USD", "GBP", "USD"])
     }
 }

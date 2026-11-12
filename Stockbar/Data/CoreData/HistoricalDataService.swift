@@ -9,6 +9,7 @@ protocol HistoricalDataServiceProtocol: Sendable {
     func savePortfolioSnapshot(_ snapshot: HistoricalPortfolioSnapshot) async throws
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot]
     func fetchAllPortfolioSnapshots() async throws -> [HistoricalPortfolioSnapshot]
+    func fetchPortfolioValues(from startDate: Date, to endDate: Date) async throws -> [StoredPortfolioValue]
     func getDataCount(for symbol: String) async throws -> Int
     func getTotalPriceSnapshotCount() async throws -> Int
     func getPortfolioSnapshotCount() async throws -> Int
@@ -212,6 +213,35 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
         let batchSize = portfolioFetchBatchSize
         return try await coreDataStack.performBackgroundTask { context in
             try Self.portfolioSnapshots(matching: nil, batchSize: batchSize, in: context)
+        }
+    }
+
+    /// The date, total and currency of each snapshot in the range, oldest
+    /// first. Positions are not read: they are most of a snapshot's rows, and
+    /// a chart of the portfolio's value uses none of them.
+    func fetchPortfolioValues(from startDate: Date, to endDate: Date) async throws -> [StoredPortfolioValue] {
+        return try await coreDataStack.performBackgroundTask { context in
+            try Self.portfolioValues(from: startDate, to: endDate, in: context)
+        }
+    }
+
+    static func portfolioValues(
+        from startDate: Date, to endDate: Date, in context: NSManagedObjectContext
+    ) throws -> [StoredPortfolioValue] {
+        let request = NSFetchRequest<NSDictionary>(entityName: "PortfolioSnapshotEntity")
+        request.resultType = .dictionaryResultType
+        request.propertiesToFetch = ["timestamp", "totalValue", "currency"]
+        request.predicate = NSPredicate(format: "timestamp >= %@ AND timestamp <= %@",
+                                        startDate as NSDate,
+                                        endDate as NSDate)
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+        // The same defaults as toHistoricalPortfolioSnapshot().
+        return try context.fetch(request).map { row in
+            StoredPortfolioValue(
+                date: row["timestamp"] as? Date ?? Date(),
+                totalValue: row["totalValue"] as? Double ?? 0,
+                currency: row["currency"] as? String ?? "USD"
+            )
         }
     }
 
