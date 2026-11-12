@@ -1,3 +1,4 @@
+import Sparkle
 import XCTest
 @testable import Stockbar
 
@@ -65,6 +66,38 @@ final class AppUpdateServiceTests: XCTestCase {
         ))
         let local = "http://127.0.0.1:8123/appcast.xml"
         XCTAssertEqual(UpdateChannel.experimental.feedOverride(experimentalFeed: local, liveRequestsAllowed: false), local)
+    }
+
+    /// Sparkle asks its delegate for the feed by an optional Objective-C method,
+    /// so a method it could not find would leave every channel on the ordinary feed.
+    @MainActor
+    func testTheUpdaterIsToldWhichFeedEachChannelReads() {
+        let feed = "https://example.com/experimental/appcast.xml"
+        let selector = NSSelectorFromString("feedURLStringForUpdater:")
+
+        for channel in UpdateChannel.allCases {
+            let delegate = UpdaterDelegate(currentChannel: { channel }, experimentalFeed: feed, liveRequestsAllowed: true)
+
+            XCTAssertTrue(delegate.responds(to: selector), channel.rawValue)
+            let answer = delegate.perform(selector, with: nil)?.takeUnretainedValue() as? String
+            XCTAssertEqual(answer, channel == .experimental ? feed : nil, channel.rawValue)
+        }
+    }
+
+    /// `Scripts/release_feed.py` numbers an experimental build to sort between
+    /// the testing builds around it; its tests sort the same list. Sparkle does
+    /// the comparing in the app, and to Sparkle a missing part is 0: the build
+    /// of a tagged commit, `<build>.0.0`, is the release itself.
+    func testTheUpdaterOrdersBuildNumbersAsTheFeedScriptNumbersThem() {
+        let updater = SUStandardVersionComparator.default
+        let ascending = ["360", "360.0.1", "360.0.2", "360.3", "360.3.3", "360.3.4", "360.4",
+                         "360.8", "360.8.1", "360.9", "370"]
+
+        for (lower, higher) in zip(ascending, ascending.dropFirst()) {
+            XCTAssertEqual(updater.compareVersion(lower, toVersion: higher), .orderedAscending, "\(lower) < \(higher)")
+        }
+        XCTAssertEqual(updater.compareVersion("370", toVersion: "370.0.0"), .orderedSame)
+        XCTAssertEqual(updater.compareVersion("360.9", toVersion: "360.9.0"), .orderedSame)
     }
 
     /// The feeds are written by a Python script and read by the app; a testing

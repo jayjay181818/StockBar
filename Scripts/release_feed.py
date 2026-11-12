@@ -90,7 +90,12 @@ class Item:
 
 
 def build_key(build: str) -> tuple[int, ...]:
-    """Orders build numbers the way the updater does: 360 < 360.14 < 370."""
+    """Orders build numbers the way the updater does: 360 < 360.14 < 370.
+
+    One difference: to the updater a missing part is 0, so 360.9 and 360.9.0
+    are the same build, while here the longer one sorts higher. The two forms
+    never share a feed: only experimental builds have three parts.
+    """
     return tuple(int(part) for part in build.split("."))
 
 
@@ -122,12 +127,14 @@ def plan(ref_type: str, ref_name: str, describe: str, project_version: str, proj
     is a dry run that publishes nothing.
 
     A push to `experimental` is an experimental build with a third part.
-    `ahead_of_testing` is how many of the commits since the version tag
-    `testing` does not have. With 14 commits since v3.6.0, 5 of them not in
-    `testing`, the build is 360.9.5: just above 360.9, the testing build it
-    contains, and below 360.10. Bringing `testing` into the branch raises the
-    middle part, and every other commit raises the last, so each build sorts
-    above the one before it.
+    `ahead_of_testing` is how many of its commits `testing` does not have.
+    With 14 commits since v3.6.0, 5 of them not in `testing`, the build is
+    360.9.5: just above 360.9, the testing build it contains, and below
+    360.10. Bringing `testing` into the branch raises the middle part, and
+    every other commit raises the last, so each build sorts above the one
+    before it. The tagged commit itself is built too, as 360.0.0, which the
+    updater takes for the release: the feed of experimental builds lists
+    nothing else, so that is how a release reaches the channel.
 
     That number depends on where `testing` is when the build is made, so an
     older commit built again later could be numbered above a newer one.
@@ -153,13 +160,15 @@ def plan(ref_type: str, ref_name: str, describe: str, project_version: str, proj
         raise ReleaseError(f"No version tag is reachable from this commit (git describe gave '{describe.strip()}').")
     base, count = stable_build(match.group(1)), int(match.group(2))
     if ref_name == EXPERIMENTAL or ref_name.startswith(EXPERIMENTAL_DRY_RUN):
-        if ahead_of_testing is None or not 0 <= ahead_of_testing <= count:
+        if ahead_of_testing is None or ahead_of_testing < 0:
             raise ReleaseError(
-                f"An experimental build needs the number of its commits that {TESTING} does not have, "
-                f"between 0 and the {count} since {match.group(1)}; got {ahead_of_testing}."
+                f"An experimental build needs the number of its commits that {TESTING} does not have; "
+                f"got {ahead_of_testing}."
             )
         channel, feed_branch = EXPERIMENTAL, EXPERIMENTAL_FEED_BRANCH
-        build = f"{base}.{count - ahead_of_testing}.{ahead_of_testing}"
+        # More than the commits since the tag only while `testing` lacks the tag itself.
+        ahead = min(ahead_of_testing, count)
+        build = f"{base}.{count - ahead}.{ahead}"
     else:
         channel, feed_branch = TESTING, FEED_BRANCH
         build = f"{base}.{count}"
@@ -170,7 +179,7 @@ def plan(ref_type: str, ref_name: str, describe: str, project_version: str, proj
             f"and never be offered. Bring {ref_name} up to date with the branch that carries {newest_tag} first."
         )
     reason = ""
-    if mode == "publish" and count == 0:
+    if mode == "publish" and channel == TESTING and count == 0:
         mode, reason = "skip", f"This commit is {match.group(1)} itself; its release build covers it."
     elif mode == "publish" and channel == EXPERIMENTAL and behind_branch:
         mode, reason = "skip", f"{ref_name} has moved on since this commit; the build of its newest commit covers it."

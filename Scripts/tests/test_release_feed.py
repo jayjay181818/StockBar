@@ -53,29 +53,35 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(self.plan(ref_name='experimental', ahead_of_testing=0).build, '360.14.0')
 
     def test_experimental_builds_sort_between_the_testing_builds_around_them(self):
-        # Two commits, testing brought in (three of its commits and a merge), one more commit,
-        # then the branch promoted and testing brought back in.
-        history = [(1, 1), (2, 2), (6, 3), (7, 4), (9, 0)]
+        # Two commits; testing brought in (three of its commits and a merge); one more commit;
+        # the branch promoted with a merge commit; testing brought back in with another.
+        history = [(1, 1), (2, 2), (6, 3), (7, 4), (9, 1)]
         builds = [self.plan(ref_name='experimental', describe=f'v3.6.0-{count}-gabc1234',
                             ahead_of_testing=ahead).build for count, ahead in history]
-        self.assertEqual(builds, ['360.0.1', '360.0.2', '360.3.3', '360.3.4', '360.9.0'])
-        self.assertEqual(sorted(builds + ['360', '360.3', '360.4', '360.9', '360.10', '370'], key=feed.build_key),
+        self.assertEqual(builds, ['360.0.1', '360.0.2', '360.3.3', '360.3.4', '360.8.1'])
+        # AppUpdateServiceTests asks the updater's own comparison for the same order.
+        self.assertEqual(sorted(builds + ['360', '360.3', '360.4', '360.8', '360.9', '370'], key=feed.build_key),
                          ['360', '360.0.1', '360.0.2', '360.3', '360.3.3', '360.3.4', '360.4',
-                          '360.9', '360.9.0', '360.10', '370'])
+                          '360.8', '360.8.1', '360.9', '370'])
 
     def test_an_experimental_build_needs_to_know_how_far_it_is_from_testing(self):
-        for ahead in (None, -1, 15):
+        for ahead in (None, -1):
             with self.subTest(ahead=ahead), self.assertRaisesRegex(feed.ReleaseError, 'does not have'):
                 self.plan(ref_name='experimental', ahead_of_testing=ahead)
+        # While testing lacks the version tag, commits from before the tag are counted too.
+        self.assertEqual(self.plan(ref_name='experimental', ahead_of_testing=40).build, '360.0.14')
 
     def test_an_experimental_commit_the_branch_has_moved_on_from_is_not_published(self):
         plan = self.plan(ref_name='experimental', ahead_of_testing=5, behind_branch=True)
         self.assertEqual(plan.mode, 'skip')
         self.assertIn('moved on', plan.reason)
 
-    def test_experimental_keeps_the_rules_of_a_testing_build(self):
-        self.assertEqual(self.plan(ref_name='experimental', describe='v3.6.0-0-gabc1234', ahead_of_testing=0).mode,
-                         'skip')
+    def test_the_tagged_commit_is_published_to_experimental_as_the_release(self):
+        # The feed of experimental builds lists no releases, so this is how one reaches the channel.
+        plan = self.plan(ref_name='experimental', describe='v3.6.0-0-gabc1234', ahead_of_testing=0)
+        self.assertEqual((plan.mode, plan.build, plan.release_tag), ('publish', '360.0.0', 'experimental-360.0.0'))
+
+    def test_an_experimental_build_that_would_sort_below_the_newest_release_is_refused(self):
         with self.assertRaisesRegex(feed.ReleaseError, 'v3.7.0 is not in the history of experimental'):
             self.plan(ref_name='experimental', ahead_of_testing=5, newest_tag='v3.7.0')
 
@@ -156,9 +162,9 @@ class FeedTests(unittest.TestCase):
         self.path.write_text(feed.render_feed(items, 'https://example.com/repo'), encoding='utf-8')
 
     def test_builds_sort_the_way_the_updater_compares_them(self):
-        builds = ['370.2', '360', '360.14', '370', '360.2', '360.2.0', '360.2.11', '360.0.3']
+        builds = ['370.2', '360', '360.14', '370', '360.2', '360.2.1', '360.2.11', '360.0.3']
         self.assertEqual(sorted(builds, key=feed.build_key),
-                         ['360', '360.0.3', '360.2', '360.2.0', '360.2.11', '360.14', '370', '370.2'])
+                         ['360', '360.0.3', '360.2', '360.2.1', '360.2.11', '360.14', '370', '370.2'])
 
     def test_a_feed_survives_being_written_and_read_back(self):
         items = [item('360.2', notes='Fixed <b> & "quotes" ]]> done\n\n- second line', link='https://example.com/r'),

@@ -214,7 +214,7 @@ final class AppUpdateService {
 /// Tells Sparkle which feed the chosen update channel reads and which of its
 /// channels it may see.
 @MainActor
-private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
     private let currentChannel: @MainActor () -> UpdateChannel
     private let experimentalFeed: String?
     private let liveRequestsAllowed: Bool

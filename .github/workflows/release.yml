@@ -59,14 +59,14 @@ jobs:
       run: |
         describe="$(git describe --tags --long --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2>/dev/null || true)"
         newest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n 1p)"
-        # An experimental build is numbered by how many of the commits since
-        # that tag `testing` does not have. That depends on where `testing` is
-        # now, so a commit the branch has already moved on from is not built.
+        # An experimental build is numbered by how many of its commits
+        # `testing` does not have. That depends on where `testing` is now, so a
+        # commit the branch has already moved on from is not built.
         experimental=()
         if [[ "$GITHUB_REF_NAME" == experimental || "$GITHUB_REF_NAME" == release-test/experimental* ]]; then
-          tag="${describe%-*-g*}"
-          ahead="$(git rev-list --count HEAD --not origin/testing ${tag:+"$tag"})"
-          newest_commit="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)"
+          ahead="$(git rev-list --count HEAD --not origin/testing)"
+          newest_commit="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" \
+            | awk -v ref="refs/heads/$GITHUB_REF_NAME" '$2 == ref { print $1 }')"
           experimental=(--ahead-of-testing "$ahead")
           if [[ "$newest_commit" != "$GITHUB_SHA" ]]; then
             experimental+=(--behind-branch)
