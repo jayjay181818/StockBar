@@ -23,6 +23,11 @@ class HistoricalDataManager {
         didSet { aliasHistoryCache.removeAll() }
     }
     private(set) var priceDataRevision: Int = 0
+    /// How often `invalidatePriceData` has run, and the count at which each
+    /// symbol's stored rows last changed underneath. A read of the store that
+    /// began before that holds the old rows and is not taken for the symbol.
+    @ObservationIgnored private(set) var priceInvalidationCount = 0
+    @ObservationIgnored private var lastPriceInvalidation: [String: Int] = [:]
     /// Which series changed with each `priceDataRevision` bump: upper-cased
     /// symbol and alias keys, or nil when every series may have changed.
     let priceDataChanges = PassthroughSubject<Set<String>?, Never>()
@@ -1099,6 +1104,7 @@ class HistoricalDataManager {
         if migrationService.migrationVersionStored >= coreDataMasterVersion {
             let storedVersion = migrationService.migrationVersionStored
             let service = coreDataService
+            let invalidations = priceInvalidationCount
             // The main thread is busy building the first window while this
             // runs. Reading and thinning the store needs nothing from the main
             // actor, so only taking the results into memory waits for it.
@@ -1108,7 +1114,7 @@ class HistoricalDataManager {
                 // Core Data is the store of record; load each symbol's history.
                 let prices = await Self.readStoredPriceHistory(for: nil, from: service)
                 // The portfolio read does not wait for the prices to be taken.
-                async let pricesAdopted: Void = self.adoptStoredPriceHistory(prices)
+                async let pricesAdopted: Void = self.adoptStoredPriceHistory(prices, readAfter: invalidations)
 
                 // Load portfolio snapshots from Core Data
                 let coreDataPortfolioSnaps = Self.thinnedPortfolioHistory(
@@ -1709,14 +1715,24 @@ class HistoricalDataManager {
 
     /// Drops in-memory price data for symbols whose stored snapshots changed
     /// underneath (e.g. after a data migration) so every view reloads them.
+    /// The caller reloads the symbols afterwards: a read of the store that
+    /// began before this call is not taken for them.
     func invalidatePriceData(for symbols: Set<String>) {
         guard !symbols.isEmpty else { return }
         let keys = Set(symbols.map { $0.uppercased() })
+        priceInvalidationCount += 1
+        for key in keys { lastPriceInvalidation[key] = priceInvalidationCount }
         for key in priceSnapshots.keys where keys.contains(key.uppercased()) {
             priceSnapshots.removeValue(forKey: key)
         }
         symbols.forEach { invalidateStockDataCache(for: $0) }
         notePriceDataRevision(changed: symbols)
+    }
+
+    /// True when `symbol`'s stored rows changed underneath after
+    /// `priceInvalidationCount` stood at `count`.
+    func priceDataInvalidated(for symbol: String, since count: Int) -> Bool {
+        (lastPriceInvalidation[symbol.uppercased()] ?? 0) > count
     }
 
     func invalidateStockDataCache(for symbol: String) {

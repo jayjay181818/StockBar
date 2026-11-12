@@ -348,7 +348,10 @@ extension HistoricalDataManager {
     /// Loads stored price history from Core Data for the given symbols (all
     /// stored symbols when nil), merging with anything recorded in memory since.
     func reloadStoredPriceHistory(for symbols: Set<String>? = nil) async {
-        await adoptStoredPriceHistory(await Self.readStoredPriceHistory(for: symbols, from: coreDataService))
+        let invalidations = priceInvalidationCount
+        await adoptStoredPriceHistory(
+            await Self.readStoredPriceHistory(for: symbols, from: coreDataService), readAfter: invalidations
+        )
     }
 
     /// Stored price history as it is kept in memory, read away from the main actor.
@@ -384,19 +387,25 @@ extension HistoricalDataManager {
         return StoredPriceHistory(symbolCount: targets.count, series: series)
     }
 
-    /// Takes stored price history into memory, keeping anything recorded since
-    /// it was read.
-    func adoptStoredPriceHistory(_ history: StoredPriceHistory?) async {
+    /// Takes stored price history into memory. A point recorded in memory since
+    /// the read is kept unless the store has one at the same timestamp, which
+    /// wins. `invalidations` is `priceInvalidationCount` as it stood when the
+    /// read began: a symbol invalidated since then is left to the reload that
+    /// follows its invalidation, because this read may hold its old rows.
+    func adoptStoredPriceHistory(_ history: StoredPriceHistory?, readAfter invalidations: Int) async {
         guard let history else { return }
         var loadedCount = 0
         for (symbol, stored) in history.series {
+            guard !priceDataInvalidated(for: symbol, since: invalidations) else { continue }
             let inMemory = priceSnapshots[symbol] ?? []
             if inMemory.isEmpty {
                 priceSnapshots[symbol] = stored
             } else {
-                // Thinning keeps every recent point and the last point of each
-                // earlier day, so thinning this merge gives what thinning the
-                // unthinned history with the same additions would.
+                // The stored rows arrive thinned, so a point in memory at the
+                // timestamp of a row thinning dropped is no longer filtered out
+                // here. The thinning below drops it for the reason the row was
+                // dropped: a later point of its day is kept. The result is what
+                // merging with the unthinned rows and thinning once would give.
                 let storedKeys = Set(stored.map { snapshotTimestampKey($0.timestamp) })
                 let merged = stored + inMemory.filter { !storedKeys.contains(snapshotTimestampKey($0.timestamp)) }
                 priceSnapshots[symbol] = Self.thinnedPriceHistory(merged)
