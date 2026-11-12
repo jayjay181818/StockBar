@@ -1,6 +1,6 @@
 # Measuring Stockbar's resource use
 
-Three tools, all run from the repository root. None of them needs administrator
+Four tools, all run from the repository root. None of them needs administrator
 rights, and none touches the real portfolio except the first, which only reads
 counters from an app that is already running.
 
@@ -9,6 +9,7 @@ counters from an app that is already running.
 | What is the app I am running using right now? | `Scripts/measure_performance.sh` |
 | What does this checkout use, on fixed data? | `Scripts/perf/benchmark.sh` |
 | Did a change make a difference? | `Scripts/perf/compare.sh` |
+| What is the Python helper's memory made of? | `Scripts/perf/helper_layers.py` |
 
 The results of the optimisation work, and the baseline they are compared with,
 are in [the experimental log](../EXPERIMENTAL_LOG.md).
@@ -89,6 +90,35 @@ Comparing a commit with itself shows the noise of the method.
 
 Do not build, run tests or use the Mac heavily while either benchmark runs,
 and do not edit the scripts in `Scripts/perf/` until it has finished.
+
+## What the Python helper holds: `helper_layers.py`
+
+```bash
+python3 Scripts/perf/helper_layers.py \
+  "$HOME/Library/Application Support/Stockbar/python-env/bin/python" \
+  build/bench/bin/proc_usage
+```
+
+Starts the helper's interpreter with one more layer of its imports each time
+(the interpreter alone, the standard library modules, `requests`, `pandas`,
+`yfinance`) and prints the memory each holds once the imports are done, with
+the CPU and time that took. Nothing is fetched. `build/bench/bin/proc_usage`
+is the sampler either benchmark builds on its first run.
+
+To set a helper with no interpreter beside them, compile the two floor
+programs and pass each with `--floor`:
+
+```bash
+xcrun swiftc -O Scripts/perf/native_floor.swift -o build/bench/bin/native_floor_swift
+rustc -O Scripts/perf/native_floor.rs -o build/bench/bin/native_floor_rust
+python3 Scripts/perf/helper_layers.py <interpreter> build/bench/bin/proc_usage \
+  --floor "Swift, URLSession ready=build/bench/bin/native_floor_swift" \
+  --floor "Rust, standard library only=build/bench/bin/native_floor_rust"
+```
+
+A floor is a program that writes one line and waits, so it shows where a
+compiled helper starts from, not what it holds after fetching. The Rust one
+needs `rustc`, which no other part of the project uses.
 
 ## What these do not measure
 
