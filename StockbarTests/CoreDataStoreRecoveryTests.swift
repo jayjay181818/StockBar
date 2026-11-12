@@ -538,3 +538,145 @@ final class StoreModelMigrationTests: XCTestCase {
         }
     }
 }
+
+/// Stored portfolio history is read a batch at a time. That must return what
+/// a single read of everything did.
+final class PortfolioHistoryFetchTests: XCTestCase {
+    private let base = Date(timeIntervalSince1970: 1_790_000_000)
+
+    override func setUp() async throws {
+        try await super.setUp()
+        try await deleteHistory()
+    }
+
+    override func tearDown() async throws {
+        try await deleteHistory()
+        try await super.tearDown()
+    }
+
+    private func deleteHistory() async throws {
+        try await CoreDataStack.shared.performBackgroundTask { context in
+            for name in ["PortfolioSnapshotEntity", "PositionSnapshotEntity"] {
+                for object in try context.fetch(NSFetchRequest<NSManagedObject>(entityName: name)) {
+                    context.delete(object)
+                }
+            }
+        }
+    }
+
+    private func date(_ hour: Int) -> Date { base.addingTimeInterval(Double(hour) * 3_600) }
+
+    /// Every figure is derived from the hour, so a position attached to the
+    /// wrong snapshot shows up as a wrong number.
+    private func snapshot(hour: Int) -> HistoricalPortfolioSnapshot {
+        let value = Double(hour)
+        return HistoricalPortfolioSnapshot(
+            date: date(hour), totalValue: 1_000 + value, totalGains: value, totalCost: 1_000,
+            currency: hour.isMultiple(of: 2) ? "GBP" : "USD",
+            portfolioComposition: [
+                "AAA": PositionSnapshot(symbol: "AAA", units: 1, priceAtDate: value, valueAtDate: value, currency: "GBP"),
+                "BBB": PositionSnapshot(symbol: "BBB", units: 2, priceAtDate: value * 10, valueAtDate: value * 20, currency: "USD")
+            ]
+        )
+    }
+
+    private func store(hours: [Int], using service: CoreDataHistoricalDataService) async throws {
+        for hour in hours { try await service.savePortfolioSnapshot(snapshot(hour: hour)) }
+    }
+
+    private func assertMatchesWhatWasStored(
+        _ loaded: [HistoricalPortfolioSnapshot], hours: [Int], file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertEqual(loaded.map(\.date), hours.map(date), "oldest first, none missing or repeated", file: file, line: line)
+        for (snapshot, hour) in zip(loaded, hours) {
+            let expected = self.snapshot(hour: hour)
+            XCTAssertEqual(snapshot.totalValue, expected.totalValue, file: file, line: line)
+            XCTAssertEqual(snapshot.totalGains, expected.totalGains, file: file, line: line)
+            XCTAssertEqual(snapshot.totalCost, expected.totalCost, file: file, line: line)
+            XCTAssertEqual(snapshot.currency, expected.currency, file: file, line: line)
+            XCTAssertEqual(Set(snapshot.portfolioComposition.keys), ["AAA", "BBB"], file: file, line: line)
+            for (symbol, position) in expected.portfolioComposition {
+                let stored = snapshot.portfolioComposition[symbol]
+                XCTAssertEqual(stored?.symbol, position.symbol, file: file, line: line)
+                XCTAssertEqual(stored?.units, position.units, file: file, line: line)
+                XCTAssertEqual(stored?.priceAtDate, position.priceAtDate, file: file, line: line)
+                XCTAssertEqual(stored?.valueAtDate, position.valueAtDate, file: file, line: line)
+                XCTAssertEqual(stored?.currency, position.currency, file: file, line: line)
+            }
+        }
+    }
+
+    func testAHistoryLongerThanOneBatchComesBackWholeAndOldestFirst() async throws {
+        // Eight snapshots in batches of three: two full batches and a part one.
+        let service = CoreDataHistoricalDataService(portfolioFetchBatchSize: 3)
+        try await store(hours: [5, 1, 8, 3, 7, 2, 6, 4], using: service)
+
+        let everything = try await service.fetchAllPortfolioSnapshots()
+        let middle = try await service.fetchPortfolioSnapshots(from: date(2), to: date(6))
+        let none = try await service.fetchPortfolioSnapshots(from: date(20), to: date(30))
+
+        assertMatchesWhatWasStored(everything, hours: Array(1...8))
+        assertMatchesWhatWasStored(middle, hours: Array(2...6))
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func testTheBatchSizeDoesNotChangeWhatIsRead() async throws {
+        try await store(hours: Array(1...7), using: CoreDataHistoricalDataService())
+
+        for batchSize in [1, 2, 7, 8, 500] {
+            let loaded = try await CoreDataHistoricalDataService(portfolioFetchBatchSize: batchSize).fetchAllPortfolioSnapshots()
+            assertMatchesWhatWasStored(loaded, hours: Array(1...7))
+        }
+    }
+
+    /// The app's store is SQLite, which returns a batch in row order rather
+    /// than date order and reads its positions with a second query.
+    func testBatchedReadOnASQLiteStore() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stockbar-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = CoreDataStack.shared.persistentContainer.managedObjectModel
+        let container = NSPersistentContainer(name: "StockbarDataModel", managedObjectModel: model)
+        container.persistentStoreDescriptions = [
+            NSPersistentStoreDescription(url: directory.appendingPathComponent("store.sqlite"))
+        ]
+        var loadError: Error?
+        container.loadPersistentStores { _, error in loadError = error }
+        XCTAssertNil(loadError)
+        let context = container.newBackgroundContext()
+        // Built here so the block below does not capture the test case.
+        // Stored out of date order, so row order and date order differ.
+        let stored = [5, 1, 8, 3, 7, 2, 6, 4].map(snapshot(hour:))
+        let bareDate = date(9)
+        let from = date(2)
+
+        let (everything, later) = try context.performAndWait {
+            for snapshot in stored {
+                _ = PortfolioSnapshotEntity.fromHistoricalPortfolioSnapshot(snapshot, in: context)
+            }
+            // Nothing but a date, as an interrupted write could leave it.
+            PortfolioSnapshotEntity(context: context).timestamp = bareDate
+            try context.save()
+            context.reset()
+            return (
+                try CoreDataHistoricalDataService.portfolioSnapshots(matching: nil, batchSize: 3, in: context),
+                try CoreDataHistoricalDataService.portfolioSnapshots(
+                    matching: NSPredicate(format: "timestamp >= %@ AND timestamp <= %@", from as NSDate, bareDate as NSDate),
+                    batchSize: 3, in: context
+                )
+            )
+        }
+
+        XCTAssertEqual(everything.count, 9)
+        assertMatchesWhatWasStored(Array(everything.prefix(8)), hours: Array(1...8))
+        XCTAssertEqual(later.count, 8)
+        assertMatchesWhatWasStored(Array(later.prefix(7)), hours: Array(2...8))
+        for bare in [everything.last, later.last] {
+            XCTAssertEqual(bare?.date, bareDate)
+            XCTAssertEqual(bare?.totalValue, 0)
+            XCTAssertEqual(bare?.currency, "USD")
+            XCTAssertEqual(bare?.portfolioComposition.isEmpty, true)
+        }
+    }
+}

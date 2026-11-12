@@ -14,25 +14,36 @@ import sys
 import time
 
 
-def measure(interpreter, worker, proc_usage):
+def started_usage(command, proc_usage, first_request=None):
+    """Start `command`, wait for its first line of output, and read what the process holds.
+
+    Returns the seconds it took to answer and the sampler's fields.
+    """
     environment = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "LANG") if key in os.environ}
     environment.update(PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1")
     started = time.perf_counter()
     process = subprocess.Popen(
-        [interpreter, worker], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, env=environment,
     )
     try:
-        process.stdin.write(b'{"id": 1, "script": "none", "args": []}\n')
-        process.stdin.flush()
+        if first_request is not None:
+            process.stdin.write(first_request)
+            process.stdin.flush()
         if not process.stdout.readline():
-            sys.exit("The worker exited before answering.")
+            sys.exit(f"{os.path.basename(command[0])} exited before answering.")
         ready = time.perf_counter() - started
         usage = subprocess.run([proc_usage, str(process.pid)], capture_output=True, text=True, check=True).stdout
     finally:
         process.stdin.close()
         process.wait(timeout=10)
-    fields = dict(line.split("=", 1) for line in usage.splitlines() if "=" in line)
+    return ready, dict(line.split("=", 1) for line in usage.splitlines() if "=" in line)
+
+
+def measure(interpreter, worker, proc_usage):
+    ready, fields = started_usage(
+        [interpreter, worker], proc_usage, b'{"id": 1, "script": "none", "args": []}\n',
+    )
     return {
         "helper_start_s": f"{ready:.2f}",
         "helper_start_cpu_s": fields["app_cpu_s_before_window"],
