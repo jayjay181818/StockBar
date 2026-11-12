@@ -149,14 +149,14 @@ Stockbar looks for a new version about once a day. When there is one it shows th
 
 **Settings → General → Updates** shows the version you are running and has:
 
-- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. With automatic checks on, changing the channel checks again straight away.
+- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. **Experimental** offers work in progress that has not reached Testing yet, where things may break; a released version or a testing build reaches it once the experimental work includes it. With automatic checks on, changing the channel checks again straight away.
 - **Check Automatically** — turn off to check only when you ask.
 - **Check Now** — the same as **Check for Updates…** in the **Stockbar** menu.
 
 Things to know:
 
 - **Keychain prompt after an update.** macOS asks once for access to your saved credentials (Trading 212, Folync, FMP and Twelve Data are kept in one Keychain item, "Stockbar credentials"). Choose **Always Allow**. The first update to a version that keeps them in one item asks once more for each credential saved by the version before, to move it across. Stockbar is built without an Apple developer account, so each build has a new signature and macOS does not carry the answer over.
-- **Leaving Testing.** Stockbar never moves to an older build. After switching back to Stable you keep the testing build you have until a newer version is released.
+- **Changing channel.** Stockbar never moves to an older build. After switching back to Stable you keep the testing or experimental build you have until a newer version is released. After switching from Experimental to Testing you keep it until there is a testing build newer than the one it was built on.
 - **Where updates come from.** They are built by GitHub from Stockbar's source and downloaded from its GitHub releases. Stockbar checks each one against a signing key built into the app and refuses a download or an update list that does not match.
 - **Development builds.** A build made from source in Xcode shows only its version here; updates are off.
 

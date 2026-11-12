@@ -13,9 +13,9 @@ To resume this work, read this file and the open pull requests into
 Seven changes are merged, and the first milestone has been measured: see
 the table below and [Milestone 1](#milestone-1-2026-11-12). The candidates
 that remain are small or would change what the app does, so no further
-optimisation is planned until the decisions below are made. One feature is
-planned at the owner's request: an update channel that follows
-`experimental` (plan item 13).
+optimisation is planned until the decisions below are made. One feature was
+built at the owner's request and is open as pull request 97: an update
+channel in the app that follows `experimental`.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -45,6 +45,11 @@ planned at the owner's request: an update channel that follows
 
 Waiting for a decision:
 
+- Pull request 97, the Experimental update channel. Merging it is itself a
+  push to `experimental`, which the workflow it changes would build, sign
+  with the update key and publish as a public prerelease, and so would every
+  merge after it. That is distributing a build, so it waits for the owner's
+  explicit word.
 - Pull request 86, where the idle Python helper exits after 90 seconds. It
   trades memory for CPU.
 - Pull request 94, where `script/package_release.sh` refuses to package an
@@ -201,15 +206,15 @@ Figures from either side of a break are not compared with each other.
     system's cache of drawn glyphs, filled when the main window's figures
     roll in. See "What the idle memory is made of" under
     [Milestone 1](#milestone-1-2026-11-12).
-13. Asked for by the owner on 2026-11-12, not started: an update channel in
-    the app that follows `experimental`. It is a feature, not an
-    optimisation. It needs the release workflow to build and publish each
-    push to `experimental`, which the rules of this branch do not allow
-    without the owner's word, so its pull request is to stay open until the
-    owner says to merge it. The builds are to go in an update feed of their
-    own: the copy of `Scripts/release_feed.py` on `testing` and `main`
-    refuses to rewrite a feed that holds a channel it does not know, so a
-    shared feed would stop testing builds and releases from being
+13. Open as pull request 97, waiting for the owner's word: an update
+    channel in the app that follows `experimental`, asked for by the owner
+    on 2026-11-12. It is a feature, not an optimisation. Once merged, the
+    release workflow builds and publishes each push to `experimental`,
+    starting with the merge itself, which the rules of this branch do not
+    allow without the owner's word. The builds go in an update feed of
+    their own: the copy of `Scripts/release_feed.py` on `testing` and
+    `main` refuses to rewrite a feed that holds a channel it does not know,
+    so a shared feed would stop testing builds and releases from being
     published.
 
 No further optimisation is planned until the owner decides about promotion
@@ -1260,7 +1265,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   measured results of plan items 8, 9, 11 and 12, plan item 13, four rows
   in "Tried and rejected", and the merge line of pull request 95. Only this
   file changes.
-- Merged: the date and squash commit are filled in by the next pull request.
+- Merged: 2026-11-12, squash commit `dd56915`
 - Benchmark: no before/after run. No file that goes into the app changes
   (nothing under `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so
   before, `c3c21ec`, and after build the same app. What this pull request
@@ -1277,6 +1282,218 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   runs used about four times the CPU of that earlier soak. See the notes
   under the soak's table.
 - Verdict: retained.
+
+### 97: Add an Experimental update channel that follows the experimental branch
+
+- What: a feature the owner asked for, not an optimisation. **Settings →
+  General → Updates** offers a third update channel, Experimental, beside
+  Stable and Testing. Someone who chooses it is offered every build of the
+  `experimental` branch.
+
+  In the app, `UpdateChannel` gains `experimental`. That channel reads a
+  second update feed, whose address is the new `StockbarExperimentalFeedURL`
+  key of `Info.plist`; the updater's delegate hands it to Sparkle each time
+  Sparkle checks. Stable and Testing read the feed they always have. In a
+  test or acceptance run the second feed is read only when it is served
+  from this Mac, the rule the first feed already follows.
+
+  In the release workflow, a push to `experimental` is built, signed and
+  published the way a push to `testing` is: as a prerelease, tagged
+  `experimental-<build>`, and listed in a feed of its own, `appcast.xml` on
+  a new `appcast-experimental` branch. A branch whose name starts
+  `release-test/experimental` is a dry run of such a build and publishes
+  nothing.
+
+  The build number is `<base>.<A>.<M>`: the build of the last version tag,
+  then the number of commits since that tag that `testing` also has, then
+  the number it does not have. The head of `experimental` as this pull
+  request was written would be 370.0.11. An experimental build therefore
+  sorts above the testing build it contains and below the next one. The
+  number depends on where `testing` is when the build is made, so only the
+  newest commit of `experimental` is built. When `experimental` is moved
+  onto a tagged commit, that commit is published to the channel as
+  `<base>.0.0`, which Sparkle treats as the release itself; that is how a
+  release reaches the channel.
+
+  The builds have a feed of their own because the copy of
+  `Scripts/release_feed.py` on `testing` and `main` refuses to rewrite a
+  feed that holds a channel it does not know. In a shared feed the first
+  experimental build would have stopped testing builds and releases from
+  being published. The script now refuses to list the two kinds together,
+  in either direction.
+
+  Behaviour changes for the builds that already exist. All are in the step
+  that removes superseded prereleases, which both kinds of build now share,
+  except the last:
+
+  - Given an empty feed, or the other kind's feed, the step now fails. It
+    used to remove every `testing-` prerelease.
+  - It removes only prereleases tagged `testing-<build number>`. A
+    `testing-` tag that does not end in a build number is left alone.
+  - A tag that spells a listed build number differently (`360.04` for
+    `360.4`) is kept. It used to be removed.
+  - The release notes of a testing build look for the previous build among
+    tags matching `testing-[0-9]*` where they matched `testing-*`.
+
+  Everything else about a testing build, a release and an ordinary dry run
+  is as before: the same build numbers, tags, titles and feed, checked by
+  the review on made-up histories and feeds (see Review).
+- Merged: not merged. Open for the owner's word, because merging publishes
+  the first experimental build. The date and squash commit are filled in by
+  the pull request after it.
+- Benchmark: before `dd56915`, after `fab1363`, six launches a side in turns
+  on 2026-11-12, 21:10 to 21:43 UTC, on macOS 27.2.1 and mains power, all
+  twelve launches with the screen unlocked and the display awake. Named in
+  advance: no row expected to move. The benchmark runs the app isolated,
+  where the updater does not start, so the delegate that chooses the feed
+  is never created. The only new code a launch runs is the read of one more
+  value from the bundle's `Info.plist`.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 101.8 (100.5 to 102.4) MB | 102.8 (100.4 to 103.5) MB | +1.1 MB, +1.1% | no measurable change (p = 0.141) |
+  | Idle memory the app holds allocated | 57.1 (55.5 to 57.9) MB | 57.3 (55.1 to 57.9) MB | +0.1 MB, +0.3% | no measurable change (p = 0.981) |
+  | Peak memory, launch and history load | 251.2 (243.1 to 256.8) MB | 255.9 (248.0 to 260.8) MB | +4.8 MB, +1.9% | no measurable change (p = 0.387) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (0.0 to 0.2) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.204 (0.174 to 0.210) s/min | 0.197 (0.189 to 0.210) s/min | -0.007 s/min, -3.4% | no measurable change (p = 0.329) |
+  | Idle CPU wake-ups | 24 (23 to 25) /min | 26 (24 to 29) /min | +2 /min, +8.3% | possibly higher (p = 0.022) |
+  | Idle CPU power | 3.54 (3.42 to 3.82) mW | 3.84 (3.50 to 4.54) mW | +0.30 mW, +8.5% | no measurable change (p = 0.104) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.55 (0.50 to 0.65) s | 0.55 (0.51 to 0.60) s | -0.01 s, -0.9% | no measurable change (p = 0.846) |
+  | Launch to history loaded | 0.56 (0.54 to 0.79) s | 0.56 (0.53 to 0.57) s | -0.00 s, -0.9% | no measurable change (p = 0.567) |
+  | CPU from launch to the idle window | 2.09 (2.01 to 2.35) s | 2.04 (1.98 to 2.11) s | -0.05 s, -2.6% | no measurable change (p = 0.290) |
+  | CPU energy from launch to the idle window | 6.28 (6.14 to 6.44) J | 6.13 (5.98 to 6.40) J | -0.14 J, -2.2% | no measurable change (p = 0.193) |
+  | Python helper start to ready, no network | 0.28 (0.28 to 0.54) s | 0.29 (0.28 to 0.47) s | +0.01 s, +1.8% | no measurable change (p = 0.924) |
+  | Python helper start, CPU | 0.28 (0.27 to 0.34) s | 0.28 (0.27 to 0.32) s | +0.01 s, +1.8% | no measurable change (p = 0.680) |
+  | Python helper memory once started | 71.0 (70.9 to 71.0) MB | 71.0 (70.9 to 71.0) MB | +0.0 MB, +0.1% | no measurable change (p = 1.000) |
+
+  Fourteen rows show no measurable change. Idle CPU wake-ups came out
+  "possibly higher", 26 a minute against 24 (p = 0.022). Nothing this pull
+  request adds runs while the benchmark's app idles, and a "possibly" row
+  needs a repeat before it counts either way.
+
+  Repeat, 21:46 to 22:19 UTC, with the same two commits under the same
+  conditions:
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 100.2 (97.9 to 103.7) MB | 99.1 (98.1 to 100.4) MB | -1.1 MB, -1.0% | no measurable change (p = 0.554) |
+  | Idle memory the app holds allocated | 54.9 (45.6 to 57.5) MB | 54.8 (54.3 to 55.5) MB | -0.1 MB, -0.1% | no measurable change (p = 0.974) |
+  | Peak memory, launch and history load | 245.6 (240.1 to 256.1) MB | 244.8 (243.3 to 245.7) MB | -0.8 MB, -0.3% | no measurable change (p = 0.777) |
+  | Idle memory growth across the window | 0.0 (-0.0 to -0.0) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.079 (0.070 to 0.191) s/min | 0.079 (0.068 to 0.084) s/min | +0.001 s/min, +0.6% | no measurable change (p = 0.630) |
+  | Idle CPU wake-ups | 26 (23 to 28) /min | 24 (24 to 25) /min | -2 /min, -7.7% | possibly lower (p = 0.050) |
+  | Idle CPU power | 4.21 (4.08 to 4.50) mW | 4.09 (3.95 to 4.41) mW | -0.12 mW, -2.9% | no measurable change (p = 0.329) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.55 (0.51 to 0.55) s | 0.55 (0.53 to 0.56) s | +0.00 s, +0.0% | no measurable change (p = 0.387) |
+  | Launch to history loaded | 0.59 (0.54 to 0.62) s | 0.59 (0.57 to 0.61) s | +0.01 s, +0.8% | no measurable change (p = 0.524) |
+  | CPU from launch to the idle window | 1.97 (1.81 to 2.12) s | 1.82 (1.81 to 1.87) s | -0.15 s, -7.6% | possibly lower (p = 0.043) |
+  | CPU energy from launch to the idle window | 6.19 (5.97 to 6.46) J | 5.97 (5.90 to 6.12) J | -0.21 J, -3.4% | possibly lower (p = 0.026) |
+  | Python helper start to ready, no network | 0.28 (0.28 to 0.54) s | 0.28 (0.28 to 0.46) s | +0.00 s, +0.0% | no measurable change (p = 0.697) |
+  | Python helper start, CPU | 0.28 (0.28 to 0.34) s | 0.28 (0.28 to 0.32) s | +0.00 s, +0.0% | no measurable change (p = 0.697) |
+  | Python helper memory once started | 71.0 (71.0 to 71.4) MB | 71.0 (70.9 to 71.0) MB | +0.0 MB, +0.0% | no measurable change (p = 0.273) |
+
+  In the repeat idle CPU wake-ups came out "possibly lower", 24 a minute
+  against 26 (p = 0.050), the opposite of the first run. CPU and CPU energy
+  from launch to the idle window came out "possibly lower" as well (p =
+  0.043 and 0.026); in the first run both were "no measurable change" (p =
+  0.290 and 0.193). No row moved in both runs, so this pull request made no
+  measurable change, as named in advance. The first run's launches used
+  about two and a half times the idle CPU of the repeat's, 0.20 against
+  0.08 s/min on both sides, which is the Mac's state and not the build.
+
+  An earlier attempt, started at 20:43 UTC, was cut short after six of its
+  twelve launches when the tool that had started it restarted. Its launches
+  are not used.
+
+  Not measured: an update check on the Experimental channel. It is the same
+  single request the other channels make, to a different address, and the
+  benchmark runs with the updater off. The 30-minute soak is deferred to
+  the next milestone.
+- Testing: 717 XCTest tests with 0 failures (seven new), 66 Python helper
+  tests and 89 script tests (fourteen new) pass, and `checks`, `docs-check`
+  and `build-release` pass, all at `fab1363`.
+
+  The new Swift tests cover which feed each channel reads, the rule for
+  isolated runs, that the updater's delegate answers the Objective-C method
+  Sparkle asks for the feed, that both shipped feed addresses are the
+  branches the feed script publishes to, and that Sparkle's own comparison
+  puts build numbers in the order the feed script's tests sort them. The new
+  script tests cover the numbering, the skip of a commit the branch has
+  moved on from, the tagged commit, the separate feeds and the removal of
+  superseded builds.
+
+  Tried end to end on this Mac at the first commit, `0f3a2e5`, with a
+  scratch copy of the Release build under another bundle identifier, two
+  feeds served from this Mac and a throwaway signing key. The project's own
+  scripts signed four builds and wrote both feeds. Launched once on each
+  channel, the copy asked for the ordinary feed on Stable and Testing and
+  for the experimental feed on Experimental. In its Settings window the
+  channel picker offered all three; running build 370.0.1, it was offered
+  370.0.2 on Experimental, 370.1 on Testing and nothing on Stable, and a
+  change of channel made it check again without a restart. The trial
+  stopped at the offer: no update was installed from an experimental feed.
+  `script/package_release.sh` packaged a build numbered 370.0.1, and its
+  start check passed. The installed app was not touched, and everything the
+  trial left behind was removed.
+
+  The workflow's steps were run on this Mac for a push to `experimental`,
+  to `testing`, to both kinds of dry-run branch and for a version tag, and
+  again in throwaway repositories after the review's fixes: a branch moved
+  onto a tagged commit, a commit the branch has moved on from, a second
+  branch whose name ends the same way, and a version tag that `testing`
+  does not have yet.
+
+  Not tested: the workflow on GitHub. It cannot run there until this is
+  merged or a `release-test/experimental…` branch is pushed, and both wait
+  for the owner. Signing with the real update key, creating the
+  `appcast-experimental` branch and publishing a prerelease happen for the
+  first time in that first run.
+- Review: one independent review by Opus of the first commit, by a reviewer
+  that had not seen the implementation. It found no blocking defect, one
+  fault worth fixing and several smaller points. Each was confirmed before
+  it was acted on, and the fixes are the second commit, `fab1363`:
+
+  - A push that moves `experimental` onto a tagged commit was skipped, as it
+    is on `testing`, so a release would never have been offered on the
+    channel. It is now published there as `<base>.0.0`.
+  - The tests and the development notes said 360.9.0 sorts above 360.9.
+    Sparkle's own comparison, run against the project's copy of Sparkle,
+    calls them equal. The tests and notes are corrected, and a Swift test
+    now asks Sparkle for the order.
+  - The check that a commit is still the newest of its branch matched
+    branch names by their ending. It could only have skipped a build
+    wrongly, never published one. It now matches the whole name.
+  - "How this branch works" in this file said that no workflow runs for
+    `experimental`. Corrected below.
+
+  The review also confirmed, on throwaway repositories and 300 made-up
+  feeds, that the plan for a testing build, a release and an ordinary dry
+  run is unchanged apart from one new line of output, that the ordinary
+  feed is written byte for byte as before, and that experimental build
+  numbers only rise as the two branches move, short of a force-push.
+- Known issues, all consequences of the design:
+  - The Experimental channel is offered experimental builds only. A release
+    or a testing build reaches it once `experimental` contains it.
+  - After a new version tag, a push to `experimental` fails in the
+    workflow's first step until the tag is in the branch's history. The
+    same rule already holds for `testing`.
+  - After `experimental` is merged into `testing` with a merge commit, its
+    builds are numbered below the testing build that merge made, until
+    `testing` is brought back into `experimental`.
+  - Every push to `experimental` publishes a build, including a merge that
+    changes only this file.
+  - The released 3.7.0 has no Experimental option. The first experimental
+    build has to be installed by hand from its prerelease page; from then
+    on the channel updates itself.
+  - A build from before this change that finds the Experimental channel
+    stored reads it as Stable. That can only follow a downgrade by hand,
+    and the choice comes back with the next build that knows the channel.
+  - Pre-existing, not changed here: a release run and a testing run are not
+    kept apart, so a release's clean-up could remove a testing prerelease
+    created at the same moment.
+- Verdict: open for the owner's decision. Recommended: retain, and merge
+  when the owner is ready for experimental builds to be published.
 
 ## Rust evaluation, 2026-11-12
 
@@ -1401,7 +1618,10 @@ them starts without the repository owner's decision.
 
 - `experimental` was created from `testing`. Nothing reaches `testing` or
   `main` from here without an explicit instruction; no releases, no changes to
-  repository settings, no force-pushes or history rewrites.
+  repository settings, no force-pushes or history rewrites. Once pull request
+  97 is merged, at the owner's word, each push to `experimental` is published
+  as an experimental build: a prerelease, offered only to people who chose
+  the Experimental update channel.
 - One optimisation is one branch (`perf/*`, `feature/*`, `refactor/*`,
   `rust/*`) from the latest `experimental`, one pull request, and one squash
   commit, so it can be read and reverted alone. A merged change is undone with
@@ -1418,13 +1638,17 @@ them starts without the repository owner's decision.
   behaviour still works, the benchmark record is complete, no known
   regression. A change that trades one metric for another stays open for a
   decision. A performance change with no measurable benefit is not merged.
-- No workflow runs for `experimental` or for pull requests into it, so every
-  check is run locally: `bash script/develop.sh test`, `checks`,
+- The CI workflow does not run for `experimental` or for pull requests into
+  it, so every check is run locally: `bash script/develop.sh test`, `checks`,
   `python-tests`, `build-release`, and
-  `python3 -B -m unittest discover -s Scripts/tests -p 'test_*.py'`.
+  `python3 -B -m unittest discover -s Scripts/tests -p 'test_*.py'`. From
+  pull request 97 on, the release workflow does run for a push to
+  `experimental`. It builds and publishes the newest commit and runs none of
+  the tests.
 - Checkpoint tags are named `experimental-checkpoint-<date>-<name>`. The
-  release workflow reacts to `vX.Y.Z` tags and reads `testing-*` tags; this
-  matches neither.
+  release workflow reacts to `vX.Y.Z` tags and reads tags of the form
+  `testing-<build>` and `experimental-<build>`, where the build starts with a
+  digit. A checkpoint tag is none of these.
 - The merge date and squash commit of a pull request are filled in by the next
   pull request, since they do not exist until after the merge.
 
@@ -1491,7 +1715,8 @@ launch.
 | Pull request 94, open for a decision | Fable (orchestrator) | Done directly: seven lines of shell, two tests and a paragraph of documentation, tried by hand on a build with the counters and one without |
 | Pull request 95 | Fable (orchestrator) | Done directly: found from the owner's screenshot and the drawing code, then checked by drawing the app's own chart view with the old formula and the new. A probe build showed the benchmark never draws that chart, which settled three rows the benchmark had marked |
 | Milestone 1: the comparison, the soaks, the launch with allocations named and the two trial builds | Fable (orchestrator) | Done directly. Each step was a measurement to read before choosing the next, with nothing independent to hand to a subagent |
+| Pull request 97, the Experimental update channel, open for a decision | Fable (orchestrator), with a check of the Settings window by Sonnet and one independent review by Opus | Sonnet was used at the owner's instruction for driving the screen: it worked through the trial copy's Settings window and reported what each channel was offered, in 53 tool calls and about 138,000 tokens. The Opus review was worth it: it found that a release would never have reached the channel and that the tests and notes had Sparkle's ordering wrong, in 62 tool calls, about 250,000 tokens and fifteen minutes |
 
-Haiku and Sonnet have not been used: nothing so far has been parallel or
-self-contained enough to repay a cold start, and most of the elapsed time is
-benchmark runs, which no model speeds up.
+Haiku has not been used, and Sonnet once, for pull request 97: nothing else
+so far has been parallel or self-contained enough to repay a cold start, and
+most of the elapsed time is benchmark runs, which no model speeds up.

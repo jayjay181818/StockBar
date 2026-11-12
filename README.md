@@ -35,14 +35,14 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 | 🔔 **Alerts** | Price above or below a level, or a percentage move, delivered as macOS notifications. |
 | 🧮 **Analytics** | Value at risk, Sharpe and Sortino, drawdowns, correlation, sector allocation and attribution. |
 | 🐍 **Sets itself up** | Stockbar installs its own Python for market data. Nothing needs installing first. |
-| 🔄 **Updates itself** | Stable and Testing channels, straight from GitHub releases. Every update is signature-checked. |
+| 🔄 **Updates itself** | Stable, Testing and Experimental channels, straight from GitHub releases. Every update is signature-checked. |
 | 🔒 **Private by design** | Data stays on your Mac, credentials stay in the Keychain, and logs are redacted. |
 
 ## 🚀 Quick start
 
 **Requirements:** macOS 15.4 or later.
 
-1. Download `Stockbar-<version>.zip` from the [latest release](https://github.com/jayjay181818/StockBar/releases/latest) and unzip it. Version 3.6.0 and earlier have no download; testing builds are on the [Releases page](https://github.com/jayjay181818/StockBar/releases), marked *Pre-release*.
+1. Download `Stockbar-<version>.zip` from the [latest release](https://github.com/jayjay181818/StockBar/releases/latest) and unzip it. Version 3.6.0 and earlier have no download; testing and experimental builds are on the [Releases page](https://github.com/jayjay181818/StockBar/releases), marked *Pre-release*.
 2. Move **Stockbar** to your Applications folder **before** opening it. Until it is moved, macOS runs a downloaded app from a read-only copy, where it cannot update itself.
 3. Open it. macOS refuses the first time, because the app is not notarised by Apple: open **System Settings → Privacy & Security**, scroll down to **Security** and choose **Open Anyway**. This is needed once per Mac.
 
@@ -81,6 +81,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 |---|---|
 | **Stable** (default) | Released versions only. |
 | **Testing** | Every change as it lands in the `testing` branch, before it is released, as well as released versions. May be rough. |
+| **Experimental** | Every change as it lands in the `experimental` branch: work in progress that has not reached `testing` yet. Things may break. A release or a testing build arrives once that branch includes it. |
 
 - Updates are downloaded from this repository's GitHub releases. Each one is checked against a signing key built into Stockbar before it is installed, and a download or update list that fails the check is refused.
 - After every update macOS asks once for access to your saved credentials in the Keychain. Choose **Always Allow**. Stockbar is built without an Apple developer account, so there is no signature macOS would remember from one build to the next.
@@ -393,7 +394,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 **Contributing**
 - Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build and test gates, and a Release build, on every PR.
-- Every merge into `testing` publishes a testing build. Releases are tagged `vX.Y.Z` on the merged commit, and pushing the tag builds and publishes the release.
+- Every merge into `testing` publishes a testing build, and every merge into `experimental` an experimental one. Releases are tagged `vX.Y.Z` on the merged commit, and pushing the tag builds and publishes the release.
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 <details>
