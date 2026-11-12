@@ -7,6 +7,7 @@ struct StockbarSettingsView: View {
 
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode: String = "system"
     @AppStorage("settings.selectedTab", store: StockbarRuntimeStorage.userDefaults) private var selectedTab: SettingsTab = .general
+    @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshInterval: TimeInterval
     @State private var snapshotInterval: TimeInterval
@@ -357,6 +358,16 @@ struct StockbarSettingsView: View {
 
         pythonSection
 
+        Section("Memory") {
+            Toggle(isOn: $quitPythonHelperWhenIdle) {
+                Text("Quit Python Helper When Idle")
+                Text("Prices are fetched by a Python helper that holds 70 MB or more and stays running for 15 minutes after a refresh. Turned on, it quits after 90 seconds, and each refresh starts it again: about a third of a second of processor time. Refreshing every minute keeps it running either way.")
+            }
+            .onChange(of: quitPythonHelperWhenIdle) {
+                Task { await PythonWorkerPool.shared.idleTimeoutChanged() }
+            }
+        }
+
         Section("Diagnostics") {
             LabeledContent {
                 Button("Open Diagnostics") { onOpenSection(.diagnostics) }
@@ -610,7 +621,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: "Light, dark or match the system."
         case .dataSources: "Brokers, Folync and market-data providers."
         case .refresh: "How often prices and chart history update."
-        case .advanced: "Backups, export and troubleshooting."
+        case .advanced: "Backups, export, memory and troubleshooting."
         }
     }
 }

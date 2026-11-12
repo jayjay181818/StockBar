@@ -142,6 +142,7 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 - Prices refresh at the **Main Refresh Interval** (Settings → Refresh; default 5 minutes). A price younger than about 90% of the interval is reused.
 - A symbol that fails is retried with increasing delays (1, 2, 5, then 10 minutes). After five consecutive failures it is paused for one hour; use **Retry Now** in its popover to resume sooner.
 - **Data Health** summarises tracked rows, menu-bar visibility, currency and refresh settings.
+- **Memory between refreshes.** Prices are fetched by a Python helper, a separate process that holds 70 MB or more and stays running for 15 minutes after a refresh, so at an interval up to 15 minutes it never quits. **Settings → Advanced → Memory → Quit Python Helper When Idle** makes it quit 90 seconds after its last request. Each refresh then starts it again, which takes about a third of a second of processor time and delays that refresh's first price by about as long. Refreshing every minute keeps the helper running either way. The setting is off unless you turn it on.
 
 ## Updates
 
