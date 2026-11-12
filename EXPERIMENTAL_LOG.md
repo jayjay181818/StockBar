@@ -484,7 +484,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   nothing writes such a snapshot. A dictionary entry filed under a key other
   than its position's own symbol takes the key as its symbol, so it is still
   found under that key.
-- Merged: the date and squash commit are filled in by the next pull request
+- Merged: 2026-11-12, squash commit `612d214`.
 - Benchmark: before `8140395`, after `3f50c11`, six launches a side in turns
   on 2026-11-12 from 12:32 to 13:04 UTC, macOS 27.2.1, mains power. The row
   it was meant to move is the idle memory the app holds allocated, expected
@@ -548,6 +548,39 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   app reads it back.
 - Verdict: retained, for 10.7 MB less allocated memory at idle and 20.8 MB
   less at the launch peak, with nothing given up.
+
+### 91: Keep the app's log when a benchmark launch fails
+
+- What: `Scripts/perf/benchmark.sh` runs the app against temporary storage
+  and deletes that storage when it ends, the app's log with it. A run that
+  failed therefore left nothing to explain the failure, which is what
+  happened to the first attempt at pull request 90's comparison. A run that
+  does not finish, whether it fails or is stopped, now copies the log to
+  `app-failed.log` in its results folder, with anything the app printed as
+  `app-output-failed.log`, and says where. The temporary storage is still deleted. The script's two error
+  messages for a launch that exits or times out no longer name the log file
+  that is about to be deleted. A successful run is unchanged. One new script
+  test runs the script against a stand-in for the
+  app that exits at once, and a paragraph in `Scripts/README_PERFORMANCE.md`
+  describes it.
+- Merged: the date and squash commit are filled in by the next pull request
+- Benchmark: not run. No file that goes into the app changes (nothing under
+  `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`), so before and after
+  are the same app and all fifteen rows are "not measured".
+- Testing: 75 script tests pass (one new). The new test fails against the
+  script as it was and passes with the change. `checks` and `docs-check`
+  pass. A run stopped with a termination signal during its warm-up, tried by
+  hand against a stand-in that stays running, kept the log as well; no
+  script test covers that case. One real run of the changed script on its normal path (one launch of
+  the build of `3f50c11`) ended without error, saved `app.log` and its
+  figures as before, wrote no `app-failed.log`, and left no temporary
+  storage or app process behind. The app's own tests were not run again: no
+  file they build changes.
+- Known issues: the new test needs macOS and its developer tools, and is
+  skipped without them. The first time it runs in a checkout it compiles the
+  benchmark's small measuring tool into `build/`, which takes a few seconds.
+- Verdict: retained. It does not explain the failure that prompted it; it
+  means the next one can be explained.
 
 ## Rust evaluation, 2026-11-12
 
@@ -749,6 +782,7 @@ launch.
 | Pull request 88, the Rust evaluation | Fable (orchestrator) | Done directly: measuring, two web searches and the write-up |
 | Pull request 89 | Fable (orchestrator), with two independent reviews by Opus | Worth it. The first review found a real defect: a slow launch read could undo the UK price scale repair for the session. It was fixed, with tests, before the comparison. The second review, of the fix, found no defect and pointed out a behaviour change the description had missed |
 | Pull request 90 | Fable (orchestrator), with one independent review by Opus | Worth it. The change was written before the transition. The review read the branch after `experimental` was merged into it and caught that the tests no longer compiled, before a build had been spent finding out |
+| Pull request 91 | Fable (orchestrator) | Done directly: a dozen lines of shell and one test |
 
 Haiku and Sonnet have not been used: nothing so far has been parallel or
 self-contained enough to repay a cold start, and most of the elapsed time is
