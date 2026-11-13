@@ -93,6 +93,12 @@ Decided on 2026-11-13:
   [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
   Four are to be fixed, two to be looked into and reported before anything
   changes, and three left as they are. The first fix is pull request 104.
+- Findings 6 and 7 were looked into and reported, with a larger finding
+  of the same profile: the main window redraws once per symbol in every
+  refresh, and goes on doing so after it is closed. The owner chose to
+  apply each refresh's quotes together (pull request 106), to fix finding
+  6, and to leave finding 7. See
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).
 - The eight Dependabot alerts for `urllib3` and `requests` were dismissed
   as inaccurate. `main` has pinned the fixed versions since 2026-11-05, but
   GitHub's dependency graph still holds `requirements.txt` as it was
@@ -169,7 +175,7 @@ Figures from either side of a break are not compared with each other.
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress, starting with pull request 104 |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 106 |
 
 ### Planned next, in order
 
@@ -270,8 +276,13 @@ Figures from either side of a break are not compared with each other.
 No further optimisation of what the benchmark runs is planned. Under way
 is "the rest of core": the owner's choices from the
 [review of the refresh path](#review-of-the-refresh-path-2026-11-13), one
-pull request each, starting with pull request 104. Open for the owner is
-whether the fetch should leave Python. `experimental` was promoted to `testing` on
+pull request each. Done: findings 1 (pull request 104) and the refresh
+workload (pull request 105). The redraw per symbol (pull request 106)
+halves the refresh passes' CPU but raises their wake-ups, so it waits on
+the owner. Next, in order: finding 6, then findings 5, 9 and 8. Open for
+the owner are pull request 106, whether the fetch should leave Python,
+the cached quote shown as just updated, and the price alerts' repeated
+rewrite. `experimental` was promoted to `testing` on
 2026-11-13. What could still be done, and what each would cost, is listed
 at the end of [Milestone 1](#milestone-1-2026-11-12).
 
@@ -307,8 +318,8 @@ with the owner's decision on each:
 | 3 | Symbols whose market is closed are still fetched every 30 minutes, all night and at weekends, and each fetch saves a portfolio snapshot that the weekly clean-up later deletes | Leave as it is |
 | 4 | The two benchmark indices, the S&P 500 and the FTSE 100, are fetched at every refresh | Keep as it is, including the FTSE 100's hours |
 | 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix |
-| 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Look into it and report before changing anything |
-| 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Look into it and report before changing anything |
+| 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Looked into: confirmed, about 66 ms of the main thread per refresh. Fix |
+| 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Looked into: confirmed, under 10 ms per refresh. Leave as it is |
 | 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix |
 | 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix |
 
@@ -320,6 +331,83 @@ The review also recommended adding a refresh on made-up data to the
 benchmark, so that findings 5 to 9 can be measured. That was part of what
 the owner settled on 2026-11-13 for "the rest of core". It is pull request
 105: `Scripts/perf/compare.sh --refresh`.
+
+### Findings 6 and 7 looked into, 2026-11-13
+
+Measured in the benchmark's isolated copy of the app, `experimental` at
+`93198fc`, on the refresh workload of pull request 105: four passes 30 s
+apart, eleven holdings and two indices, 69,982 stored prices in memory over
+22 series, and the main window open, as in every benchmark launch. Nothing
+was changed. Two tools, three runs:
+
+- `sample` over the 122 s of the four passes, one sample every 1.33 ms of
+  every thread. 3,234 samples found a thread at work rather than waiting,
+  2,895 of them on the main thread.
+- The same launch with Core Data's SQL log on
+  (`-com.apple.CoreData.SQLDebug 1`), for what each pass writes.
+- A trial copy, never committed, that wrote a line to standard error for
+  each evaluation of the main window's overview page, each ticker item's
+  update and the start and end of each pass. Three refresh launches in
+  turn: window open, window closed by the copy 5 s before the first pass,
+  window open again. CPU over the 120 s from `Scripts/perf/proc_usage`.
+
+Where the work of a refresh goes, in busy samples over the four passes:
+
+| Work | Busy samples | Share |
+| --- | --- | --- |
+| Main window: SwiftUI updates, the overview chart, Core Animation commits, a blurred shadow drawn on the CPU, AppKit layout | 2,738 | 85% |
+| Menu bar ticker items | 229 | 7% |
+| The refused history backfill that starts two minutes after launch; not part of the refresh | 99 | 3% |
+| Recording the portfolio snapshot and thinning the stored prices | 74 | 2% |
+| The refresh pass itself | 26 | 1% |
+| Core Data, on its own threads | 17 | 0.5% |
+| The rest | 51 | 1.5% |
+
+The main window, a finding of its own. A pass applied each quote and then
+waited on the cache coordinator and the log before the next. Each wait let
+SwiftUI redraw what observes the holdings, so the overview page was
+evaluated again after every symbol: 18 or 19 times a pass, about every 45
+ms, in all three trial launches. A pass took 0.73 to 0.80 s from start to
+end, most of it those redraws. The window keeps its content when it is
+closed (`isReleasedWhenClosed` is off and the controller holds it), and
+closing it saved nothing: 3.80 s/min of CPU over the refresh window with
+it closed, against 3.60 and 3.59 with it open, and the same 18 or 19
+evaluations a pass. The window is shown at every launch
+(`AppDelegate.swift`), so in normal use it is open or closed after being
+open, and either way it does this work. Inside each redraw, the chart's
+colour is worked out twice for every one of its 732 points, each time
+reading the chart model's published data again (156 busy samples).
+
+Finding 6, confirmed. Each of the eleven ticker items updates three times a
+pass: when its quote is applied, when the holdings list announces a change
+just after the pass, and 250 ms after the stored prices change. Each update
+asks for the symbol's last 24 hours, and that merges the symbol's whole
+stored series with its live samples
+(`InstrumentAliasHistoryLookup.combinedSnapshots`) to keep 71 to 85 points
+of it. The cache in front of the merge, `AliasPriceSnapshotCache`, holds
+7,200 points in all, against 69,982 in memory, and is emptied whenever a
+price or a live sample is recorded, so during a refresh it does not
+answer. The merge is 198 of the menu bar's 229 busy samples: about 66 ms
+of the main thread a pass, growing with the stored history.
+
+Finding 7, confirmed and cheap. Each pass makes three write transactions,
+each after an empty one: the eleven holdings' saved price rows are
+updated, 13 price samples are added, and one portfolio snapshot is added
+with its 11 positions. Each also writes Core Data's change history, one row
+for each object changed, 35 a pass, which nothing in the app reads except
+the clean-up that deletes it, and posts a change notification. 17 busy
+samples over the four passes, under 10 ms a pass. Pull request 105 measured
+0.046 MB written over the four passes in four refresh launches of six.
+
+The owner's decisions, the same day:
+
+- The main window: apply each pass's quotes together before waiting on
+  anything, so the window redraws once a pass rather than once a symbol.
+  Pull request 106. Not chosen: working out the chart's colour once per
+  redraw, and dropping the window's content when it is closed.
+- Finding 6: read only the last day of the sorted history. Next.
+- Finding 7: leave as it is. Recorded under
+  [Tried and rejected](#tried-and-rejected).
 
 ## Baseline
 
@@ -546,7 +634,9 @@ and held 21.8 MB.
 
 Nothing was changed. The cache belongs to the system, the animation is
 deliberate, and in normal use the app starts without a window, so the
-figures are ready long before one is opened. The cache was still held after
+figures are ready long before one is opened. (Corrected on 2026-11-13: the
+app shows its main window at every launch, from `AppDelegate.swift`, so the
+cache is filled in normal use as in the benchmark.) The cache was still held after
 the 30 minutes of the soak below; whether it is ever emptied was not
 measured beyond that. Pull request 98 has since made the rolling a setting.
 
@@ -2398,8 +2488,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   fixture holds prices last updated when it was made, marked closed. Its
   refresh rows were steady: 7.01 to 7.28 s of CPU and 23.95 to 25.37 J
   over the four passes in all six launches.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `93198fc`. The merge published
+  experimental build 370.16.6 as the prerelease `experimental-370.16.6`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.6 of 3.7.0 and carries the workload, its code signature verifies
+  and its executable has no coverage counters. `main` and `testing` were
+  unchanged.
 - A first launch with the workload, from this branch on 2026-11-13 at 11:39
   UTC: all four passes completed and updated 13 symbols each. Over the 120
   s the app used 7.29 s of CPU and 25.5 J of CPU energy, woke 699 times,
@@ -2467,12 +2562,119 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - The benchmark's launches keep the main window open, as they always
     have, and it redraws as prices change. In normal use it is closed. So
     the refresh rows include a window that is usually not there.
+    (Corrected on 2026-11-13: the app shows the window at every launch, and
+    a closed window goes on redrawing, so the refresh rows are those of
+    normal use. See
+    [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).)
   - The refresh launches start from the data the one before left, so
     their figures drift a little across a turn. Both sides run the same
     sequence.
   - A build from before this pull request shows a warning that its
     launches "were builds without the refresh workload".
 - Verdict: retained.
+
+### 106: Apply a refresh pass's quotes together before waiting on anything
+
+- What: the first change chosen after
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).
+  `RefreshService.runRefreshPass` applied one symbol's quote, then waited
+  on the cache actor and on the logger before the next symbol. Each wait
+  let other main-actor work run, so SwiftUI redrew the main window, open
+  or closed, once for each symbol. Now `applyQuotes` applies every
+  result, with its price sample and alert check, without waiting on
+  anything, and `recordPassOutcome` then does the cache bookkeeping and
+  the log lines. The quote status, the save, the portfolio sample and the
+  snapshot task now come before the cache and log calls instead of after
+  them. The symbols, the values recorded, the failure handling and the
+  back-off are unchanged. Holdings are still looked up by name, so a
+  symbol held in two rows still updates the first of them each time it is
+  listed. No Rust, native macOS API, dependency or architectural change.
+- Merged: back-filled at the start of the next pull request.
+- Redraws counted in the trial copy, with the counters of
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
+  applied to this branch's code commit `cd291fa` and run on the same
+  fixture in the same way on 2026-11-13 from 14:19 to 14:30 UTC: four
+  forced passes 30 s apart, with the window open, closed, and open again.
+  The trial copy is never committed. One launch each, so read the CPU
+  figures as an order of size; the benchmark below has six a side.
+
+  | Per refresh pass | Before (`93198fc`) | After (`cd291fa`) |
+  | --- | --- | --- |
+  | Main window redraws | 18 to 19 | 5 |
+  | Menu bar item updates | 33 | 33 |
+  | Pass, start to end | 0.73 to 0.80 s | 0.29 to 0.42 s |
+  | App CPU over the 120 s, window open | 3.60 and 3.59 s/min | 1.64 and 1.63 s/min |
+  | App CPU over the 120 s, window closed | 3.80 s/min | 1.93 s/min |
+
+  What each of the five remaining redraws comes from was not looked into.
+  The 33 menu bar updates are finding 6's, the next pull request.
+- Benchmark: before `93198fc`, after `cd291fa` (the code commit; the
+  commit after it changes one comment and this log), with `--refresh`:
+  six launches a side in turns, from 14:30 to 15:45 UTC on 2026-11-13,
+  macOS 27.2.1. The Mac was on battery power for this run, where the
+  earlier comparisons were on mains power, so its figures are not
+  comparable with theirs: idle CPU, for one, is 0.080 s/min here against
+  0.164 to 0.168 in pull request 105's run. Both sides of this run were
+  measured in the same conditions, and the report flagged no launch for a
+  locked screen or a sleeping display. No usual row moved. Four refresh
+  rows moved, three of them down and one up:
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.8 (94.6 to 98.0) MB | 96.1 (90.7 to 100.0) MB | -0.7 MB, -0.7% | no measurable change (p = 1.000) |
+  | Idle memory the app holds allocated | 52.2 (49.5 to 52.8) MB | 52.1 (50.4 to 53.8) MB | -0.1 MB, -0.1% | no measurable change (p = 0.729) |
+  | Peak memory, launch and history load | 252.9 (247.1 to 260.2) MB | 254.8 (239.6 to 261.4) MB | +1.9 MB, +0.8% | no measurable change (p = 0.699) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (-2.1 to 0.5) MB | +0.0 MB | no measurable change (p = 0.727) |
+  | Idle CPU | 0.080 (0.077 to 0.083) s/min | 0.084 (0.078 to 0.090) s/min | +0.004 s/min, +5.6% | no measurable change (p = 0.149) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 24 (23 to 26) /min | -1 /min, -3.9% | no measurable change (p = 0.335) |
+  | Idle CPU power | 4.05 (3.99 to 4.19) mW | 4.11 (3.41 to 4.26) mW | +0.05 mW, +1.4% | no measurable change (p = 0.729) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.56 (0.52 to 0.60) s | 0.56 (0.52 to 0.97) s | -0.01 s, -0.9% | no measurable change (p = 0.792) |
+  | Launch to history loaded | 0.58 (0.55 to 0.74) s | 0.60 (0.54 to 0.90) s | +0.02 s, +3.4% | no measurable change (p = 1.000) |
+  | CPU from launch to the idle window | 1.81 (1.74 to 1.98) s | 1.81 (1.75 to 1.98) s | +0.00 s, +0.3% | no measurable change (p = 0.835) |
+  | CPU energy from launch to the idle window | 5.78 (5.66 to 6.11) J | 5.90 (5.67 to 6.39) J | +0.12 J, +2.2% | no measurable change (p = 0.310) |
+  | Python helper start to ready, no network | 0.29 (0.28 to 0.64) s | 0.29 (0.28 to 0.61) s | -0.01 s, -3.4% | no measurable change (p = 0.394) |
+  | Python helper start, CPU | 0.29 (0.28 to 0.39) s | 0.29 (0.28 to 0.36) s | -0.00 s, -1.7% | no measurable change (p = 0.589) |
+  | Python helper memory once started | 71.1 (71.0 to 71.3) MB | 71.0 (71.0 to 71.1) MB | -0.1 MB, -0.1% | no measurable change (p = 0.405) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 6.797 (6.722 to 6.922) s | 3.367 (3.292 to 3.486) s | -3.430 s, -50.5% | lower (p = 0.002) |
+  | CPU energy over the refresh window | 23.674 (22.946 to 24.269) J | 11.267 (10.939 to 11.526) J | -12.407 J, -52.4% | lower (p = 0.002) |
+  | CPU wake-ups over the refresh window | 683 (641 to 775) wake-ups | 902 (822 to 987) wake-ups | +218 wake-ups, +32.0% | higher (p = 0.002) |
+  | Disk writes over the refresh window | 0.046 (0.046 to 1.406) MB | 0.046 (0.046 to 1.406) MB | +0.000 MB | no measurable change (p = 1.000) |
+  | Memory during the refresh window (physical footprint) | 141.6 (138.0 to 148.0) MB | 131.2 (128.4 to 135.1) MB | -10.4 MB, -7.3% | lower (p = 0.002) |
+  | Allocated memory added by the refreshes | 49.9 (46.9 to 52.8) MB | 27.9 (24.9 to 29.3) MB | -22.0 MB, -44.1% | lower (p = 0.002) |
+
+  The wake-ups are the trade-off: 218 more over the four passes, about
+  55 a pass, while CPU and CPU energy halve. The trial copy shows the same
+  direction, 355 against 536 wake-ups a minute with the window open. Why
+  they rose was not looked into. One untested explanation: the main
+  window's rolling digits animate when prices change, and before this
+  change the main thread was too busy redrawing to run many of their
+  frames.
+- Testing: 727 XCTest tests pass with 0 failures, one of them new: three
+  holdings refreshed in one forced pass, with an observer on their prices
+  whose follow-up task runs at the pass's first wait, must see all three
+  new prices. Against the code before this change it saw
+  `[100.0, nan, nan]`. `checks` and `docs-check` pass. The trial copy's
+  four passes and every benchmark refresh launch completed and updated
+  every symbol. An independent review by a reviewer that had not seen the
+  implementation found no defect; what it raised is below and in the
+  comment fix.
+- Known issues:
+  - The order of the log lines changed. Each line's wording is the same,
+    but all of a pass's "Updated cache" lines now come before its failure
+    lines, and the save and snapshot lines before both.
+  - A symbol whose updates are paused after repeated failures, refreshed
+    successfully late in a forced pass of several symbols that names it
+    without clearing the pause, can keep its "Updates paused" notice in an
+    open popover until its next update, because the cache now hears of
+    the success a few hops later. The manual retry clears the pause first
+    and is not affected, and failures already had the same timing.
+  - The code commit's message gives the wrong reason for looking holdings
+    up by name. The comment in the code and the squash commit give the
+    right one.
+- Verdict: left open for the owner. CPU and energy, which the wake-ups
+  stand in for, both halve, so the recommendation is to retain it.
 
 ## Rust evaluation, 2026-11-12
 
@@ -2594,7 +2796,8 @@ supervised trial against Yahoo.
 | Precompiled bytecode for the Python helper's own scripts | 2026-11-12, plan item 8 | Compiling all three scripts takes 8.2 ms of a 330 ms helper start | About 2 percent of the start, for a build step and files to keep in step with the scripts. Never written |
 | Thin only the newly aged part of each price series after a recorded snapshot | 2026-11-12, plan item 11 | A full pass costs 32.6 ms on the main actor for each recorded snapshot at the fixture's size, 0.0065 s/min at the default interval | The saving is about 2 s of CPU in a trading day, and it needs remembered state that every place replacing a series must keep true. Never written |
 | Draw the main window's chart as one area plot and one line plot in place of a mark for every point | 2026-11-12, milestone 1 | Three launches of each build: Swift Charts' classes among the 27 largest fell from 5.02 MB to 4.38 MB (2.75 MB in one launch), and the untyped allocations it was meant to lower did not move (19.7 to 20.4 MB before, 20.2 to 20.6 MB after) | About 0.6 MB, for a change to how the chart is built that could be tried on one macOS version only. Appearance and VoiceOver were not compared. Never committed |
-| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window. Six lines if the owner wants the memory more than the animation. Never committed. The owner asked for a switch in its place, which is pull request 98 |
+| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window (corrected on 2026-11-13: it shows the window at every launch). Six lines if the owner wants the memory more than the animation. Never committed. The owner asked for a switch in its place, which is pull request 98 |
+| Combine a refresh's three Core Data transactions, or stop recording Core Data's change history (finding 7) | 2026-11-13, [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13) | `sample` over four refresh passes: 17 busy samples on Core Data's threads of 3,234 in all, under 10 ms a pass. Each pass makes three write transactions and writes 35 change-history rows | A few milliseconds a refresh, too little to measure against the rest. The change history is part of how the store is opened, so turning it off risks the store opening read-only. Left as it is at the owner's choice. Never written |
 
 ## How this branch works
 
@@ -2717,6 +2920,8 @@ launch.
 | The review of the refresh path | Opus 5.5 (orchestrator), with one read-only review by Opus | Worth it. The reviewer had not seen the code and read the refresh path end to end in 26 tool calls, about 287,000 tokens and five and a half minutes, after a first attempt failed on a server error. Three of its claims were checked again in the code before they went to the owner, and held |
 | Pull request 104 | Opus 5.5 (orchestrator) | Done directly: one function pair replaced and three tests, measured with a script that runs the helper's `main()` offline |
 | Pull request 105 | Opus 5.5 (orchestrator) | Done directly: the seam the review had pointed to, the benchmark's extra window and its report rows, tried with one launch before the comparison |
+| Findings 6 and 7 looked into | Opus 5.5 (orchestrator) | Done directly: a profile, an SQL log and a trial copy with counters, each read before choosing the next; nothing independent to hand off |
+| Pull request 106 | Opus 5.5 (orchestrator), with one independent review by Opus | Done directly: one loop reordered and moved into two functions, a test shown to fail on the old code, and the trial copy's counters run again on the change. The review, read-only while the comparison ran, found no defect and was worth it: a comment gave the wrong reason for looking holdings up by name, the log lines moved more than the description said, and a suspension notice can now lag in one rare case. 24 tool calls, about 153,000 tokens and four and a half minutes |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

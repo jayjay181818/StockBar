@@ -304,8 +304,8 @@ class RefreshService {
     ) -> AppliedQuotes {
         var applied = AppliedQuotes()
         for symbol in symbols {
-            // Looked up by name: holdings may have been removed or reordered
-            // while the fetch was in flight.
+            // Looked up by name, as before: a symbol held in two rows updates
+            // the first of them each time it is listed.
             guard let holding = dataModel.realTimeTrades.first(where: { $0.trade.name == symbol }) else {
                 continue
             }
