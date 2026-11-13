@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.0.13)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.13</link>
+      <pubDate>Fri, 13 Nov 2026 00:18:46 +0000</pubDate>
+      <sparkle:version>370.0.13</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.0.13 of Stockbar 3.7.0. Changes since experimental-370.0.12:
+
+- Add a setting that lets the idle Python helper quit after 90 seconds (#86)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.0.13/Stockbar-370.0.13.zip" length="7166358" type="application/octet-stream" sparkle:edSignature="NM+ypYMqtjnTAK8IyUXij6DfjQgy4pluNjzqH/1FXyOXdN20hRtnR3mV9AnNheFmgPEfoGq9VXOerxMp8wLfCA=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.0.12)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.12</link>
       <pubDate>Thu, 12 Nov 2026 22:35:44 +0000</pubDate>
@@ -32,6 +45,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: korIvhYPQKvPPpj9rmDDJqV0aHGB2p8xqSeFSag5iiHANB2NL5aqO59PlUZanzBossN6yYm+vfkrItamCTstBA==
-length: 2279
+edSignature: gKFjqdf/Vyn5rPb6swjCk8lpNt9BB4EASVeecKMC4qVN8Y6Ux8hhrdeEUurmvPRSgLn3YMruqAWmK/HrvR2JCg==
+length: 3259
 -->
