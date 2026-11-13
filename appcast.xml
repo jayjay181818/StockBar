@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.16.3)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.3</link>
+      <pubDate>Fri, 13 Nov 2026 10:12:51 +0000</pubDate>
+      <sparkle:version>370.16.3</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.16.3 of Stockbar 3.7.0. Changes since experimental-370.16.2:
+
+- Turn on Quit Python Helper When Idle by default (#102)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.3/Stockbar-370.16.3.zip" length="7175261" type="application/octet-stream" sparkle:edSignature="lQHyeELyFQqzBbaVS3RwoaV3NHmFkwtzZdQ5iiHRjH330zjcEbbPkfvCJ6H97wDyX1pl15Xsru5X8sUqQCEjDg=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16.2)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.2</link>
       <pubDate>Fri, 13 Nov 2026 01:58:38 +0000</pubDate>
@@ -84,6 +97,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 32Y3tlRLk2A6TXj698QkOGJtxYkspHvoV49CJ80AwzrfxI25eP/c7q5KV1k4jzd+wLgSm9UFcEbyL867o0GfCA==
-length: 6153
+edSignature: QW+6KMemw7k0EXhoPn+rmA3VCQQpP6qrk+PPn4ydHanl8ZwaSkK0LBnkOMn+z94E/h8e86ov7RtGGI5h3mKDCw==
+length: 7113
 -->
