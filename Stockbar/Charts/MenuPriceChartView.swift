@@ -440,6 +440,7 @@ struct MenuPriceChartView: View {
         .onChange(of: benchmarkEnabled) { _, enabled in
             viewModel.setBenchmarkSymbol(enabled ? MenuPriceChartView.benchmarkSymbol(for: symbol) : nil)
         }
+        .stockbarRollingDigitsSetting()
     }
 
     private var headerView: some View {
@@ -463,7 +464,7 @@ struct MenuPriceChartView: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                    .contentTransition(.numericText())
+                    .stockbarRollingDigits()
                     .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: currentPrice)
 
                 if let point = hoveredPoint {
@@ -537,7 +538,7 @@ struct MenuPriceChartView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
 
             Text("at \(avgCost)")
                 .font(.system(size: 11, weight: .medium, design: .rounded))

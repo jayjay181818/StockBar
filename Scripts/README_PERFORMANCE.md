@@ -1,258 +1,140 @@
-# Performance Testing Guide
+# Measuring Stockbar's resource use
 
-## Quick Start
+Four tools, all run from the repository root. None of them needs administrator
+rights, and none touches the real portfolio except the first, which only reads
+counters from an app that is already running.
 
-1. **Launch Stockbar**
-   - Run Stockbar.app from Applications or Xcode
-   - Wait for app to fully load and complete initial data fetch
+| Question | Tool |
+| --- | --- |
+| What is the app I am running using right now? | `Scripts/measure_performance.sh` |
+| What does this checkout use, on fixed data? | `Scripts/perf/benchmark.sh` |
+| Did a change make a difference? | `Scripts/perf/compare.sh` |
+| What is the Python helper's memory made of? | `Scripts/perf/helper_layers.py` |
 
-2. **Run Performance Test**
-   ```bash
-   cd Scripts  # from the repository root
-   ./measure_performance.sh
-   ```
+The results of the optimisation work, and the baseline they are compared with,
+are in [the experimental log](../EXPERIMENTAL_LOG.md).
 
-3. **During Test (30 seconds)**
-   - Use app normally: view charts, switch tabs, check analytics
-   - Interact with menu bar items
-   - Open/close preferences
-   - This simulates real-world usage
-
-4. **Review Results**
-   - Script outputs CPU, memory, and thread metrics
-   - Compares against targets:
-     - CPU: <5% average
-     - Memory: <200 MB
-     - Both must pass for green status
-
-## Performance Targets
-
-### CPU Usage
-- **Target**: <5% average during normal operation
-- **Measurement**: 30-second average, 15 samples
-- **Acceptable**: Spikes to 10-20% during refresh are OK
-- **Warning**: Sustained >10% indicates optimization needed
-
-### Memory Footprint
-- **Target**: <200 MB total
-- **Measurement**: Resident Set Size (RSS)
-- **Acceptable**: Growth during initial data load is OK
-- **Warning**: >250 MB indicates memory leak
-
-### Threads
-- **Expected**: 5-15 threads typical for macOS app
-- **Acceptable**: Thread count stable over time
-- **Warning**: Continuously increasing threads indicates leak
-
-## Detailed Performance Testing
-
-### 1. Idle Performance
-Test CPU/memory when app is idle (no user interaction):
+## A running app: `measure_performance.sh`
 
 ```bash
-# Launch app, wait 2 minutes for stabilization
-# Then run:
-./measure_performance.sh
+bash Scripts/measure_performance.sh                 # ten minutes
+bash Scripts/measure_performance.sh --duration 60   # a quick look
 ```
 
-**Expected**:
-- CPU: 0-2% (nearly idle)
-- Memory: 100-150 MB
+Samples the running Stockbar and its Python helper: memory (physical
+footprint, the figure Activity Monitor shows), how much of the time the helper
+was running, CPU seconds, wake-ups and disk writes per minute. It reads kernel
+counters and never pauses or signals the app. Leave the app alone for an idle
+figure. This is the only tool that sees the helper at work and real refreshes,
+so its figures depend on the portfolio, the network and the time of day: use
+it to look, not to compare two builds.
 
-### 2. Active Usage Performance
-Test during normal usage:
+## One build on fixed data: `benchmark.sh`
 
 ```bash
-# While script runs, perform these actions:
-# - Click menu bar items
-# - Open preferences
-# - Switch chart types
-# - Change analytics time ranges
-./measure_performance.sh
+bash Scripts/perf/benchmark.sh --label my-change
 ```
 
-**Expected**:
-- CPU: 2-5% average
-- Memory: 120-180 MB
+Builds the Release configuration as a separate app (`com.stockbar.acceptance`)
+and runs it in the isolated acceptance mode: its own storage below the
+temporary folder, live providers off, no Keychain. It fills that storage with
+synthetic history (`Scripts/perf/make_fixture.py`: 11 holdings, 7,000 portfolio
+snapshots of 15 positions, about 70,000 prices), does one warm-up launch, then
+measures five launches. A window and menu-bar items appear for each launch and
+go when it is stopped; the Mac and its display are kept awake meanwhile.
 
-### 3. Stress Test Performance
-Test with heavy portfolio:
+For every launch it records:
+
+| Figure | What it is |
+| --- | --- |
+| `app_footprint_mb_median` | Idle memory: physical footprint over a 60 s window that starts 75 s after launch |
+| `app_heap_allocated_mb` | Bytes the app holds allocated at the end of the window. Steadier than the footprint, which also counts freed pages not yet handed back |
+| `app_lifetime_peak_mb` | The most memory the app held at any point: the launch, the first window and the history load |
+| `app_footprint_drift_mb` | Later half of the idle window against the earlier half. Use a long `--window` for this |
+| `app_cpu_s_per_min`, `app_wakeups_per_min` | Idle CPU time and CPU wake-ups |
+| `app_power_mw` | Idle CPU power, from the kernel's per-process energy estimate |
+| `app_cpu_s_before_window`, `app_energy_j_before_window` | CPU time and CPU energy from launch to the start of the idle window |
+| `launch_to_window_s` | Launch until the main window is on screen |
+| `launch_to_history_s` | Launch until the stored portfolio history is loaded |
+| `helper_start_s`, `helper_start_cpu_s`, `helper_footprint_mb` | One start of the Python helper to the point it can take a request, with no network: the local part of a quote refresh |
+
+Beside the summary it keeps the app's log and, for each launch, the figures,
+the memory samples, a breakdown by kind of memory (`footprint`) and the largest
+heap classes (`heap`), in `build/bench/results/`.
+
+A run that does not finish, because a launch never reached the point the
+script waits for or because the script was stopped, has no summary. It keeps
+the app's log as `app-failed.log` in the same place, so that what happened can
+be explained; the isolated storage the log was written to is deleted as usual.
+
+A soak run is the same thing with one long window:
 
 ```bash
-# Add 20+ stocks to portfolio
-# Enable multiple chart indicators
-# View analytics for All Time period
-./measure_performance.sh
+bash Scripts/perf/benchmark.sh --label soak --runs 1 --window 1800
 ```
 
-**Expected**:
-- CPU: 3-8% average (slightly higher OK)
-- Memory: 150-200 MB
-
-### 4. Chart Rendering Performance
-Subjective test for responsiveness:
-
-1. Open Charts tab
-2. Rapidly switch between chart types (Line → Candlestick → Volume)
-3. Change time ranges quickly (1D → 1M → 1Y)
-
-**Expected**:
-- No visible lag (<100ms render time)
-- Smooth animations
-- UI stays responsive
-
-### 5. Menu Bar Update Speed
-Test menu bar responsiveness:
-
-1. Trigger manual refresh
-2. Observe menu bar update time
-
-**Expected**:
-- Menu bar updates within 50ms
-- Feels instant to user
-
-### 6. Startup Performance
-Test app launch time:
-
-1. Quit Stockbar completely
-2. Time the relaunch: `time open -a Stockbar`
-3. Wait until menu bar items appear
-
-**Expected**:
-- Launch time: <3 seconds
-- Menu bar populated: <5 seconds
-
-## Troubleshooting Performance Issues
-
-### High CPU Usage
-
-**Symptoms**: CPU >10% sustained
-**Common Causes**:
-- Infinite refresh loops
-- Inefficient calculations
-- Too frequent polling
-
-**Diagnosis**:
-```bash
-# Monitor with Instruments
-open -a Instruments
-# Choose "Time Profiler" template
-# Attach to Stockbar process
-```
-
-**Solutions**:
-- Check refresh intervals (should be 15 min minimum)
-- Review calculation caching
-- Verify background operations are throttled
-
-### High Memory Usage
-
-**Symptoms**: Memory >250 MB or continuously growing
-**Common Causes**:
-- Memory leaks (retain cycles)
-- Unbounded cache growth
-- Historical data accumulation
-
-**Diagnosis**:
-```bash
-# Check for memory leaks with Instruments
-open -a Instruments
-# Choose "Leaks" template
-# Run for 5-10 minutes
-```
-
-**Solutions**:
-- Review Combine subscriptions for `weak self`
-- Check cache size limits
-- Verify historical data cleanup runs
-
-### Slow Chart Rendering
-
-**Symptoms**: Lag when switching charts (>100ms)
-**Common Causes**:
-- Too many data points
-- Unoptimized SwiftUI views
-- Synchronous calculations on main thread
-
-**Diagnosis**:
-```bash
-# Check main thread blocking
-open -a Instruments
-# Choose "System Trace" template
-```
-
-**Solutions**:
-- Limit chart data points (max 500-1000)
-- Move calculations to background actors
-- Use `.task` modifiers for async work
-
-## Activity Monitor Analysis
-
-For detailed investigation:
-
-1. **Open Activity Monitor**
-   ```bash
-   open -a "Activity Monitor"
-   ```
-
-2. **Find Stockbar Process**
-   - Search for "Stockbar" in process list
-
-3. **Monitor Key Metrics**
-   - **CPU %**: Should stay <5%
-   - **Memory**: Should be <200 MB
-   - **Threads**: Should be stable (5-15)
-   - **Energy Impact**: Should be "Low"
-
-4. **Sample Process (if issues)**
-   - Select Stockbar process
-   - Click gear icon → "Sample Process"
-   - Review for bottlenecks
-
-## Performance Benchmarks
-
-### Baseline (v2.2.10)
-- CPU: 2-3% average
-- Memory: 85-100 MB
-- Startup: <2 seconds
-
-### With Phase 1-4 Features (v2.3.0)
-- **Target**: CPU: <5% average
-- **Target**: Memory: <200 MB
-- **Target**: Startup: <3 seconds
-- **Acceptable**: Slight increase due to new features
-
-## Automated Performance Monitoring
-
-For continuous monitoring during development:
+## Two commits against each other: `compare.sh`
 
 ```bash
-# Run in background, log every 5 minutes
-while true; do
-    date >> performance.log
-    ps -p $(pgrep Stockbar) -o %cpu,%mem >> performance.log
-    sleep 300
-done
+bash Scripts/perf/compare.sh experimental HEAD --label my-change
 ```
 
-## Performance Regression Testing
+Exports and builds each commit (never the uncommitted working tree), then
+measures them in turns: before, after, after, before. It prints the table a
+pull request carries: for every figure the median and range of each side, the
+change, and a verdict from a rank-sum permutation test over the launches.
+Below p = 0.01 a row is "lower" or "higher". Between 0.01 and 0.05 it is
+"possibly lower" or "possibly higher": the table has fifteen rows, and the
+same commit measured against itself reaches that on some row often enough
+(it did in the baseline) that such a row needs a repeat before it counts.
+Anything else is "no measurable change". The default is six launches a side
+and takes about 35 minutes. Four a side can reach "possibly" at best, and
+with fewer nothing can be told apart.
 
-Before each release:
+Comparing a commit with itself shows the noise of the method.
 
-1. Run all performance tests
-2. Compare to baseline metrics
-3. Document any increases
-4. Investigate if >10% degradation
+Do not build, run tests or use the Mac heavily while either benchmark runs,
+and do not edit the scripts in `Scripts/perf/` until it has finished.
 
-## Notes
+## What the Python helper holds: `helper_layers.py`
 
-- **Acceptable Variance**: ±2% CPU, ±20 MB memory
-- **Optimization Priority**: CPU > Memory > Startup time
-- **User Impact**: Responsiveness matters more than absolute numbers
-- **Context**: Mac specs affect results (test on target hardware)
+```bash
+python3 Scripts/perf/helper_layers.py \
+  "$HOME/Library/Application Support/Stockbar/python-env/bin/python" \
+  build/bench/bin/proc_usage
+```
 
-## Contact
+Starts the helper's interpreter with one more layer of its imports each time
+(the interpreter alone, the standard library modules, `requests`, `pandas`,
+`yfinance`) and prints the memory each holds once the imports are done, with
+the CPU and time that took. Nothing is fetched. `build/bench/bin/proc_usage`
+is the sampler either benchmark builds on its first run.
 
-For performance issues or questions:
-- Check logs: `~/Library/Application Support/com.stockbar/stockbar.log`
-- Review Debug tab in preferences for real-time metrics
+To set a helper with no interpreter beside them, compile the two floor
+programs and pass each with `--floor`:
+
+```bash
+xcrun swiftc -O Scripts/perf/native_floor.swift -o build/bench/bin/native_floor_swift
+rustc -O Scripts/perf/native_floor.rs -o build/bench/bin/native_floor_rust
+python3 Scripts/perf/helper_layers.py <interpreter> build/bench/bin/proc_usage \
+  --floor "Swift, URLSession ready=build/bench/bin/native_floor_swift" \
+  --floor "Rust, standard library only=build/bench/bin/native_floor_rust"
+```
+
+A floor is a program that writes one line and waits, so it shows where a
+compiled helper starts from, not what it holds after fetching. The Rust one
+needs `rustc`, which no other part of the project uses.
+
+## What these do not measure
+
+- Whole-system battery drain. `app_power_mw` covers the CPU work the kernel
+  bills to the process; the display, the graphics processor and the network
+  are left out. `sudo powermetrics --samplers tasks,battery -i 10000 -n 60`
+  gives the whole-system view.
+- How smooth the interface is: dropped frames, or how long a click takes to
+  show. Instruments does this (Time Profiler, Hangs or SwiftUI templates)
+  against the Release build.
+- A quote refresh over the network, or the helper's lifetime between
+  refreshes. Acceptance mode never starts the helper, so only
+  `measure_performance.sh` against the real app sees them, and the provider
+  and the network are part of what it then measures.

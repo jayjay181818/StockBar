@@ -37,6 +37,7 @@ struct StockbarMainView: View {
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 1060, minHeight: 680)
         .preferredColorScheme(appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil)
+        .stockbarRollingDigitsSetting()
     }
 
     private var sidebar: some View {
@@ -878,7 +879,7 @@ private struct ProfitLossCell: View {
             Text(text)
                 .monospacedDigit()
                 .foregroundStyle(foregroundStyle)
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }

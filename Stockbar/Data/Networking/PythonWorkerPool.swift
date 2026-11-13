@@ -37,13 +37,36 @@ enum PythonWorkerError: Error, Equatable {
 /// Requests never queue behind each other: when every worker is busy, `run`
 /// returns nil and the caller starts a one-off process as before. A worker is
 /// replaced when the interpreter, worker script or environment changes, is
-/// discarded after a timeout or cancellation, and exits after `idleTimeout`
-/// unused or when the app quits (its stdin closes).
+/// discarded after a timeout or cancellation, and exits after the idle
+/// timeout unused or when the app quits (its stdin closes).
 actor PythonWorkerPool {
-    static let shared = PythonWorkerPool()
+    /// The app's pool. It reads the setting each time it looks for idle
+    /// workers, so a change needs no restart.
+    static let shared = PythonWorkerPool(idleTimeout: {
+        idleTimeout(quitWhenIdle: StockbarRuntimeStorage.userDefaults.bool(forKey: quitWhenIdleKey))
+    })
+
+    /// Settings → Advanced → Memory → Quit Python Helper When Idle. Off
+    /// unless it was turned on.
+    static let quitWhenIdleKey = "pythonHelper.quitWhenIdle"
+
+    /// How long a worker nobody is using is kept. An idle worker holds about
+    /// 70 MB.
+    ///
+    /// Off, it is kept for 15 minutes, so at a refresh interval shorter than
+    /// that the next refresh finds it running. On, it is kept for one burst
+    /// of work (a refresh pass, or a backfill whose requests are seconds
+    /// apart) and each later pass starts a new one, about a third of a second
+    /// of CPU. 90 seconds outlasts the shortest refresh interval, one minute,
+    /// which therefore reuses its worker either way while its markets are
+    /// open. A closed London or US listing is refetched every 30 minutes
+    /// (`RefreshService.closedMarketFreshness`), longer than either timeout.
+    static func idleTimeout(quitWhenIdle: Bool) -> Duration {
+        quitWhenIdle ? .seconds(90) : .seconds(15 * 60)
+    }
 
     private let maxWorkers: Int
-    private let idleTimeout: Duration
+    private let readIdleTimeout: @Sendable () -> Duration
     private let logger = Logger.shared
     private var idleWorkers: [(worker: PythonWorker, lastUsed: ContinuousClock.Instant)] = []
     private var busyCount = 0
@@ -56,11 +79,11 @@ actor PythonWorkerPool {
 
     init(
         maxWorkers: Int = 2,
-        idleTimeout: Duration = .seconds(15 * 60),
+        idleTimeout: @escaping @Sendable () -> Duration = { PythonWorkerPool.idleTimeout(quitWhenIdle: false) },
         failureBackoff: Duration = .seconds(5 * 60)
     ) {
         self.maxWorkers = maxWorkers
-        self.idleTimeout = idleTimeout
+        self.readIdleTimeout = idleTimeout
         self.failureBackoff = failureBackoff
     }
 
@@ -98,6 +121,9 @@ actor PythonWorkerPool {
         }
     }
 
+    /// How long an unused worker is kept, as of now.
+    var idleTimeout: Duration { readIdleTimeout() }
+
     /// Live worker processes, idle or busy (tests).
     var workerCount: Int { idleWorkers.count + busyCount }
 
@@ -106,6 +132,15 @@ actor PythonWorkerPool {
     func retireAllWorkers() {
         generation += 1
         stopIdleWorkers()
+    }
+
+    /// Applies a changed idle timeout now. The pool's idle check may be asleep
+    /// for a quarter of the old one.
+    func idleTimeoutChanged() {
+        reaper?.cancel()
+        reaper = nil
+        reapIdleWorkers { !$0.isRunning }
+        if !idleWorkers.isEmpty { startReaperIfNeeded() }
     }
 
     /// Stops every idle worker (tests and shutdown).
@@ -145,8 +180,9 @@ actor PythonWorkerPool {
 
     private func reapIdleWorkers(where shouldStop: (PythonWorker) -> Bool) {
         let now = ContinuousClock.now
+        let timeout = idleTimeout
         idleWorkers.removeAll { entry in
-            guard shouldStop(entry.worker) || now - entry.lastUsed >= idleTimeout else { return false }
+            guard shouldStop(entry.worker) || now - entry.lastUsed >= timeout else { return false }
             entry.worker.stop()
             return true
         }
@@ -154,18 +190,22 @@ actor PythonWorkerPool {
 
     private func startReaperIfNeeded() {
         guard reaper == nil else { return }
-        let interval = idleTimeout / 4
         reaper = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
-                guard let self, await self.reapAndCheckEmpty() else { continue }
-                return
+            // The interval follows the timeout, which can change between checks.
+            while let interval = await self?.reapInterval {
+                do { try await Task.sleep(for: interval) } catch { return }
+                if await self?.reapAndCheckEmpty() != false { return }
             }
         }
     }
 
+    private var reapInterval: Duration { idleTimeout / 4 }
+
     /// Stops expired workers; returns true (and ends the reaper) once none are idle.
     private func reapAndCheckEmpty() -> Bool {
+        // A reaper that `idleTimeoutChanged` replaced while it was waiting for
+        // the pool ends here: `reaper` now holds its successor.
+        guard !Task.isCancelled else { return true }
         reapIdleWorkers { !$0.isRunning }
         guard idleWorkers.isEmpty else { return false }
         reaper = nil

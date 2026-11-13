@@ -229,6 +229,85 @@ final class MenuChartSeriesAlignmentTests: XCTestCase {
     }
 }
 
+final class MenuPopoverCurveTests: XCTestCase {
+    /// A day of prices a pixel apart, a night with none, then the next day:
+    /// the shape that drew a hook either side of the night.
+    private let twoSessions: [CGPoint] = {
+        let evening = (0...10).map { CGPoint(x: CGFloat($0), y: 40 + CGFloat($0 % 3) * 4) }
+        let morning = (0...10).map { CGPoint(x: 146 + CGFloat($0), y: 60 + CGFloat($0 % 4) * 5) }
+        return evening + morning
+    }()
+
+    /// Where the curve from `points[index - 1]` to `points[index]` is, left to right, part of the way along it.
+    private func curveX(_ points: [CGPoint], endingAt index: Int, at fraction: CGFloat) -> CGFloat {
+        let controls = MenuPopoverLineChart.curveControls(points, endingAt: index)
+        let rest = 1 - fraction
+        return rest * rest * rest * points[index - 1].x
+            + 3 * rest * rest * fraction * controls.first.x
+            + 3 * rest * fraction * fraction * controls.second.x
+            + fraction * fraction * fraction * points[index].x
+    }
+
+    func testTheLineNeverTurnsBackWhereTimeHasAGap() {
+        for index in 1..<twoSessions.count {
+            var previous = twoSessions[index - 1].x
+            for step in 1...100 {
+                let x = curveX(twoSessions, endingAt: index, at: CGFloat(step) / 100)
+                XCTAssertGreaterThanOrEqual(x, previous - 1e-9, "piece \(index) moves back at step \(step)")
+                previous = x
+            }
+        }
+    }
+
+    func testEveryPullStaysInsideItsOwnPieceOfTheLine() {
+        for index in 1..<twoSessions.count {
+            let controls = MenuPopoverLineChart.curveControls(twoSessions, endingAt: index)
+            let start = twoSessions[index - 1].x
+            let end = twoSessions[index].x
+            XCTAssertGreaterThanOrEqual(controls.first.x, start - 1e-9, "piece \(index)")
+            XCTAssertLessThanOrEqual(controls.first.x, controls.second.x + 1e-9, "piece \(index)")
+            XCTAssertLessThanOrEqual(controls.second.x, end + 1e-9, "piece \(index)")
+        }
+    }
+
+    func testAShortenedPullKeepsItsDirection() {
+        // The last piece before the night: its far end is pulled towards the
+        // first point of the morning, 136 pixels on.
+        let index = 10
+        let controls = MenuPopoverLineChart.curveControls(twoSessions, endingAt: index)
+        let end = twoSessions[index]
+        let towards = CGVector(dx: twoSessions[index + 1].x - twoSessions[index - 1].x,
+                               dy: twoSessions[index + 1].y - twoSessions[index - 1].y)
+        let pull = CGVector(dx: end.x - controls.second.x, dy: end.y - controls.second.y)
+        XCTAssertEqual(pull.dx, (end.x - twoSessions[index - 1].x) / 3, accuracy: 1e-9)
+        XCTAssertEqual(pull.dx * towards.dy - pull.dy * towards.dx, 0, accuracy: 1e-9)
+    }
+
+    func testEvenlySpacedPointsKeepTheCurveTheyHad() {
+        let points = [12.0, 30, 18, 25, 40, 22].enumerated().map { CGPoint(x: CGFloat($0.offset) * 7, y: CGFloat($0.element)) }
+        for index in 1..<points.count {
+            let p0 = points[max(index - 2, 0)]
+            let p1 = points[index - 1]
+            let p2 = points[index]
+            let p3 = points[min(index + 1, points.count - 1)]
+            let controls = MenuPopoverLineChart.curveControls(points, endingAt: index)
+            XCTAssertEqual(controls.first.x, p1.x + (p2.x - p0.x) / 6, accuracy: 1e-9)
+            XCTAssertEqual(controls.first.y, p1.y + (p2.y - p0.y) / 6, accuracy: 1e-9)
+            XCTAssertEqual(controls.second.x, p2.x - (p3.x - p1.x) / 6, accuracy: 1e-9)
+            XCTAssertEqual(controls.second.y, p2.y - (p3.y - p1.y) / 6, accuracy: 1e-9)
+        }
+    }
+
+    func testTwoPointsAtTheSameTimeAreJoinedByAStraightLine() {
+        let points = [CGPoint(x: 0, y: 10), CGPoint(x: 5, y: 12), CGPoint(x: 5, y: 20), CGPoint(x: 9, y: 15)]
+        let controls = MenuPopoverLineChart.curveControls(points, endingAt: 2)
+        XCTAssertEqual(controls.first.x, 5, accuracy: 1e-9)
+        XCTAssertEqual(controls.first.y, 12, accuracy: 1e-9)
+        XCTAssertEqual(controls.second.x, 5, accuracy: 1e-9)
+        XCTAssertEqual(controls.second.y, 20, accuracy: 1e-9)
+    }
+}
+
 private func assertClose(_ lhs: [Double], _ rhs: [Double], accuracy: Double, file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertEqual(lhs.count, rhs.count, file: file, line: line)
     for (left, right) in zip(lhs, rhs) {

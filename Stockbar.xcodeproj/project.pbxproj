@@ -14,12 +14,14 @@
 		04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000017 /* LoggerTests.swift */; };
 		04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */; };
 		04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */; };
+		04C0FFEE0000000000C4A006 /* StoredPriceHistoryAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */; };
 		04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */; };
 		04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000003F /* PythonRequirementsTests.swift */; };
 		04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */; };
 		04C0FFEE000000000000001A /* PortfolioAnalyticsServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */; };
 		04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */; };
 		04C0FFEE0000000000C4A002 /* ChartLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000C4A001 /* ChartLogicTests.swift */; };
+		04C0FFEE0000000000C4A004 /* PositionSnapshotsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000C4A003 /* PositionSnapshotsTests.swift */; };
 		04C0FFEE000000000000001E /* TechnicalIndicatorServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */; };
 		04C0FFEE0000000000000020 /* ProjectTestTargetMembershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */; };
 		04C0FFEE0000000000000022 /* LogRedactorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C0FFEE0000000000000023 /* LogRedactorTests.swift */; };
@@ -52,12 +54,14 @@
 		04C0FFEE0000000000000017 /* LoggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggerTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPublisherTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonWorkerPoolTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredPriceHistoryAdoptionTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonEnvironmentSetupTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000003F /* PythonRequirementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRequirementsTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarFormattingServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001B /* PortfolioAnalyticsServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioAnalyticsServicesTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RiskMetricsServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000C4A001 /* ChartLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartLogicTests.swift; sourceTree = "<group>"; };
+		04C0FFEE0000000000C4A003 /* PositionSnapshotsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotsTests.swift; sourceTree = "<group>"; };
 		04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TechnicalIndicatorServiceTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectTestTargetMembershipTests.swift; sourceTree = "<group>"; };
 		04C0FFEE0000000000000023 /* LogRedactorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRedactorTests.swift; sourceTree = "<group>"; };
@@ -161,6 +165,7 @@
 				04C0FFEE0000000000000017 /* LoggerTests.swift */,
 				04C0FFEE0000000000000039 /* ObservationPublisherTests.swift */,
 				04C0FFEE000000000000003B /* PythonWorkerPoolTests.swift */,
+				04C0FFEE0000000000C4A005 /* StoredPriceHistoryAdoptionTests.swift */,
 				04C0FFEE000000000000003D /* PythonEnvironmentSetupTests.swift */,
 				04C0FFEE000000000000003F /* PythonRequirementsTests.swift */,
 				04C0FFEE0000000000000019 /* MenuBarFormattingServiceTests.swift */,
@@ -172,6 +177,7 @@
 				04C0FFEE0000000000000021 /* ProjectTestTargetMembershipTests.swift */,
 				04C0FFEE000000000000001D /* RiskMetricsServiceTests.swift */,
 				04C0FFEE0000000000C4A001 /* ChartLogicTests.swift */,
+				04C0FFEE0000000000C4A003 /* PositionSnapshotsTests.swift */,
 				04C0FFEE000000000000001F /* TechnicalIndicatorServiceTests.swift */,
 				04C0FFEE0000000000000031 /* Trading212BrokerSyncTests.swift */,
 				04C0FFEE0000000000000049 /* FolyncPortfolioSourceTests.swift */,
@@ -324,6 +330,7 @@
 				04C0FFEE0000000000000016 /* LoggerTests.swift in Sources */,
 				04C0FFEE0000000000000038 /* ObservationPublisherTests.swift in Sources */,
 				04C0FFEE000000000000003A /* PythonWorkerPoolTests.swift in Sources */,
+				04C0FFEE0000000000C4A006 /* StoredPriceHistoryAdoptionTests.swift in Sources */,
 				04C0FFEE000000000000003C /* PythonEnvironmentSetupTests.swift in Sources */,
 				04C0FFEE000000000000003E /* PythonRequirementsTests.swift in Sources */,
 				04C0FFEE0000000000000018 /* MenuBarFormattingServiceTests.swift in Sources */,
@@ -335,6 +342,7 @@
 				04C0FFEE0000000000000020 /* ProjectTestTargetMembershipTests.swift in Sources */,
 				04C0FFEE000000000000001C /* RiskMetricsServiceTests.swift in Sources */,
 				04C0FFEE0000000000C4A002 /* ChartLogicTests.swift in Sources */,
+				04C0FFEE0000000000C4A004 /* PositionSnapshotsTests.swift in Sources */,
 				04C0FFEE000000000000001E /* TechnicalIndicatorServiceTests.swift in Sources */,
 				04C0FFEE0000000000000030 /* Trading212BrokerSyncTests.swift in Sources */,
 				04C0FFEE0000000000000048 /* FolyncPortfolioSourceTests.swift in Sources */,

@@ -145,8 +145,8 @@ actor RiskMetricsService {
         let days = lastByDay.values.sorted { $0.date < $1.date }
         guard days.count > 1, let first = days.first, let last = days.last else { return nil }
 
-        func holdings(_ snapshot: HistoricalPortfolioSnapshot) -> [String: PositionSnapshot] {
-            snapshot.portfolioComposition.filter { !SymbolMetadata.isBenchmarkSymbol($0.key) }
+        func holdings(_ snapshot: HistoricalPortfolioSnapshot) -> PositionSnapshots {
+            snapshot.portfolioComposition.filter { !SymbolMetadata.isBenchmarkSymbol($0.symbol) }
         }
 
         var indexValues = [first.totalValue]
@@ -162,11 +162,11 @@ actor RiskMetricsService {
             } else if !prevHoldings.isEmpty && !nowHoldings.isEmpty {
                 var before = 0.0
                 var after = 0.0
-                for (symbol, position) in prevHoldings {
+                for position in prevHoldings {
                     let value = convert(position.valueAtDate, position.currency)
                     guard value.isFinite, value > 0 else { continue }
                     var ratio = 1.0
-                    if let current = nowHoldings[symbol],
+                    if let current = nowHoldings[position.symbol],
                        position.priceAtDate.isFinite, position.priceAtDate > 0,
                        current.priceAtDate.isFinite, current.priceAtDate > 0 {
                         let change = current.priceAtDate / position.priceAtDate

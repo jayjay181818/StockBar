@@ -9,6 +9,7 @@ protocol HistoricalDataServiceProtocol: Sendable {
     func savePortfolioSnapshot(_ snapshot: HistoricalPortfolioSnapshot) async throws
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot]
     func fetchAllPortfolioSnapshots() async throws -> [HistoricalPortfolioSnapshot]
+    func fetchPortfolioValues(from startDate: Date, to endDate: Date) async throws -> [StoredPortfolioValue]
     func getDataCount(for symbol: String) async throws -> Int
     func getTotalPriceSnapshotCount() async throws -> Int
     func getPortfolioSnapshotCount() async throws -> Int
@@ -16,9 +17,14 @@ protocol HistoricalDataServiceProtocol: Sendable {
 
 final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unchecked Sendable {
     private let coreDataStack: CoreDataStack
-    
-    init(coreDataStack: CoreDataStack = .shared) {
+    /// Portfolio snapshots converted per round trip to the store. Each one
+    /// brings its positions with it, so a long history read in one go holds
+    /// several times its final size in managed objects while it is converted.
+    private let portfolioFetchBatchSize: Int
+
+    init(coreDataStack: CoreDataStack = .shared, portfolioFetchBatchSize: Int = 500) {
         self.coreDataStack = coreDataStack
+        self.portfolioFetchBatchSize = max(1, portfolioFetchBatchSize)
     }
     
     // MARK: - Price Snapshots
@@ -191,32 +197,88 @@ final class CoreDataHistoricalDataService: HistoricalDataServiceProtocol, @unche
     }
     
     func fetchPortfolioSnapshots(from startDate: Date, to endDate: Date) async throws -> [HistoricalPortfolioSnapshot] {
+        let batchSize = portfolioFetchBatchSize
         return try await coreDataStack.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "timestamp >= %@ AND timestamp <= %@",
-                                               startDate as NSDate,
-                                               endDate as NSDate)
-            fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
-            // Without this every snapshot's positions are a separate query.
-            fetchRequest.relationshipKeyPathsForPrefetching = ["positionSnapshots"]
-            fetchRequest.returnsObjectsAsFaults = false
-            
-            let entities = try context.fetch(fetchRequest)
-            return entities.map { $0.toHistoricalPortfolioSnapshot() }
+            try Self.portfolioSnapshots(
+                matching: NSPredicate(format: "timestamp >= %@ AND timestamp <= %@",
+                                      startDate as NSDate,
+                                      endDate as NSDate),
+                batchSize: batchSize,
+                in: context
+            )
         }
     }
     
     func fetchAllPortfolioSnapshots() async throws -> [HistoricalPortfolioSnapshot] {
+        let batchSize = portfolioFetchBatchSize
         return try await coreDataStack.performBackgroundTask { context in
-            let fetchRequest: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
-            fetchRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
-            // Without this every snapshot's positions are a separate query.
-            fetchRequest.relationshipKeyPathsForPrefetching = ["positionSnapshots"]
-            fetchRequest.returnsObjectsAsFaults = false
-            
-            let entities = try context.fetch(fetchRequest)
-            return entities.map { $0.toHistoricalPortfolioSnapshot() }
+            try Self.portfolioSnapshots(matching: nil, batchSize: batchSize, in: context)
         }
+    }
+
+    /// The date, total and currency of each snapshot in the range, oldest
+    /// first. Positions are not read: they are most of a snapshot's rows, and
+    /// a chart of the portfolio's value uses none of them.
+    func fetchPortfolioValues(from startDate: Date, to endDate: Date) async throws -> [StoredPortfolioValue] {
+        return try await coreDataStack.performBackgroundTask { context in
+            try Self.portfolioValues(from: startDate, to: endDate, in: context)
+        }
+    }
+
+    static func portfolioValues(
+        from startDate: Date, to endDate: Date, in context: NSManagedObjectContext
+    ) throws -> [StoredPortfolioValue] {
+        let request = NSFetchRequest<NSDictionary>(entityName: "PortfolioSnapshotEntity")
+        request.resultType = .dictionaryResultType
+        request.propertiesToFetch = ["timestamp", "totalValue", "currency"]
+        request.predicate = NSPredicate(format: "timestamp >= %@ AND timestamp <= %@",
+                                        startDate as NSDate,
+                                        endDate as NSDate)
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+        // The same defaults as toHistoricalPortfolioSnapshot().
+        return try context.fetch(request).map { row in
+            StoredPortfolioValue(
+                date: row["timestamp"] as? Date ?? Date(),
+                totalValue: row["totalValue"] as? Double ?? 0,
+                currency: row["currency"] as? String ?? "USD"
+            )
+        }
+    }
+
+    /// Reads the matching snapshots oldest first, a batch at a time, and lets
+    /// go of each batch's managed objects before reading the next. The context
+    /// must have no unsaved changes: it is reset after every batch.
+    static func portfolioSnapshots(
+        matching predicate: NSPredicate?, batchSize: Int, in context: NSManagedObjectContext
+    ) throws -> [HistoricalPortfolioSnapshot] {
+        let idRequest = NSFetchRequest<NSManagedObjectID>(entityName: "PortfolioSnapshotEntity")
+        idRequest.resultType = .managedObjectIDResultType
+        idRequest.predicate = predicate
+        idRequest.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
+        let ids = try context.fetch(idRequest)
+
+        var snapshots: [HistoricalPortfolioSnapshot] = []
+        snapshots.reserveCapacity(ids.count)
+        for start in stride(from: 0, to: ids.count, by: batchSize) {
+            let batch = Array(ids[start..<min(start + batchSize, ids.count)])
+            // The pool matters as much as the reset: converting a snapshot
+            // leaves bridged strings, dates and sets behind until it drains.
+            try autoreleasepool {
+                let request: NSFetchRequest<PortfolioSnapshotEntity> = PortfolioSnapshotEntity.fetchRequest()
+                request.predicate = NSPredicate(format: "self IN %@", batch)
+                // Without this every snapshot's positions are a separate query.
+                request.relationshipKeyPathsForPrefetching = ["positionSnapshots"]
+                request.returnsObjectsAsFaults = false
+                let entities = Dictionary(
+                    try context.fetch(request).map { ($0.objectID, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                // The store returns a batch in no particular order.
+                snapshots.append(contentsOf: batch.compactMap { entities[$0]?.toHistoricalPortfolioSnapshot() })
+                context.reset()
+            }
+        }
+        return snapshots
     }
     
     func getPortfolioSnapshotCount() async throws -> Int {

@@ -343,7 +343,7 @@ struct MenuPopoverStatBox: View {
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
 
             if let subValue, !subValue.isEmpty {
                 Text(subValue)
@@ -674,18 +674,43 @@ struct MenuPopoverLineChart: View {
         }
 
         for index in 1..<points.count {
-            let p0 = points[max(index - 2, 0)]
-            let p1 = points[index - 1]
-            let p2 = points[index]
-            let p3 = points[min(index + 1, points.count - 1)]
-            path.addCurve(
-                to: p2,
-                control1: CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6),
-                control2: CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
-            )
+            let controls = Self.curveControls(points, endingAt: index)
+            path.addCurve(to: points[index], control1: controls.first, control2: controls.second)
         }
 
         return path
+    }
+
+    /// The control points of the curve from `points[index - 1]` to `points[index]`.
+    ///
+    /// The direction at each end comes from the points either side of it. Where
+    /// the points are unevenly spaced in time (the night between two trading
+    /// days), a far neighbour made that pull many times longer than the piece
+    /// of curve it shapes, and the line doubled back on itself before the gap
+    /// and after it. The pull is therefore shortened, keeping its direction,
+    /// to reach no further than a third of the way across its own piece, which
+    /// is what evenly spaced points give anyway. The line then always moves
+    /// forward in time. Expects `points` in ascending x order.
+    static func curveControls(_ points: [CGPoint], endingAt index: Int) -> (first: CGPoint, second: CGPoint) {
+        let p0 = points[max(index - 2, 0)]
+        let p1 = points[index - 1]
+        let p2 = points[index]
+        let p3 = points[min(index + 1, points.count - 1)]
+        let reach = max(0, (p2.x - p1.x) / 3)
+
+        func pull(from start: CGPoint, to end: CGPoint) -> CGVector {
+            let dx = (end.x - start.x) / 6
+            let dy = (end.y - start.y) / 6
+            let scale = dx > reach ? reach / dx : 1
+            return CGVector(dx: dx * scale, dy: dy * scale)
+        }
+
+        let leaving = pull(from: p0, to: p2)
+        let arriving = pull(from: p1, to: p3)
+        return (
+            CGPoint(x: p1.x + leaving.dx, y: p1.y + leaving.dy),
+            CGPoint(x: p2.x - arriving.dx, y: p2.y - arriving.dy)
+        )
     }
 
     private func drawHoverState(context: GraphicsContext, primaryPoints: [CGPoint], size: CGSize) {
