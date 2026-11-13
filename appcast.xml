@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.16.6)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.6</link>
+      <pubDate>Fri, 13 Nov 2026 13:37:34 +0000</pubDate>
+      <sparkle:version>370.16.6</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.16.6 of Stockbar 3.7.0. Changes since experimental-370.16.5:
+
+- Add a refresh workload to the benchmark (#105)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.6/Stockbar-370.16.6.zip" length="7190630" type="application/octet-stream" sparkle:edSignature="67N8TdnekgKtpuRE99zXTkGsPv4xpOW+x6JEDxuyR7AflyljtGzBfxJkk65RR2dJ48AbPJBuXZONA5Q3AScfAQ=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16.5)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.5</link>
       <pubDate>Fri, 13 Nov 2026 11:35:20 +0000</pubDate>
@@ -123,6 +136,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ZMQ45/+zN/ABqGyG2sLLPtoVy9e8Xm6eqAuiyF34uZcSNWNj70rkLYMm2KsW7bpPqQGnPGp/ctp0LdAoHkT3BA==
-length: 9069
+edSignature: bUVRL6FRlVbvC25T8ioYzyyt/YhU4GGlY/JCIir2VLFS995Kas3w11Y61cVIVnsFB6h9qLW1psFAE9JH3GyZBg==
+length: 10021
 -->
