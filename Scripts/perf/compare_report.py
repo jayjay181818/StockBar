@@ -39,8 +39,8 @@ METRICS = [
     ("helper_start_cpu_s", "Python helper start, CPU", "s", 2, "helper_cost.py"),
     ("helper_footprint_mb", "Python helper memory once started", "MB", 1, "helper_cost.py"),
 ]
-# With --refresh: four "Refresh now" passes on made-up quotes, 30 s apart, after
-# the idle window. Shown only when a side measured them.
+# With --refresh: four "Refresh now" passes on made-up quotes, 30 s apart, in
+# launches of their own after the usual ones. Shown only when a side measured them.
 REFRESH_METRICS = [
     ("refresh_passes", "Refresh passes completed in the refresh window", "passes", 0, "app log"),
     ("refresh_cpu_s", "CPU over the refresh window", "s", 3, "proc_pid_rusage, refresh window"),
