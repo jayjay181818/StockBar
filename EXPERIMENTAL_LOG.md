@@ -91,8 +91,8 @@ Decided on 2026-11-13:
 - The eight Dependabot alerts for `urllib3` and `requests` were dismissed
   as inaccurate. `main` has pinned the fixed versions since 2026-11-05, but
   GitHub's dependency graph still holds `requirements.txt` as it was
-  before. A small change to the file goes to `experimental`, so that GitHub
-  reads it again when it reaches `main`.
+  before. A small change to the file (pull request 103) goes to
+  `experimental`, so that GitHub reads it again when it reaches `main`.
 
 Done on 2026-11-13: `experimental` is promoted to `testing`. The owner
 asked for it without the two trading days of use that the recommendation
@@ -2104,8 +2104,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   description, the user guide and the architecture note describe both
   states and say it is on by default. A pool made without a timeout, which
   only tests do, still keeps its workers for 15 minutes.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `267cf3b`. The merge published
+  experimental build 370.16.3 as the prerelease `experimental-370.16.3`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.3 of 3.7.0 and carries the new description, its code signature
+  verifies and its executable has no `__llvm_prf` section. `main` and
+  `testing` did not move.
 - Benchmark: before `e43a8c0`, after `ea7aa22`, six launches a side in
   turns from 09:30 to 10:05 UTC on 2026-11-13, macOS 27.2.1 and mains
   power, all twelve launches with the screen unlocked and the display
@@ -2161,6 +2166,44 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     one made before the switch was turned off, or by a build without the
     switch, leaves it on.
 - Verdict: retained. The owner's decision, made knowing the trade.
+
+### 103: Note in `requirements.txt` that its pins have GitHub's advisory fixes
+
+- What: two comment lines in `Stockbar/Resources/requirements.txt`, saying
+  that the `requests` and `urllib3` pins have the fixes for the eight
+  advisories GitHub raised against them. No pin changes.
+
+  The point is the change itself. `main` has pinned `urllib3==2.8.0` and
+  `requests==2.34.2` since `c61f882` (2026-11-05 13:27 UTC), but GitHub's
+  dependency graph still holds the file as it was at that commit, whose
+  lines for Apple's Python 3.9 pinned `urllib3==1.26.20` and
+  `requests==2.32.5`. So eight Dependabot alerts stayed open, and a new
+  advisory would be matched against versions Stockbar does not install.
+  The graph has re-read the workflow files and `Package.resolved` since,
+  but not this file, which no push to `main` has changed since 2026-11-05
+  15:02 UTC. A change to the file on `main` is expected to make GitHub read
+  it again. The owner chose on 2026-11-13 to dismiss the eight alerts as
+  inaccurate at once, which was done the same day, and to let this change
+  reach `main` with the next promotion.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- Benchmark: not run, and all fifteen rows are "not measured". The one file
+  of the app that changes is this text file, and only in comments. The
+  launch-time check reads it for its pins and skips comment lines, as its
+  tests show. Deferred to the next milestone comparison.
+- Testing: `bash script/update_python_lock.sh --check`, which CI runs,
+  reports that `requirements.lock` still matches. The 7
+  `PythonRequirementsTests` pass with 0 failures. The script tests, the 66
+  Python helper tests, `checks` and `docs-check` pass.
+- Known issues:
+  - That GitHub reads the file again when it changes on `main` is
+    expected, not verified: GitHub does not say what makes it re-read a
+    file. If the graph is still stale after the change reaches `main`, the
+    next step is to ask GitHub Support.
+  - Until then, Dependabot matches new advisories for `urllib3`,
+    `requests` and `yfinance` against old versions. A fix for the versions
+    Stockbar installs could be missed, and a stale alert raised.
+- Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
 
@@ -2401,6 +2444,7 @@ launch.
 | Pull request 98, the switch for the rolling digits | Fable (orchestrator), with one check of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: it read both Memory switches word for word, turned the new one off and looked at the Overview page, in 24 tool calls, about 126,000 tokens and 80 seconds. The Opus review found no defect and was still worth it: the description and the guide stated more than had been measured, the test did not read what a figure does, and nothing kept later figures on the modifier, in 55 tool calls, about 201,000 tokens and eleven minutes. It ran beside pull request 86's first comparison, which had to be repeated on a quiet Mac |
 | The promotion to `testing` and pull request 101 | Fable (orchestrator) | Done directly: two pull requests, the checks on the published build and one comparison. Reading the repository's settings before merging showed that pull request 99 would have deleted `experimental`; it was replaced before anything was merged |
 | Pull request 102, the helper's switch on by default | Opus 5.5 (orchestrator, from here on at the owner's choice of model), with one check of the Settings window by Sonnet | Done directly: a five-file change and its test. Sonnet read the switch in the trial copy in 16 tool calls, about 105,000 tokens and 51 seconds; the copy's window is the main window, with Settings in its sidebar, and making it taller was enough to reach the Memory section. No independent review: a change of default, whose test was read against the diff |
+| The Dependabot alerts and pull request 103 | Opus 5.5 (orchestrator) | Done directly. The alerts' history and GitHub's dependency graph showed the code had been fixed for eight days; the alerts were dismissed through the API with a note, and the comment change was checked against the lock and the launch-time check |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
