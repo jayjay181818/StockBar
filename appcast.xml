@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.16.5)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.5</link>
+      <pubDate>Fri, 13 Nov 2026 11:35:20 +0000</pubDate>
+      <sparkle:version>370.16.5</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.16.5 of Stockbar 3.7.0. Changes since experimental-370.16.4:
+
+- Read and write the Python helper's quote cache once per refresh (#104)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.5/Stockbar-370.16.5.zip" length="7175695" type="application/octet-stream" sparkle:edSignature="wT3u3sZVxJXBN4B27om9CxriGdrWogjImtuoycJf6aLcX5zwAquw2gz0bOSdMOPVpXi2K2f350rfgGfnu6v5Ag=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16.4)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.4</link>
       <pubDate>Fri, 13 Nov 2026 10:18:19 +0000</pubDate>
@@ -110,6 +123,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Izl1dTC7BCdOspREGILVE6OVLGgVpRNSCDxFMf4iqqgRyA1RYENNbOdWTCVPZcI6tyzgKwxqFSMR17MchDkvCA==
-length: 8093
+edSignature: ZMQ45/+zN/ABqGyG2sLLPtoVy9e8Xm6eqAuiyF34uZcSNWNj70rkLYMm2KsW7bpPqQGnPGp/ctp0LdAoHkT3BA==
+length: 9069
 -->
