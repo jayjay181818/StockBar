@@ -9,9 +9,9 @@ import Synchronization
 /// cache with eviction, promotion, statistics and an hourly clean-up, all in
 /// service of those four values.
 ///
-/// The values are stored after every recorded price snapshot and almost never
-/// differ from one snapshot to the next, so storing a value its file already
-/// holds leaves the file alone.
+/// The values are stored after every recorded portfolio snapshot and almost
+/// never differ from one snapshot to the next, so storing a value its file
+/// already holds leaves the file alone.
 final class CacheManager: Sendable {
     static let shared = CacheManager()
 
@@ -20,17 +20,18 @@ final class CacheManager: Sendable {
     private struct State {
         /// The encoded value of each key, as last stored or read.
         var payloads: [String: Data] = [:]
-        /// Keys whose file is known not to hold the payload: its last write
-        /// failed, or it was found unreadable and removed.
-        var unsaved: Set<String> = []
+        /// Keys whose last file write failed, so the file may not hold the
+        /// payload. A key leaves when a write of it succeeds.
+        var failedWrites: Set<String> = []
         /// Counts the file work queued, so that a read can tell whether any
         /// was queued while it was reading.
         var queuedFileWork = 0
     }
 
     /// File work for a key is queued while this is held, so the files change
-    /// in the same order as `payloads`. Unless a key is in `unsaved`, its file
-    /// holds its payload once the queue has drained.
+    /// in the same order as `payloads`. Once the queue has drained, a key's
+    /// file holds its payload unless its write failed or something outside
+    /// the app has changed the file.
     private let state = Mutex(State())
     /// File work happens here, in order, so a store followed by a remove
     /// cannot land the wrong way round.
@@ -75,14 +76,13 @@ final class CacheManager: Sendable {
 
         let url = fileURL(for: key)
         state.withLock { state in
-            if state.payloads[key] == payload, !state.unsaved.contains(key) {
-                // The file holds this value already, or a queued write is about to put it there.
-                return
-            }
+            // Unchanged: the file work last queued for this key wrote this
+            // value, or the value was read from the file.
+            let unchanged = state.payloads[key] == payload
             state.payloads[key] = payload
-            state.unsaved.remove(key)
             state.queuedFileWork += 1
             fileQueue.async { [self] in
+                if unchanged, fileIsCurrent(for: key, at: url) { return }
                 let now = Date()
                 let envelope = Envelope(
                     key: key, data: payload, timestamp: now, size: payload.count,
@@ -90,13 +90,21 @@ final class CacheManager: Sendable {
                 )
                 do {
                     try JSONEncoder().encode(envelope).write(to: url, options: .atomic)
+                    self.state.withLock { _ = $0.failedWrites.remove(key) }
                 } catch {
-                    // Not on disk: the next store of this key writes even if the value is the same.
-                    self.state.withLock { _ = $0.unsaved.insert(key) }
+                    self.state.withLock { _ = $0.failedWrites.insert(key) }
                     Task { [logger] in await logger.error("❌ Failed to write the cache file for \(key): \(error)") }
                 }
             }
         }
+    }
+
+    /// Whether the file of a key whose value has not changed can be left
+    /// alone: its last write did not fail, and it has not been deleted since.
+    /// Runs on `fileQueue`, after the file work queued before it.
+    private func fileIsCurrent(for key: String, at url: URL) -> Bool {
+        let lastWriteFailed = state.withLock { $0.failedWrites.contains(key) }
+        return !lastWriteFailed && FileManager.default.fileExists(atPath: url.path)
     }
 
     func retrieve<T: Codable & Sendable>(_ type: T.Type, forKey key: String) -> T? {
@@ -112,7 +120,6 @@ final class CacheManager: Sendable {
             guard let envelope = try? JSONDecoder().decode(Envelope.self, from: raw) else {
                 // Unreadable: remove it so it is rebuilt rather than failing every launch.
                 try? FileManager.default.removeItem(at: url)
-                state.withLock { _ = $0.unsaved.insert(key) }
                 return nil
             }
             return envelope.data
@@ -132,7 +139,6 @@ final class CacheManager: Sendable {
         let url = fileURL(for: key)
         state.withLock { state in
             state.payloads[key] = nil
-            state.unsaved.remove(key)
             state.queuedFileWork += 1
             fileQueue.async {
                 try? FileManager.default.removeItem(at: url)

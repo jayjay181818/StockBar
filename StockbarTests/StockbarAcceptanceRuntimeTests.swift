@@ -276,7 +276,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
 
         // The value is encoded with its keys in order. That is what makes two
         // encodings of a dictionary the same bytes: left unsorted, the order
-        // varies with where the encoder's memory happens to be.
+        // varies from one encoding to the next.
         let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
         let payload = try XCTUnwrap((envelope["data"] as? String).flatMap { Data(base64Encoded: $0) })
         let keysAsWritten = try XCTUnwrap(String(data: payload, encoding: .utf8))
@@ -325,23 +325,47 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertEqual(CacheManager(cacheRoot: cacheRoot).retrieve([String: Date].self, forKey: "dates"), changed)
     }
 
-    func testCacheManagerWritesAnUnchangedValueWhoseFileIsMissingIt() throws {
+    func testCacheManagerWritesAnUnchangedValueWhenItsFileDoesNotHoldIt() throws {
         let cacheRoot = root.appendingPathComponent("Caches/stockbar-cache-unsaved", isDirectory: true)
         let manager = CacheManager(cacheRoot: cacheRoot)
         let file = manager.diskCacheDirectory.appendingPathComponent("numbers.cache")
+        func fileNumber() throws -> UInt64? {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+            return (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+        }
+        func storedOnDisk() -> [Int]? {
+            CacheManager(cacheRoot: cacheRoot).retrieve([Int].self, forKey: "numbers")
+        }
 
-        // With its folder gone the write fails. The value is still served from memory.
-        try FileManager.default.removeItem(at: manager.diskCacheDirectory)
+        // An older value on disk, then a write that fails: with the folder
+        // moved away there is nowhere to write. Memory still serves the new value.
+        manager.store([1], forKey: "numbers")
+        manager.flush()
+        let parked = cacheRoot.appendingPathComponent("parked")
+        try FileManager.default.moveItem(at: manager.diskCacheDirectory, to: parked)
         manager.store([1, 2], forKey: "numbers")
         manager.flush()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         XCTAssertEqual(manager.retrieve([Int].self, forKey: "numbers"), [1, 2])
 
-        // The same value again: it never reached the file, so this time it is written.
-        try FileManager.default.createDirectory(at: manager.diskCacheDirectory, withIntermediateDirectories: true)
+        // The folder is back with the older file in it. The same value again:
+        // it never reached the file, so this time it is written.
+        try FileManager.default.moveItem(at: parked, to: manager.diskCacheDirectory)
+        XCTAssertEqual(storedOnDisk(), [1])
         manager.store([1, 2], forKey: "numbers")
         manager.flush()
-        XCTAssertEqual(CacheManager(cacheRoot: cacheRoot).retrieve([Int].self, forKey: "numbers"), [1, 2])
+        XCTAssertEqual(storedOnDisk(), [1, 2])
+
+        // That write succeeded, so the next store of the value leaves the file alone again.
+        let rewritten = try fileNumber()
+        manager.store([1, 2], forKey: "numbers")
+        manager.flush()
+        XCTAssertEqual(try fileNumber(), rewritten)
+
+        // A file deleted from outside the app is written again.
+        try FileManager.default.removeItem(at: file)
+        manager.store([1, 2], forKey: "numbers")
+        manager.flush()
+        XCTAssertEqual(storedOnDisk(), [1, 2])
 
         // A file found unreadable is removed. Asking for another type than was
         // stored is what makes the read go to the file while the value is held.
@@ -350,7 +374,34 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         manager.store([1, 2], forKey: "numbers")
         manager.flush()
-        XCTAssertEqual(CacheManager(cacheRoot: cacheRoot).retrieve([Int].self, forKey: "numbers"), [1, 2])
+        XCTAssertEqual(storedOnDisk(), [1, 2])
+    }
+
+    func testCacheManagerFilesAgreeWithMemoryAfterConcurrentUse() throws {
+        let cacheRoot = root.appendingPathComponent("Caches/stockbar-cache-concurrent", isDirectory: true)
+        let manager = CacheManager(cacheRoot: cacheRoot)
+        let keys = ["a", "b", "c"]
+
+        // Stores, removes and reads of three keys from many threads at once.
+        // Few distinct values, so that many of the stores find theirs unchanged.
+        DispatchQueue.concurrentPerform(iterations: 600) { index in
+            let key = keys[index % keys.count]
+            switch (index / keys.count) % 5 {
+            case 0, 1: manager.store([index % 4], forKey: key)
+            case 2: manager.store([index % 2], forKey: key)
+            case 3: manager.remove(forKey: key)
+            default: _ = manager.retrieve([Int].self, forKey: key)
+            }
+        }
+        manager.flush()
+
+        // In whatever order they landed, each file holds what memory holds.
+        let fromFiles = CacheManager(cacheRoot: cacheRoot)
+        for key in keys {
+            XCTAssertEqual(
+                fromFiles.retrieve([Int].self, forKey: key), manager.retrieve([Int].self, forKey: key), key
+            )
+        }
     }
 
     func testAcceptanceRuntimeRequiresCompleteEnvironment() {
