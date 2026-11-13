@@ -318,7 +318,8 @@ alert, at every refresh, where once per refresh would do.
 
 The review also recommended adding a refresh on made-up data to the
 benchmark, so that findings 5 to 9 can be measured. That was part of what
-the owner settled on 2026-11-13 for "the rest of core".
+the owner settled on 2026-11-13 for "the rest of core". It is pull request
+105: `Scripts/perf/compare.sh --refresh`.
 
 ## Baseline
 
@@ -2276,8 +2277,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `update_cache`; `fetch_batch` no longer reads or writes the cache, which
   `main` does around it. A symbol given twice is fetched once, as before,
   when the second lookup found the first one's cached quote.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `19a51de`. The merge published
+  experimental build 370.16.5 as the prerelease `experimental-370.16.5`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.5 of 3.7.0 and its bundled `get_stock_data.py` has the new cache
+  functions, its code signature verifies and its executable has no
+  `__llvm_prf` section. `main` and `testing` did not move.
 - Measured offline, with `measure.py` (not in the repository): `main()` run
   with fresh globals, as the app's worker runs it, on a cache that holds a
   stale entry for every symbol, which is its state at each refresh. The
@@ -2350,6 +2356,121 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     quotes fetched so far. The script stops starting new symbols 15 seconds
     before that limit, and gives up waiting on any one symbol by then, so
     this needs the script to overrun its own time limit by 15 seconds.
+- Verdict: retained.
+
+### 105: Add a refresh workload to the benchmark
+
+- What: the benchmark keeps live providers off, so it never refreshed a
+  price and could not measure the refresh path, where findings 5 to 9 of
+  the [review](#review-of-the-refresh-path-2026-11-13) lie.
+  `Scripts/perf/benchmark.sh --refresh`, and `compare.sh --refresh`, now
+  make as many launches again after the usual ones. `--settle` seconds
+  after each, the script sends the app `SIGUSR1`, and the app runs four
+  "Refresh now" passes, 30 s apart, on made-up quotes, with no network and
+  no Python. Chart Data Collection is set to 30 s for these runs, so
+  every pass records price rows and a portfolio snapshot, as every refresh
+  does at the default settings. CPU, CPU energy, wake-ups, disk writes,
+  footprint and heap growth over those 120 s get seven rows of their own,
+  shown only when a side measured them.
+
+  In the app, `BenchmarkRefreshSettings` takes the workload only in an
+  acceptance run with live providers off whose environment asks for it.
+  `DataModel` then uses `BenchmarkQuoteService`, which refuses every quote,
+  as the Python service does in an acceptance run, until the signal
+  arrives. So the launch and the idle window are measured as without it.
+  `BenchmarkRefreshDriver` runs the passes through the refresh service's
+  normal forced path. A build without the workload never logs that it is
+  ready, is not signalled, and shows "not measured" on its side of the new
+  rows; the report now shows a side's figures when only that side measured
+  a row. Without `--refresh` nothing changes, and a comparison still takes
+  about 35 minutes; with it, about 75. `Scripts/README_PERFORMANCE.md` and
+  `Docs/Architecture.md` describe it.
+
+  The first version measured the refreshes in the same launches, after the
+  idle window. Its comparison, before `19a51de` and after `03af500`, from
+  11:47 to 12:41 UTC, was set aside: a refresh changes the stored data the
+  next launch starts from, and in the second and third launch of each of
+  this branch's turns the idle window drew 0.39 to 0.45 mW of CPU power
+  against 4.51 to 4.76 mW in every other launch, and used 0.085 to 0.104
+  s/min of CPU against 0.157 to 0.174. So the usual rows were no longer
+  measured on the same data as the other build's. What makes the idle
+  window cheaper after a refresh was not looked into; the benchmark's
+  fixture holds prices last updated when it was made, marked closed. Its
+  refresh rows were steady: 7.01 to 7.28 s of CPU and 23.95 to 25.37 J
+  over the four passes in all six launches.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- A first launch with the workload, from this branch on 2026-11-13 at 11:39
+  UTC: all four passes completed and updated 13 symbols each. Over the 120
+  s the app used 7.29 s of CPU and 25.5 J of CPU energy, woke 699 times,
+  wrote 0.05 MB, and held 35.3 MB more allocated afterwards than before;
+  its footprint was 144.3 MB against 100.4 MB idle. The first pass took
+  0.7 s from start to "Refresh completed", the later ones 1.7 to 1.8 s.
+  That is about 1.7 s of CPU a pass for eleven holdings, against 0.19 s a
+  minute idle, so the refresh path is where most of the app's work goes
+  while prices are being fetched. One launch, so read it as an order of
+  size; the comparison below has six. The benchmark's launches show the
+  main window, which redraws as prices change; how much of that cost is the
+  window's is for finding 6 to look into.
+- Benchmark: before `19a51de`, after `97bb986` (the second of the two
+  code commits; the third commit changes only this log), with `--refresh`:
+  six launches a side in turns from 12:36 to 13:29 UTC on 2026-11-13,
+  macOS 27.2.1 and mains power, the screen unlocked and the display awake
+  in every launch and every refresh window. The load average was 5.8 when
+  the run started and 3.3 when it ended. Named in advance: no usual row
+  expected to move, since the workload refuses quotes as before until it is
+  signalled, and the refresh launches come after the others. No usual row
+  moved. The refresh rows are this pull request's to add, so the build
+  before it has none; they are the figures later pull requests are
+  measured against.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 101.0 (100.3 to 103.6) MB | 101.4 (100.7 to 102.9) MB | +0.4 MB, +0.3% | no measurable change (p = 0.617) |
+  | Idle memory the app holds allocated | 56.0 (55.2 to 56.4) MB | 56.1 (55.4 to 56.4) MB | +0.1 MB, +0.3% | no measurable change (p = 0.504) |
+  | Peak memory, launch and history load | 249.3 (246.4 to 257.0) MB | 248.1 (244.1 to 253.7) MB | -1.2 MB, -0.5% | no measurable change (p = 0.416) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.1 (0.0 to 0.1) MB | +0.1 MB | no measurable change (p = 0.545) |
+  | Idle CPU | 0.168 (0.161 to 0.172) s/min | 0.164 (0.154 to 0.168) s/min | -0.004 s/min, -2.1% | no measurable change (p = 0.240) |
+  | Idle CPU wake-ups | 24 (23 to 29) /min | 24 (23 to 26) /min | +0 /min, +2.1% | no measurable change (p = 0.740) |
+  | Idle CPU power | 4.56 (4.38 to 4.72) mW | 4.59 (4.27 to 4.76) mW | +0.03 mW, +0.5% | no measurable change (p = 0.851) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.52 to 0.62) s | 0.58 (0.57 to 0.63) s | +0.01 s, +0.9% | no measurable change (p = 0.420) |
+  | Launch to history loaded | 0.59 (0.56 to 0.82) s | 0.63 (0.58 to 0.72) s | +0.04 s, +6.8% | no measurable change (p = 0.452) |
+  | CPU from launch to the idle window | 2.02 (2.01 to 2.19) s | 2.07 (1.98 to 2.23) s | +0.05 s, +2.5% | no measurable change (p = 0.387) |
+  | CPU energy from launch to the idle window | 6.25 (5.75 to 6.51) J | 6.37 (5.53 to 6.54) J | +0.12 J, +1.9% | no measurable change (p = 0.513) |
+  | Python helper start to ready, no network | 0.33 (0.28 to 0.63) s | 0.28 (0.28 to 0.57) s | -0.05 s, -15.2% | no measurable change (p = 0.372) |
+  | Python helper start, CPU | 0.32 (0.28 to 0.40) s | 0.28 (0.28 to 0.36) s | -0.04 s, -12.5% | no measurable change (p = 0.351) |
+  | Python helper memory once started | 71.1 (71.0 to 71.3) MB | 71.0 (71.0 to 71.1) MB | -0.0 MB, -0.1% | no measurable change (p = 0.448) |
+  | Refresh passes completed in the refresh window | not measured | 4 (4 to 4) passes | | |
+  | CPU over the refresh window | not measured | 7.360 (7.220 to 7.422) s | | |
+  | CPU energy over the refresh window | not measured | 25.569 (24.613 to 25.705) J | | |
+  | CPU wake-ups over the refresh window | not measured | 718 (702 to 759) wake-ups | | |
+  | Disk writes over the refresh window | not measured | 0.046 (0.046 to 1.406) MB | | |
+  | Memory during the refresh window (physical footprint) | not measured | 142.2 (136.1 to 146.0) MB | | |
+  | Allocated memory added by the refreshes | not measured | 36.5 (34.6 to 53.1) MB | | |
+
+  The disk writes are 0.046 MB in four of the six refresh launches and 1.4
+  MB in the other two, each the third refresh launch of its turn, which
+  also added 50.8 and 53.1 MB of allocated memory against 34.6 to 37.2 in
+  the others. What happens in the third launch was not looked into.
+- Testing: 726 XCTest tests pass with 0 failures, two of them new: the
+  workload is taken only in an acceptance run with live providers off
+  whose environment asks for it, with figures in range; and the quotes are
+  refused as in any acceptance run until the service is armed, then move
+  with each batch from a fixed price per symbol, while history stays
+  refused. The 92 script tests pass, one of them new: refresh rows appear
+  only when a side measured them, with that side's figures. `checks` and
+  `docs-check` pass. Two runs of the benchmark itself, a trial launch and
+  the comparison above, completed all four passes in every refresh launch.
+- Known issues:
+  - The benchmark's launches keep the main window open, as they always
+    have, and it redraws as prices change. In normal use it is closed. So
+    the refresh rows include a window that is usually not there.
+  - The refresh launches start from the data the one before left, so
+    their figures drift a little across a turn. Both sides run the same
+    sequence.
+  - A build from before this pull request shows a warning that its
+    launches "were builds without the refresh workload".
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -2594,6 +2715,7 @@ launch.
 | The Dependabot alerts and pull request 103 | Opus 5.5 (orchestrator) | Done directly. The alerts' history and GitHub's dependency graph showed the code had been fixed for eight days; the alerts were dismissed through the API with a note, and the comment change was checked against the lock and the launch-time check |
 | The review of the refresh path | Opus 5.5 (orchestrator), with one read-only review by Opus | Worth it. The reviewer had not seen the code and read the refresh path end to end in 26 tool calls, about 287,000 tokens and five and a half minutes, after a first attempt failed on a server error. Three of its claims were checked again in the code before they went to the owner, and held |
 | Pull request 104 | Opus 5.5 (orchestrator) | Done directly: one function pair replaced and three tests, measured with a script that runs the helper's `main()` offline |
+| Pull request 105 | Opus 5.5 (orchestrator) | Done directly: the seam the review had pointed to, the benchmark's extra window and its report rows, tried with one launch before the comparison |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
