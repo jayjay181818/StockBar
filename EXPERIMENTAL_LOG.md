@@ -2413,7 +2413,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   main window, which redraws as prices change; how much of that cost is the
   window's is for finding 6 to look into.
 - Benchmark: before `19a51de`, after `97bb986` (the second of the two
-  code commits; the third commit changes only this log), with `--refresh`:
+  code commits; the commits after it change only this log and one comment
+  in `compare_report.py`), with `--refresh`:
   six launches a side in turns from 12:36 to 13:29 UTC on 2026-11-13,
   macOS 27.2.1 and mains power, the screen unlocked and the display awake
   in every launch and every refresh window. The load average was 5.8 when
