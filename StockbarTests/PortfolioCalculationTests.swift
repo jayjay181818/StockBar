@@ -1988,6 +1988,65 @@ class PortfolioCalculationTests: XCTestCase {
         XCTAssertEqual(combined.map(\.symbol), [alias, requested, requested])
     }
 
+    func testAWindowOfTheCombinedHistoryHasTheSamePricesAsTheWholeSeriesCutToIt() {
+        let requested = "NEW"
+        let alias = "OLD"
+        let base = 1_700_000_000.0
+        func price(_ offset: Double, _ value: Double, _ symbol: String) -> PriceSnapshot {
+            makePriceSnapshot(timestamp: Date(timeIntervalSince1970: base + offset), price: value, symbol: symbol)
+        }
+        // Prices within a millisecond of the window's edges, where a later
+        // alias or a live sample replaces the one before it, and two prices
+        // that are not valid.
+        let stored = [
+            alias: [price(99.9994, 1, alias), price(100, 2, alias), price(100.0004, 3, alias), price(150, 4, alias),
+                    price(199.9996, 5, alias), price(200.0004, 6, alias), price(250, 7, alias)],
+            requested: [price(99.9996, 8, requested), price(150.0002, 9, requested), price(200.0001, 10, requested),
+                        price(160, .nan, requested), price(170, 0, requested)]
+        ]
+        let live = [requested: [price(100.0001, 11, requested), price(199.9999, 12, requested), price(200.0006, 13, requested)]]
+        let whole = InstrumentAliasHistoryLookup.combinedSnapshots(
+            for: requested, aliases: [alias], storedBySymbol: stored, liveBySymbol: live
+        )
+        let start = Date(timeIntervalSince1970: base + 100)
+        let end = Date(timeIntervalSince1970: base + 200)
+        let windows = [
+            start...end,
+            start.addingTimeInterval(-0.0005)...end.addingTimeInterval(0.0005),
+            start.addingTimeInterval(0.0002)...end.addingTimeInterval(-0.0002),
+            start...start,
+            Date(timeIntervalSince1970: 0)...Date(timeIntervalSince1970: base + 1_000)
+        ]
+
+        for window in windows {
+            let expected = whole.filter { window.contains($0.timestamp) }
+            let windowed = InstrumentAliasHistoryLookup.combinedSnapshots(
+                for: requested, aliases: [alias], storedBySymbol: stored, liveBySymbol: live, within: window
+            )
+            XCTAssertEqual(windowed.map(\.timestamp), expected.map(\.timestamp), "\(window)")
+            XCTAssertEqual(windowed.map(\.price), expected.map(\.price), "\(window)")
+            XCTAssertEqual(windowed.map(\.symbol), expected.map(\.symbol), "\(window)")
+        }
+        // At each edge of the first window a live sample replaced the stored
+        // prices, and the price just past its end is out. In the third
+        // window those live samples fall outside while prices they replaced
+        // fall inside, and neither may appear.
+        XCTAssertEqual(whole.filter { windows[0].contains($0.timestamp) }.map(\.price), [11, 9, 12])
+        XCTAssertEqual(whole.filter { windows[2].contains($0.timestamp) }.map(\.price), [9])
+    }
+
+    func testAliasPriceSnapshotCacheLooksUpASeriesWithoutBuildingOne() {
+        var cache = AliasPriceSnapshotCache(pointLimit: 10, entryLimit: 4)
+        let series = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 100), price: 101, symbol: "NEW")]
+
+        XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
+        _ = cache.snapshots(for: "NEW", aliases: ["OLD"]) { series }
+        XCTAssertEqual(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"])?.map(\.price), [101])
+        XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OTHER"]), "a different alias list is a miss")
+        cache.removeAll()
+        XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
+    }
+
     func testAliasPriceSnapshotCacheInvalidatesOnAliasChangeAndExplicitRemoval() {
         var cache = AliasPriceSnapshotCache(pointLimit: 10, entryLimit: 4)
         let original = [
