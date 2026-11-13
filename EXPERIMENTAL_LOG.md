@@ -17,7 +17,8 @@ further optimisation is planned. Since the milestone the owner has asked
 for three things, none an optimisation of its own: an update channel that
 follows `experimental` (pull request 97, merged), a switch for the Python
 helper's early exit (pull request 86, merged) and a switch for the rolling
-digits (pull request 98).
+digits (pull request 98, merged). On 2026-11-13 the owner asked for pull
+request 94 to be merged and for `experimental` to be promoted to `testing`.
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -59,22 +60,28 @@ digits (pull request 98).
   drawn digits held 0.4 MB against 9.4 to 9.9 MB with it on, in two
   launches each way. The standard benchmark was not run for this pull
   request, at the owner's instruction.
+- `script/package_release.sh` refuses to package an app built with
+  test-coverage counters (pull request 94, merged on the owner's word). It
+  guards against the fault that pull request 85 removed coming back. The
+  app is not changed.
 
 Waiting for a decision:
 
 - Whether the helper's switch (pull request 86) should be on unless turned
   off. It is off, because on trades memory for CPU.
-- Pull request 94, where `script/package_release.sh` refuses to package an
-  app built with test-coverage counters. It changes the release packaging
-  step, and it has to reach `testing` and `main` together with pull request
-  85's scheme change: without that change every build carries the counters
-  and would be refused.
 - Whether the market data fetch should leave Python. The
   [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
   component was moved to Rust.
-- Whether to promote `experimental` to `testing`. The recommendation and
-  what it does not cover are at the end of
-  [Milestone 1](#milestone-1-2026-11-12).
+
+Decided on 2026-11-13: `experimental` is promoted to `testing`. The owner
+asked for it without the two trading days of use that the recommendation
+at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first; what
+that section says the measurements do not cover still holds. The promotion
+is a pull request from `experimental` into `testing`, opened once pull
+request 94 is merged. Its outcome is recorded by the pull request that
+brings `testing` back into `experimental` afterwards. Asked for at the
+same time: a look at "the rest of core" after the promotion. What that
+covers is not yet settled with the owner.
 
 Decided on 2026-11-12 and done in pull request 98: the rolling digits of
 the figures, which cost 6 to 10 MB of cached glyphs after a launch like the
@@ -135,17 +142,18 @@ Figures from either side of a break are not compared with each other.
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
 | Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
-| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default; pull request 94 is open for a decision |
+| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
 | Stage 3 changes | Done 2026-11-12. Plan items 8, 9, 11 and 12 were measured and none gave a change worth making; pull request 88 records the Rust evaluation |
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
-| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). Nothing is promoted until the owner asks for it |
+| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13; it follows pull request 94 |
 
 ### Planned next, in order
 
 1. Done in pull request 85: release builds without test-coverage counters.
    The branch also carried a check in `script/package_release.sh` that refuses
    an instrumented binary. That is a change to the release packaging step, so
-   it came off the branch and is open as pull request 94 for a decision.
+   it came off the branch as pull request 94, which waited for a decision
+   and was merged on the owner's word on 2026-11-13.
 2. Done in pull request 86, as a switch that is off by default: the idle
    Python helper quits after 90 seconds. As a fixed change it traded memory
    for CPU and waited for a decision; the owner asked for a switch. Its
@@ -234,10 +242,11 @@ Figures from either side of a break are not compared with each other.
     it off against 9.4 to 9.9 MB with it on. On unless turned off. The
     standard benchmark was not run, at the owner's instruction.
 
-No further optimisation is planned. Open for the owner are promotion, pull
-request 94 and whether the fetch should leave Python. What could still be
-done, and what each would cost, is listed at the end of
-[Milestone 1](#milestone-1-2026-11-12).
+No further optimisation is planned. Open for the owner are whether the
+helper's switch should be on unless turned off and whether the fetch
+should leave Python. Promotion to `testing` was asked for on 2026-11-13.
+What could still be done, and what each would cost, is listed at the end
+of [Milestone 1](#milestone-1-2026-11-12).
 
 ## Baseline
 
@@ -572,6 +581,11 @@ the answer given was: not yet. The code is ready, and the gaps listed
 below are the reason to wait. The Experimental channel can now close the
 first three: run an experimental build on both of the owner's Macs, on the
 real portfolio, through two trading days, and promote after that.
+
+On 2026-11-13 the owner asked for the promotion without that wait, and for
+pull request 94 to be merged first. The promotion therefore carries every
+pull request from 84 to 98. The list below is unchanged by that: it is
+what the testing build has not been through.
 
 What the measurements do not cover:
 
@@ -1316,6 +1330,68 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained, for 3.44 MB less allocated memory at idle with nothing
   given up.
 
+### 94: Refuse to package an app built with test-coverage counters
+
+- What: `script/package_release.sh` stops with "Refusing to package: the
+  app was built with test-coverage instrumentation." when the executable it
+  is about to sign carries coverage counters. It reads the executable
+  itself (`size -m`, a section named `__llvm_prf…`) straight after the app
+  is staged, before anything is signed or written to the output folder.
+  Stockbar 3.7.0 was released with those counters built in. Pull request 85
+  removed the cause, and nothing else in the release path would notice it
+  coming back. Two new script tests package a stand-in app, one compiled
+  with the coverage flags and one without, and two sentences in
+  `Docs/Development.md` name the refusal.
+
+  The check was on the carried-over branch beside pull request 85's scheme
+  change. It came off because it changes the release packaging step, and
+  waited for a decision from 2026-11-12. The owner asked for it to be
+  merged on 2026-11-13. `experimental` had moved by five pull requests in
+  between and was merged into the branch; nothing conflicted.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- Benchmark: not run. No file that goes into the app differs between
+  `7ed5e85` and this branch (nothing under `Stockbar/`, `StockbarTests/`,
+  `PythonTests/` or `Stockbar.xcodeproj`), so before and after are the same
+  app and all fifteen rows are "not measured". The one cost the change adds
+  is to packaging: `size -m` on the 18 MB Release executable took 0.01 s in
+  each of five runs, timed for the first version of this pull request on
+  2026-11-12.
+- Testing, on the branch with `experimental` at `7ed5e85` merged in:
+  91 script tests pass, two of them new. 724 XCTest tests
+  pass with 0 failures and 66 Python helper tests pass, though no
+  file they build changes. `checks`, `docs-check` and `build-release` pass.
+  One full packaging run, `package_release.sh --build 0.0.1` into a scratch
+  folder, built the Release configuration, signed it ad hoc, zipped it and
+  started the packaged app, and ended without error.
+
+  From the first version, on 2026-11-12: packaging the saved benchmark
+  build of the baseline `47c1bda`, whose sources are those of release 3.7.0
+  and whose executable has seven `__llvm_prf` sections, was refused with
+  the message and exit code 1, and nothing was written. Packaging the saved
+  build of `bd56486`, the commit of pull request 85, succeeded. The new
+  test fails against the script without the check.
+
+  The check has not yet run in GitHub Actions. The release workflow's
+  build of this merge is its first run there. The executable of the
+  published experimental build 370.0.14 has no `__llvm_prf` section, so
+  that build is not expected to be refused.
+- Known issues:
+  - It has to stay with pull request 85's scheme change. With the old
+    scheme every Release build is instrumented and would be refused. A
+    promotion of `experimental` as a whole carries both.
+  - Packaging has a new way to stop. If `size` cannot read the executable,
+    because it is missing or is not a Mach-O file, the script stops at this
+    check with the error `size` prints.
+  - The check goes by section name. Instrumentation that named its
+    sections differently would pass. Only the app's own executable is
+    read, not the Sparkle framework's, which Stockbar does not build.
+  - The new tests need macOS and its developer tools, and are skipped
+    without them.
+- Verdict: retained. Nine lines and a hundredth of a second for each
+  package, against a fault that has shipped once and that nothing else
+  detects.
+
 ### 95: Keep the popover chart's line from doubling back at a gap in time
 
 - What: a bug fix. The owner reported it from a second Mac running 3.7.0: in
@@ -1739,8 +1815,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `figures.rollingDigits`, is stored with the app's other defaults and
   travels with a settings export. The user guide and the architecture note
   describe it.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `7ed5e85`. The merge published the
+  prerelease `experimental-370.0.14`. Checked afterwards: the feed's
+  signature and the archive's signature both verify against the
+  `SUPublicEDKey` in `Info.plist`; the archive's length matches the feed;
+  the unpacked app reports build 370.0.14 of version 3.7.0, holds the new
+  setting's key and passes `codesign --verify --deep --strict`. `main`,
+  `testing` and the `appcast` branch did not move.
 - Benchmark: not run. The owner's instruction, given on 2026-11-12 at 23:46
   UTC, was "skip the benchmark on the digits toggle." All fifteen rows of
   the standard set are therefore not measured for this pull request, and
@@ -2061,7 +2142,7 @@ launch.
 | Pull request 91 | Fable (orchestrator) | Done directly: a dozen lines of shell and one test |
 | Pull request 92 | Fable (orchestrator) | Done directly. The change was written before the transition; it was re-read, trimmed of the code it replaces and corrected after its first measurement |
 | Pull request 93 | Fable (orchestrator) | Done directly. The carried-over change was nine lines; reading the append path before measuring showed it would undo itself in use, and the step growth and two tests were added |
-| Pull request 94, open for a decision | Fable (orchestrator) | Done directly: seven lines of shell, two tests and a paragraph of documentation, tried by hand on a build with the counters and one without |
+| Pull request 94 | Fable (orchestrator) | Done directly: nine lines of shell, two tests and two sentences of documentation, tried by hand on a build with the counters and one without. It waited a day for the owner's decision and was merged on their word |
 | Pull request 95 | Fable (orchestrator) | Done directly: found from the owner's screenshot and the drawing code, then checked by drawing the app's own chart view with the old formula and the new. A probe build showed the benchmark never draws that chart, which settled three rows the benchmark had marked |
 | Milestone 1: the comparison, the soaks, the launch with allocations named and the two trial builds | Fable (orchestrator) | Done directly. Each step was a measurement to read before choosing the next, with nothing independent to hand to a subagent |
 | Pull request 97, the Experimental update channel | Fable (orchestrator), with a check of the Settings window by Sonnet and one independent review by Opus | Sonnet was used at the owner's instruction for driving the screen: it worked through the trial copy's Settings window and reported what each channel was offered, in 53 tool calls and about 138,000 tokens. The Opus review was worth it: it found that a release would never have reached the channel and that the tests and notes had Sparkle's ordering wrong, in 62 tool calls, about 250,000 tokens and fifteen minutes |
