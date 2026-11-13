@@ -179,7 +179,7 @@ Figures from either side of a break are not compared with each other.
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 107 |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 108 |
 
 ### Planned next, in order
 
@@ -283,12 +283,13 @@ is "the rest of core": the owner's choices from the
 pull request each. Done: finding 1 (pull request 104), the refresh
 workload (pull request 105), the redraw per symbol (pull request 106,
 which halves the refresh passes' CPU and raises their wake-ups, a
-trade-off the owner accepted) and finding 6 (pull request 107). Next, in
-order: findings 5, 9 and 8. Open for the owner are whether the fetch
-should leave Python, the cached quote shown as just updated, and the
-price alerts' repeated rewrite. `experimental` was promoted to `testing` on
-2026-11-13. What could still be done, and what each would cost, is listed
-at the end of [Milestone 1](#milestone-1-2026-11-12).
+trade-off the owner accepted), finding 6 (pull request 107) and finding 5
+(pull request 108). Next, in order: findings 9 and 8. Open for the owner
+are whether the fetch should leave Python, the cached quote shown as just
+updated, and the price alerts' repeated rewrite. `experimental` was
+promoted to `testing` on 2026-11-13. What could still be done, and what
+each would cost, is listed at the end of
+[Milestone 1](#milestone-1-2026-11-12).
 
 ## Review of the refresh path, 2026-11-13
 
@@ -321,7 +322,7 @@ with the owner's decision on each:
 | 2 | Two requests to the provider per symbol per refresh: the helper downloads five days of daily prices every time, to get the previous close | Leave as it is |
 | 3 | Symbols whose market is closed are still fetched every 30 minutes, all night and at weekends, and each fetch saves a portfolio snapshot that the weekly clean-up later deletes | Leave as it is |
 | 4 | The two benchmark indices, the S&P 500 and the FTSE 100, are fetched at every refresh | Keep as it is, including the FTSE 100's hours |
-| 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix |
+| 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix. Pull request 108 |
 | 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Looked into: confirmed, about 66 ms of the main thread per refresh. Fixed in pull request 107 |
 | 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Looked into: confirmed, under 10 ms per refresh. Leave as it is |
 | 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix |
@@ -2730,7 +2731,14 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   history, and the analytics correlations. A range whose start is after
   its end returns nothing, as before. No Rust, native macOS API,
   dependency or architectural change.
-- Merged: not yet. The next pull request fills this in.
+- Merged: 2026-11-13, squash commit `0a1ea40`. The merge published
+  experimental build 370.16.8 as the prerelease `experimental-370.16.8`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.8 of 3.7.0 and carries `cachedSnapshots`, its code signature
+  verifies and its executable has no coverage counters. The build job
+  started three seconds after the merge, with no wait for a runner, and
+  took 5 minutes. `main` and `testing` were unchanged.
 - The read timed in the trial copy, with the counters of
   [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
   and a timer around the day read applied to `f1dce15` and to this
@@ -2837,6 +2845,134 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   the refresh window is lower, and no row is higher. The gain is modest
   at the size of a whole refresh: about a quarter of a second of CPU in
   four passes.
+
+### 108: Leave a history cache file alone when its value has not changed
+
+- What: finding 5 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  `HistoricalDataManager.saveHistoricalData()` runs after every recorded
+  portfolio snapshot and stores the portfolio composition, two
+  calculation dates and, when there are any, the earliest history dates
+  in `CacheManager`. `CacheManager.store` encoded the value and rewrote
+  its file every time, so each snapshot rewrote three or four files with
+  the contents they already had. Now `store` compares the encoded value
+  with the one it holds for the key. When they are the same it leaves
+  the file alone, provided the key's last write did not fail and the
+  file is still there. A changed value is written as before. What the
+  comparison rests on:
+  - The value is encoded with sorted keys. Unsorted, `JSONEncoder`
+    orders a dictionary's or a struct's keys differently from one
+    encoding to the next, so an unchanged value would look changed. A
+    standalone check encoded one 20-key dictionary 300 times and got 7
+    and 8 different byte sequences in two runs, and a struct holding an
+    array of structs gave 2 in each run. With sorted keys both gave 1.
+    The check's source and output are kept in
+    `build/bench/results/trial-history-cache-20261113/key-order-check`.
+  - `store` and `remove` queue their file work while holding the lock,
+    so the files change in the same order as the values held in memory.
+  - The check for an unchanged value runs on the file queue, after the
+    file work queued before it. A key whose write failed is recorded
+    until a write of it succeeds, and until then every store of it
+    writes, changed or not.
+  - A value read from its file counts as held, so the first store after
+    a launch leaves the file alone when the value is the same. The read
+    is held only if no file work was queued while it was reading.
+  - After `clearMemoryCache()`, which the app calls when it is short of
+    memory, the next store of each key writes its file once, since
+    nothing then says what the file holds.
+
+  The layout of the files is unchanged, so files written by earlier
+  versions stay readable and the other way round. No Rust, native macOS
+  API, dependency or architectural change.
+- Merged: not yet. The next pull request fills this in.
+- The writes counted in the trial copy, with the counters of
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
+  and two more in `CacheManager`, one for each call of `store` and one
+  for each file written, applied to `0a1ea40` and to this branch's code
+  commit `9e98e63`. Same fixture, on 2026-11-13 on battery power: two
+  launches a side with the main window open, each with four forced
+  passes 30 s apart; before from 19:41 to 19:49 UTC and after from 20:03
+  to 20:11 UTC. All four launches completed their four passes. The trial
+  copy is never committed. Its output and the two counter patches are
+  kept in `build/bench/results/trial-history-cache-20261113`.
+
+  | Per launch | Before (`0a1ea40`) | After (`9e98e63`) |
+  | --- | --- | --- |
+  | Calls of `CacheManager.store` | 15 and 15 | 15 and 15 |
+  | Cache files written | 15 and 15 | 1 and 1 |
+  | Cache files written during the four passes | 12 and 12 | 0 and 0 |
+  | Bytes of file content written | 7,903 and 7,899 | 187 and 187 |
+  | Bytes of file content written during the four passes | 6,322 and 6,318 | 0 and 0 |
+  | App disk writes over the 120 s of refreshes | 0.023 and 0.023 MB/min | 0.000 and 0.000 MB/min |
+  | App CPU over the 120 s | 1.464 and 1.589 s/min | 1.376 and 1.515 s/min |
+  | App CPU wake-ups over the 120 s | 701.5 and 759.5 /min | 850.5 and 723.5 /min |
+  | App CPU power over the 120 s | 70.05 and 76.19 mW | 67.69 and 69.14 mW |
+
+  The 15 calls are three values stored five times: once after the
+  launch's history calculation and once after each pass. The fixture has
+  no earliest history dates, so it stores three values where a portfolio
+  with history stores four. The one file still written is the date of
+  the launch's history calculation, which does change at each launch.
+  The CPU, wake-up and power rows overlap between the two sides and, with
+  two launches a side, are an order of size only. Other processes were
+  keeping this Mac busy straight after the after side, with a load
+  average of 8 to 14 at 20:12 UTC; the load during the before side was
+  not looked at. The counts of calls, files and bytes do not depend on
+  it.
+- Benchmark: not yet run. At 20:12 UTC on 2026-11-13 this Mac was on
+  battery power at 63% and falling by about 1% a minute, and busy with
+  processes that are not this work's, so a 76-minute run would have been
+  measured under load and could have emptied the battery. It runs once
+  the Mac is on mains power and quiet, and this entry is filled in then.
+- Testing: 732 XCTest tests pass with 0 failures, three of them new.
+  The first stores a 20-key dictionary, checks that its keys are written
+  in sorted order, and checks that five stores of an equal dictionary
+  built in the opposite order leave the file's bytes and its file number
+  as they were. It then checks that a changed value is written, that a
+  value read from its file counts as held, that the file is written
+  again after `clearMemoryCache()`, and that a store after a remove
+  writes. The second makes a write fail while an older file stays in
+  place, and checks that the next store of the same value writes it,
+  that the store after that leaves the file alone, and that a file
+  deleted by hand or found unreadable is written again. The third runs
+  600 stores, removes and reads of three keys from many threads at once
+  and checks that each file then holds what memory holds. Each safeguard
+  was removed in turn to see a test fail: without the record of failed
+  writes, without the check that the file exists, without clearing the
+  record after a good write, and without sorted keys, the first or
+  second test fails. `checks` and `docs-check` pass. An independent
+  review by a reviewer that had not seen the implementation found no
+  defect in the comparison or the locking. It found that the first code
+  commit, which skipped an unchanged store without looking at the file,
+  no longer wrote again a file deleted from outside the app, and would
+  not retry a store that followed a write still waiting in the queue if
+  that write then failed. The second code commit closes both, and the
+  reviewer's second look at it found no defect.
+- Known issues:
+  - A file changed or damaged from outside the app while it still exists
+    is no longer put right at the next snapshot, only when its value
+    next changes or the app next reads it and finds it unreadable.
+    Before, every snapshot rewrote it. Nothing else in the app or its
+    scripts writes to these files. A file that macOS deletes from the
+    caches folder to free space is written again at the next snapshot,
+    as before.
+  - The time recorded inside each file no longer moves forward at every
+    snapshot. Nothing in this version reads it. A build from before
+    commit `17f29db` dropped a file whose recorded time was over a year
+    old, so going back to such a build after a year without a change to
+    a value would lose that value from the cache, and it would be
+    rebuilt.
+  - An unchanged store still costs a block on the file queue, a lock and
+    one check that the file exists. This was not timed on its own.
+  - The first store of each key after updating to this build rewrites
+    its file once, with its keys in sorted order.
+  - Not covered by a test: that file work is queued in the order the
+    values change. The third test checks only the state at the end and
+    would usually still pass without that. Also not covered: two stores
+    of the same value both queued before the first one's write fails.
+    The second then finds the failure recorded and writes.
+- Verdict: pending the benchmark. Recommended to retain: the four passes
+  write no cache file where they wrote twelve.
 
 ## Rust evaluation, 2026-11-12
 
@@ -3085,6 +3221,7 @@ launch.
 | Findings 6 and 7 looked into | Opus 5.5 (orchestrator) | Done directly: a profile, an SQL log and a trial copy with counters, each read before choosing the next; nothing independent to hand off |
 | Pull request 106 | Opus 5.5 (orchestrator), with one independent review by Opus | Done directly: one loop reordered and moved into two functions, a test shown to fail on the old code, and the trial copy's counters run again on the change. The review, read-only while the comparison ran, found no defect and was worth it: a comment gave the wrong reason for looking holdings up by name, the log lines moved more than the description said, and a suspension notice can now lag in one rare case. 24 tool calls, about 153,000 tokens and four and a half minutes |
 | Pull request 107 | Opus 5.5 (orchestrator) for the first code commit, then Fable 5.2 (orchestrator again, at the owner's change of model) for the review fixes, the timing and the comparison, with one independent review by Opus | Done directly: one function given a window, its two callers' paths and three tests, timed in the trial copy before and after. The review, read-only, found no defect and was worth it: it showed the first test would have passed with a margin too small to be safe, that a miss left a stale series counted in the cache, and that two comments overstated what they described. 18 tool calls, about 133,000 tokens and four and a half minutes |
+| Pull request 108 | Fable 5.2 (orchestrator), with one independent review by Opus in two passes | Done directly: one class and three tests, with the cache's file writes counted in the trial copy before and after. The review, read-only, was worth it: it found no defect in the comparison or the locking, but showed that the first version no longer wrote again a file deleted from outside the app, which the second code commit puts right, and corrected two comments. It also said key order does not vary between encodings of one dictionary; a measurement showed it does, and the reviewer withdrew that. First pass 33 tool calls, about 158,000 tokens and seven minutes; the second look at the reworked code 3 tool calls and a minute and a half |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
