@@ -126,8 +126,9 @@ class StockDataContractTests(unittest.TestCase):
             candidate[field] = invalid_value
             self.assertFalse(self.module.is_valid_quote(candidate), field)
 
-        self.assertFalse(self.module.set_cache("^GSPC", {**valid, "previousClose": None}))
-        self.assertIsNone(self.module.get_cached("^GSPC"))
+        self.assertEqual(self.module.update_cache({"^GSPC": {**valid, "previousClose": None}}), [])
+        self.assertEqual(self.module.get_cached_quotes(["^GSPC"]), ({}, []))
+        self.assertFalse(os.path.exists(self.cache_path))
 
     def test_invalid_provider_quote_falls_through_to_next_provider(self):
         invalid_yfinance = {
@@ -174,9 +175,9 @@ class StockDataContractTests(unittest.TestCase):
                 "import importlib.util;"
                 f"s=importlib.util.spec_from_file_location('m',{SCRIPT_PATH!r});"
                 "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
-                f"m.set_cache('SYM{index}',{{'symbol':'SYM{index}',"
+                f"m.update_cache({{'SYM{index}':{{'symbol':'SYM{index}',"
                 f"'price':{index + 1}.0,'regularMarketPrice':{index + 1}.0,"
-                f"'previousClose':{index + 0.5},'timestamp':1785300000}})"
+                f"'previousClose':{index + 0.5},'timestamp':1785300000}}}})"
             )
             environment = os.environ.copy()
             environment["STOCKBAR_CACHE_FILE"] = self.cache_path
@@ -695,7 +696,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(printed[1]["quote"]["price"], 10.0)
 
     def test_cached_quotes_are_not_fetched_again(self):
-        self.module.set_cache("AAPL", self.quote("AAPL", price=42.0))
+        self.module.update_cache({"AAPL": self.quote("AAPL", price=42.0)})
 
         def batch(symbols, time_budget_seconds=None):
             self.assertEqual(symbols, ["MSFT"])
@@ -706,6 +707,54 @@ class CommandLineTests(unittest.TestCase):
         self.assertIsNone(code)
         self.assertEqual([entry["quote"]["price"] for entry in printed], [42.0, 7.0])
 
+    def stored(self):
+        with open(self.cache_path, "r") as cache_file:
+            return json.load(cache_file)
+
+    def test_a_refresh_reads_and_writes_the_cache_file_once(self):
+        self.module.update_cache({"OLD": self.quote("OLD")})
+        symbols = [f"S{index}" for index in range(12)]
+        fetch = mock.Mock(side_effect=lambda symbol, deadline: self.quote(symbol, price=3.0))
+        with mock.patch.object(self.module, "REQUEST_SPACING_SECONDS", 0), \
+                mock.patch.object(self.module, "fetch_quote_with_deadline", fetch), \
+                mock.patch.object(self.module, "load_cache_unlocked", wraps=self.module.load_cache_unlocked) as reads, \
+                mock.patch.object(self.module, "save_cache_unlocked", wraps=self.module.save_cache_unlocked) as writes:
+            code, printed = self.run_main("--json", *symbols, "S0")
+        self.assertIsNone(code)
+        self.assertEqual([entry["symbol"] for entry in printed], symbols + ["S0"])
+        self.assertTrue(all(entry["success"] for entry in printed))
+        self.assertEqual(fetch.call_count, 12)
+        self.assertEqual((reads.call_count, writes.call_count), (2, 1))
+        self.assertEqual(set(self.stored()), {"OLD", *symbols})
+
+    def test_a_refresh_served_from_the_cache_writes_nothing(self):
+        self.module.update_cache({"AAPL": self.quote("AAPL", price=42.0)})
+        with mock.patch.object(self.module, "fetch_batch") as batch, \
+                mock.patch.object(self.module, "save_cache_unlocked") as writes:
+            code, printed = self.run_main("--json", "AAPL")
+        self.assertIsNone(code)
+        self.assertEqual(printed[0]["quote"]["price"], 42.0)
+        batch.assert_not_called()
+        writes.assert_not_called()
+
+    def test_an_unusable_fresh_entry_is_refetched_and_dropped(self):
+        import time
+        with open(self.cache_path, "w") as cache_file:
+            json.dump({
+                # A previous close is present, so reading them needs no backfill.
+                "BAD": {"timestamp": time.time(), "result": {"symbol": "BAD", "price": None, "previousClose": 4.0}},
+                "GONE": {"timestamp": time.time(), "result": {"symbol": "GONE", "price": None, "previousClose": 4.0}},
+            }, cache_file)
+        fetched = {"BAD": self.quote("BAD", price=5.0), "GONE": None}
+        with mock.patch.object(self.module, "fetch_batch", return_value=fetched) as batch:
+            code, printed = self.run_main("--json", "BAD", "GONE")
+        self.assertIsNone(code)
+        batch.assert_called_once_with(["BAD", "GONE"], time_budget_seconds=None)
+        self.assertEqual([entry["success"] for entry in printed], [True, False])
+        stored = self.stored()
+        self.assertEqual(set(stored), {"BAD"})
+        self.assertEqual(stored["BAD"]["result"]["price"], 5.0)
+
     def test_single_symbol_text_mode_and_its_no_data_error(self):
         with mock.patch.object(self.module, "fetch_batch", return_value={"AAPL": self.quote("AAPL")}):
             code, printed = self.run_main("AAPL")
@@ -713,10 +762,11 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("AAPL @ ", printed)
         self.assertIn("Close: 10.00, PrevClose: 9.00", printed)
 
-        with mock.patch.object(self.module, "fetch_batch", return_value={"AAPL": None}), \
+        # AAPL is now cached, so the failure uses a symbol that is not.
+        with mock.patch.object(self.module, "fetch_batch", return_value={"MSFT": None}), \
                 mock.patch.object(self.module, "fetch_single", return_value=None):
-            code, printed = self.run_main("AAPL")
-        self.assertEqual(printed["error_code"], "NO_DATA")
+            code, printed = self.run_main("MSFT")
+        self.assertEqual((printed["error_code"], printed["symbol"]), ("NO_DATA", "MSFT"))
 
     def test_key_check_reports_success_failure_and_unknown_services(self):
         with mock.patch.object(self.module, "fetch_real_time_quote_fmp", return_value=self.quote("AAPL")):
