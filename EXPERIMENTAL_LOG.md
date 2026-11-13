@@ -88,6 +88,11 @@ Decided on 2026-11-13:
   refresh on made-up data added to the benchmark, so that changes there can
   be measured. Nothing in it is changed before the owner has seen the
   findings.
+- The review's findings went to the owner, who chose for each what happens
+  next. They are listed under
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  Four are to be fixed, two to be looked into and reported before anything
+  changes, and three left as they are. The first fix is pull request 104.
 - The eight Dependabot alerts for `urllib3` and `requests` were dismissed
   as inaccurate. `main` has pinned the fixed versions since 2026-11-05, but
   GitHub's dependency graph still holds `requirements.txt` as it was
@@ -164,7 +169,7 @@ Figures from either side of a break are not compared with each other.
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. A read-only review comes first; not started |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress, starting with pull request 104 |
 
 ### Planned next, in order
 
@@ -262,12 +267,58 @@ Figures from either side of a break are not compared with each other.
     it off against 9.4 to 9.9 MB with it on. On unless turned off. The
     standard benchmark was not run, at the owner's instruction.
 
-No further optimisation of what the benchmark runs is planned. Next is
-"the rest of core": a read-only review of the refresh path, whose findings
-go to the owner before anything is changed. Open for the owner is whether
-the fetch should leave Python. `experimental` was promoted to `testing` on
+No further optimisation of what the benchmark runs is planned. Under way
+is "the rest of core": the owner's choices from the
+[review of the refresh path](#review-of-the-refresh-path-2026-11-13), one
+pull request each, starting with pull request 104. Open for the owner is
+whether the fetch should leave Python. `experimental` was promoted to `testing` on
 2026-11-13. What could still be done, and what each would cost, is listed
 at the end of [Milestone 1](#milestone-1-2026-11-12).
+
+## Review of the refresh path, 2026-11-13
+
+A read-only review of the code the benchmark never runs: the price refresh
+and its network path, the Core Data writes made while prices are recorded,
+and the menu bar's updates. An Opus subagent that had not seen the code did
+the reading. Findings 1 and 4 and the first possible fault were checked
+again in the code before they went to the owner. The costs are counted from
+the code, not measured.
+
+Possible faults, with the owner:
+
+- A quote served from the Python helper's quote cache is stamped by the app
+  as updated at the time it arrives. "Refresh now" within about four and a
+  half minutes of the last fetch can show an old price as fresh, and at a
+  one-minute refresh with more than about six symbols the later symbols
+  are fetched only every other pass while the repeated price is saved as a
+  new sample.
+- The FTSE 100 index, `^FTSE`, has no London suffix, so the app gives it
+  New York's market hours. It is polled at full rate from 09:00 to 01:00
+  London time, mostly while London is shut, and only every 30 minutes from
+  07:00 to 09:00, while London is open.
+
+Where the refresh does more work than it needs, ranked by expected benefit,
+with the owner's decision on each:
+
+| # | Finding | Owner's decision |
+| --- | --- | --- |
+| 1 | The Python helper rewrites its whole quote cache file, and forces it to disk twice, for every symbol of every refresh. The cache also almost never answers, because its entries live for 0.9 of the refresh interval | Fix. Pull request 104 |
+| 2 | Two requests to the provider per symbol per refresh: the helper downloads five days of daily prices every time, to get the previous close | Leave as it is |
+| 3 | Symbols whose market is closed are still fetched every 30 minutes, all night and at weekends, and each fetch saves a portfolio snapshot that the weekly clean-up later deletes | Leave as it is |
+| 4 | The two benchmark indices, the S&P 500 and the FTSE 100, are fetched at every refresh | Keep as it is, including the FTSE 100's hours |
+| 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix |
+| 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Look into it and report before changing anything |
+| 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Look into it and report before changing anything |
+| 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix |
+| 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix |
+
+Also found, not yet put to the owner as an item of its own: price alerts
+rewrite the whole saved list of last prices once for each symbol with an
+alert, at every refresh, where once per refresh would do.
+
+The review also recommended adding a refresh on made-up data to the
+benchmark, so that findings 5 to 9 can be measured. That was part of what
+the owner settled on 2026-11-13 for "the rest of core".
 
 ## Baseline
 
@@ -2185,8 +2236,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   it again. The owner chose on 2026-11-13 to dismiss the eight alerts as
   inaccurate at once, which was done the same day, and to let this change
   reach `main` with the next promotion.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `25b450d`. The merge published
+  experimental build 370.16.4 as the prerelease `experimental-370.16.4`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.4 of 3.7.0 and its bundled `requirements.txt` carries the new
+  comment, its code signature verifies and its executable has no
+  `__llvm_prf` section. `main` and `testing` did not move.
 - Benchmark: not run, and all fifteen rows are "not measured". The one file
   of the app that changes is this text file, and only in comments. The
   launch-time check reads it for its pins and skips comment lines, as its
@@ -2203,6 +2259,97 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - Until then, Dependabot matches new advisories for `urllib3`,
     `requests` and `yfinance` against old versions. A fix for the versions
     Stockbar installs could be missed, and a stale alert raised.
+- Verdict: retained.
+
+### 104: Read and write the Python helper's quote cache once per refresh
+
+- What: finding 1 of the
+  [review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  `get_stock_data.py` read its quote cache file three times for each symbol
+  of a refresh and rewrote the whole file, forcing it to disk twice, once
+  for each symbol fetched. Now a refresh reads the file once to look up
+  every symbol, and stores everything it fetched with one locked read,
+  merge and atomic write at the end. The lock, the atomic replace and both
+  forced writes are unchanged, and entries another process stored meanwhile
+  are kept. Nothing is written when every symbol came from the cache.
+  `get_cached` and `set_cache` are replaced by `get_cached_quotes` and
+  `update_cache`; `fetch_batch` no longer reads or writes the cache, which
+  `main` does around it. A symbol given twice is fetched once, as before,
+  when the second lookup found the first one's cached quote.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- Measured offline, with `measure.py` (not in the repository): `main()` run
+  with fresh globals, as the app's worker runs it, on a cache that holds a
+  stale entry for every symbol, which is its state at each refresh. The
+  provider fetch was replaced by a stub that returns a full quote, and the
+  one-second spacing between requests was skipped. Fifty calls a side, in
+  ten alternating rounds of five, on 2026-11-13 from 10:50 to 10:51 UTC.
+  Before is the script at `25b450d`, after is this pull request's. Median
+  (range):
+
+  | Per refresh | Before, 22 symbols | After, 22 symbols | Before, 50 symbols | After, 50 symbols |
+  | --- | --- | --- | --- | --- |
+  | Reads of the cache file | 66 | 2 | 150 | 2 |
+  | Writes of the cache file | 22 | 1 | 50 | 1 |
+  | Forced writes to disk | 44 | 2 | 100 | 2 |
+  | Bytes written | 296,509 (296,250 to 296,864) | 13,476 (13,449 to 13,504) | 1,531,399 (1,530,093 to 1,533,174) | 30,621 (30,560 to 30,680) |
+  | CPU | 20.9 (19.8 to 25.2) ms | 1.5 (1.2 to 2.7) ms | 80.4 (77.0 to 103.3) ms | 2.4 (2.1 to 3.1) ms |
+  | Elapsed | 21.4 (20.0 to 25.8) ms | 1.6 (1.2 to 5.4) ms | 81.2 (77.8 to 114.5) ms | 2.4 (2.1 to 3.3) ms |
+
+  22 symbols is the benchmark fixture's portfolio. The time a refresh
+  spends waiting for the provider, about a second a symbol, is not
+  changed.
+- Benchmark: before `25b450d`, after `22f7565` (the code commit; the
+  second commit changes only this log), six launches a side in turns from
+  10:54 to 11:29 UTC on 2026-11-13, macOS 27.2.1 and mains power, all
+  twelve launches with the screen unlocked and the display awake. The load
+  average was 5.9 when the run started and 4.4 when it ended. Named in
+  advance: no row expected to move. The benchmark never fetches a price, and
+  its three helper rows start the helper without running this script. No
+  row moved.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 100.8 (100.4 to 101.5) MB | 101.3 (99.2 to 102.4) MB | +0.5 MB, +0.4% | no measurable change (p = 0.671) |
+  | Idle memory the app holds allocated | 55.9 (55.6 to 56.6) MB | 56.1 (54.0 to 56.9) MB | +0.2 MB, +0.4% | no measurable change (p = 0.671) |
+  | Peak memory, launch and history load | 250.4 (243.4 to 264.2) MB | 253.2 (248.6 to 259.8) MB | +2.8 MB, +1.1% | no measurable change (p = 0.729) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (-0.1 to 0.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.172 (0.159 to 0.203) s/min | 0.167 (0.165 to 0.171) s/min | -0.005 s/min, -2.9% | no measurable change (p = 0.095) |
+  | Idle CPU wake-ups | 25 (24 to 27) /min | 26 (25 to 28) /min | +2 /min, +6.0% | no measurable change (p = 0.184) |
+  | Idle CPU power | 4.48 (4.40 to 4.79) mW | 4.53 (4.45 to 4.67) mW | +0.04 mW, +1.0% | no measurable change (p = 0.866) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.60 (0.58 to 0.66) s | 0.56 (0.56 to 0.71) s | -0.04 s, -6.6% | no measurable change (p = 0.065) |
+  | Launch to history loaded | 0.59 (0.56 to 0.64) s | 0.58 (0.56 to 0.76) s | -0.01 s, -1.7% | no measurable change (p = 0.848) |
+  | CPU from launch to the idle window | 2.06 (2.01 to 2.19) s | 2.08 (2.04 to 2.16) s | +0.02 s, +0.7% | no measurable change (p = 0.617) |
+  | CPU energy from launch to the idle window | 6.07 (5.58 to 6.32) J | 6.25 (5.98 to 6.52) J | +0.18 J, +3.0% | no measurable change (p = 0.180) |
+  | Python helper start to ready, no network | 0.42 (0.29 to 0.61) s | 0.31 (0.28 to 0.58) s | -0.11 s, -25.3% | no measurable change (p = 0.387) |
+  | Python helper start, CPU | 0.39 (0.29 to 0.41) s | 0.30 (0.27 to 0.38) s | -0.09 s, -23.1% | no measurable change (p = 0.139) |
+  | Python helper memory once started | 71.0 (70.0 to 71.4) MB | 71.2 (71.0 to 71.5) MB | +0.1 MB, +0.1% | no measurable change (p = 0.180) |
+
+  Not measured by it: the change itself, which is measured offline above.
+- Testing: the 69 Python helper tests pass, three of them new: a refresh of
+  twelve symbols, one of them given twice, reads the file twice, writes it
+  once, fetches each symbol once and keeps the entry already stored for a
+  symbol it was not asked for; a refresh served from
+  the cache writes nothing; a fresh entry that is not a valid quote is
+  fetched again and replaced, or dropped when the fetch fails. The test of
+  eight processes storing at once still finds all eight entries. The
+  single-symbol text-mode test now uses a different symbol for its no-data
+  half, because its first half's quote is now cached by `main`, not by the
+  `fetch_batch` the test replaces with a mock. 724 XCTest tests pass with
+  0 failures, as do the 91 script tests, `checks` and `docs-check`. Every
+  path of `main` ran in the offline measurement and the tests, with the
+  provider replaced; no live provider was called.
+- Known issues:
+  - A quote fetched in a refresh that then fails as a whole, with an
+    exception outside the per-symbol fetches, is no longer cached. Before,
+    each quote was stored as soon as it arrived. The refresh reports a
+    network error either way, and the next one fetches again.
+  - The app stops the helper after the batch's time limit as a backstop.
+    A refresh stopped that way stores nothing, where before it kept the
+    quotes fetched so far. The script stops starting new symbols 15 seconds
+    before that limit, and gives up waiting on any one symbol by then, so
+    this needs the script to overrun its own time limit by 15 seconds.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -2445,6 +2592,8 @@ launch.
 | The promotion to `testing` and pull request 101 | Fable (orchestrator) | Done directly: two pull requests, the checks on the published build and one comparison. Reading the repository's settings before merging showed that pull request 99 would have deleted `experimental`; it was replaced before anything was merged |
 | Pull request 102, the helper's switch on by default | Opus 5.5 (orchestrator, from here on at the owner's choice of model), with one check of the Settings window by Sonnet | Done directly: a five-file change and its test. Sonnet read the switch in the trial copy in 16 tool calls, about 105,000 tokens and 51 seconds; the copy's window is the main window, with Settings in its sidebar, and making it taller was enough to reach the Memory section. No independent review: a change of default, whose test was read against the diff |
 | The Dependabot alerts and pull request 103 | Opus 5.5 (orchestrator) | Done directly. The alerts' history and GitHub's dependency graph showed the code had been fixed for eight days; the alerts were dismissed through the API with a note, and the comment change was checked against the lock and the launch-time check |
+| The review of the refresh path | Opus 5.5 (orchestrator), with one read-only review by Opus | Worth it. The reviewer had not seen the code and read the refresh path end to end in 26 tool calls, about 287,000 tokens and five and a half minutes, after a first attempt failed on a server error. Three of its claims were checked again in the code before they went to the owner, and held |
+| Pull request 104 | Opus 5.5 (orchestrator) | Done directly: one function pair replaced and three tests, measured with a script that runs the helper's `main()` offline |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
