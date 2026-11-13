@@ -62,6 +62,15 @@ else
   /usr/bin/ditto "$derived_data/Build/Products/Release/Stockbar.app" "$app"
 fi
 
+# Test-coverage counters run on every code path of the app. A scheme whose test
+# action auto-creates its test plan builds them into every configuration, so
+# check the binary itself rather than the settings.
+sections="$(size -m "$app/Contents/MacOS/Stockbar")"
+if grep -q '__llvm_prf' <<<"$sections"; then
+  echo "Refusing to package: the app was built with test-coverage instrumentation." >&2
+  exit 1
+fi
+
 plist="$app/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleVersion -string "$build_number" "$plist"
 if [[ -n "$version" ]]; then
