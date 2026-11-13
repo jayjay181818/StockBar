@@ -55,11 +55,11 @@ digits (pull request 98, merged).
   (pull request 97). Every push to `experimental` is now built, signed and
   published as a prerelease, so every merge here distributes a build. The
   merge itself published the first, 370.0.12.
-- The idle Python helper can be made to quit after 90 seconds, with
-  **Settings → Advanced → Memory → Quit Python Helper When Idle** (pull
-  request 86). Off, which is the default, nothing changes: the helper is
-  kept for 15 minutes. What the switch saves on real data is expected, not
-  measured.
+- The idle Python helper quits after 90 seconds, with **Settings →
+  Advanced → Memory → Quit Python Helper When Idle** (pull request 86). The
+  switch is on unless turned off since pull request 102, at the owner's
+  word; turned off, the helper is kept for 15 minutes as before. What it
+  saves on real data is expected, not measured.
 - The rolling digits of the figures can be turned off, with **Settings →
   Advanced → Memory → Roll Digits When Figures Change** (pull request 98).
   On, which is the default, nothing changes. Off, the system's cache of
@@ -73,14 +73,26 @@ digits (pull request 98, merged).
 
 Waiting for a decision:
 
-- Whether the helper's switch (pull request 86) should be on unless turned
-  off. It is off, because on trades memory for CPU.
 - Whether the market data fetch should leave Python. The
   [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
   component was moved to Rust.
-- What a look at "the rest of core" should cover. The owner asked for it
-  on 2026-11-13, to follow the promotion. The question has been put to
-  them and nothing has been started on it.
+
+Decided on 2026-11-13:
+
+- The helper's switch is on unless turned off (pull request 102). The
+  owner chose it, knowing that on trades memory for CPU.
+- "The rest of core" is the code the benchmark never runs, because it keeps
+  live providers off: the price refresh and its network path, the Core
+  Data writes made while prices are recorded, and the menu bar's updates.
+  It starts with a read-only review whose findings go to the owner, and a
+  refresh on made-up data added to the benchmark, so that changes there can
+  be measured. Nothing in it is changed before the owner has seen the
+  findings.
+- The eight Dependabot alerts for `urllib3` and `requests` were dismissed
+  as inaccurate. `main` has pinned the fixed versions since 2026-11-05, but
+  GitHub's dependency graph still holds `requirements.txt` as it was
+  before. A small change to the file goes to `experimental`, so that GitHub
+  reads it again when it reaches `main`.
 
 Done on 2026-11-13: `experimental` is promoted to `testing`. The owner
 asked for it without the two trading days of use that the recommendation
@@ -147,12 +159,12 @@ Figures from either side of a break are not compared with each other.
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
 | Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
-| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
+| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default, on by default since pull request 102; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
 | Stage 3 changes | Done 2026-11-12. Plan items 8, 9, 11 and 12 were measured and none gave a change worth making; pull request 88 records the Rust evaluation |
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion. What it covers is not settled; not started |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. A read-only review comes first; not started |
 
 ### Planned next, in order
 
@@ -164,7 +176,8 @@ Figures from either side of a break are not compared with each other.
 2. Done in pull request 86, as a switch that is off by default: the idle
    Python helper quits after 90 seconds. As a fixed change it traded memory
    for CPU and waited for a decision; the owner asked for a switch. Its
-   effect shows only on real data.
+   effect shows only on real data. The owner asked on 2026-11-13 for it to
+   be on by default, which pull request 102 does.
 3. Done in pull request 87: portfolio history read in batches.
 4. Done in pull request 89: stored history read at launch away from the main
    actor.
@@ -249,12 +262,12 @@ Figures from either side of a break are not compared with each other.
     it off against 9.4 to 9.9 MB with it on. On unless turned off. The
     standard benchmark was not run, at the owner's instruction.
 
-No further optimisation is planned. Open for the owner are whether the
-helper's switch should be on unless turned off, whether the fetch should
-leave Python, and what the look at "the rest of core" should cover.
-`experimental` was promoted to `testing` on 2026-11-13. What could still be
-done, and what each would cost, is listed at the end of
-[Milestone 1](#milestone-1-2026-11-12).
+No further optimisation of what the benchmark runs is planned. Next is
+"the rest of core": a read-only review of the refresh path, whose findings
+go to the owner before anything is changed. Open for the owner is whether
+the fetch should leave Python. `experimental` was promoted to `testing` on
+2026-11-13. What could still be done, and what each would cost, is listed
+at the end of [Milestone 1](#milestone-1-2026-11-12).
 
 ## Baseline
 
@@ -2059,10 +2072,15 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `Docs/Development.md` on how a promotion is made. The merge brings one
   commit, whose files are the ones `experimental` already had, so no file
   of the app, its tests or its scripts changes.
-- Merged: the date and merge commit are filled in by the pull request
-  after it. It is merged with a merge commit, not a squash. After a squash
-  `2256b6c` would not be in the history of `experimental`, and its builds
-  would stay numbered below 370.16.
+- Merged: 2026-11-13, merge commit `e43a8c0`, with a merge commit as
+  planned: after a squash `2256b6c` would not be in the history of
+  `experimental`, and its builds would stay numbered below 370.16. The
+  merge published experimental build 370.16.2 as the prerelease
+  `experimental-370.16.2`. Checked after it: the feed's signature and the
+  archive's signature are valid, the archive's length matches the feed,
+  the unpacked app is build 370.16.2 of 3.7.0, its code signature verifies
+  and its executable has no `__llvm_prf` section. `main` and `testing` did
+  not move.
 - Benchmark: before, `3cf549b`, and after are the same app, so all fifteen
   rows are "not measured" for this pull request. The comparison of the
   baseline with the promoted commit was run for it and is under
@@ -2073,6 +2091,76 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Known issues: none known. Each later promotion needs the same two steps,
   which `Docs/Development.md` now names.
 - Verdict: retained.
+
+### 102: Turn on Quit Python Helper When Idle by default
+
+- What: the switch from pull request 86, **Settings → Advanced → Memory →
+  Quit Python Helper When Idle**, is on unless turned off. A helper nobody
+  is using quits about 90 seconds after its last request instead of 15
+  minutes. The owner asked for it on 2026-11-13. Only a setting that was
+  never changed takes the default, so a Mac where the switch was turned
+  off keeps it off. `PythonWorkerPool.quitWhenIdleDefault` is the one
+  default, read by the pool and by the Settings switch. The switch's
+  description, the user guide and the architecture note describe both
+  states and say it is on by default. A pool made without a timeout, which
+  only tests do, still keeps its workers for 15 minutes.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- Benchmark: before `e43a8c0`, after `ea7aa22`, six launches a side in
+  turns from 09:30 to 10:05 UTC on 2026-11-13, macOS 27.2.1 and mains
+  power, all twelve launches with the screen unlocked and the display
+  awake. The Mac had restarted at 09:03 UTC, and the load average was 15.9
+  when the run started and 5.2 when it ended. Named in advance: no row
+  expected to move. The benchmark never starts a helper through the pool
+  (the helper was alive in none of the samples of any of the twelve
+  launches), and its three helper rows start one directly. No row moved.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.2 (94.7 to 97.8) MB | 96.7 (89.4 to 99.5) MB | +0.5 MB, +0.6% | no measurable change (p = 0.818) |
+  | Idle memory the app holds allocated | 51.5 (50.1 to 53.8) MB | 52.4 (51.4 to 53.6) MB | +0.9 MB, +1.6% | no measurable change (p = 0.271) |
+  | Peak memory, launch and history load | 251.6 (240.1 to 255.9) MB | 255.8 (249.3 to 261.4) MB | +4.3 MB, +1.7% | no measurable change (p = 0.310) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.080 (0.066 to 0.085) s/min | 0.081 (0.078 to 0.087) s/min | +0.001 s/min, +1.3% | no measurable change (p = 0.613) |
+  | Idle CPU wake-ups | 26 (24 to 31) /min | 28 (25 to 43) /min | +2 /min, +7.8% | no measurable change (p = 0.323) |
+  | Idle CPU power | 4.26 (4.16 to 4.70) mW | 4.17 (4.14 to 4.93) mW | -0.08 mW, -2.0% | no measurable change (p = 0.260) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.53 to 0.60) s | 0.56 (0.54 to 1.35) s | -0.02 s, -3.4% | no measurable change (p = 1.000) |
+  | Launch to history loaded | 0.65 (0.61 to 0.69) s | 0.60 (0.57 to 1.34) s | -0.05 s, -7.7% | no measurable change (p = 0.431) |
+  | CPU from launch to the idle window | 1.90 (1.81 to 2.19) s | 1.88 (1.80 to 1.91) s | -0.01 s, -0.5% | no measurable change (p = 0.418) |
+  | CPU energy from launch to the idle window | 5.37 (4.22 to 6.02) J | 5.80 (5.56 to 6.26) J | +0.43 J, +8.1% | no measurable change (p = 0.368) |
+  | Python helper start to ready, no network | 0.32 (0.30 to 0.57) s | 0.35 (0.28 to 0.65) s | +0.03 s, +9.4% | no measurable change (p = 0.844) |
+  | Python helper start, CPU | 0.32 (0.29 to 0.36) s | 0.34 (0.28 to 0.40) s | +0.02 s, +6.3% | no measurable change (p = 0.797) |
+  | Python helper memory once started | 71.1 (71.1 to 71.3) MB | 71.0 (71.0 to 71.2) MB | -0.0 MB, -0.1% | no measurable change (p = 0.121) |
+
+- On real data: not measured. What the switch saves is in pull request
+  86's entry, and is still theoretical: at the default five-minute refresh,
+  app and helper together are expected to average about 114 MB in place of
+  the 175 MB measured on the installed 3.7.0, for about 0.06 s/min more
+  CPU. Sampling the owner's Mac with the switch on, with
+  `Scripts/measure_performance.sh`, would turn that into a measurement.
+- Testing: 724 XCTest tests with 0 failures; the pool's test now checks that
+  an unchanged setting is on, that turned off the app's pool keeps its
+  workers for 15 minutes without a restart, and that a pool given no
+  timeout keeps them for 15 minutes. 66 Python helper tests and 91 script
+  tests pass. `checks`, `docs-check` and `build-release` pass.
+
+  The switch was read on screen, driven by Sonnet, in an isolated copy of
+  the measured build of `ea7aa22` (made-up data, live providers off, a new
+  store). Under Settings → Advanced → Memory it was on, and its description
+  read word for word as in the diff. Roll Digits When Figures Change was on
+  too. Nothing was clicked. Afterwards none of the copy's four settings
+  files held `pythonHelper.quitWhenIdle`, so the switch showed the default,
+  not a stored value.
+- Known issues:
+  - Everyone who never changed the switch gets the new behaviour. At a
+    refresh interval of five minutes or longer, every refresh pass starts a
+    helper: about a third of a second of CPU, and that pass's first price
+    arrives about as much later.
+  - A settings export carries only settings that were changed. Importing
+    one made before the switch was turned off, or by a build without the
+    switch, leaves it on.
+- Verdict: retained. The owner's decision, made knowing the trade.
 
 ## Rust evaluation, 2026-11-12
 
@@ -2312,8 +2400,9 @@ launch.
 | Pull request 86 reworked as a switch | Fable (orchestrator), with two checks of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: the first check read and toggled the switch in 23 tool calls and about 128,000 tokens but could not scroll the page; the second settled that it scrolls, through the scroll bar's accessibility buttons, in 15 tool calls and about 128,000 tokens. The Opus review was worth it: no defect in the pool, but it found that the switch's description promised the helper is kept in cases where it is not, and that two tests could not fail, in 23 tool calls, about 155,000 tokens and six minutes. My own reading before it found the one race that was fixed |
 | Pull request 98, the switch for the rolling digits | Fable (orchestrator), with one check of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: it read both Memory switches word for word, turned the new one off and looked at the Overview page, in 24 tool calls, about 126,000 tokens and 80 seconds. The Opus review found no defect and was still worth it: the description and the guide stated more than had been measured, the test did not read what a figure does, and nothing kept later figures on the modifier, in 55 tool calls, about 201,000 tokens and eleven minutes. It ran beside pull request 86's first comparison, which had to be repeated on a quiet Mac |
 | The promotion to `testing` and pull request 101 | Fable (orchestrator) | Done directly: two pull requests, the checks on the published build and one comparison. Reading the repository's settings before merging showed that pull request 99 would have deleted `experimental`; it was replaced before anything was merged |
+| Pull request 102, the helper's switch on by default | Opus 5.5 (orchestrator, from here on at the owner's choice of model), with one check of the Settings window by Sonnet | Done directly: a five-file change and its test. Sonnet read the switch in the trial copy in 16 tool calls, about 105,000 tokens and 51 seconds; the copy's window is the main window, with Settings in its sidebar, and making it taller was enough to reach the Memory section. No independent review: a change of default, whose test was read against the diff |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
-requests 97, 86 and 98: nothing else so far has been parallel or self-contained
+requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
 enough to repay a cold start, and most of the elapsed time is benchmark
 runs, which no model speeds up.
