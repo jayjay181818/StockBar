@@ -446,6 +446,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     }
     
     func popoverDidClose(_ notification: Notification) {
+        // Release the content. Left in place it is redrawn and its chart
+        // reloaded at every refresh, with nothing on screen, until the next
+        // open replaces it.
+        (notification.object as? NSPopover)?.contentViewController = nil
         updateMainStatusItem(with: dataModel.realTimeTrades)
     }
     
