@@ -18,11 +18,12 @@
 #    recalculation are done. Then measures each launch: time to the first
 #    window and to history loaded, peak memory, and memory, CPU, energy and
 #    wakeups over an idle window that starts --settle seconds after launch.
-#    With --refresh, each measured launch then runs the refresh workload: four
-#    "Refresh now" passes on made-up quotes, 30 s apart, with no network and no
-#    Python, and the 120 s that hold them are measured the same way. The quotes
-#    stay refused, as in any acceptance run, until the idle window has been
-#    measured, so the other figures are taken as without it.
+#    With --refresh, as many launches again follow for the refresh workload:
+#    --settle seconds after each, the app runs four "Refresh now" passes on
+#    made-up quotes, 30 s apart, with no network and no Python, and the 120 s
+#    that hold them are measured as the idle window is. They come after the
+#    other launches because a refresh changes the stored data the next launch
+#    starts from.
 # 4. Measures one start of the Python helper on its own, because acceptance
 #    mode never starts it.
 #
@@ -209,24 +210,28 @@ wait_for_log() {
   return 1
 }
 
-# The refresh workload, after the idle window has been measured: SIGUSR1 tells
-# the app to run its passes, and the window that holds them is measured as the
-# idle one is. A build without the workload never logs that it is ready and
-# is not signalled.
+# One launch of the refresh workload. Until SIGUSR1 the app refuses every quote,
+# as in any acceptance run; then it runs its passes, and the window that holds
+# them is measured as the idle one is. A build without the workload never logs
+# that it is ready and is not signalled.
 measure_refresh() {
-  local run="$1" run_file="$2" heap_before="$3" window_s=$((refresh_passes * refresh_spacing)) passes
+  local run="$1" run_file="$2" window_s=$((refresh_passes * refresh_spacing)) passes remaining heap_before
   if ! tail -n "+$((log_start + 1))" "$app_log" | grep -q "Benchmark refresh: ready"; then
     echo "refresh_unsupported=1" >>"$run_file"
     return 0
   fi
+  remaining="$("$python_bin" -c 'import sys; print(max(0.0, float(sys.argv[1]) + float(sys.argv[2]) - float(sys.argv[3])))' "$launched_at" "$settle" "$(now)")"
+  sleep "$remaining"
+  /usr/bin/heap -s "$app_pid" >"$work/heap-before-refresh.txt" 2>&1 || true
+  heap_before="$(heap_allocated_mb "$work/heap-before-refresh.txt")"
   kill -USR1 "$app_pid"
   wait_for_log "Benchmark refresh: starting" 30 >/dev/null
-  "$proc_usage" "$app_pid" --interval 5 --duration "$window_s" --series "$results/launch-$run-refresh-series.txt" \
+  "$proc_usage" "$app_pid" --interval 5 --duration "$window_s" --series "$results/refresh-$run-series.txt" \
     >"$work/refresh.txt"
   wait_for_log "Benchmark refresh: pass $refresh_passes of $refresh_passes finished" 60 >/dev/null
   passes="$(tail -n "+$((log_start + 1))" "$app_log" | grep -c "Refresh completed: " || true)"
   /usr/bin/heap -s "$app_pid" >"$work/heap-refresh.txt" 2>&1 || true
-  head -n 60 "$work/heap-refresh.txt" >"$results/launch-$run-refresh-heap.txt"
+  head -n 60 "$work/heap-refresh.txt" >"$results/refresh-$run-heap.txt"
   "$python_bin" - "$work/refresh.txt" "$window_s" "$passes" "$heap_before" "$(heap_allocated_mb "$work/heap-refresh.txt")" \
     >>"$run_file" <<'PY'
 import sys
@@ -289,10 +294,22 @@ print(datetime.datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=d
   head -n 60 "$work/heap.txt" >"$results/launch-$run-heap.txt"
   heap_mb="$(heap_allocated_mb "$work/heap.txt")"
   [[ -n "$heap_mb" ]] && echo "app_heap_allocated_mb=$heap_mb" >>"$run_file"
-  [[ "$refresh" -eq 1 ]] && measure_refresh "$run" "$run_file" "$heap_mb"
   cp "$run_file" "$results/launch-$run-metrics.txt"
   stop_app
 done
+if [[ "$refresh" -eq 1 ]]; then
+  # Each starts from the data the one before it left, the same way for every build.
+  for run in $(seq 1 "$runs"); do
+    note "Refresh launch $run of $runs (about $((settle + refresh_passes * refresh_spacing)) s)"
+    launch
+    wait_for_log "historical portfolio snapshots from Core Data\." 120 >/dev/null
+    run_file="$work/refresh-$run.txt"
+    : >"$run_file"
+    measure_refresh "$run" "$run_file"
+    cp "$run_file" "$results/refresh-$run-metrics.txt"
+    stop_app
+  done
+fi
 cp "$app_log" "$results/app.log"
 log_saved=1
 

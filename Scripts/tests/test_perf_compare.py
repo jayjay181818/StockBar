@@ -94,13 +94,15 @@ class ReportTests(unittest.TestCase):
                 self.write(folder, f'before-1/launch-{launch}-metrics.txt', [
                     'app_footprint_mb_median=100', 'refresh_unsupported=1',
                 ])
-                self.write(folder, f'after-1/launch-{launch}-metrics.txt', [
-                    'app_footprint_mb_median=100', f'refresh_cpu_s={0.5 + launch / 100}', 'refresh_passes=4',
+                self.write(folder, f'after-1/launch-{launch}-metrics.txt', ['app_footprint_mb_median=100'])
+                self.write(folder, f'after-1/refresh-{launch}-metrics.txt', [
+                    f'refresh_cpu_s={0.5 + launch / 100}', 'refresh_passes=4',
                 ])
             text = compare.report(folder, 'aaaaaaa', 'bbbbbbb')
 
-        self.assertIn('| CPU over the refresh window | not measured | not measured |', text)
-        self.assertIn('| Refresh passes completed in the refresh window | not measured |', text)
+        self.assertIn('| CPU over the refresh window | not measured | 0.530 (0.510 to 0.550) s | | |', text)
+        self.assertIn('| Refresh passes completed in the refresh window | not measured | 4 (4 to 4) passes |', text)
+        self.assertIn('| Disk writes over the refresh window | not measured | not measured |', text)
         self.assertIn('5 launch(es) before and 0 after were builds without the refresh workload', text)
 
 

@@ -152,7 +152,9 @@ def report(folder, before_commit, after_commit):
     refresh_measured = any(key in side for side in (before, after) for key, *_ in REFRESH_METRICS)
     for key, name, unit, digits, method in METRICS + (REFRESH_METRICS if refresh_measured else []):
         if key not in before or key not in after:
-            lines.append(f"| {name} | not measured | not measured | | | {method} |")
+            # A side that measured it still shows its figures.
+            shown = [f"{spread(side[key], digits)} {unit}" if key in side else "not measured" for side in (before, after)]
+            lines.append(f"| {name} | {shown[0]} | {shown[1]} | | | {method} |")
             continue
         change, p_value, word = verdict(before[key], after[key])
         base = statistics.median(before[key])

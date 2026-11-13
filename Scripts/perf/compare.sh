@@ -23,8 +23,8 @@
 # The table goes to the terminal and to report.md in
 # build/bench/results/compare-<label>-<time>/, beside everything each turn
 # saved. About (settle + window + 10) seconds a launch, plus the builds.
-# --refresh adds the refresh workload to every launch (see benchmark.sh):
-# about two minutes more a launch, and rows of its own in the table.
+# --refresh adds the refresh workload to every turn (see benchmark.sh): as many
+# launches again, about (settle + 130) seconds each, and rows of its own in the table.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PERF_DIR="$ROOT_DIR/Scripts/perf"
