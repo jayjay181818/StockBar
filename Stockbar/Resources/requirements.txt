@@ -10,7 +10,8 @@ yfinance==1.8.0
 # pandas 4 has not been released to test against; lift the cap once it has.
 pandas<4
 
-# HTTP stack
+# HTTP stack. These versions have the fixes for the eight advisories GitHub
+# raised against urllib3 and requests in November 2026.
 requests==2.34.2
 urllib3==2.8.0
 
