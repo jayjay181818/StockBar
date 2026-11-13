@@ -10,15 +10,21 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Seven optimisations are merged, and the first milestone has been measured:
-see the table below and [Milestone 1](#milestone-1-2026-11-12). The
-candidates that remain are small or would change what the app does, so no
-further optimisation is planned. Since the milestone the owner has asked
-for three things, none an optimisation of its own: an update channel that
+`experimental` was promoted to `testing` on 2026-11-13, at the owner's
+word. Pull requests 84 to 98 are on `testing` as merge commit `2256b6c`
+and were published as testing build 370.16: see
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). `main` has
+none of it.
+
+Seven optimisations are merged, and they have been measured together
+against the baseline twice: at [Milestone 1](#milestone-1-2026-11-12), and
+on the promoted commit, which is the table below. The candidates that
+remain are small or would change what the app does, so no further
+optimisation is planned. Since the first milestone the owner has asked for
+three things, none an optimisation of its own: an update channel that
 follows `experimental` (pull request 97, merged), a switch for the Python
 helper's early exit (pull request 86, merged) and a switch for the rolling
-digits (pull request 98, merged). On 2026-11-13 the owner asked for pull
-request 94 to be merged and for `experimental` to be promoted to `testing`.
+digits (pull request 98, merged).
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -72,16 +78,15 @@ Waiting for a decision:
 - Whether the market data fetch should leave Python. The
   [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
   component was moved to Rust.
+- What a look at "the rest of core" should cover. The owner asked for it
+  on 2026-11-13, to follow the promotion. The question has been put to
+  them and nothing has been started on it.
 
-Decided on 2026-11-13: `experimental` is promoted to `testing`. The owner
+Done on 2026-11-13: `experimental` is promoted to `testing`. The owner
 asked for it without the two trading days of use that the recommendation
-at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first; what
-that section says the measurements do not cover still holds. The promotion
-is a pull request from `experimental` into `testing`, opened once pull
-request 94 is merged. Its outcome is recorded by the pull request that
-brings `testing` back into `experimental` afterwards. Asked for at the
-same time: a look at "the rest of core" after the promotion. What that
-covers is not yet settled with the owner.
+at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first. What
+that section says the measurements do not cover still holds, now for the
+testing build.
 
 Decided on 2026-11-12 and done in pull request 98: the rolling digits of
 the figures, which cost 6 to 10 MB of cached glyphs after a launch like the
@@ -91,25 +96,25 @@ This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
 different days are not set side by side, because the machine's state drifts.
 
-Milestone 1 was measured on 2026-11-12 with `experimental` at `c4f4cff`, six
-launches a side in turns. The head since then, `c3c21ec`, adds only pull
-request 95, whose code the benchmark does not run. These are the rows that
-moved. The full table, the soak runs, what the idle memory now consists of
-and what is left are under [Milestone 1](#milestone-1-2026-11-12).
+It was last measured on 2026-11-13, after the promotion, against `2256b6c`:
+the commit the promotion put on `testing`, whose files are those of
+`experimental` at `3cf549b`. Six launches a side in turns. These are the
+rows that moved, the same six as at Milestone 1. The full table is under
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). The soak runs,
+what the idle memory consists of and what is left are under
+[Milestone 1](#milestone-1-2026-11-12).
 
-| Metric | Baseline `47c1bda` | `experimental` at `c4f4cff` | Change |
+| Metric | Baseline `47c1bda` | Promoted commit `2256b6c` | Change |
 | --- | --- | --- | --- |
-| Idle memory (physical footprint) | 121.5 MB | 98.3 MB | -23.2 MB, -19.1% |
-| Idle memory the app holds allocated | 60.4 MB | 54.0 MB | -6.4 MB, -10.5% |
-| Peak memory, launch and history load | 281.1 MB | 244.4 MB | -36.7 MB, -13.0% |
-| Launch to history loaded | 1.88 s | 0.72 s | -1.15 s, -61.3% |
-| CPU from launch to the idle window | 2.46 s | 2.07 s | -0.39 s, -16.0% |
-| CPU energy from launch to the idle window | 7.76 J | 6.37 J | -1.39 J, -18.0% |
+| Idle memory (physical footprint) | 119.9 MB | 95.8 MB | -24.2 MB, -20.1% |
+| Idle memory the app holds allocated | 63.8 MB | 54.5 MB | -9.3 MB, -14.6% |
+| Peak memory, launch and history load | 285.1 MB | 244.9 MB | -40.1 MB, -14.1% |
+| Launch to history loaded | 1.20 s | 0.63 s | -0.57 s, -47.3% |
+| CPU from launch to the idle window | 2.64 s | 1.88 s | -0.76 s, -28.8% |
+| CPU energy from launch to the idle window | 7.85 J | 6.07 J | -1.78 J, -22.6% |
 
-Idle CPU, wake-ups, idle CPU power, disk writes and the three Python helper
-rows did not change measurably. Launch to first window came out "possibly
-lower", 0.61 s against 0.97 s (p = 0.024), which does not count without a
-repeat.
+Idle CPU, wake-ups, idle CPU power, disk writes, launch to first window and
+the three Python helper rows did not change measurably.
 
 ### Breaks in the measuring environment
 
@@ -145,7 +150,9 @@ Figures from either side of a break are not compared with each other.
 | Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
 | Stage 3 changes | Done 2026-11-12. Plan items 8, 9, 11 and 12 were measured and none gave a change worth making; pull request 88 records the Rust evaluation |
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
-| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13; it follows pull request 94 |
+| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
+| Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion. What it covers is not settled; not started |
 
 ### Planned next, in order
 
@@ -243,10 +250,11 @@ Figures from either side of a break are not compared with each other.
     standard benchmark was not run, at the owner's instruction.
 
 No further optimisation is planned. Open for the owner are whether the
-helper's switch should be on unless turned off and whether the fetch
-should leave Python. Promotion to `testing` was asked for on 2026-11-13.
-What could still be done, and what each would cost, is listed at the end
-of [Milestone 1](#milestone-1-2026-11-12).
+helper's switch should be on unless turned off, whether the fetch should
+leave Python, and what the look at "the rest of core" should cover.
+`experimental` was promoted to `testing` on 2026-11-13. What could still be
+done, and what each would cost, is listed at the end of
+[Milestone 1](#milestone-1-2026-11-12).
 
 ## Baseline
 
@@ -584,8 +592,9 @@ real portfolio, through two trading days, and promote after that.
 
 On 2026-11-13 the owner asked for the promotion without that wait, and for
 pull request 94 to be merged first. The promotion therefore carries every
-pull request from 84 to 98. The list below is unchanged by that: it is
-what the testing build has not been through.
+pull request from 84 to 98, and was made the same day: see
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). The list below
+is unchanged by that: it is what the testing build has not been through.
 
 What the measurements do not cover:
 
@@ -600,6 +609,120 @@ What the measurements do not cover:
   on a store that has grown over years.
 - The popover chart fix was checked by drawing the app's own view with
   made-up data, not on the Mac that showed the fault.
+
+## Promotion to `testing`, 2026-11-13
+
+The owner asked for it on 2026-11-13. `experimental` at `3cf549b`, which is
+pull requests 84 to 98, went into `testing` through
+[pull request 100](https://github.com/jayjay181818/StockBar/pull/100). It
+was merged with a merge commit, so each change is still a commit of its own
+on `testing` and can be reverted alone.
+
+- Branches. `testing` was `47c1bda` and is `2256b6c`, a merge commit whose
+  parents are `47c1bda` and `3cf549b` and whose files are those of
+  `3cf549b`. `main` was and is `75be612`. `experimental` stayed at
+  `3cf549b`. The branch `appcast`, which holds the stable and testing feed,
+  went from `4dfd943` to `e313178`: that is the release workflow adding the
+  testing build. No version tag was made and nothing was released on the
+  Stable channel.
+- Pull request 99 was opened first, from `experimental` itself, and was
+  closed unmerged. GitHub deletes a merged pull request's branch, and the
+  repository's one ruleset protects only `main` and `testing` from
+  deletion, so merging it would have deleted `experimental`. Pull request
+  100 came from a temporary branch at the same commit,
+  `feature/promote-experimental-to-testing`, which GitHub deleted at the
+  merge. No repository setting was changed.
+- CI. The CI workflow does not run for `experimental`, so it ran on this
+  code for the first time here: on pull request 99, on pull request 100 and
+  on `testing` after the merge. Both of its jobs passed all three times.
+  One builds and tests with Xcode 26, which this code had not been built
+  with before, and one with Xcode 27.
+- The testing build. The merge published build 370.16 as the prerelease
+  `testing-370.16`: `2256b6c` is the sixteenth commit on `testing` since
+  the tag `v3.7.0`, fifteen changes and the merge. Checked after it: the
+  feed's signature and the archive's signature are valid, the archive's
+  length matches the feed, the unpacked app is build 370.16 of 3.7.0, its
+  code signature verifies and its executable has no `__llvm_prf` section.
+  The feed offers two builds, 370.16 on the Testing channel and the release
+  370. This was the first testing build made by the workflow as pull
+  request 97 changed it. The four experimental prereleases, 370.0.12 to
+  370.0.15, were still listed afterwards.
+- Experimental builds. Until `testing` is brought back, the next
+  experimental build would be numbered 370.15.1: below testing build
+  370.16, so a Mac that has 370.16 would not be offered it. The pull
+  request that records this section merges `testing` into `experimental`
+  with a merge commit. After it, experimental builds are numbered 370.16
+  with a third part, which is above it.
+
+### Comparison with the baseline
+
+```bash
+bash Scripts/perf/compare.sh 47c1bda 2256b6c --label milestone-2
+```
+
+Six launches a side in turns, between 01:18 and 01:50 UTC on 2026-11-13,
+after the promotion, on macOS 27.2.1 and mains power. All twelve launches
+ran with the screen unlocked and the display awake. The load average was
+not recorded. These figures are not set beside Milestone 1's, which are
+from another day: the baseline, the same build both times, loaded its
+history in 1.88 s then and 1.20 s now.
+
+| Metric | Before: median (range) | After: median (range) | Change | Verdict |
+| --- | --- | --- | --- | --- |
+| Idle memory (physical footprint) | 119.9 (102.3 to 134.9) MB | 95.8 (81.4 to 100.4) MB | -24.2 MB, -20.1% | lower (p = 0.002) |
+| Idle memory the app holds allocated | 63.8 (60.7 to 64.5) MB | 54.5 (40.7 to 56.2) MB | -9.3 MB, -14.6% | lower (p = 0.002) |
+| Peak memory, launch and history load | 285.1 (276.5 to 289.7) MB | 244.9 (241.3 to 248.4) MB | -40.1 MB, -14.1% | lower (p = 0.002) |
+| Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-15.1 to 0.1) MB | +0.0 MB | no measurable change (p = 0.515) |
+| Idle CPU | 0.093 (0.083 to 0.099) s/min | 0.089 (0.082 to 0.102) s/min | -0.005 s/min, -4.8% | no measurable change (p = 0.515) |
+| Idle CPU wake-ups | 27 (23 to 31) /min | 24 (21 to 29) /min | -4 /min, -13.0% | no measurable change (p = 0.167) |
+| Idle CPU power | 4.13 (3.38 to 4.65) mW | 3.97 (3.27 to 4.45) mW | -0.16 mW, -3.9% | no measurable change (p = 0.485) |
+| Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+| Launch to first window | 0.58 (0.47 to 1.11) s | 0.52 (0.46 to 0.75) s | -0.06 s, -10.3% | no measurable change (p = 0.582) |
+| Launch to history loaded | 1.20 (1.06 to 2.41) s | 0.63 (0.54 to 0.74) s | -0.57 s, -47.3% | lower (p = 0.002) |
+| CPU from launch to the idle window | 2.64 (2.25 to 2.94) s | 1.88 (1.84 to 1.90) s | -0.76 s, -28.8% | lower (p = 0.002) |
+| CPU energy from launch to the idle window | 7.85 (6.85 to 9.25) J | 6.07 (5.94 to 6.22) J | -1.78 J, -22.6% | lower (p = 0.002) |
+| Python helper start to ready, no network | 0.31 (0.28 to 0.62) s | 0.29 (0.28 to 0.60) s | -0.02 s, -4.8% | no measurable change (p = 0.853) |
+| Python helper start, CPU | 0.30 (0.28 to 0.37) s | 0.29 (0.28 to 0.38) s | -0.01 s, -1.7% | no measurable change (p = 0.859) |
+| Python helper memory once started | 71.0 (70.9 to 71.0) MB | 71.0 (71.0 to 71.2) MB | +0.0 MB, +0.0% | no measurable change (p = 0.273) |
+
+- The six rows that were lower at Milestone 1 are lower again, and no row
+  is higher. Launch to first window, "possibly lower" at Milestone 1, shows
+  no measurable change here.
+- Pull requests 97, 86, 98 and 94 were merged after Milestone 1. Pull
+  request 86's comparison stands for itself in its entry. Pull request 98
+  was not benchmarked, at the owner's instruction, and pull requests 97 and
+  94 change no code the benchmark runs. This is therefore the first run of
+  the standard benchmark on an app that has pull request 98 in it. Both
+  switches were as they ship: the helper kept for 15 minutes and the digits
+  rolling.
+- The baseline idled at two levels again (plan item 9): 102.3, 107.3 and
+  108.3 MB in its first round and 131.5, 132.4 and 134.9 MB in its second.
+- One launch of `2256b6c` is the low end of three ranges: it idled at 81.4
+  MB, held 40.7 MB allocated and gave back 15.1 MB during the idle window.
+  The app's log shows why. macOS sent it a memory pressure warning at
+  01:41:15, about 20 seconds into that window, and between the samples at
+  15 and 30 seconds its footprint fell from 95.9 to 80.8 MB. No other
+  launch on either side had a warning. At the end of the window that launch
+  held 8.6 MB of allocations with no class, where the launch before it held
+  22.5 MB. What those were was not identified. The other five launches
+  idled at 94.7 to 100.4 MB and held 53.5 to 56.2 MB allocated. Without the
+  launch the two medians are 95.9 and 54.7 MB, and with or without it every
+  launch of `2256b6c` is below every launch of the baseline in both rows.
+
+Not measured for the promotion: a soak run, last made at Milestone 1 on
+`c3c21ec`; anything on a real portfolio, on another Mac or on an older
+macOS; a refresh over the network. No use of the testing build by the owner
+is recorded here.
+
+### Tests
+
+- On the files that were promoted, run for pull request 94 before its
+  merge: 724 XCTest tests with 0 failures, 66 Python helper tests and 91
+  script tests pass; `checks`, `docs-check` and `build-release` pass; one
+  full packaging run ended without error.
+- The CI workflow's two jobs, three times, as above. Each runs the Python
+  helper tests, the script tests, `checks`, a build, the XCTest tests, a
+  Release build and a packaging run.
 
 ## Pull requests
 
@@ -1348,8 +1471,14 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   waited for a decision from 2026-11-12. The owner asked for it to be
   merged on 2026-11-13. `experimental` had moved by five pull requests in
   between and was merged into the branch; nothing conflicted.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `3cf549b`. The merge published
+  experimental build 370.0.15 as the prerelease `experimental-370.0.15`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.0.15 of 3.7.0, its code signature verifies and its executable has no
+  `__llvm_prf` section. That release run was the check's first run in
+  GitHub Actions, and it let the build through. `main`, `testing` and the
+  stable and testing feed did not move.
 - Benchmark: not run. No file that goes into the app differs between
   `7ed5e85` and this branch (nothing under `Stockbar/`, `StockbarTests/`,
   `PythonTests/` or `Stockbar.xcodeproj`), so before and after are the same
@@ -1919,6 +2048,32 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained, as a switch that is on unless turned off. Nothing
   changes for anyone who leaves it alone.
 
+### 101: Bring `testing` back into `experimental` and record the promotion
+
+- What: merges `testing` at `2256b6c` into `experimental`, so that the
+  merge commit of the promotion is in its history and its builds are
+  numbered above testing build 370.16. Records the promotion and the
+  comparison made after it in this log
+  ([Promotion to `testing`](#promotion-to-testing-2026-11-13)), fills in
+  pull request 94's merge, and adds three sentences to
+  `Docs/Development.md` on how a promotion is made. The merge brings one
+  commit, whose files are the ones `experimental` already had, so no file
+  of the app, its tests or its scripts changes.
+- Merged: the date and merge commit are filled in by the pull request
+  after it. It is merged with a merge commit, not a squash. After a squash
+  `2256b6c` would not be in the history of `experimental`, and its builds
+  would stay numbered below 370.16.
+- Benchmark: before, `3cf549b`, and after are the same app, so all fifteen
+  rows are "not measured" for this pull request. The comparison of the
+  baseline with the promoted commit was run for it and is under
+  [Promotion to `testing`](#promotion-to-testing-2026-11-13).
+- Testing: `docs-check` and `checks` pass on the branch. The tests were not
+  run again here. The files they build are those of `2256b6c`, on which
+  both CI jobs passed after the promotion.
+- Known issues: none known. Each later promotion needs the same two steps,
+  which `Docs/Development.md` now names.
+- Verdict: retained.
+
 ## Rust evaluation, 2026-11-12
 
 No component was moved to Rust, and none is recommended. The one place where
@@ -2081,6 +2236,14 @@ supervised trial against Yahoo.
   digit. A checkpoint tag is none of these.
 - The merge date and squash commit of a pull request are filled in by the next
   pull request, since they do not exist until after the merge.
+- A promotion to `testing` is made only at the owner's word, as a pull
+  request from a temporary branch at the commit to promote. It is never
+  made from `experimental` itself: GitHub deletes a merged pull request's
+  branch, and `experimental` is not protected from deletion. It is merged
+  with a merge commit. Straight afterwards `testing` is merged back into
+  `experimental` through a pull request, again with a merge commit, the one
+  exception to the squash rule above: until then experimental builds are
+  numbered below the new testing build.
 
 ## The transition, 2026-11-11
 
@@ -2148,6 +2311,7 @@ launch.
 | Pull request 97, the Experimental update channel | Fable (orchestrator), with a check of the Settings window by Sonnet and one independent review by Opus | Sonnet was used at the owner's instruction for driving the screen: it worked through the trial copy's Settings window and reported what each channel was offered, in 53 tool calls and about 138,000 tokens. The Opus review was worth it: it found that a release would never have reached the channel and that the tests and notes had Sparkle's ordering wrong, in 62 tool calls, about 250,000 tokens and fifteen minutes |
 | Pull request 86 reworked as a switch | Fable (orchestrator), with two checks of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: the first check read and toggled the switch in 23 tool calls and about 128,000 tokens but could not scroll the page; the second settled that it scrolls, through the scroll bar's accessibility buttons, in 15 tool calls and about 128,000 tokens. The Opus review was worth it: no defect in the pool, but it found that the switch's description promised the helper is kept in cases where it is not, and that two tests could not fail, in 23 tool calls, about 155,000 tokens and six minutes. My own reading before it found the one race that was fixed |
 | Pull request 98, the switch for the rolling digits | Fable (orchestrator), with one check of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: it read both Memory switches word for word, turned the new one off and looked at the Overview page, in 24 tool calls, about 126,000 tokens and 80 seconds. The Opus review found no defect and was still worth it: the description and the guide stated more than had been measured, the test did not read what a figure does, and nothing kept later figures on the modifier, in 55 tool calls, about 201,000 tokens and eleven minutes. It ran beside pull request 86's first comparison, which had to be repeated on a quiet Mac |
+| The promotion to `testing` and pull request 101 | Fable (orchestrator) | Done directly: two pull requests, the checks on the published build and one comparison. Reading the repository's settings before merging showed that pull request 99 would have deleted `experimental`; it was replaced before anything was merged |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86 and 98: nothing else so far has been parallel or self-contained
