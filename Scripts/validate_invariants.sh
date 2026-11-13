@@ -85,6 +85,17 @@ for test_file in StockbarTests/*.swift; do
   fi
 done
 
+# 9. Figures roll through stockbarRollingDigits(), which Settings → Advanced →
+#    Memory can turn off. The transition written anywhere else ignores it.
+direct_rolling_digits="$(
+  rg -n 'contentTransition\(\.numericText' Stockbar -g '*.swift' \
+    | rg -v '^Stockbar/Views/StockbarDesign\.swift:[0-9]+: +content\.contentTransition' || true
+)"
+if [[ -n "$direct_rolling_digits" ]]; then
+  fail "contentTransition(.numericText()) used directly; use stockbarRollingDigits():"
+  echo "$direct_rolling_digits"
+fi
+
 if [[ "$status" -eq 0 ]]; then
   echo "Invariant validation passed"
 fi

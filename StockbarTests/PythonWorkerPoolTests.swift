@@ -1,4 +1,5 @@
 import Darwin
+import os
 import XCTest
 @testable import Stockbar
 
@@ -159,6 +160,106 @@ final class PythonWorkerPoolTests: XCTestCase {
         }
         let stopped = try await waitUntilGone(warm.pid)
         XCTAssertTrue(stopped, "The cancelled worker must be stopped")
+    }
+
+    func testAnIdleWorkerStopsAfterTheIdleTimeoutAndSoDoesTheOneThatReplacesIt() async throws {
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: { .seconds(1) })
+        let runner = makeRunner()
+        let (idle, _) = try await run(runner, [])
+        let pooled = await pool.workerCount
+        XCTAssertEqual(pooled, 1, "The request must have been served by a pooled worker, not a one-off process")
+
+        let stopped = try await waitUntilGone(idle.pid)
+
+        XCTAssertTrue(stopped, "A worker nobody is using must give its memory back")
+        let workerCount = await pool.workerCount
+        XCTAssertEqual(workerCount, 0)
+        let (fresh, _) = try await run(runner, ["--json", "AAPL"])
+        XCTAssertNotEqual(fresh.pid, idle.pid)
+        XCTAssertEqual(fresh.args, ["--json", "AAPL"])
+        // The first stop ended the pool's idle check; the new worker must restart
+        // it, or only the first worker of a session would ever stop.
+        let stoppedAgain = try await waitUntilGone(fresh.pid)
+        XCTAssertTrue(stoppedAgain, "Every later worker must stop when idle too")
+    }
+
+    func testAWorkerUsedAgainWithinTheIdleTimeoutKeepsRunning() async throws {
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: { .seconds(3) })
+        let runner = makeRunner()
+        let (first, _) = try await run(runner, [])
+
+        // Each gap is well inside the timeout; together they outlast it. A
+        // refresh interval shorter than the timeout must not restart the worker.
+        for _ in 0..<5 {
+            try await Task.sleep(for: .milliseconds(700))
+            let (next, _) = try await run(runner, [])
+            XCTAssertEqual(next.pid, first.pid)
+        }
+    }
+
+    func testAShortenedIdleTimeoutAppliesAtOnce() async throws {
+        let timeout = OSAllocatedUnfairLock(initialState: Duration.seconds(10 * 60))
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: { timeout.withLock { $0 } })
+        let runner = makeRunner()
+        let (idle, _) = try await run(runner, [])
+
+        // The pool's idle check is now asleep for a quarter of ten minutes.
+        timeout.withLock { $0 = .seconds(1) }
+        await pool.idleTimeoutChanged()
+
+        let stopped = try await waitUntilGone(idle.pid)
+        XCTAssertTrue(stopped, "Turning the setting on must not wait out the old timeout")
+        let workerCount = await pool.workerCount
+        XCTAssertEqual(workerCount, 0)
+    }
+
+    func testALengthenedIdleTimeoutKeepsTheWorkerThatIsIdleNow() async throws {
+        let timeout = OSAllocatedUnfairLock(initialState: Duration.seconds(1))
+        pool = PythonWorkerPool(maxWorkers: 1, idleTimeout: { timeout.withLock { $0 } })
+        let runner = makeRunner()
+        let (idle, _) = try await run(runner, [])
+
+        // Turned off while a worker is idle and the short check is pending.
+        timeout.withLock { $0 = .seconds(10 * 60) }
+        await pool.idleTimeoutChanged()
+
+        try await Task.sleep(for: .milliseconds(1_500))
+        let (again, _) = try await run(runner, [])
+        XCTAssertEqual(again.pid, idle.pid, "Turning the setting off must keep the worker that would have stopped")
+    }
+
+    func testTheAppsPoolFollowsTheQuitWhenIdleSetting() async throws {
+        // Under XCTest the app's store is an isolated suite. The switch in
+        // Settings writes to this store, and the app's pool must read it.
+        guard StockbarRuntimeStorage.acceptance.defaultsSuiteName != nil else {
+            return XCTFail("Tests must not run against the real defaults")
+        }
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = PythonWorkerPool.quitWhenIdleKey
+        let original = defaults.object(forKey: key)
+        defer {
+            if let original { defaults.set(original, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        // Never set: exactly as before the setting existed.
+        defaults.removeObject(forKey: key)
+        let unset = await PythonWorkerPool.shared.idleTimeout
+        XCTAssertEqual(unset, .seconds(15 * 60))
+        let unconfigured = await PythonWorkerPool().idleTimeout
+        XCTAssertEqual(unconfigured, unset, "A pool that is given no timeout must keep its workers as before")
+
+        defaults.set(true, forKey: key)
+        // The pool stops a worker between one and one and a quarter timeouts
+        // after its last request.
+        let on = await PythonWorkerPool.shared.idleTimeout
+        XCTAssertGreaterThan(on, .seconds(60 + 5), "The shortest refresh interval, plus its timer tolerance, must reuse its worker")
+        XCTAssertLessThan(on * 5 / 4, .seconds(5 * 60), "At the default refresh interval the worker must exit between refreshes")
+
+        defaults.set(false, forKey: key)
+        let off = await PythonWorkerPool.shared.idleTimeout
+        XCTAssertEqual(off, unset, "Turned off again, the app's pool must go back without a restart")
+
+        XCTAssertEqual(SettingsTransferKeys.settingsKeys[key], .bool, "The setting travels with an export")
     }
 
     func testChangedEnvironmentReplacesTheWorker() async throws {

@@ -142,6 +142,8 @@ Market-data API keys for FMP and Twelve Data, and the provider order, are also c
 - Prices refresh at the **Main Refresh Interval** (Settings → Refresh; default 5 minutes). A price younger than about 90% of the interval is reused.
 - A symbol that fails is retried with increasing delays (1, 2, 5, then 10 minutes). After five consecutive failures it is paused for one hour; use **Retry Now** in its popover to resume sooner.
 - **Data Health** summarises tracked rows, menu-bar visibility, currency and refresh settings.
+- **Memory between refreshes.** Prices are fetched by a Python helper, a separate process that holds 70 MB or more and stays running for 15 minutes after its last request, so while markets are open it never quits at an interval shorter than 15 minutes. **Settings → Advanced → Memory → Quit Python Helper When Idle** makes it quit about 90 seconds after its last request (it is checked every 20 seconds or so, so up to 115). Each refresh then starts it again, which takes about a third of a second of processor time and delays that refresh's first price by about as long. While markets are open, refreshing every minute keeps the helper running either way. While the London and US markets are closed their prices are fetched only every 30 minutes, so a helper with nothing else to fetch quits in between whether the setting is on or off. The setting is off unless you turn it on.
+- **Rolling digits.** Figures in the main window and the popovers can roll to a new value when they change. macOS keeps the digits it draws for the rolling in memory: 6 to 10 MB when measured, each time after the main window's figures had rolled in as the window opened. **Settings → Advanced → Memory → Roll Digits When Figures Change** turns the rolling off, and figures then change without it. Memory already used may not be given back until Stockbar is restarted: it was still held 30 minutes later when measured. The setting is on unless you turn it off.
 
 ## Updates
 
@@ -149,21 +151,21 @@ Stockbar looks for a new version about once a day. When there is one it shows th
 
 **Settings → General → Updates** shows the version you are running and has:
 
-- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. With automatic checks on, changing the channel checks again straight away.
+- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. **Experimental** offers work in progress that has not reached Testing yet, where things may break; a released version or a testing build reaches it once the experimental work includes it. With automatic checks on, changing the channel checks again straight away.
 - **Check Automatically** — turn off to check only when you ask.
 - **Check Now** — the same as **Check for Updates…** in the **Stockbar** menu.
 
 Things to know:
 
 - **Keychain prompt after an update.** macOS asks once for access to your saved credentials (Trading 212, Folync, FMP and Twelve Data are kept in one Keychain item, "Stockbar credentials"). Choose **Always Allow**. The first update to a version that keeps them in one item asks once more for each credential saved by the version before, to move it across. Stockbar is built without an Apple developer account, so each build has a new signature and macOS does not carry the answer over.
-- **Leaving Testing.** Stockbar never moves to an older build. After switching back to Stable you keep the testing build you have until a newer version is released.
+- **Changing channel.** Stockbar never moves to an older build. After switching back to Stable you keep the testing or experimental build you have until a newer version is released. After switching from Experimental to Testing you keep it until there is a testing build newer than the one it was built on.
 - **Where updates come from.** They are built by GitHub from Stockbar's source and downloaded from its GitHub releases. Stockbar checks each one against a signing key built into the app and refuses a download or an update list that does not match.
 - **Development builds.** A build made from source in Xcode shows only its version here; updates are off.
 
 ## Backups, Data Health and Diagnostics
 
 - **Backups** — Stockbar makes an automatic backup once a day. The Backups screen (and Settings → Advanced → Backups) shows the last backup and offers **Back Up Now**, **Restore from Backup…** and **View Backups**, plus how long to keep them. Restoring asks for confirmation. Keychain credentials are not included in backups.
-- **Export & Import** — Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds your preferences plus the FMP, Twelve Data, Trading 212 and Folync keys. **Everything** adds your portfolio database; its estimated size is shown first. The file contains your API keys, so keep it and its password safe. **Import…** shows what the file contains and asks before replacing anything. Keys not in the file stay as they are, and Stockbar backs up your portfolio before replacing it, then relaunches. The Python setup, window positions and caches are not exported.
+- **Export & Import** — Settings → Advanced → Export & Import saves Stockbar to one password-protected `.stockbarexport` file, for example to move to another Mac. **Settings & Keys** holds your preferences plus the FMP, Twelve Data, Trading 212 and Folync keys. **Everything** adds your portfolio database; its estimated size is shown first. The file contains your API keys, so keep it and its password safe. **Import…** shows what the file contains and asks before replacing anything. Keys not in the file stay as they are, and Stockbar backs up your portfolio before replacing it, then relaunches. The Python environment and its interpreter path, window positions and caches are not exported.
 - **Data Health** — price and exchange-rate freshness, portfolio source, tracked symbols, menu-bar visibility and preferred currency.
 - **Diagnostics** — view, refresh and clear the log. The log file is at `~/Library/Logs/com.stockbar/stockbar.log`.
 

@@ -5,17 +5,20 @@ Only .github/workflows/release.yml calls this.
 
   release_feed.py plan   --ref-type branch --ref-name testing \\
                          --describe v3.6.0-14-gabc1234 \\
+                         [--ahead-of-testing 5] [--behind-branch] \\
                          --project Stockbar.xcodeproj/project.pbxproj
   release_feed.py add    --appcast appcast.xml --channel testing --build 360.14 \\
                          --version 3.6.0 --url https://... --length 1234 \\
                          --signature <EdDSA signature> --minimum-system 15.4 \\
                          --notes-file notes.md [--link https://...]
-  release_feed.py builds --appcast appcast.xml --channel testing
+  release_feed.py superseded --appcast appcast.xml --channel testing < tags
 
-plan    prints key=value lines describing the build a push should produce.
-add     adds one build to the feed, newest first, and drops the builds nobody
-        would be offered any more. The feed must be signed again afterwards.
-builds  prints the build numbers the feed still lists for a channel.
+plan        prints key=value lines describing the build a push should produce.
+add         adds one build to the feed, newest first, and drops the builds
+            nobody would be offered any more. The feed must be signed again
+            afterwards.
+superseded  reads release tags, one a line, and prints those of the channel's
+            builds that the feed no longer lists.
 """
 from __future__ import annotations
 
@@ -35,9 +38,20 @@ STABLE = "stable"
 # The name testing builds carry in the feed. The app asks for the same name:
 # UpdateChannel.testingFeedChannel in Stockbar/Services/AppUpdateService.swift.
 TESTING = "testing"
-# Older released versions stay listed for Macs the newest one no longer supports.
-KEEP_STABLE = 3
-KEEP_TESTING = 10
+# The branch experimental builds are made from and the name they carry in their
+# feed. The app asks for the same name: UpdateChannel.experimentalFeedChannel.
+EXPERIMENTAL = "experimental"
+# How many builds of each channel a feed lists. Older released versions stay
+# listed for Macs the newest one no longer supports.
+KEEP = {STABLE: 3, TESTING: 10, EXPERIMENTAL: 10}
+# Each feed is appcast.xml alone on a branch. Experimental builds have a feed
+# to themselves, which the app reads from StockbarExperimentalFeedURL in
+# Stockbar/Info.plist, so that publishing one can never disturb the feed
+# released and testing builds are offered from.
+FEED_BRANCH = "appcast"
+EXPERIMENTAL_FEED_BRANCH = "appcast-experimental"
+# A dry run of an experimental build: a branch whose name starts with this.
+EXPERIMENTAL_DRY_RUN = "release-test/experimental"
 
 VERSION_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 DESCRIBE = re.compile(r"(v\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+")
@@ -57,6 +71,7 @@ class Plan:
     version: str
     release_tag: str
     asset_name: str
+    feed_branch: str
     reason: str = ""
 
 
@@ -75,7 +90,12 @@ class Item:
 
 
 def build_key(build: str) -> tuple[int, ...]:
-    """Orders build numbers the way the updater does: 360 < 360.14 < 370."""
+    """Orders build numbers the way the updater does: 360 < 360.14 < 370.
+
+    One difference: to the updater a missing part is 0, so 360.9 and 360.9.0
+    are the same build, while here the longer one sorts higher. The two forms
+    never share a feed: only experimental builds have three parts.
+    """
     return tuple(int(part) for part in build.split("."))
 
 
@@ -98,7 +118,7 @@ def project_setting(project_text: str, name: str) -> str:
 
 
 def plan(ref_type: str, ref_name: str, describe: str, project_version: str, project_build: str,
-         newest_tag: str = "") -> Plan:
+         newest_tag: str = "", ahead_of_testing: int | None = None, behind_branch: bool = False) -> Plan:
     """Decides what a push builds.
 
     A version tag is a stable release. A push to `testing` is a testing build,
@@ -106,9 +126,24 @@ def plan(ref_type: str, ref_name: str, describe: str, project_version: str, proj
     360.14, which sorts above 360 and below the next release. Any other branch
     is a dry run that publishes nothing.
 
-    `newest_tag` is the highest version tag in the repository. A testing build
-    numbered after an older release would sort below the newest one and never
-    be offered, so it is refused.
+    A push to `experimental` is an experimental build with a third part.
+    `ahead_of_testing` is how many of its commits `testing` does not have.
+    With 14 commits since v3.6.0, 5 of them not in `testing`, the build is
+    360.9.5: just above 360.9, the testing build it contains, and below
+    360.10. Bringing `testing` into the branch raises the middle part, and
+    every other commit raises the last, so each build sorts above the one
+    before it. The tagged commit itself is built too, as 360.0.0, which the
+    updater takes for the release: the feed of experimental builds lists
+    nothing else, so that is how a release reaches the channel.
+
+    That number depends on where `testing` is when the build is made, so an
+    older commit built again later could be numbered above a newer one.
+    `behind_branch` says the branch has moved on since the pushed commit; such
+    a commit is never published.
+
+    `newest_tag` is the highest version tag in the repository. A testing or
+    experimental build numbered after an older release would sort below the
+    newest one and never be offered, so it is refused.
     """
     if ref_type == "tag":
         build = stable_build(ref_name)
@@ -118,23 +153,38 @@ def plan(ref_type: str, ref_name: str, describe: str, project_version: str, proj
                 f"Tag {ref_name} needs the project at version {version} (build {build}), "
                 f"but it is at {project_version} (build {project_build}). Run script/release.sh first."
             )
-        return Plan("publish", STABLE, build, version, ref_name, f"Stockbar-{version}.zip")
+        return Plan("publish", STABLE, build, version, ref_name, f"Stockbar-{version}.zip", FEED_BRANCH)
 
     match = DESCRIBE.fullmatch(describe.strip())
     if not match:
         raise ReleaseError(f"No version tag is reachable from this commit (git describe gave '{describe.strip()}').")
     base, count = stable_build(match.group(1)), int(match.group(2))
-    build = f"{base}.{count}"
-    mode = "publish" if ref_name == TESTING else "dry-run"
+    if ref_name == EXPERIMENTAL or ref_name.startswith(EXPERIMENTAL_DRY_RUN):
+        if ahead_of_testing is None or ahead_of_testing < 0:
+            raise ReleaseError(
+                f"An experimental build needs the number of its commits that {TESTING} does not have; "
+                f"got {ahead_of_testing}."
+            )
+        channel, feed_branch = EXPERIMENTAL, EXPERIMENTAL_FEED_BRANCH
+        # More than the commits since the tag only while `testing` lacks the tag itself.
+        ahead = min(ahead_of_testing, count)
+        build = f"{base}.{count - ahead}.{ahead}"
+    else:
+        channel, feed_branch = TESTING, FEED_BRANCH
+        build = f"{base}.{count}"
+    mode = "publish" if ref_name in (TESTING, EXPERIMENTAL) else "dry-run"
     if mode == "publish" and newest_tag and build_key(stable_build(newest_tag)) > build_key(base):
         raise ReleaseError(
             f"{newest_tag} is not in the history of {ref_name}, so build {build} would sort below it "
             f"and never be offered. Bring {ref_name} up to date with the branch that carries {newest_tag} first."
         )
     reason = ""
-    if mode == "publish" and count == 0:
+    if mode == "publish" and channel == TESTING and count == 0:
         mode, reason = "skip", f"This commit is {match.group(1)} itself; its release build covers it."
-    return Plan(mode, TESTING, build, project_version, f"testing-{build}", f"Stockbar-{build}.zip", reason)
+    elif mode == "publish" and channel == EXPERIMENTAL and behind_branch:
+        mode, reason = "skip", f"{ref_name} has moved on since this commit; the build of its newest commit covers it."
+    return Plan(mode, channel, build, project_version, f"{channel}-{build}", f"Stockbar-{build}.zip",
+                feed_branch, reason)
 
 
 def _qualified(name: str) -> str:
@@ -167,7 +217,7 @@ def read_feed(path: Path) -> list[Item]:
         if enclosure is None:
             raise ReleaseError("The feed has an item without a download. Refusing to rewrite it.")
         channel = _text(element, _qualified("channel"), required=False) or STABLE
-        if channel not in (STABLE, TESTING):
+        if channel not in KEEP:
             raise ReleaseError(f"The feed has an item on an unknown channel '{channel}'.")
         items.append(Item(
             build=_text(element, _qualified("version")),
@@ -200,8 +250,8 @@ def render_feed(items: list[Item], repository_url: str) -> str:
         ET.SubElement(element, "pubDate").text = item.published
         ET.SubElement(element, _qualified("version")).text = item.build
         ET.SubElement(element, _qualified("shortVersionString")).text = item.version
-        if item.channel == TESTING:
-            ET.SubElement(element, _qualified("channel")).text = TESTING
+        if item.channel != STABLE:
+            ET.SubElement(element, _qualified("channel")).text = item.channel
         ET.SubElement(element, _qualified("minimumSystemVersion")).text = item.minimum_system
         # Inside the feed, so the feed's signature covers the notes too.
         ET.SubElement(element, "description", {_qualified("format"): "markdown"}).text = item.notes
@@ -215,18 +265,19 @@ def render_feed(items: list[Item], repository_url: str) -> str:
     return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(rss, encoding="unicode") + "\n"
 
 
-def prune(items: list[Item], keep_stable: int = KEEP_STABLE, keep_testing: int = KEEP_TESTING) -> list[Item]:
+def prune(items: list[Item]) -> list[Item]:
     """Newest first, without the builds no one would be offered.
 
     A testing build older than the newest release is one of those: everyone on
     the testing channel is offered the release instead.
     """
     newest_first = sorted(items, key=lambda item: build_key(item.build), reverse=True)
-    stable = [item for item in newest_first if item.channel == STABLE][:keep_stable]
-    floor = build_key(stable[0].build) if stable else ()
-    testing = [item for item in newest_first
-               if item.channel == TESTING and build_key(item.build) > floor][:keep_testing]
-    return sorted(stable + testing, key=lambda item: build_key(item.build), reverse=True)
+    kept = [item for item in newest_first if item.channel == STABLE][:KEEP[STABLE]]
+    floor = build_key(kept[0].build) if kept else ()
+    for channel in (TESTING, EXPERIMENTAL):
+        kept += [item for item in newest_first
+                 if item.channel == channel and build_key(item.build) > floor][:KEEP[channel]]
+    return sorted(kept, key=lambda item: build_key(item.build), reverse=True)
 
 
 def three_part(version: str) -> str:
@@ -238,7 +289,7 @@ def three_part(version: str) -> str:
 
 
 def validated(item: Item) -> Item:
-    if item.channel not in (STABLE, TESTING):
+    if item.channel not in KEEP:
         raise ReleaseError(f"Unknown channel '{item.channel}'.")
     if not BUILD.fullmatch(item.build):
         raise ReleaseError(f"'{item.build}' is not a build number.")
@@ -260,8 +311,33 @@ def validated(item: Item) -> Item:
 def add(items: list[Item], item: Item) -> list[Item]:
     """The feed with `item` added, replacing an earlier entry for the same build."""
     item = validated(item)
+    if any((existing.channel == EXPERIMENTAL) != (item.channel == EXPERIMENTAL) for existing in items):
+        raise ReleaseError(
+            f"Experimental builds are listed in a feed of their own (the {EXPERIMENTAL_FEED_BRANCH} branch), "
+            f"never beside released or testing builds."
+        )
     others = [existing for existing in items if build_key(existing.build) != build_key(item.build)]
     return prune(others + [item])
+
+
+def superseded(tags: list[str], items: list[Item], channel: str) -> list[str]:
+    """The tags of `channel`'s builds that the feed no longer lists.
+
+    Such a build can never be offered again, so the workflow removes its
+    prerelease. Only a tag that is the channel's name, a hyphen and a build
+    number is ever returned: `experimental-370.0.4`, never
+    `experimental-checkpoint-2026-11-12`.
+    """
+    if channel not in (TESTING, EXPERIMENTAL):
+        raise ReleaseError(f"Only testing and experimental builds are ever removed, not '{channel}'.")
+    # Read against the other feed, or an empty one, every build of the channel would look superseded.
+    if not items or any((item.channel == EXPERIMENTAL) != (channel == EXPERIMENTAL) for item in items):
+        raise ReleaseError(f"This is not the feed {channel} builds are listed in. Refusing to call any superseded.")
+    listed = {build_key(item.build) for item in items if item.channel == channel}
+    prefix = f"{channel}-"
+    return [tag for tag in tags
+            if tag.startswith(prefix) and BUILD.fullmatch(tag[len(prefix):])
+            and build_key(tag[len(prefix):]) not in listed]
 
 
 def _main(argv: list[str]) -> int:
@@ -273,6 +349,8 @@ def _main(argv: list[str]) -> int:
     plan_parser.add_argument("--ref-name", required=True)
     plan_parser.add_argument("--describe", default="")
     plan_parser.add_argument("--newest-tag", default="")
+    plan_parser.add_argument("--ahead-of-testing", type=int)
+    plan_parser.add_argument("--behind-branch", action="store_true")
     plan_parser.add_argument("--project", required=True, type=Path)
 
     add_parser = commands.add_parser("add")
@@ -288,9 +366,9 @@ def _main(argv: list[str]) -> int:
     add_parser.add_argument("--link", default="")
     add_parser.add_argument("--repository-url", default="https://github.com/jayjay181818/StockBar")
 
-    builds_parser = commands.add_parser("builds")
-    builds_parser.add_argument("--appcast", required=True, type=Path)
-    builds_parser.add_argument("--channel", required=True, choices=[STABLE, TESTING])
+    superseded_parser = commands.add_parser("superseded")
+    superseded_parser.add_argument("--appcast", required=True, type=Path)
+    superseded_parser.add_argument("--channel", required=True, choices=[TESTING, EXPERIMENTAL])
 
     args = parser.parse_args(argv)
     try:
@@ -299,7 +377,7 @@ def _main(argv: list[str]) -> int:
             result = plan(args.ref_type, args.ref_name, args.describe,
                           project_setting(project, "MARKETING_VERSION"),
                           project_setting(project, "CURRENT_PROJECT_VERSION"),
-                          args.newest_tag)
+                          args.newest_tag, args.ahead_of_testing, args.behind_branch)
             for key, value in vars(result).items():
                 print(f"{key}={value}")
         elif args.command == "add":
@@ -314,9 +392,9 @@ def _main(argv: list[str]) -> int:
             args.appcast.write_text(render_feed(items, args.repository_url), encoding="utf-8")
             print(f"{args.appcast}: {len(items)} build(s), newest {items[0].build}")
         else:
-            for item in read_feed(args.appcast):
-                if item.channel == args.channel:
-                    print(item.build)
+            tags = [line.strip() for line in sys.stdin if line.strip()]
+            for tag in superseded(tags, read_feed(args.appcast), args.channel):
+                print(tag)
     except ReleaseError as error:
         print(f"release_feed: {error}", file=sys.stderr)
         return 1

@@ -491,6 +491,7 @@ struct PortfolioMenuPopoverView: View {
         .onChange(of: dataModel.portfolioMenuBarDisplaySettings) { _, _ in
             refreshChartModel()
         }
+        .stockbarRollingDigitsSetting()
     }
 
     /// Event handlers run between renders, so they must not reuse the last render's summary.
@@ -520,7 +521,7 @@ struct PortfolioMenuPopoverView: View {
                 Text(currentDisplayValue)
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                    .contentTransition(.numericText())
+                    .stockbarRollingDigits()
                     .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: summary.totalValue)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
