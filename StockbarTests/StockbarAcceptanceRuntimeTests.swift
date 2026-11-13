@@ -140,6 +140,79 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         )
     }
 
+    func testBenchmarkRefreshIsOnlyForAnAcceptanceRunWithProvidersOff() throws {
+        let acceptance = try StockbarAcceptanceRuntime.resolve(environment: [
+            "STOCKBAR_ACCEPTANCE_ROOT": root.path,
+            "STOCKBAR_ACCEPTANCE_RUN_ID": "acceptance-12345678",
+            "STOCKBAR_DISABLE_LIVE_PROVIDERS": "1"
+        ])
+        let asked = [
+            BenchmarkRefreshSettings.enabledKey: "1",
+            BenchmarkRefreshSettings.passesKey: "4",
+            BenchmarkRefreshSettings.spacingKey: "30"
+        ]
+        XCTAssertEqual(
+            BenchmarkRefreshSettings.make(environment: asked, runtime: acceptance),
+            BenchmarkRefreshSettings(passes: 4, spacing: 30)
+        )
+
+        // The app outside an acceptance run never takes it, whatever its environment says.
+        let production = try StockbarAcceptanceRuntime.resolve(environment: [:])
+        XCTAssertNil(BenchmarkRefreshSettings.make(environment: asked, runtime: production))
+
+        // Not asked for, or asked for with figures it does not accept.
+        XCTAssertNil(BenchmarkRefreshSettings.make(environment: [:], runtime: acceptance))
+        let refused = [
+            (BenchmarkRefreshSettings.enabledKey, "0"),
+            (BenchmarkRefreshSettings.passesKey, "0"),
+            (BenchmarkRefreshSettings.passesKey, "many"),
+            (BenchmarkRefreshSettings.spacingKey, "1"),
+            (BenchmarkRefreshSettings.spacingKey, "")
+        ]
+        for (key, value) in refused {
+            var environment = asked
+            environment[key] = value
+            XCTAssertNil(BenchmarkRefreshSettings.make(environment: environment, runtime: acceptance), "\(key)=\(value)")
+        }
+    }
+
+    func testBenchmarkQuotesAreRefusedUntilArmedAndThenMoveWithEachBatch() async throws {
+        let service = BenchmarkQuoteService(policy: StockbarProviderAccessPolicy(liveRequestsAllowed: false))
+        do {
+            _ = try await service.fetchBatchQuotes(for: ["AAPL"])
+            XCTFail("Quotes before arm() must be refused as in any acceptance run")
+        } catch let error as ProviderAccessError {
+            XCTAssertEqual(error, .disabledForAcceptance(.python))
+        }
+
+        await service.arm()
+        let first = try await service.fetchBatchQuotes(for: ["AAPL", "MSFT"])
+        let second = try await service.fetchBatchQuotes(for: ["AAPL", "MSFT"])
+        XCTAssertEqual(first.map(\.symbol), ["AAPL", "MSFT"])
+        XCTAssertNotEqual(first[0].regularMarketPrice, second[0].regularMarketPrice)
+        XCTAssertEqual(first[0].regularMarketPreviousClose, second[0].regularMarketPreviousClose)
+        XCTAssertNotEqual(first[0].regularMarketPreviousClose, first[1].regularMarketPreviousClose)
+        for quote in first + second {
+            XCTAssertTrue((40..<400).contains(quote.regularMarketPreviousClose), quote.symbol)
+            XCTAssertGreaterThan(quote.regularMarketPrice, quote.regularMarketPreviousClose)
+            XCTAssertEqual(quote.displayPrice, quote.regularMarketPrice)
+            XCTAssertNil(quote.failure)
+        }
+        // The same symbol gets the same price in every launch.
+        XCTAssertEqual(
+            BenchmarkQuoteService.quote(for: "AAPL", batch: 1, time: 0).regularMarketPrice,
+            first[0].regularMarketPrice
+        )
+
+        // History is not part of the workload.
+        do {
+            _ = try await service.fetchHistoricalData(for: "AAPL", from: .distantPast, to: Date())
+            XCTFail("History must stay refused")
+        } catch let error as ProviderAccessError {
+            XCTAssertEqual(error, .disabledForAcceptance(.python))
+        }
+    }
+
     func testCacheManagerUsesAnExplicitAcceptanceCacheRoot() throws {
         let cacheRoot = root.appendingPathComponent("Caches/stockbar-cache", isDirectory: true)
         let manager = CacheManager(cacheRoot: cacheRoot)

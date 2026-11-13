@@ -2,7 +2,7 @@
 # Repeatable resource benchmark for Stockbar.
 #
 #   bash Scripts/perf/benchmark.sh [--label name] [--runs 5] [--settle 75] [--window 60] [--skip-build]
-#                                  [--source dir --commit-label text] [--output dir] [--build-only]
+#                                  [--source dir --commit-label text] [--output dir] [--build-only] [--refresh]
 #
 # To compare two commits use Scripts/perf/compare.sh, which runs this for each.
 #
@@ -18,6 +18,12 @@
 #    recalculation are done. Then measures each launch: time to the first
 #    window and to history loaded, peak memory, and memory, CPU, energy and
 #    wakeups over an idle window that starts --settle seconds after launch.
+#    With --refresh, as many launches again follow for the refresh workload:
+#    --settle seconds after each, the app runs four "Refresh now" passes on
+#    made-up quotes, 30 s apart, with no network and no Python, and the 120 s
+#    that hold them are measured as the idle window is. They come after the
+#    other launches because a refresh changes the stored data the next launch
+#    starts from.
 # 4. Measures one start of the Python helper on its own, because acceptance
 #    mode never starts it.
 #
@@ -41,6 +47,9 @@ build_only=0
 source_dir="$ROOT_DIR"
 commit_label=""
 output_dir=""
+refresh=0
+refresh_passes=4
+refresh_spacing=30
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --label) label="${2:-}"; shift 2 ;;
@@ -52,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --source) source_dir="${2:-}"; shift 2 ;;
     --commit-label) commit_label="${2:-}"; shift 2 ;;
     --output) output_dir="${2:-}"; shift 2 ;;
+    --refresh) refresh=1; shift ;;
     *) sed -n '2,6p' "${BASH_SOURCE[0]}" >&2; exit 64 ;;
   esac
 done
@@ -159,6 +169,17 @@ grep -q '"liveProviderRequestsAllowed" : false' "$work/preflight.json" || {
   echo "Preflight did not confirm that live providers are off." >&2; exit 67
 }
 "$python_bin" "$PERF_DIR/make_fixture.py" "$store" >"$work/fixture.txt"
+if [[ "$refresh" -eq 1 ]]; then
+  # Read by the app only in an acceptance run with live providers off.
+  export STOCKBAR_BENCH_REFRESH=1
+  export STOCKBAR_BENCH_REFRESH_PASSES="$refresh_passes"
+  export STOCKBAR_BENCH_REFRESH_SPACING="$refresh_spacing"
+  # Settings → Chart Data Collection at its shortest, so that every pass
+  # records a portfolio snapshot, as every refresh does at the defaults.
+  mkdir -p "$root/Preferences"
+  defaults write "$root/Preferences/com.stockbar.acceptance.$STOCKBAR_ACCEPTANCE_RUN_ID" \
+    portfolioSnapshotIntervalSeconds -float "$refresh_spacing"
+fi
 
 launch() {
   log_start=0
@@ -170,6 +191,10 @@ launch() {
 }
 # Seconds from one clock time to another.
 elapsed() { "$python_bin" -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.2f}")' "$1" "$2"; }
+# Megabytes the app holds allocated, from the output of heap -s.
+heap_allocated_mb() {
+  awk '/^All zones:/ { for (i = 2; i <= NF; i++) if ($i ~ /^\(?bytes\)?$/) { gsub(/[^0-9]/, "", $(i - 1)); printf "%.1f\n", $(i - 1) / 1048576; exit } }' "$1"
+}
 # Waits for a line logged by the current launch. Prints the line.
 wait_for_log() {
   local pattern="$1" seconds="$2" line
@@ -183,6 +208,55 @@ wait_for_log() {
   done
   echo "Timed out after $seconds s waiting for the app to log \"$pattern\"." >&2
   return 1
+}
+
+# One launch of the refresh workload. Until SIGUSR1 the app refuses every quote,
+# as in any acceptance run; then it runs its passes, and the window that holds
+# them is measured as the idle one is. A build without the workload never logs
+# that it is ready and is not signalled.
+measure_refresh() {
+  local run="$1" run_file="$2" window_s=$((refresh_passes * refresh_spacing)) passes remaining heap_before
+  if ! tail -n "+$((log_start + 1))" "$app_log" | grep -q "Benchmark refresh: ready"; then
+    echo "refresh_unsupported=1" >>"$run_file"
+    return 0
+  fi
+  remaining="$("$python_bin" -c 'import sys; print(max(0.0, float(sys.argv[1]) + float(sys.argv[2]) - float(sys.argv[3])))' "$launched_at" "$settle" "$(now)")"
+  sleep "$remaining"
+  /usr/bin/heap -s "$app_pid" >"$work/heap-before-refresh.txt" 2>&1 || true
+  heap_before="$(heap_allocated_mb "$work/heap-before-refresh.txt")"
+  kill -USR1 "$app_pid"
+  wait_for_log "Benchmark refresh: starting" 30 >/dev/null
+  "$proc_usage" "$app_pid" --interval 5 --duration "$window_s" --series "$results/refresh-$run-series.txt" \
+    >"$work/refresh.txt"
+  wait_for_log "Benchmark refresh: pass $refresh_passes of $refresh_passes finished" 60 >/dev/null
+  passes="$(tail -n "+$((log_start + 1))" "$app_log" | grep -c "Refresh completed: " || true)"
+  /usr/bin/heap -s "$app_pid" >"$work/heap-refresh.txt" 2>&1 || true
+  head -n 60 "$work/heap-refresh.txt" >"$results/refresh-$run-heap.txt"
+  "$python_bin" - "$work/refresh.txt" "$window_s" "$passes" "$heap_before" "$(heap_allocated_mb "$work/heap-refresh.txt")" \
+    >>"$run_file" <<'PY'
+import sys
+
+path, window, passes, heap_before, heap_after = sys.argv[1:]
+window = float(window)
+figures = {}
+for line in open(path):
+    key, _, value = line.strip().partition("=")
+    try:
+        figures[key] = float(value)
+    except ValueError:
+        pass
+print(f"refresh_passes={passes}")
+print(f"refresh_cpu_s={figures['app_cpu_s_per_min'] * window / 60:.3f}")
+print(f"refresh_energy_j={figures['app_power_mw'] * window / 1000:.3f}")
+print(f"refresh_wakeups={figures['app_wakeups_per_min'] * window / 60:.0f}")
+print(f"refresh_disk_written_mb={figures['app_disk_written_mb_per_min'] * window / 60:.3f}")
+print(f"refresh_footprint_mb_median={figures['app_footprint_mb_median']:.1f}")
+if heap_before and heap_after:
+    print(f"refresh_heap_growth_mb={float(heap_after) - float(heap_before):.1f}")
+for key in ("display_asleep", "screen_locked"):
+    if figures.get(key):
+        print(f"refresh_{key}=1")
+PY
 }
 
 note "Warm-up launch (first-run migrations and history recalculation)"
@@ -218,11 +292,24 @@ print(datetime.datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=d
   # varies from launch to launch; this figure does not.
   /usr/bin/heap -s "$app_pid" >"$work/heap.txt" 2>&1 || true
   head -n 60 "$work/heap.txt" >"$results/launch-$run-heap.txt"
-  awk '/^All zones:/ { for (i = 2; i <= NF; i++) if ($i ~ /^\(?bytes\)?$/) { gsub(/[^0-9]/, "", $(i - 1)); printf "app_heap_allocated_mb=%.1f\n", $(i - 1) / 1048576; exit } }' \
-    "$work/heap.txt" >>"$run_file"
+  heap_mb="$(heap_allocated_mb "$work/heap.txt")"
+  [[ -n "$heap_mb" ]] && echo "app_heap_allocated_mb=$heap_mb" >>"$run_file"
   cp "$run_file" "$results/launch-$run-metrics.txt"
   stop_app
 done
+if [[ "$refresh" -eq 1 ]]; then
+  # Each starts from the data the one before it left, the same way for every build.
+  for run in $(seq 1 "$runs"); do
+    note "Refresh launch $run of $runs (about $((settle + refresh_passes * refresh_spacing)) s)"
+    launch
+    wait_for_log "historical portfolio snapshots from Core Data\." 120 >/dev/null
+    run_file="$work/refresh-$run.txt"
+    : >"$run_file"
+    measure_refresh "$run" "$run_file"
+    cp "$run_file" "$results/refresh-$run-metrics.txt"
+    stop_app
+  done
+fi
 cp "$app_log" "$results/app.log"
 log_saved=1
 
@@ -245,7 +332,7 @@ coverage_bytes="$(size -m "$executable" | awk '/__llvm_(prf|cov)/ {sum += $NF} E
   echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "commit: $commit_label"
   echo "system: macOS $(sw_vers -productVersion), $(sysctl -n machdep.cpu.brand_string), $(($(sysctl -n hw.memsize) / 1073741824)) GB, $(pmset -g batt | head -n 1 | sed -E "s/.*'(.*)'.*/\1/")"
-  echo "settings: runs=$runs settle=${settle}s window=${window}s"
+  echo "settings: runs=$runs settle=${settle}s window=${window}s$([[ "$refresh" -eq 1 ]] && echo " refresh=${refresh_passes}x${refresh_spacing}s")"
   echo "fixture: $(cat "$work/fixture.txt")"
   echo
   printf '%-34s %10s   %s\n' metric median "each run"
@@ -260,6 +347,8 @@ order = [
     "app_disk_written_mb_per_min", "app_cpu_s_before_window", "app_energy_j_before_window",
     "launch_to_window_s", "launch_to_history_s", "full_recalculation", "display_asleep", "screen_locked",
     "helper_start_s", "helper_start_cpu_s", "helper_footprint_mb", "helper_resident_mb",
+    "refresh_passes", "refresh_cpu_s", "refresh_energy_j", "refresh_wakeups", "refresh_disk_written_mb",
+    "refresh_footprint_mb_median", "refresh_heap_growth_mb", "refresh_unsupported",
 ]
 values = {}
 for prefix in ("run", "helper"):

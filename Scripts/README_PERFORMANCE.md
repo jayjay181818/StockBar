@@ -67,6 +67,32 @@ script waits for or because the script was stopped, has no summary. It keeps
 the app's log as `app-failed.log` in the same place, so that what happened can
 be explained; the isolated storage the log was written to is deleted as usual.
 
+The launches above never refresh a price: live providers are off, so every
+quote is refused. `--refresh` adds as many launches again, after those, for
+the refresh workload. `--settle` seconds after each, the script sends the app
+`SIGUSR1`, and the app runs four "Refresh now" passes, 30 s apart, on made-up
+quotes that move a little each pass, with no network and no Python. Chart
+Data Collection is set to 30 s, so every pass records price rows and a
+portfolio snapshot, as every refresh does at the default settings. The 120 s
+that hold the passes are measured as the idle window is:
+
+| Figure | What it is |
+| --- | --- |
+| `refresh_passes` | Refresh passes the app logged as completed in the window. Four, unless a pass failed |
+| `refresh_cpu_s`, `refresh_energy_j`, `refresh_wakeups` | CPU time, CPU energy and CPU wake-ups over the window |
+| `refresh_disk_written_mb` | What the app wrote to disk over the window: the store, its caches and its settings |
+| `refresh_footprint_mb_median` | Physical footprint over the window |
+| `refresh_heap_growth_mb` | Bytes allocated after the window, less those allocated just before the signal |
+| `refresh_unsupported` | 1 for a build that does not have the workload, which is then not signalled |
+
+The app takes the workload only in an acceptance run with live providers
+off, and refuses quotes until the signal. The refresh launches come after the
+others because a refresh changes the stored data the next launch starts from:
+measured after a launch that had refreshed, the idle window used about a
+tenth of the CPU energy. Each refresh launch starts from the data the one
+before it left, in the same order for every build. They take about 3.5
+minutes each.
+
 A soak run is the same thing with one long window:
 
 ```bash
@@ -90,6 +116,11 @@ same commit measured against itself reaches that on some row often enough
 Anything else is "no measurable change". The default is six launches a side
 and takes about 35 minutes. Four a side can reach "possibly" at best, and
 with fewer nothing can be told apart.
+
+`--refresh` passes the refresh workload on to every turn and adds its rows to
+the table; the comparison then takes about 75 minutes. A commit from before
+the workload existed shows "not measured" on its side of those rows, and its
+turns take no longer.
 
 Comparing a commit with itself shows the noise of the method.
 
