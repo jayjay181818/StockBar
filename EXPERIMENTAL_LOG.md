@@ -2646,11 +2646,25 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   The wake-ups are the trade-off: 218 more over the four passes, about
   55 a pass, while CPU and CPU energy halve. The trial copy shows the same
-  direction, 355 against 536 wake-ups a minute with the window open. Why
-  they rose was not looked into. One untested explanation: the main
-  window's rolling digits animate when prices change, and before this
-  change the main thread was too busy redrawing to run many of their
-  frames.
+  direction, 355 against 536 wake-ups a minute with the window open.
+
+  The likely cause is the main window's rolling digits, which animate
+  when prices change: before this change the main thread was too busy
+  redrawing to run many of their frames. To check, the trial copy of
+  `cd291fa` ran three more launches on 2026-11-13 from 15:46 to 15:59 UTC,
+  on battery power, with the rolling digits on, off, and on again:
+
+  | Over the 120 s of refreshes | Rolling on | Rolling off | Rolling on again |
+  | --- | --- | --- | --- |
+  | App CPU wake-ups | 426 /min | 340 /min | 440.5 /min |
+  | App CPU | 1.66 s/min | 0.99 s/min | 1.73 s/min |
+  | App CPU power | 91.8 mW | 53.4 mW | 96.2 mW |
+
+  With them off, the change's wake-ups are below the 355 a minute of the
+  code before it with them on. The code before it was not run with them
+  off, and each figure is from one launch. The wake-ups with them on vary
+  from launch to launch: 426 to 536 a minute across this branch's four
+  such launches.
 - Testing: 727 XCTest tests pass with 0 failures, one of them new: three
   holdings refreshed in one forced pass, with an observer on their prices
   whose follow-up task runs at the pass's first wait, must see all three
@@ -2674,7 +2688,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     up by name. The comment in the code and the squash commit give the
     right one.
 - Verdict: left open for the owner. CPU and energy, which the wake-ups
-  stand in for, both halve, so the recommendation is to retain it.
+  stand in for, both halve, and the extra wake-ups come with the rolling
+  digits, which now get to animate. The recommendation is to retain it.
 
 ## Rust evaluation, 2026-11-12
 
