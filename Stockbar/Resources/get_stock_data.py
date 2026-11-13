@@ -262,22 +262,28 @@ def save_cache_unlocked(value):
             pass
         raise
 
-def get_cached(symbol):
+def get_cached_quotes(symbols):
+    """The cached quotes still fresh enough to use, from one read of the cache file.
+
+    Returns the usable quotes by symbol, and the symbols whose fresh entry is not
+    a valid quote. The caller drops those from the cache when it next writes it.
+    """
     with cache_lock():
         current_cache = load_cache_unlocked()
+    quotes = {}
+    unusable = []
+    for symbol in symbols:
         entry = current_cache.get(symbol)
-    if entry:
+        if not isinstance(entry, dict):
+            continue
         ts = entry.get('timestamp')
         if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
-            cached_result = entry.get('result')
-            cached_result = apply_previous_close_backfill(symbol, cached_result)
+            cached_result = apply_previous_close_backfill(symbol, entry.get('result'))
             if is_valid_quote(cached_result):
-                return cached_result
-            with cache_lock():
-                current_cache = load_cache_unlocked()
-                current_cache.pop(symbol, None)
-                save_cache_unlocked(current_cache)
-    return None
+                quotes[symbol] = cached_result
+            else:
+                unusable.append(symbol)
+    return quotes, unusable
 
 CACHE_ENTRY_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
@@ -304,18 +310,29 @@ def prune_cache(current_cache, now=None):
             removed += 1
     return removed
 
-def set_cache(symbol, result):
-    if not is_valid_quote(result):
-        return False
+def update_cache(quotes, drop=()):
+    """Stores the valid quotes among `quotes` and removes the `drop` symbols.
+
+    One locked read and one atomic write, however many symbols a refresh has.
+    Entries other processes stored meanwhile are kept. Nothing is written when
+    there is nothing to change. Returns the symbols stored.
+    """
+    valid = {symbol: quote for symbol, quote in quotes.items() if is_valid_quote(quote)}
+    if not valid and not drop:
+        return []
     with cache_lock():
         current_cache = load_cache_unlocked()
         prune_cache(current_cache)
-        current_cache[symbol] = {
-            'timestamp': time.time(),
-            'result': make_json_safe(result)
-        }
+        for symbol in drop:
+            current_cache.pop(symbol, None)
+        now = time.time()
+        for symbol, quote in valid.items():
+            current_cache[symbol] = {
+                'timestamp': now,
+                'result': make_json_safe(quote)
+            }
         save_cache_unlocked(current_cache)
-    return True
+    return list(valid)
 
 def exchange_today(index, symbol):
     """Current calendar date in the exchange's timezone.
@@ -1460,17 +1477,13 @@ def fetch_batch(symbols, time_budget_seconds=None):
 
     `time_budget_seconds` bounds the whole batch: symbols that cannot start within
     it are reported as timed out, so the caller still receives every other result.
+    The caller checks the cache first and stores what this returns.
     """
     results = {}
     batch_deadline = (time.monotonic() + time_budget_seconds) if time_budget_seconds else None
     fetched_any = False
 
     for symbol in symbols:
-        cached = get_cached(symbol)
-        if cached:
-            results[symbol] = cached
-            continue
-
         remaining = None if batch_deadline is None else batch_deadline - time.monotonic()
         if remaining is not None and remaining <= 1.0:
             FAILURE_CAUSES[symbol] = "TIMEOUT"
@@ -1485,7 +1498,6 @@ def fetch_batch(symbols, time_budget_seconds=None):
         deadline = SYMBOL_DEADLINE_SECONDS if remaining is None else min(SYMBOL_DEADLINE_SECONDS, remaining)
         quote_data = fetch_quote_with_deadline(symbol, deadline)
         if is_valid_quote(quote_data):
-            set_cache(symbol, quote_data)
             results[symbol] = quote_data
         else:
             print(f"Failed to fetch data for {symbol}", file=sys.stderr)
@@ -1623,15 +1635,8 @@ def main():
             sys.exit(1)
 
         symbols = [s.upper() for s in args.symbols]
-        results = {}
-
-        symbols_to_fetch = []
-        for symbol in symbols:
-            cached = get_cached(symbol)
-            if cached:
-                results[symbol] = cached
-            else:
-                symbols_to_fetch.append(symbol)
+        results, unusable = get_cached_quotes(symbols)
+        symbols_to_fetch = [symbol for symbol in dict.fromkeys(symbols) if symbol not in results]
 
         if symbols_to_fetch:
             try:
@@ -1642,12 +1647,10 @@ def main():
                     elif args.json:
                         results[symbol] = None
                     else:
-                        single_res = fetch_single(symbol)
-                        if single_res:
-                            set_cache(symbol, single_res)
-                            results[symbol] = single_res
-                        else:
-                            results[symbol] = None
+                        results[symbol] = fetch_single(symbol)
+                # One cache write for the whole refresh. fetch_single's text
+                # results are not quotes, so they were never cached.
+                update_cache(batch_results, drop=unusable)
             except Exception as e:
                 error_str = str(e)
                 output_error('NETWORK_ERROR', f'Network error: {str(e)}')
