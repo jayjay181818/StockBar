@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.16.4)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.4</link>
+      <pubDate>Fri, 13 Nov 2026 10:18:19 +0000</pubDate>
+      <sparkle:version>370.16.4</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.16.4 of Stockbar 3.7.0. Changes since experimental-370.16.3:
+
+- Note in requirements.txt that its pins have GitHub's advisory fixes (#103)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.4/Stockbar-370.16.4.zip" length="7175323" type="application/octet-stream" sparkle:edSignature="o3iVgGp+sfIVhJJjb6btUT0iCHkyMrltpQubgWyI7K3SHaOai+Np69msObI/Ce14bOKGbwLGOgy4MWW77L8TBA=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16.3)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.3</link>
       <pubDate>Fri, 13 Nov 2026 10:12:51 +0000</pubDate>
@@ -97,6 +110,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: QW+6KMemw7k0EXhoPn+rmA3VCQQpP6qrk+PPn4ydHanl8ZwaSkK0LBnkOMn+z94E/h8e86ov7RtGGI5h3mKDCw==
-length: 7113
+edSignature: Izl1dTC7BCdOspREGILVE6OVLGgVpRNSCDxFMf4iqqgRyA1RYENNbOdWTCVPZcI6tyzgKwxqFSMR17MchDkvCA==
+length: 8093
 -->
