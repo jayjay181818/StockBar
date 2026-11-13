@@ -1685,7 +1685,8 @@ class HistoricalDataManager {
             // A window, such as the menu bar's last day, is read from the
             // prices themselves unless the whole series is already built:
             // building and sorting all of it to keep a day cost more than
-            // the window. The cache is emptied whenever a price is added.
+            // the window. The cache is emptied whenever the stored prices
+            // or the live samples change, so during a refresh it is empty.
             if let cached = aliasHistoryCache.cachedSnapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
                 return cached.filter { window.contains($0.timestamp) }
             }

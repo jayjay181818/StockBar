@@ -21,9 +21,10 @@ extension DateFormatter {
 
 struct InstrumentAliasHistoryLookup {
     /// The prices stored and sampled for `symbol` and its aliases, oldest
-    /// first, one per millisecond: a later alias, and a live sample, replace
-    /// an earlier price at the same millisecond. With `window`, only the
-    /// prices inside it, the same ones the whole series would have there.
+    /// first, one per millisecond. Where several share a millisecond, later
+    /// aliases win, then the symbol itself, and within each of them a live
+    /// sample wins over a stored price. With `window`, only the prices
+    /// inside it, the same ones the whole series would have there.
     static func combinedSnapshots(
         for symbol: String,
         aliases: [String],
@@ -38,10 +39,10 @@ struct InstrumentAliasHistoryLookup {
             .filter { !$0.isEmpty && $0 != requested && seenAliases.insert($0).inserted }
         orderedAliases.append(requested)
 
-        // Prices that share a millisecond are under 1 ms apart, so reading
-        // 1 ms either side of the window takes in every price that could
+        // Prices that share a millisecond are at most 1 ms apart, so reading
+        // 2 ms either side of the window takes in every price that could
         // replace one inside it. The result is then cut to the window.
-        let readWindow = window.map { $0.lowerBound.addingTimeInterval(-0.001)...$0.upperBound.addingTimeInterval(0.001) }
+        let readWindow = window.map { $0.lowerBound.addingTimeInterval(-0.002)...$0.upperBound.addingTimeInterval(0.002) }
         var latestByTimestamp: [Int64: PriceSnapshot] = [:]
         for alias in orderedAliases {
             for source in [storedBySymbol, liveBySymbol] {

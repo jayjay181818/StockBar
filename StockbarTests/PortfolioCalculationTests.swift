@@ -1991,60 +1991,88 @@ class PortfolioCalculationTests: XCTestCase {
     func testAWindowOfTheCombinedHistoryHasTheSamePricesAsTheWholeSeriesCutToIt() {
         let requested = "NEW"
         let alias = "OLD"
+        let olderAlias = "OLDER"
         let base = 1_700_000_000.0
         func price(_ offset: Double, _ value: Double, _ symbol: String) -> PriceSnapshot {
             makePriceSnapshot(timestamp: Date(timeIntervalSince1970: base + offset), price: value, symbol: symbol)
         }
-        // Prices within a millisecond of the window's edges, where a later
-        // alias or a live sample replaces the one before it, and two prices
-        // that are not valid.
+        func window(_ from: Double, _ to: Double) -> ClosedRange<Date> {
+            Date(timeIntervalSince1970: base + from)...Date(timeIntervalSince1970: base + to)
+        }
+        // Prices that share a millisecond with one across a window's edge,
+        // where a later alias or a live sample wins, and two invalid prices.
         let stored = [
+            olderAlias: [price(120, 20, olderAlias), price(150, 21, olderAlias)],
             alias: [price(99.9994, 1, alias), price(100, 2, alias), price(100.0004, 3, alias), price(150, 4, alias),
-                    price(199.9996, 5, alias), price(200.0004, 6, alias), price(250, 7, alias)],
+                    price(199.9996, 5, alias), price(200.0004, 6, alias), price(250, 7, alias),
+                    price(300.00049, 14, alias)],
             requested: [price(99.9996, 8, requested), price(150.0002, 9, requested), price(200.0001, 10, requested),
                         price(160, .nan, requested), price(170, 0, requested)]
         ]
-        let live = [requested: [price(100.0001, 11, requested), price(199.9999, 12, requested), price(200.0006, 13, requested)]]
+        let live = [
+            olderAlias: [price(120.0002, 22, olderAlias)],
+            alias: [price(120.0003, 23, alias)],
+            requested: [price(100.0001, 11, requested), price(199.9999, 12, requested), price(200.0006, 13, requested),
+                        price(299.99951, 15, requested)]
+        ]
+        let aliases = [olderAlias, alias]
         let whole = InstrumentAliasHistoryLookup.combinedSnapshots(
-            for: requested, aliases: [alias], storedBySymbol: stored, liveBySymbol: live
+            for: requested, aliases: aliases, storedBySymbol: stored, liveBySymbol: live
         )
-        let start = Date(timeIntervalSince1970: base + 100)
-        let end = Date(timeIntervalSince1970: base + 200)
+        func windowed(_ window: ClosedRange<Date>) -> [PriceSnapshot] {
+            InstrumentAliasHistoryLookup.combinedSnapshots(
+                for: requested, aliases: aliases, storedBySymbol: stored, liveBySymbol: live, within: window
+            )
+        }
         let windows = [
-            start...end,
-            start.addingTimeInterval(-0.0005)...end.addingTimeInterval(0.0005),
-            start.addingTimeInterval(0.0002)...end.addingTimeInterval(-0.0002),
-            start...start,
-            Date(timeIntervalSince1970: 0)...Date(timeIntervalSince1970: base + 1_000)
+            window(100, 200), window(99.9995, 200.0005), window(100.0002, 199.9998), window(100, 100),
+            window(300.00048, 400), window(-base, 1_000)
         ]
 
         for window in windows {
             let expected = whole.filter { window.contains($0.timestamp) }
-            let windowed = InstrumentAliasHistoryLookup.combinedSnapshots(
-                for: requested, aliases: [alias], storedBySymbol: stored, liveBySymbol: live, within: window
-            )
-            XCTAssertEqual(windowed.map(\.timestamp), expected.map(\.timestamp), "\(window)")
-            XCTAssertEqual(windowed.map(\.price), expected.map(\.price), "\(window)")
-            XCTAssertEqual(windowed.map(\.symbol), expected.map(\.symbol), "\(window)")
+            let read = windowed(window)
+            XCTAssertEqual(read.map(\.timestamp), expected.map(\.timestamp), "\(window)")
+            XCTAssertEqual(read.map(\.price), expected.map(\.price), "\(window)")
+            XCTAssertEqual(read.map(\.symbol), expected.map(\.symbol), "\(window)")
         }
-        // At each edge of the first window a live sample replaced the stored
-        // prices, and the price just past its end is out. In the third
-        // window those live samples fall outside while prices they replaced
+        // At each edge of the first window a live sample won over the stored
+        // prices, and the price just past its end is out.
+        XCTAssertEqual(windowed(windows[0]).map(\.price), [11, 23, 9, 12])
+        // Here those live samples fall outside while prices they won over
         // fall inside, and neither may appear.
-        XCTAssertEqual(whole.filter { windows[0].contains($0.timestamp) }.map(\.price), [11, 9, 12])
-        XCTAssertEqual(whole.filter { windows[2].contains($0.timestamp) }.map(\.price), [9])
+        XCTAssertEqual(windowed(windows[2]).map(\.price), [23, 9])
+        // The live sample 0.97 ms before this window wins over the stored
+        // price 0.01 ms inside it, so reading must reach 1 ms past an edge.
+        XCTAssertEqual(windowed(windows[4]).map(\.price), [])
+        XCTAssertEqual(windowed(windows[5]).map(\.price), whole.map(\.price))
     }
 
     func testAliasPriceSnapshotCacheLooksUpASeriesWithoutBuildingOne() {
-        var cache = AliasPriceSnapshotCache(pointLimit: 10, entryLimit: 4)
-        let series = [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 100), price: 101, symbol: "NEW")]
+        var cache = AliasPriceSnapshotCache(pointLimit: 2, entryLimit: 4)
+        func series(_ symbol: String) -> [PriceSnapshot] {
+            [makePriceSnapshot(timestamp: Date(timeIntervalSince1970: 100), price: 101, symbol: symbol)]
+        }
+        var resolveCount = 0
 
         XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
-        _ = cache.snapshots(for: "NEW", aliases: ["OLD"]) { series }
+        _ = cache.snapshots(for: "NEW", aliases: ["OLD"]) { resolveCount += 1; return series("NEW") }
+        XCTAssertEqual(resolveCount, 1, "the lookup that missed stored nothing")
         XCTAssertEqual(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"])?.map(\.price), [101])
-        XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OTHER"]), "a different alias list is a miss")
-        cache.removeAll()
+
+        // A lookup that hits counts as a use: NEW outlives OTHER when a
+        // third series needs the room.
+        _ = cache.snapshots(for: "OTHER", aliases: []) { series("OTHER") }
+        XCTAssertNotNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
+        _ = cache.snapshots(for: "THIRD", aliases: []) { series("THIRD") }
+        XCTAssertNil(cache.cachedSnapshots(for: "OTHER", aliases: []))
+        XCTAssertNotNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
+
+        // A series cached for another alias list is not this symbol's, and is dropped.
+        XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["RENAMED"]))
         XCTAssertNil(cache.cachedSnapshots(for: "NEW", aliases: ["OLD"]))
+        cache.removeAll()
+        XCTAssertNil(cache.cachedSnapshots(for: "THIRD", aliases: []))
     }
 
     func testAliasPriceSnapshotCacheInvalidatesOnAliasChangeAndExplicitRemoval() {
@@ -2176,6 +2204,15 @@ class PortfolioCalculationTests: XCTestCase {
             manager.getPriceSnapshots(for: symbol, from: windowStart, to: now).map(\.price),
             [202, 303, 404]
         )
+
+        // The same window once the whole series is built and cached, and a
+        // range that ends before it starts.
+        XCTAssertEqual(manager.aliasAwarePriceSnapshots(for: symbol).map(\.price), [101, 202, 303, 404])
+        XCTAssertEqual(
+            manager.getPriceSnapshots(for: symbol, from: windowStart, to: now).map(\.price),
+            [202, 303, 404]
+        )
+        XCTAssertTrue(manager.getPriceSnapshots(for: symbol, from: now, to: windowStart).isEmpty)
 
         manager.priceSnapshots[symbol] = []
         XCTAssertEqual(
