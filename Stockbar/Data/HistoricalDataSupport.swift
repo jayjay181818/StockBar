@@ -20,11 +20,17 @@ extension DateFormatter {
 }
 
 struct InstrumentAliasHistoryLookup {
+    /// The prices stored and sampled for `symbol` and its aliases, oldest
+    /// first, one per millisecond. Where several share a millisecond, later
+    /// aliases win, then the symbol itself, and within each of them a live
+    /// sample wins over a stored price. With `window`, only the prices
+    /// inside it, the same ones the whole series would have there.
     static func combinedSnapshots(
         for symbol: String,
         aliases: [String],
         storedBySymbol: [String: [PriceSnapshot]],
-        liveBySymbol: [String: [PriceSnapshot]]
+        liveBySymbol: [String: [PriceSnapshot]],
+        within window: ClosedRange<Date>? = nil
     ) -> [PriceSnapshot] {
         let requested = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         var seenAliases = Set<String>()
@@ -33,15 +39,24 @@ struct InstrumentAliasHistoryLookup {
             .filter { !$0.isEmpty && $0 != requested && seenAliases.insert($0).inserted }
         orderedAliases.append(requested)
 
+        // Prices that share a millisecond are at most 1 ms apart, so reading
+        // 2 ms either side of the window takes in every price that could
+        // replace one inside it. The result is then cut to the window.
+        let readWindow = window.map { $0.lowerBound.addingTimeInterval(-0.002)...$0.upperBound.addingTimeInterval(0.002) }
         var latestByTimestamp: [Int64: PriceSnapshot] = [:]
         for alias in orderedAliases {
-            for snapshot in values(for: alias, in: storedBySymbol) + values(for: alias, in: liveBySymbol)
-                where snapshot.price.isFinite && snapshot.price > 0 {
-                let key = Int64((snapshot.timestamp.timeIntervalSince1970 * 1_000).rounded())
-                latestByTimestamp[key] = snapshot
+            for source in [storedBySymbol, liveBySymbol] {
+                for snapshot in values(for: alias, in: source)
+                    where snapshot.price.isFinite && snapshot.price > 0
+                        && readWindow?.contains(snapshot.timestamp) != false {
+                    let key = Int64((snapshot.timestamp.timeIntervalSince1970 * 1_000).rounded())
+                    latestByTimestamp[key] = snapshot
+                }
             }
         }
-        return latestByTimestamp.values.sorted { $0.timestamp < $1.timestamp }
+        var combined = Array(latestByTimestamp.values)
+        if let window { combined.removeAll { !window.contains($0.timestamp) } }
+        return combined.sorted { $0.timestamp < $1.timestamp }
     }
 
     private static func values(

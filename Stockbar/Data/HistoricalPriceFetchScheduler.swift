@@ -83,13 +83,7 @@ struct AliasPriceSnapshotCache {
         aliases: [String],
         resolve: () -> [PriceSnapshot]
     ) -> [PriceSnapshot] {
-        access &+= 1
-        if var entry = entries[symbol], entry.aliases == aliases {
-            entry.access = access
-            entries[symbol] = entry
-            return entry.snapshots
-        }
-        if let previous = entries.removeValue(forKey: symbol) { pointCount -= previous.snapshots.count }
+        if let cached = cachedSnapshots(for: symbol, aliases: aliases) { return cached }
         let snapshots = resolve()
         guard entryLimit > 0, snapshots.count <= pointLimit else { return snapshots }
         while entries.count >= entryLimit || pointCount + snapshots.count > pointLimit {
@@ -100,6 +94,21 @@ struct AliasPriceSnapshotCache {
         entries[symbol] = Entry(aliases: aliases, snapshots: snapshots, access: access)
         pointCount += snapshots.count
         return snapshots
+    }
+
+    /// The cached series, or nil without building one. A hit counts as a
+    /// use; a series cached for a different alias list is dropped.
+    mutating func cachedSnapshots(for symbol: String, aliases: [String]) -> [PriceSnapshot]? {
+        access &+= 1
+        guard var entry = entries[symbol] else { return nil }
+        guard entry.aliases == aliases else {
+            entries[symbol] = nil
+            pointCount -= entry.snapshots.count
+            return nil
+        }
+        entry.access = access
+        entries[symbol] = entry
+        return entry.snapshots
     }
 
     mutating func removeAll() {
