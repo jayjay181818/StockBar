@@ -7,7 +7,7 @@ struct StockbarSettingsView: View {
 
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode: String = "system"
     @AppStorage("settings.selectedTab", store: StockbarRuntimeStorage.userDefaults) private var selectedTab: SettingsTab = .general
-    @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = false
+    @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = PythonWorkerPool.quitWhenIdleDefault
     @AppStorage(StockbarRollingDigits.key, store: StockbarRuntimeStorage.userDefaults) private var rollsDigits = StockbarRollingDigits.defaultValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshInterval: TimeInterval
@@ -362,7 +362,7 @@ struct StockbarSettingsView: View {
         Section("Memory") {
             Toggle(isOn: $quitPythonHelperWhenIdle) {
                 Text("Quit Python Helper When Idle")
-                Text("Prices are fetched by a Python helper that holds 70 MB or more and stays running for 15 minutes after its last request. Turned on, it quits about 90 seconds after its last request, and each refresh starts it again: about a third of a second of processor time. While markets are open, refreshing every minute keeps it running either way.")
+                Text("Prices are fetched by a Python helper that holds 70 MB or more. Turned on, it quits about 90 seconds after its last request, and each refresh starts it again: about a third of a second of processor time. Turned off, it stays running for 15 minutes after its last request. While markets are open, refreshing every minute keeps it running either way.")
             }
             .onChange(of: quitPythonHelperWhenIdle) {
                 Task { await PythonWorkerPool.shared.idleTimeoutChanged() }

@@ -241,13 +241,6 @@ final class PythonWorkerPoolTests: XCTestCase {
             if let original { defaults.set(original, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
 
-        // Never set: exactly as before the setting existed.
-        defaults.removeObject(forKey: key)
-        let unset = await PythonWorkerPool.shared.idleTimeout
-        XCTAssertEqual(unset, .seconds(15 * 60))
-        let unconfigured = await PythonWorkerPool().idleTimeout
-        XCTAssertEqual(unconfigured, unset, "A pool that is given no timeout must keep its workers as before")
-
         defaults.set(true, forKey: key)
         // The pool stops a worker between one and one and a quarter timeouts
         // after its last request.
@@ -255,9 +248,20 @@ final class PythonWorkerPoolTests: XCTestCase {
         XCTAssertGreaterThan(on, .seconds(60 + 5), "The shortest refresh interval, plus its timer tolerance, must reuse its worker")
         XCTAssertLessThan(on * 5 / 4, .seconds(5 * 60), "At the default refresh interval the worker must exit between refreshes")
 
+        // Never set: on, the same as a store where it was turned on.
+        defaults.removeObject(forKey: key)
+        XCTAssertTrue(PythonWorkerPool.quitWhenIdleDefault)
+        XCTAssertTrue(PythonWorkerPool.quitsWhenIdle(in: defaults))
+        let unset = await PythonWorkerPool.shared.idleTimeout
+        XCTAssertEqual(unset, on, "Never changed, the setting is on")
+
         defaults.set(false, forKey: key)
+        XCTAssertFalse(PythonWorkerPool.quitsWhenIdle(in: defaults))
         let off = await PythonWorkerPool.shared.idleTimeout
-        XCTAssertEqual(off, unset, "Turned off again, the app's pool must go back without a restart")
+        XCTAssertEqual(off, .seconds(15 * 60), "Turned off, the app's pool must keep its workers for 15 minutes without a restart")
+
+        let unconfigured = await PythonWorkerPool().idleTimeout
+        XCTAssertEqual(unconfigured, off, "A pool that is given no timeout keeps its workers for 15 minutes")
 
         XCTAssertEqual(SettingsTransferKeys.settingsKeys[key], .bool, "The setting travels with an export")
     }
