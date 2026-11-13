@@ -351,7 +351,6 @@ class HistoricalDataManager {
         lastSnapshotTime = now
         Task { await logger.debug("📸 Recording snapshot at \(now)") }
         
-        var currentPriceSnapshots: [PriceSnapshot] = []
         var changedPriceSnapshots: [PriceSnapshot] = []
         var hasValidData = false
         
@@ -376,7 +375,6 @@ class HistoricalDataManager {
                 symbol: trade.trade.name
             )
             
-            currentPriceSnapshots.append(snapshot)
             hasValidData = true
 
             let name = trade.trade.name
@@ -403,12 +401,15 @@ class HistoricalDataManager {
         let gains = dataModel.calculateNetGains()
         let totalValue = calculateTotalPortfolioValue(from: dataModel)
         
+        // The session's snapshots are read only for their totals, so the
+        // positions' prices are left out. Each symbol's prices are kept in
+        // `priceSnapshots`.
         let portfolioSnapshot = PortfolioSnapshot(
             timestamp: now,
             totalValue: totalValue,
             totalGains: gains.amount,
             currency: gains.currency,
-            priceSnapshots: currentPriceSnapshots
+            priceSnapshots: []
         )
         
         portfolioSnapshots.append(portfolioSnapshot)
