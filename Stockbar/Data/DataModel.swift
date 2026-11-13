@@ -17,7 +17,10 @@ class DataModel {
 
     // MARK: - Properties
 
-    private let networkService: NetworkService = PythonNetworkService.shared
+    /// Made-up quotes when the benchmark measures refreshes, otherwise nil.
+    private let benchmarkQuotes = BenchmarkRefreshSettings.current.map { _ in BenchmarkQuoteService() }
+    private var networkService: NetworkService { benchmarkQuotes ?? PythonNetworkService.shared }
+    @ObservationIgnored private var benchmarkRefreshDriver: BenchmarkRefreshDriver?
 
     internal let currencyConverter: CurrencyConverter // Internal for UI access to exchange rate info
     private let decoder = JSONDecoder()           // Keep as is
@@ -246,7 +249,14 @@ class DataModel {
                 refreshInterval: refreshInterval
             )
             self.refreshService.setDataModel(self)
-            
+            if let settings = BenchmarkRefreshSettings.current, let quotes = self.benchmarkQuotes {
+                let driver = BenchmarkRefreshDriver(settings: settings, quotes: quotes) { [weak self] in
+                    await self?.refreshService?.performRefreshAllTrades(force: true)
+                }
+                driver.start()
+                self.benchmarkRefreshDriver = driver
+            }
+
             self.historicalDataCoordinator = HistoricalDataCoordinator(
                 networkService: networkService,
                 historicalDataManager: historicalDataManager

@@ -39,11 +39,27 @@ METRICS = [
     ("helper_start_cpu_s", "Python helper start, CPU", "s", 2, "helper_cost.py"),
     ("helper_footprint_mb", "Python helper memory once started", "MB", 1, "helper_cost.py"),
 ]
+# With --refresh: four "Refresh now" passes on made-up quotes, 30 s apart, after
+# the idle window. Shown only when a side measured them.
+REFRESH_METRICS = [
+    ("refresh_passes", "Refresh passes completed in the refresh window", "passes", 0, "app log"),
+    ("refresh_cpu_s", "CPU over the refresh window", "s", 3, "proc_pid_rusage, refresh window"),
+    ("refresh_energy_j", "CPU energy over the refresh window", "J", 3, "proc_pid_rusage, refresh window"),
+    ("refresh_wakeups", "CPU wake-ups over the refresh window", "wake-ups", 0, "proc_pid_rusage, refresh window"),
+    ("refresh_disk_written_mb", "Disk writes over the refresh window", "MB", 3, "proc_pid_rusage, refresh window"),
+    ("refresh_footprint_mb_median", "Memory during the refresh window (physical footprint)", "MB", 1,
+     "proc_pid_rusage, refresh window"),
+    ("refresh_heap_growth_mb", "Allocated memory added by the refreshes", "MB", 1,
+     "heap, before and after the refresh window"),
+]
 # Launches that differ in these were not measured under the same conditions.
 CONDITIONS = [
     ("full_recalculation", "recalculated the whole portfolio history"),
     ("display_asleep", "ran with the display asleep"),
     ("screen_locked", "ran with the screen locked"),
+    ("refresh_display_asleep", "ran the refresh window with the display asleep"),
+    ("refresh_screen_locked", "ran the refresh window with the screen locked"),
+    ("refresh_unsupported", "were builds without the refresh workload"),
 ]
 SIGNIFICANCE = 0.01
 SUGGESTIVE = 0.05
@@ -133,7 +149,8 @@ def report(folder, before_commit, after_commit):
         "| Metric | Before: median (range) | After: median (range) | Change | Verdict | Read with |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    for key, name, unit, digits, method in METRICS:
+    refresh_measured = any(key in side for side in (before, after) for key, *_ in REFRESH_METRICS)
+    for key, name, unit, digits, method in METRICS + (REFRESH_METRICS if refresh_measured else []):
         if key not in before or key not in after:
             lines.append(f"| {name} | not measured | not measured | | | {method} |")
             continue

@@ -86,6 +86,22 @@ class ReportTests(unittest.TestCase):
         self.assertIn('A "possibly" row lies between p = 0.01 and p = 0.05', text)
         self.assertIn('| Launch to history loaded | not measured | not measured |', text)
         self.assertIn('0 launch(es) before and 1 after ran with the display asleep', text)
+        self.assertNotIn('refresh window', text)
+
+    def test_refresh_rows_appear_when_a_side_measured_them(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for launch in range(1, 6):
+                self.write(folder, f'before-1/launch-{launch}-metrics.txt', [
+                    'app_footprint_mb_median=100', 'refresh_unsupported=1',
+                ])
+                self.write(folder, f'after-1/launch-{launch}-metrics.txt', [
+                    'app_footprint_mb_median=100', f'refresh_cpu_s={0.5 + launch / 100}', 'refresh_passes=4',
+                ])
+            text = compare.report(folder, 'aaaaaaa', 'bbbbbbb')
+
+        self.assertIn('| CPU over the refresh window | not measured | not measured |', text)
+        self.assertIn('| Refresh passes completed in the refresh window | not measured |', text)
+        self.assertIn('5 launch(es) before and 0 after were builds without the refresh workload', text)
 
 
 if __name__ == '__main__':

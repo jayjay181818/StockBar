@@ -3,7 +3,7 @@
 # pull request carries.
 #
 #   bash Scripts/perf/compare.sh <before> <after> [--label name] [--rounds 2] [--runs 3]
-#                                [--settle 75] [--window 60]
+#                                [--settle 75] [--window 60] [--refresh]
 #
 # <before> and <after> are commits, by any name git accepts. Each is exported
 # to build/bench/src/ and built into build/bench/dd/, both named after the
@@ -23,6 +23,8 @@
 # The table goes to the terminal and to report.md in
 # build/bench/results/compare-<label>-<time>/, beside everything each turn
 # saved. About (settle + window + 10) seconds a launch, plus the builds.
+# --refresh adds the refresh workload to every launch (see benchmark.sh):
+# about two minutes more a launch, and rows of its own in the table.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PERF_DIR="$ROOT_DIR/Scripts/perf"
@@ -38,6 +40,7 @@ rounds=2
 runs=3
 settle=75
 window=60
+refresh=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --label) label="${2:-}"; shift 2 ;;
@@ -45,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --runs) runs="${2:-}"; shift 2 ;;
     --settle) settle="${2:-}"; shift 2 ;;
     --window) window="${2:-}"; shift 2 ;;
+    --refresh) refresh=(--refresh); shift ;;
     *) usage ;;
   esac
 done
@@ -91,7 +95,8 @@ for round in $(seq 1 "$rounds"); do
     if [[ "$side" == before ]]; then sha="$before_sha"; build="$before_build"; else sha="$after_sha"; build="$after_build"; fi
     note "Round $round of $rounds: $side (${sha:0:7})"
     STOCKBAR_DERIVED_DATA="$build" bash "$PERF_DIR/benchmark.sh" --skip-build --commit-label "${sha:0:7}" \
-      --label "$side" --runs "$runs" --settle "$settle" --window "$window" --output "$out/$side-$round" >/dev/null
+      --label "$side" --runs "$runs" --settle "$settle" --window "$window" ${refresh[@]+"${refresh[@]}"} \
+      --output "$out/$side-$round" >/dev/null
   done
 done
 
