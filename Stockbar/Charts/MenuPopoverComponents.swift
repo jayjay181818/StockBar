@@ -343,7 +343,7 @@ struct MenuPopoverStatBox: View {
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
 
             if let subValue, !subValue.isEmpty {
                 Text(subValue)

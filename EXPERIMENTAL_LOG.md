@@ -16,8 +16,8 @@ candidates that remain are small or would change what the app does, so no
 further optimisation is planned. Since the milestone the owner has asked
 for three things, none an optimisation of its own: an update channel that
 follows `experimental` (pull request 97, merged), a switch for the Python
-helper's early exit (pull request 86) and a switch for the rolling digits
-(plan item 14, next).
+helper's early exit (pull request 86, merged) and a switch for the rolling
+digits (pull request 98).
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -53,6 +53,12 @@ helper's early exit (pull request 86) and a switch for the rolling digits
   request 86). Off, which is the default, nothing changes: the helper is
   kept for 15 minutes. What the switch saves on real data is expected, not
   measured.
+- The rolling digits of the figures can be turned off, with **Settings →
+  Advanced → Memory → Roll Digits When Figures Change** (pull request 98).
+  On, which is the default, nothing changes. Off, the system's cache of
+  drawn digits held 0.4 MB against 9.4 to 9.9 MB with it on, in two
+  launches each way. The standard benchmark was not run for this pull
+  request, at the owner's instruction.
 
 Waiting for a decision:
 
@@ -70,9 +76,9 @@ Waiting for a decision:
   what it does not cover are at the end of
   [Milestone 1](#milestone-1-2026-11-12).
 
-Decided on 2026-11-12: the rolling digits of the main window's figures,
-which cost about 6 MB of cached glyphs, get a switch of their own (plan
-item 14).
+Decided on 2026-11-12 and done in pull request 98: the rolling digits of
+the figures, which cost 6 to 10 MB of cached glyphs after a launch like the
+benchmark's, have a switch of their own (plan item 14).
 
 This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
@@ -222,9 +228,11 @@ Figures from either side of a break are not compared with each other.
     `main` refuses to rewrite a feed that holds a channel it does not know,
     so a shared feed would stop testing builds and releases from being
     published.
-14. Next, asked for by the owner on 2026-11-12: a switch beside the
-    helper's, in Settings → Advanced → Memory, that turns off the rolling
-    digits and with them about 6 MB of cached glyphs. On unless turned off.
+14. Done in pull request 98, asked for by the owner on 2026-11-12: a switch
+    beside the helper's, in Settings → Advanced → Memory, that turns off
+    the rolling digits and with them the cached glyphs: 0.4 MB held with
+    it off against 9.4 to 9.9 MB with it on. On unless turned off. The
+    standard benchmark was not run, at the owner's instruction.
 
 No further optimisation is planned. Open for the owner are promotion, pull
 request 94 and whether the fetch should leave Python. What could still be
@@ -458,7 +466,7 @@ Nothing was changed. The cache belongs to the system, the animation is
 deliberate, and in normal use the app starts without a window, so the
 figures are ready long before one is opened. The cache was still held after
 the 30 minutes of the soak below; whether it is ever emptied was not
-measured beyond that.
+measured beyond that. Pull request 98 has since made the rolling a setting.
 
 ### Soak: 30 minutes idle, baseline and `experimental`
 
@@ -539,7 +547,8 @@ the app does:
 - The main window's chart, 5.4 MB for 730 points. Fewer points would lower
   it in proportion and would change what is drawn.
 - The glyph cache, about 6 MB after a launch like the benchmark's, for the
-  rolling digits. The owner has since asked for a switch (plan item 14).
+  rolling digits. Pull request 98 has since added a switch that turns the
+  rolling off.
 - The Python helper, 71 MB while it is running. Pull request 86's switch
   lets it go between refreshes. The
   [Rust evaluation](#rust-evaluation-2026-11-12) covers taking the fetch
@@ -680,8 +689,13 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Incidental: the pool's idle check now ends when its pool is gone. The old
   loop kept waking for ever once its pool had been deallocated, which only
   tests did.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `2da80f2`. The merge published the
+  prerelease `experimental-370.0.13`. Checked afterwards: the feed's
+  signature and the archive's signature both verify against the
+  `SUPublicEDKey` in `Info.plist`; the archive's length matches the feed;
+  the unpacked app reports build 370.0.13 of version 3.7.0 and passes
+  `codesign --verify --deep --strict`. `main`, `testing` and the `appcast`
+  branch did not move.
 - Benchmark, isolated: before `ec22bc3`, after `e3c85f8`, measured twice,
   each time six launches a side in turns on macOS 27.2.1 and mains power,
   all 24 launches with the screen unlocked and the display awake. Named in
@@ -1705,6 +1719,125 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     created at the same moment.
 - Verdict: retained.
 
+### 98: Add a setting that turns off the rolling digits
+
+- What: a switch, **Settings → Advanced → Memory → Roll Digits When
+  Figures Change**, on unless turned off. On, figures roll to a new value
+  as they always have. Off, they change without rolling, and the bitmaps
+  of digits that the system caches while a figure rolls are not made. The
+  owner asked for it on 2026-11-12, after
+  [Milestone 1](#milestone-1-2026-11-12) traced about 6 MB of idle memory
+  to that cache.
+
+  The ten figures that rolled now ask for it with one modifier,
+  `stockbarRollingDigits()`, which leaves the transition out when the
+  setting is off. The three SwiftUI roots that AppKit hosts (the main
+  window, the popover of a symbol and the popover of the portfolio) each
+  read the setting once and pass it down. `Scripts/validate_invariants.sh`
+  now refuses the transition written anywhere else, so a figure added
+  later cannot ignore the switch unnoticed. The setting,
+  `figures.rollingDigits`, is stored with the app's other defaults and
+  travels with a settings export. The user guide and the architecture note
+  describe it.
+- Merged: the date and squash commit are filled in by the pull request
+  after it.
+- Benchmark: not run. The owner's instruction, given on 2026-11-12 at 23:46
+  UTC, was "skip the benchmark on the digits toggle." All fifteen rows of
+  the standard set are therefore not measured for this pull request, and
+  none is carried over from another run. It is the one change on the branch
+  merged without the standard comparison. If a later comparison or
+  milestone shows a regression, this pull request is among those to bisect.
+
+  Expected, and theoretical: with the switch on, which is the default, no
+  row moves, because the same transition reaches the same figures. What
+  differs with it on is that each figure passes through a modifier that
+  reads one value from the environment and chooses between two branches.
+- Glyph cache with the switch off and on: the one thing measured. A Release
+  build of the branch was started the way the benchmark starts it, on the
+  made-up fixture with live providers off, with the system recording where
+  each allocation is made (`MallocStackLogging=lite`), and read with `heap`
+  60 seconds after its history had loaded. Four launches in turns on
+  2026-11-13, 00:15 to 00:24 UTC. The setting was written to the launch's
+  own settings file beforehand and read back from it afterwards.
+
+  | Launch | Switch | Glyph bitmaps held | Blocks |
+  | --- | --- | --- | --- |
+  | 1 | off | 0.43 MB | 557 |
+  | 2 | on | 9.85 MB | 4,722 |
+  | 3 | off | 0.41 MB | 526 |
+  | 4 | on | 9.35 MB | 4,509 |
+
+  Counted as at Milestone 1: the blocks `heap` attributes to
+  `CGGlyphBuilderLockBitmaps` and `CGGlyphBitmapCreate`. Off, the cache
+  holds about what it held in the milestone's trial build without the
+  transition (0.46 MB). On, it held about 3 MB more than the milestone's one launch
+  (6.52 MB); why was not looked into. How much a launch caches varies with
+  its timing (see Milestone 1), and the Mac was not quiet: the test suite,
+  the check on screen and the download of pull request 86's build ran
+  beside these launches. So these are what four launches held, not a
+  constant, and the switch's description and the user guide say "6 to 10
+  MB". The build measured had the description's earlier wording, "about 6
+  MB"; the commit merged differs from it in that sentence, a comment and
+  the user guide.
+
+  Not measured: what the switch does to idle memory, which is a row of the
+  comparison that was not run. In pull request 86's two runs idle memory
+  rose and fell with the number of cached glyph blocks, so a saving of
+  about the size of the cache is expected. It is theoretical until a
+  comparison measures it. Also not measured: the cache after a popover has
+  been opened or a refresh has rolled a figure.
+- Testing: 724 XCTest tests with 0 failures. Two are new, in
+  `RollingDigitsSettingTests`. One puts a figure in a real hosting view and
+  reads the transition it ends up with: rolling with the setting unset, not
+  rolling with it off, rolling again with it on. The other checks that the
+  setting is on the settings export list. `checks`, which now includes the
+  new invariant, and `build-release` pass on the commit merged, and so does
+  `docs-check`. The invariant's pattern was tried on made-up lines and
+  flags a direct use, one inside `StockbarDesign.swift` included. 66 Python
+  helper tests and 89 script tests pass; they were run before the
+  description's figure was corrected, which changed no Python.
+
+  On screen: a trial copy of the Release build, on the made-up fixture with
+  live providers off, was worked through by a Sonnet subagent. Settings →
+  Advanced → Memory shows two switches. Their titles and descriptions as
+  read from the accessibility tree match what is drawn, and nothing is cut
+  off or overlapping in a window of 1464 by 860 points. The new switch read
+  on. One press turned it off; no alert or sheet appeared, the helper's
+  switch stayed as it was, and the Overview page showed its figures
+  normally afterwards. The trial's settings file then held
+  `figures.rollingDigits` as false. The check read the description when it
+  said "about 6 MB"; the corrected sentence was not read on screen again.
+  That figures visibly stop rolling was not watched: with providers off
+  nothing changes a figure after launch. The test above and the cache
+  measurement stand in for it.
+- Review: one independent review by Opus, of the diff before this entry was
+  written. It found no functional defect. It found that the switch's
+  description, the user guide and the comments stated more than had been
+  measured, about how much memory the rolling costs and when it comes
+  back. It found that the test did not read what a figure actually does,
+  and that nothing kept a figure added later from using the transition
+  directly. All of that
+  was corrected before the tests above were run: the wording, the test that
+  reads a hosted figure's transition, and the invariant with its note in
+  the architecture document.
+- Known issues:
+  - The standard benchmark was not run, as set out above.
+  - Turning the switch off does not give back memory already cached. That
+    may take a restart: at Milestone 1 the cache was still held after 30
+    minutes.
+  - Off takes away the roll, not every animation. Three figures animate
+    their own change unless Reduce Motion is on, and with the switch off
+    they change with SwiftUI's default transition.
+  - Turning the switch rebuilds each figure once, because the modifier
+    chooses between two branches. Nothing was seen of it on screen.
+  - A SwiftUI root added later has to end its body with
+    `stockbarRollingDigitsSetting()`, or its figures roll whatever the
+    switch says. The architecture note says so; no check enforces it.
+  - Importing settings that were exported by a build without the switch
+    puts it back to on.
+- Verdict: retained, as a switch that is on unless turned off. Nothing
+  changes for anyone who leaves it alone.
+
 ## Rust evaluation, 2026-11-12
 
 No component was moved to Rust, and none is recommended. The one place where
@@ -1825,7 +1958,7 @@ supervised trial against Yahoo.
 | Precompiled bytecode for the Python helper's own scripts | 2026-11-12, plan item 8 | Compiling all three scripts takes 8.2 ms of a 330 ms helper start | About 2 percent of the start, for a build step and files to keep in step with the scripts. Never written |
 | Thin only the newly aged part of each price series after a recorded snapshot | 2026-11-12, plan item 11 | A full pass costs 32.6 ms on the main actor for each recorded snapshot at the fixture's size, 0.0065 s/min at the default interval | The saving is about 2 s of CPU in a trading day, and it needs remembered state that every place replacing a series must keep true. Never written |
 | Draw the main window's chart as one area plot and one line plot in place of a mark for every point | 2026-11-12, milestone 1 | Three launches of each build: Swift Charts' classes among the 27 largest fell from 5.02 MB to 4.38 MB (2.75 MB in one launch), and the untyped allocations it was meant to lower did not move (19.7 to 20.4 MB before, 20.2 to 20.6 MB after) | About 0.6 MB, for a change to how the chart is built that could be tried on one macOS version only. Appearance and VoiceOver were not compared. Never committed |
-| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window. Six lines if the owner wants the memory more than the animation. Never committed |
+| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window. Six lines if the owner wants the memory more than the animation. Never committed. The owner asked for a switch in its place, which is pull request 98 |
 
 ## How this branch works
 
@@ -1933,8 +2066,9 @@ launch.
 | Milestone 1: the comparison, the soaks, the launch with allocations named and the two trial builds | Fable (orchestrator) | Done directly. Each step was a measurement to read before choosing the next, with nothing independent to hand to a subagent |
 | Pull request 97, the Experimental update channel | Fable (orchestrator), with a check of the Settings window by Sonnet and one independent review by Opus | Sonnet was used at the owner's instruction for driving the screen: it worked through the trial copy's Settings window and reported what each channel was offered, in 53 tool calls and about 138,000 tokens. The Opus review was worth it: it found that a release would never have reached the channel and that the tests and notes had Sparkle's ordering wrong, in 62 tool calls, about 250,000 tokens and fifteen minutes |
 | Pull request 86 reworked as a switch | Fable (orchestrator), with two checks of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: the first check read and toggled the switch in 23 tool calls and about 128,000 tokens but could not scroll the page; the second settled that it scrolls, through the scroll bar's accessibility buttons, in 15 tool calls and about 128,000 tokens. The Opus review was worth it: no defect in the pool, but it found that the switch's description promised the helper is kept in cases where it is not, and that two tests could not fail, in 23 tool calls, about 155,000 tokens and six minutes. My own reading before it found the one race that was fixed |
+| Pull request 98, the switch for the rolling digits | Fable (orchestrator), with one check of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: it read both Memory switches word for word, turned the new one off and looked at the Overview page, in 24 tool calls, about 126,000 tokens and 80 seconds. The Opus review found no defect and was still worth it: the description and the guide stated more than had been measured, the test did not read what a figure does, and nothing kept later figures on the modifier, in 55 tool calls, about 201,000 tokens and eleven minutes. It ran beside pull request 86's first comparison, which had to be repeated on a quiet Mac |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
-requests 97 and 86: nothing else so far has been parallel or self-contained
+requests 97, 86 and 98: nothing else so far has been parallel or self-contained
 enough to repay a cold start, and most of the elapsed time is benchmark
 runs, which no model speeds up.

@@ -177,6 +177,7 @@ enum SettingsTransferKeys {
         "stockbar.debugLoggingEnabled": .bool,
         // Memory
         PythonWorkerPool.quitWhenIdleKey: .bool,
+        StockbarRollingDigits.key: .bool,
         // Trading 212 configuration (credentials travel separately)
         "trading212.enabled": .bool,
         "trading212.environment": .string,

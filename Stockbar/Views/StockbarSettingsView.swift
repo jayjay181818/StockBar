@@ -8,6 +8,7 @@ struct StockbarSettingsView: View {
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode: String = "system"
     @AppStorage("settings.selectedTab", store: StockbarRuntimeStorage.userDefaults) private var selectedTab: SettingsTab = .general
     @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = false
+    @AppStorage(StockbarRollingDigits.key, store: StockbarRuntimeStorage.userDefaults) private var rollsDigits = StockbarRollingDigits.defaultValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshInterval: TimeInterval
     @State private var snapshotInterval: TimeInterval
@@ -365,6 +366,10 @@ struct StockbarSettingsView: View {
             }
             .onChange(of: quitPythonHelperWhenIdle) {
                 Task { await PythonWorkerPool.shared.idleTimeoutChanged() }
+            }
+            Toggle(isOn: $rollsDigits) {
+                Text("Roll Digits When Figures Change")
+                Text("Figures in the main window and the popovers can roll to a new value. macOS keeps the digits it draws for this in memory: 6 to 10 MB when measured after the main window's figures had rolled in. Turned off, figures change without rolling. Memory already used may not be given back until Stockbar is restarted.")
             }
         }
 
