@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.0.15)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.15</link>
+      <pubDate>Fri, 13 Nov 2026 00:50:28 +0000</pubDate>
+      <sparkle:version>370.0.15</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.0.15 of Stockbar 3.7.0. Changes since experimental-370.0.14:
+
+- Refuse to package an app built with test-coverage counters (#94)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.0.15/Stockbar-370.0.15.zip" length="7175228" type="application/octet-stream" sparkle:edSignature="FPGEwcVR0qgILEj+lsfusomSIp+Eq02WuNNG0Pj9Ur1mLo6SfUl4A1NKYSU1k7sMTZ6scaEeLDJGZJqiTxjCCg=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.0.14)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.14</link>
       <pubDate>Fri, 13 Nov 2026 00:32:02 +0000</pubDate>
@@ -58,6 +71,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: lWPxEsttkbXBNv76TKsD2ysrKwBQocAT62FnWJwERjhPZ9O2QLknqne/BMFdWqVHIVfFzRGxG+w9Y2CSBDmLBA==
-length: 4218
+edSignature: GKsPmp4AKmVapdO7tTMMh7sKVQKysdmQBONT1IlaIachbYFBuk3ahA7S6b97YFtUgoh+gYQPbKQvjn/xbcwzAA==
+length: 5188
 -->
