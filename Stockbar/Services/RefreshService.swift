@@ -192,10 +192,6 @@ class RefreshService {
             "About to refresh \(finalSymbolsToRefresh.count) of \(candidateSymbols.count) targeted trades: \(finalSymbolsToRefresh)"
         )
 
-        var anySuccessfulUpdate = false
-        var successfullyRefreshedSymbols: Set<String> = []
-        var failedSymbols: [(symbol: String, failure: QuoteFailure)] = []
-
         do {
             let results = try await networkService.fetchBatchQuotes(for: finalSymbolsToRefresh)
 
@@ -213,14 +209,7 @@ class RefreshService {
 
             let targetedSet = Set(finalSymbolsToRefresh.map { $0.uppercased() })
 
-            // Snapshot the symbols up front, then re-resolve each one by identity
-            // inside the loop. This method suspends on every `await`, which lets
-            // other @MainActor work (holding deletion, Trading 212 sync, a Folync
-            // portfolio swap) mutate or reorder `realTimeTrades` underneath us —
-            // a captured index would go stale and either trap or update the
-            // wrong holding.
-            //
-            // A Folync portfolio can also become active while the fetch was in
+            // A Folync portfolio can become active while the fetch was in
             // flight. Its holdings carry the same symbols but Folync's own
             // prices, so only the symbols Folync leaves to Stockbar are applied.
             let applicableSet = Self.symbolsToApply(
@@ -231,61 +220,15 @@ class RefreshService {
                 .map { $0.trade.name }
                 .filter { applicableSet.contains($0.uppercased()) }
 
-            for symbol in symbolsToApply {
-                guard let idx = dataModel.realTimeTrades.firstIndex(
-                    where: { $0.trade.name == symbol }
-                ) else { continue }
-
-                if let res = resultDict[symbol.uppercased()] {
-                    let wasSuccessful = dataModel.realTimeTrades[idx].updateWithResult(res, retainOnFailure: true)
-
-                    // Read everything this iteration needs while still in the same
-                    // synchronous region as the update — `idx` is only valid until
-                    // the next suspension point.
-                    let info = dataModel.realTimeTrades[idx].realTimeInfo
-                    let newPrice = info.getCurrentDisplayPrice()
-                    let prevClose = info.prevClosePrice
-                    let currency = info.currency ?? "USD"
-
-                    if wasSuccessful {
-                        await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
-                        await Logger.shared.debug("Updated cache for \(symbol) - successful fetch")
-                        anySuccessfulUpdate = true
-                        successfullyRefreshedSymbols.insert(symbol.uppercased())
-
-                        // Check price alerts after successful update
-                        dataModel.historicalDataManager.recordLivePriceSample(
-                            symbol: symbol,
-                            price: newPrice,
-                            previousClose: prevClose,
-                            timestamp: now
-                        )
-                        PriceAlertService.shared.checkAlerts(
-                            symbol: symbol,
-                            currentPrice: newPrice,
-                            previousPrice: prevClose,
-                            currency: currency
-                        )
-                    } else {
-                        failedSymbols.append((symbol, res.failure ?? .noData))
-                        await Logger.shared.debug(
-                            "Quote for \(symbol) failed (\((res.failure ?? .noData).rawValue)), retaining old data"
-                        )
-                    }
-                } else {
-                    failedSymbols.append((symbol, .noData))
-                    await Logger.shared.warning("No result returned for symbol \(symbol), treating as failure.")
-                }
-            }
-
-            await recordFailures(failedSymbols, anySucceeded: anySuccessfulUpdate, at: now)
+            // Nothing from here to `recordPassOutcome` suspends: see `applyQuotes`.
+            let applied = applyQuotes(resultDict, to: symbolsToApply, in: dataModel, at: now)
             dataModel.quoteRefreshStatus.record(
                 attempted: symbolsToApply.count,
-                failures: failedSymbols.map(\.failure),
+                failures: applied.failures.map(\.failure),
                 at: now
             )
 
-            if anySuccessfulUpdate {
+            if applied.anySucceeded {
                 dataModel.saveTradingInfo()
                 let summary = dataModel.calculateDisplayPortfolioSummary(
                     preferredCurrency: dataModel.portfolioMenuBarDisplaySettings.currencyCode
@@ -297,9 +240,14 @@ class RefreshService {
                     timestamp: now
                 )
                 Task { dataModel.historicalDataManager.recordSnapshot(from: dataModel) }
+            }
 
+            await recordPassOutcome(applied, at: now)
+
+            if applied.anySucceeded {
+                let updatedCount = Set(applied.refreshed.map { $0.uppercased() }).count
                 await Logger.shared.info(
-                    "Refresh completed: \(successfullyRefreshedSymbols.count)/\(finalSymbolsToRefresh.count) symbols updated"
+                    "Refresh completed: \(updatedCount)/\(finalSymbolsToRefresh.count) symbols updated"
                 )
             }
         } catch let error as ProviderAccessError {
@@ -330,6 +278,82 @@ class RefreshService {
                 await Logger.shared.warning("Quote provider back-off: next automatic refresh in \(Int(wait))s")
             }
         }
+    }
+
+    /// What applying one pass's results to the holdings produced.
+    private struct AppliedQuotes {
+        /// Symbols whose quote was applied, in holdings order.
+        var refreshed: [String] = []
+        var failures: [(symbol: String, failure: QuoteFailure)] = []
+        /// Failure messages, logged once the holdings are updated.
+        var failureLog: [(isWarning: Bool, message: String)] = []
+
+        var anySucceeded: Bool { !refreshed.isEmpty }
+    }
+
+    /// Applies every result, with the price sample and alert check each one
+    /// needs, without suspending. Each suspension lets SwiftUI redraw the views
+    /// that observe the holdings, so waiting on the cache and the log between
+    /// symbols redrew the main window once per symbol. The work that waits on
+    /// other actors is in `recordPassOutcome`.
+    private func applyQuotes(
+        _ results: [String: StockFetchResult],
+        to symbols: [String],
+        in dataModel: DataModel,
+        at now: Date
+    ) -> AppliedQuotes {
+        var applied = AppliedQuotes()
+        for symbol in symbols {
+            // Looked up by name: holdings may have been removed or reordered
+            // while the fetch was in flight.
+            guard let holding = dataModel.realTimeTrades.first(where: { $0.trade.name == symbol }) else {
+                continue
+            }
+            guard let result = results[symbol.uppercased()] else {
+                applied.failures.append((symbol, .noData))
+                applied.failureLog.append((true, "No result returned for symbol \(symbol), treating as failure."))
+                continue
+            }
+            guard holding.updateWithResult(result, retainOnFailure: true) else {
+                let failure = result.failure ?? .noData
+                applied.failures.append((symbol, failure))
+                applied.failureLog.append((false, "Quote for \(symbol) failed (\(failure.rawValue)), retaining old data"))
+                continue
+            }
+
+            applied.refreshed.append(symbol)
+            let info = holding.realTimeInfo
+            let price = info.getCurrentDisplayPrice()
+            dataModel.historicalDataManager.recordLivePriceSample(
+                symbol: symbol,
+                price: price,
+                previousClose: info.prevClosePrice,
+                timestamp: now
+            )
+            PriceAlertService.shared.checkAlerts(
+                symbol: symbol,
+                currentPrice: price,
+                previousPrice: info.prevClosePrice,
+                currency: info.currency ?? "USD"
+            )
+        }
+        return applied
+    }
+
+    /// The pass's cache bookkeeping and log lines, once the holdings are updated.
+    private func recordPassOutcome(_ applied: AppliedQuotes, at now: Date) async {
+        for symbol in applied.refreshed {
+            await cacheCoordinator.setSuccessfulFetch(for: symbol, at: now)
+            await Logger.shared.debug("Updated cache for \(symbol) - successful fetch")
+        }
+        for entry in applied.failureLog {
+            if entry.isWarning {
+                await Logger.shared.warning(entry.message)
+            } else {
+                await Logger.shared.debug(entry.message)
+            }
+        }
+        await recordFailures(applied.failures, anySucceeded: applied.anySucceeded, at: now)
     }
 
     /// The candidates this pass should fetch: quotes older than the user's "Main
