@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import Stockbar
 
@@ -133,6 +134,51 @@ class DataModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(bySymbol["MSFT"]).currentPrice, 400, accuracy: 0.0001, "a failed quote keeps the last price")
         XCTAssertEqual(dataModel.quoteRefreshStatus.attemptedCount, 2)
         XCTAssertEqual(dataModel.quoteRefreshStatus.failedCount, 1)
+    }
+
+    func testARefreshPassAppliesEveryQuoteBeforeOtherMainActorWorkRuns() async throws {
+        // Views that observe the holdings redraw when the pass next lets the main
+        // actor go. All of the pass's prices must be in place by then, or the main
+        // window redraws once per symbol.
+        let suiteName = TestDefaultsSuite.makeName("RefreshPassTogether-")
+        defer { TestDefaultsSuite.remove(suiteName) }
+
+        let symbols = ["AAPL", "MSFT", "NVDA"]
+        let network = FakeQuoteNetwork(results: symbols.enumerated().map { offset, symbol in
+            let price = 100 + Double(offset)
+            return StockFetchResult(currency: "USD", symbol: symbol, shortName: symbol, regularMarketTime: 1_700_000_000,
+                                    exchangeTimezoneName: "America/New_York", regularMarketPrice: price,
+                                    regularMarketPreviousClose: 99, displayPrice: price)
+        })
+        let refresh = RefreshService(networkService: network, cacheCoordinator: CacheCoordinator(defaults: UserDefaults(suiteName: suiteName)!))
+        refresh.setDataModel(dataModel)
+        let probe = HoldingPriceProbe(holdings: symbols.map { makeRealTimeTrade($0) })
+        dataModel.realTimeTrades = probe.holdings
+
+        withObservationTracking {
+            for holding in probe.holdings { _ = holding.realTimeInfo }
+        } onChange: {
+            // Called as the first holding changes; the task runs at the pass's next suspension.
+            Task { @MainActor in probe.recordPrices() }
+        }
+
+        await refresh.performRefreshAllTrades(limitedTo: symbols, force: true)
+
+        XCTAssertEqual(probe.pricesSeenByOtherWork, [100, 101, 102])
+        XCTAssertEqual(probe.holdings.map(\.realTimeInfo.currentPrice), [100, 101, 102])
+    }
+}
+
+/// The holdings' prices as other main-actor work first sees them during a refresh.
+@MainActor
+private final class HoldingPriceProbe {
+    let holdings: [RealTimeTrade]
+    private(set) var pricesSeenByOtherWork: [Double]?
+
+    init(holdings: [RealTimeTrade]) { self.holdings = holdings }
+
+    func recordPrices() {
+        if pricesSeenByOtherWork == nil { pricesSeenByOtherWork = holdings.map(\.realTimeInfo.currentPrice) }
     }
 }
 
