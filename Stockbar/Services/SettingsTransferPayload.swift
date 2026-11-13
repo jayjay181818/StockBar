@@ -175,6 +175,8 @@ enum SettingsTransferKeys {
         "debugLogMaxLines": .number,
         "debugLogTailMode": .bool,
         "stockbar.debugLoggingEnabled": .bool,
+        // Memory
+        PythonWorkerPool.quitWhenIdleKey: .bool,
         // Trading 212 configuration (credentials travel separately)
         "trading212.enabled": .bool,
         "trading212.environment": .string,
