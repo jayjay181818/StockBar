@@ -179,7 +179,7 @@ Figures from either side of a break are not compared with each other.
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 110 |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
 
 ### Planned next, in order
 
@@ -283,9 +283,11 @@ is "the rest of core": the owner's choices from the
 pull request each. Done: finding 1 (pull request 104), the refresh
 workload (pull request 105), the redraw per symbol (pull request 106,
 which halves the refresh passes' CPU and raises their wake-ups, a
-trade-off the owner accepted), finding 6 (pull request 107) and finding 5
-(pull request 108) and finding 9 (pull request 109). Next: finding 8,
-open as draft pull request 110. Open for the owner
+trade-off the owner accepted), finding 6 (pull request 107), finding 5
+(pull request 108), finding 9 (pull request 109) and finding 8 (pull
+request 110), which completes the findings the owner chose to fix. The
+standard comparison for the last two was shortened and shared, and the
+full one is deferred to the next milestone. Open for the owner
 are whether the fetch should leave Python, the cached quote shown as just
 updated, and the price alerts' repeated rewrite. `experimental` was
 promoted to `testing` on 2026-11-13. What could still be done, and what
@@ -326,7 +328,7 @@ with the owner's decision on each:
 | 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix. Pull request 108 |
 | 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Looked into: confirmed, about 66 ms of the main thread per refresh. Fixed in pull request 107 |
 | 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Looked into: confirmed, under 10 ms per refresh. Leave as it is |
-| 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix |
+| 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix. Pull request 110 |
 | 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix. Pull request 109 |
 
 Also found, not yet put to the owner as an item of its own: price alerts
@@ -3084,7 +3086,15 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   builds its content as before. No Rust, dependency or architectural
   change; the change uses AppKit's existing `popoverDidClose` delegate
   call.
-- Merged: not yet. The next pull request fills this in.
+- Merged: 2026-11-16, squash commit `7168684`. The merge published
+  experimental build 370.16.10 as the prerelease
+  `experimental-370.16.10`. Checked after it: the feed's signature and
+  the archive's signature are valid, the archive's length matches the
+  feed, the unpacked app is build 370.16.10 of 3.7.0, its code signature
+  verifies and its executable has no coverage counters. The release's
+  tag is on the squash commit; the change adds no name to look for in
+  the executable. The build job started four seconds after the merge and
+  took about 6 minutes. `main` and `testing` were unchanged.
 - What the closed popover does, counted in a trial copy: `0a1ea40` with
   counters added and this change behind a switch, so that one build
   serves both sides. A warm-up launch, then four measured launches in
@@ -3213,6 +3223,73 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained. A closed portfolio popover is no longer redrawn: 16
   redraws and 16 summaries over four passes became none, and its second
   chart model is freed. The memory saving is an order of size, and the
+  comparison was shortened and shared as described above; no row of it
+  moved.
+
+### 110: Leave the positions' prices out of the session's portfolio snapshots
+
+- What: finding 8 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  Every recorded snapshot appends a portfolio snapshot to a list the app
+  keeps for the session, up to 1,800 long, and each one carried a price
+  for every position. Nothing reads those prices. The chart's and the
+  performance metrics' fallbacks, the trims and the settings view read
+  each snapshot's time, total value, total gains and currency, or count
+  the list. Each symbol's prices are kept separately, as before. The
+  session's snapshots are now recorded with no prices: four lines added
+  and three removed in `Stockbar/Data/HistoricalDataManager.swift`. The
+  type keeps its field, which snapshots stored by old versions are still
+  decoded with and migrated from. No Rust, dependency or architectural
+  change.
+- Merged: not yet. The next pull request fills this in.
+- The size of the list, measured outside the app. A standalone program
+  using the app's own two types built the list at its full length of
+  1,800 snapshots, with and without the prices. Two runs gave the same
+  figures. The program and its output are kept in
+  `build/bench/results/trial-session-snapshot-20261113`.
+
+  | Positions | 1,800 snapshots with prices | Without | Less per snapshot |
+  | --- | --- | --- | --- |
+  | 11 | 2,500,384 bytes | 196,384 bytes | 1,280 bytes |
+  | 30 | 4,804,096 bytes | 196,096 bytes | 2,560 bytes |
+  | 60 | 9,411,584 bytes | 195,584 bytes | 5,120 bytes |
+
+  At the default interval of five minutes the app records 12 snapshots
+  an hour, so the list is full after 150 hours of recording. With 11
+  positions the saving grows by about 15 KB for each hour the app runs,
+  to about 2.3 MB. These are sizes of the data, not a measurement of the
+  running app's memory.
+- Benchmark: the standard comparison of this pull request alone, six
+  launches a side, was not run. It shares the shortened comparison
+  recorded in
+  [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes),
+  whose table is there: before `e03cdd5`, after the local-only commit
+  `76dfb6a` holding this change and pull request 109's, four launches a
+  side with `--refresh --runs 2`, on 2026-11-16 from 15:50 to 16:42 UTC.
+  The benchmark records four snapshots a launch, so for this change it
+  is a check for regressions, not the evidence of the saving. With four
+  launches a side it cannot give a firm verdict. Every row of it is no
+  measurable change, and none is marked "possibly". The full
+  comparison is deferred to the next milestone.
+- Testing: 732 XCTest tests pass with 0 failures with `experimental`
+  merged in, pull request 109 included. `checks` and `docs-check` pass. No test was added: a test would have to record
+  through the app's shared history manager, which also queues writes to
+  the shared store. An independent review by a reviewer that had not
+  seen the implementation, read-only while the comparison ran, found no
+  defect. It confirmed that every read of the session's list takes the
+  time, the totals, the currency or the count; that nothing encodes or
+  stores the list; that the one reader of a portfolio snapshot's prices,
+  the migration of snapshots stored by old versions, sees only data
+  those versions wrote; that export and settings transfer do not include
+  the list; and that no test builds or records one.
+- Known issues:
+  - The saving is worked out from the sizes of the types. It was not
+    measured in the running app.
+  - Code added later that wanted each position's price from this list
+    would find none. Each symbol's own price list still has them.
+- Verdict: retained. The session's list no longer holds a price for
+  every position in every snapshot, which nothing read: about 2.3 MB less
+  once the list is full with 11 positions, by the sizes of the types. The
   comparison was shortened and shared as described above; no row of it
   moved.
 
