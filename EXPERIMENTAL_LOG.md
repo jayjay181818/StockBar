@@ -284,7 +284,8 @@ pull request each. Done: finding 1 (pull request 104), the refresh
 workload (pull request 105), the redraw per symbol (pull request 106,
 which halves the refresh passes' CPU and raises their wake-ups, a
 trade-off the owner accepted), finding 6 (pull request 107) and finding 5
-(pull request 108). Next, in order: findings 9 and 8. Open for the owner
+(pull request 108). Next, in order: findings 9 and 8, open as draft pull
+requests 109 and 110. Open for the owner
 are whether the fetch should leave Python, the cached quote shown as just
 updated, and the price alerts' repeated rewrite. `experimental` was
 promoted to `testing` on 2026-11-13. What could still be done, and what
@@ -2919,11 +2920,91 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   average of 8 to 14 at 20:12 UTC; the load during the before side was
   not looked at. The counts of calls, files and bytes do not depend on
   it.
-- Benchmark: not yet run. At 20:12 UTC on 2026-11-13 this Mac was on
-  battery power at 63% and falling by about 1% a minute, and busy with
-  processes that are not this work's, so a 76-minute run would have been
-  measured under load and could have emptied the battery. It runs once
-  the Mac is on mains power and quiet, and this entry is filled in then.
+- Benchmark: before `0a1ea40`, after `9e98e63` (the code commit; the
+  commits after it change only this log), with `--refresh`: six launches
+  a side in turns, from 14:19 to 15:34 UTC on 2026-11-16, macOS 27.2.1,
+  on mains power. The report flagged no launch.
+
+  The run was measured on a busy Mac. It was not run on 2026-11-13
+  because the Mac was on battery power and busy. On 2026-11-16 the Mac
+  had been restarted at about 10:21 UTC, and a start that waited for the
+  CPU to be at least 85% idle did not get it in four hours: a file-sync
+  process and system processes each held about one core, and another
+  job's test runs on the same Mac came in bursts. During the run itself
+  two system processes, one of them serving the file sync, were each
+  above half a core in 56 and 42 of the 76 once-a-minute readings, and
+  another app in 18. The owner
+  asked for the work to go on, so the run started without waiting, under
+  two rules written into its log before it began: it would be set aside
+  and repeated if more than two of the once-a-minute readings inside its
+  turns showed keyboard or pointer input in the minute before, or if the
+  CPU of the four busiest processes together, averaged over each side's
+  turns, was more than 1.5 times higher for one side than the other. No
+  reading showed input. The four busiest together averaged 221% of a
+  core over the before side's 36 readings and 209% over the after side's
+  36, a ratio of 1.06. So the run stands. The installed app, which was
+  running on 2026-11-13, was not running. The readings, the
+  rules and the scripts are kept beside the results, in
+  `build/bench/results/compare-history-cache-20261116-141931/conditions`.
+
+  The figures are not comparable with the run of 2026-11-13. The same
+  app code, `0a1ea40` here and `d5acb72` there (they differ only in this
+  log), shows 96.5 MB of idle memory here against 85.7 MB there, 54.8 MB
+  held allocated against 47.0 MB, 0.58 s from launch to first window
+  against 1.31 s, and 3.343 s of CPU over the refresh window against
+  2.715 s. Which of the restart, the other work on the Mac and the date
+  accounts for each was not looked into. The before side is the current
+  `experimental` measured again in this run, so both sides share the
+  conditions.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.5 (93.3 to 100.5) MB | 93.0 (89.5 to 95.6) MB | -3.5 MB, -3.7% | possibly lower (p = 0.026) |
+  | Idle memory the app holds allocated | 54.8 (54.1 to 55.7) MB | 54.5 (51.5 to 55.4) MB | -0.2 MB, -0.4% | no measurable change (p = 0.331) |
+  | Peak memory, launch and history load | 244.0 (239.4 to 247.3) MB | 244.4 (241.0 to 249.9) MB | +0.4 MB, +0.2% | no measurable change (p = 0.589) |
+  | Idle memory growth across the window | 0.1 (-5.7 to 0.4) MB | 0.0 (-4.2 to 0.6) MB | -0.1 MB | no measurable change (p = 0.848) |
+  | Idle CPU | 0.097 (0.072 to 0.103) s/min | 0.097 (0.073 to 0.106) s/min | +0.000 s/min, +0.0% | no measurable change (p = 0.970) |
+  | Idle CPU wake-ups | 26 (25 to 29) /min | 27 (26 to 28) /min | +0 /min, +1.9% | no measurable change (p = 0.426) |
+  | Idle CPU power | 3.13 (2.96 to 3.94) mW | 3.38 (2.96 to 4.29) mW | +0.25 mW, +8.0% | no measurable change (p = 0.418) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.38 to 0.75) s | 0.80 (0.44 to 1.05) s | +0.22 s, +36.8% | no measurable change (p = 0.104) |
+  | Launch to history loaded | 0.65 (0.50 to 0.78) s | 0.82 (0.57 to 1.04) s | +0.18 s, +27.1% | no measurable change (p = 0.177) |
+  | CPU from launch to the idle window | 1.80 (1.64 to 1.89) s | 1.94 (1.73 to 2.17) s | +0.14 s, +7.5% | no measurable change (p = 0.117) |
+  | CPU energy from launch to the idle window | 5.70 (5.53 to 5.91) J | 5.84 (5.59 to 6.16) J | +0.14 J, +2.5% | no measurable change (p = 0.420) |
+  | Python helper start to ready, no network | 0.25 (0.23 to 0.88) s | 0.33 (0.25 to 0.60) s | +0.08 s, +32.0% | no measurable change (p = 0.381) |
+  | Python helper start, CPU | 0.24 (0.23 to 0.34) s | 0.31 (0.25 to 0.35) s | +0.07 s, +26.5% | no measurable change (p = 0.128) |
+  | Python helper memory once started | 71.0 (70.8 to 71.1) MB | 71.2 (70.9 to 71.4) MB | +0.2 MB, +0.2% | no measurable change (p = 0.067) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.343 (3.216 to 3.504) s | 3.408 (3.256 to 3.584) s | +0.065 s, +1.9% | no measurable change (p = 0.589) |
+  | CPU energy over the refresh window | 10.885 (10.720 to 11.290) J | 10.771 (10.279 to 10.871) J | -0.114 J, -1.1% | no measurable change (p = 0.132) |
+  | CPU wake-ups over the refresh window | 1780 (1596 to 1932) wake-ups | 1750 (1658 to 1802) wake-ups | -30 wake-ups, -1.7% | no measurable change (p = 0.310) |
+  | Disk writes over the refresh window | 0.046 (0.046 to 1.406) MB | 0.000 (0.000 to 1.702) MB | -0.046 MB | no measurable change (p = 0.260) |
+  | Memory during the refresh window (physical footprint) | 128.1 (123.9 to 130.1) MB | 127.2 (105.3 to 131.1) MB | -0.9 MB, -0.7% | no measurable change (p = 0.937) |
+  | Allocated memory added by the refreshes | 25.2 (22.8 to 36.9) MB | 21.1 (13.8 to 37.0) MB | -4.2 MB, -16.5% | no measurable change (p = 0.065) |
+
+  No row is higher. The "possibly lower" idle memory is a row the report
+  says needs a repeat before it counts, and it is not counted here.
+
+  Disk writes over the refresh window are recorded as no measurable
+  change, because the third launch of every turn writes about 1.4 MB on
+  either side: 1.406 and 1.406 MB before, 1.360 and 1.702 MB after. In
+  the other four launches a side, the before side wrote 0.046 MB every
+  time and the after side 0.000 MB every time, which is the cache files
+  counted above. The run of 2026-11-13 shows the same large write on
+  code without this change, 1.406 MB on one side and up to 1.578 MB on
+  the other. What that write is was not looked into.
+
+  The launch rows lean slower on the after side without reaching a
+  verdict, and the lean comes from one turn. In the after side's first
+  turn, from 14:40 to 14:58 UTC, the three launches took 1.05, 0.91 and
+  0.84 s to their first window. In its second turn they took 0.44, 0.76
+  and 0.47 s, as the before side's did: 0.47, 0.70 and 0.70 s, then
+  0.38, 0.75 and 0.40 s. In that same first turn the Python helper,
+  which this change does not touch, was slower too: its second and third
+  starts took 0.30 and 0.35 s of CPU against 0.23 to 0.25 s in the other
+  three turns. The readings do not show more other work in that turn by
+  the four-busiest measure, 209% of a core against 272% and 171% in the
+  before side's turns, so what slowed it was not identified.
 - Testing: 732 XCTest tests pass with 0 failures, three of them new.
   The first stores a 20-key dictionary, checks that its keys are written
   in sorted order, and checks that five stores of an equal dictionary
@@ -2971,8 +3052,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     would usually still pass without that. Also not covered: two stores
     of the same value both queued before the first one's write fails.
     The second then finds the failure recorded and writes.
-- Verdict: pending the benchmark. Recommended to retain: the four passes
-  write no cache file where they wrote twelve.
+- Verdict: retained. The four passes write no cache file where they
+  wrote twelve, and no row of the benchmark is higher. The saving is
+  small, about 6 KB of file content in four passes, and the benchmark's
+  own row for it does not reach a verdict because of the large write
+  described above.
 
 ## Rust evaluation, 2026-11-12
 
