@@ -179,7 +179,7 @@ Figures from either side of a break are not compared with each other.
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
-| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 108 |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). In progress: pull requests 104 to 110 |
 
 ### Planned next, in order
 
@@ -284,8 +284,8 @@ pull request each. Done: finding 1 (pull request 104), the refresh
 workload (pull request 105), the redraw per symbol (pull request 106,
 which halves the refresh passes' CPU and raises their wake-ups, a
 trade-off the owner accepted), finding 6 (pull request 107) and finding 5
-(pull request 108). Next, in order: findings 9 and 8, open as draft pull
-requests 109 and 110. Open for the owner
+(pull request 108) and finding 9 (pull request 109). Next: finding 8,
+open as draft pull request 110. Open for the owner
 are whether the fetch should leave Python, the cached quote shown as just
 updated, and the price alerts' repeated rewrite. `experimental` was
 promoted to `testing` on 2026-11-13. What could still be done, and what
@@ -327,7 +327,7 @@ with the owner's decision on each:
 | 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Looked into: confirmed, about 66 ms of the main thread per refresh. Fixed in pull request 107 |
 | 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Looked into: confirmed, under 10 ms per refresh. Leave as it is |
 | 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix |
-| 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix |
+| 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix. Pull request 109 |
 
 Also found, not yet put to the owner as an item of its own: price alerts
 rewrite the whole saved list of last prices once for each symbol with an
@@ -2885,7 +2885,18 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   The layout of the files is unchanged, so files written by earlier
   versions stay readable and the other way round. No Rust, native macOS
   API, dependency or architectural change.
-- Merged: not yet. The next pull request fills this in.
+- Merged: 2026-11-16, squash commit `e03cdd5`. The merge published
+  experimental build 370.16.9 as the prerelease `experimental-370.16.9`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.9 of 3.7.0, its code signature verifies and its executable has
+  no coverage counters. Its executable carries the names `failedWrites`
+  and `queuedFileWork`, which build 370.16.8's does not. The build job
+  started two seconds after the merge and took under 6 minutes. `main`
+  and `testing` were unchanged. The tool that checks the two signatures
+  was lost when the Mac restarted and was written again; before it was
+  used it passed build 370.16.8 and rejected a copy of that archive with
+  one byte added and a copy of the feed with one version number changed.
 - The writes counted in the trial copy, with the counters of
   [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
   and two more in `CacheManager`, one for each call of `store` and one
@@ -3057,6 +3068,153 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   small, about 6 KB of file content in four passes, and the benchmark's
   own row for it does not reach a verdict because of the large write
   described above.
+
+### 109: Release the portfolio popover's content when it closes
+
+- What: finding 9 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  The portfolio item in the menu bar builds new content for its popover
+  every time the popover opens, but kept the old content after a close
+  until the next open replaced it. Closed, that content was still redrawn
+  at every refresh, working out the portfolio summary each time, and its
+  chart was still reloaded, with nothing on screen. The popover's
+  delegate now releases the content when the popover reports closed,
+  if it is not shown again by then: seven added lines in
+  `Stockbar/StockStatusBar.swift`. The next open
+  builds its content as before. No Rust, dependency or architectural
+  change; the change uses AppKit's existing `popoverDidClose` delegate
+  call.
+- Merged: not yet. The next pull request fills this in.
+- What the closed popover does, counted in a trial copy: `0a1ea40` with
+  counters added and this change behind a switch, so that one build
+  serves both sides. A warm-up launch, then four measured launches in
+  turns, content kept and content released. Each opens and closes the
+  popover twice, then runs four forced refresh passes 30 s apart. The
+  trial copy is never committed. Its patches, scripts and output are
+  kept in `build/bench/results/trial-popover-20261113`.
+
+  First run, 2026-11-13 from 20:23 to 20:39 UTC, on battery power with a
+  load average of about 8 from other processes:
+
+  | Over the four passes, popover closed | Content kept | Content released |
+  | --- | --- | --- |
+  | Redraws of the hidden popover | 16 and 16 | 0 and 0 |
+  | Portfolio summaries worked out for it | 16 and 16 | 0 and 0 |
+  | Time in those summaries | 12.7 and 13.7 ms | none |
+  | Chart loads | 16 and 16 | 8 and 8 |
+  | Chart models freed of the 2 made by the two opens | 1 and 1 | 2 and 2 |
+  | Memory footprint, 2 s after the last pass | 163.58 and 166.25 MB | 141.28 and 150.06 MB |
+  | Memory the app holds allocated, same moment | 108.35 and 109.76 MB | 85.72 and 92.66 MB |
+
+  The eight chart loads that remain belong to the main window's own
+  chart. The run's CPU, wake-up and power readings overlapped between
+  the two sides and showed nothing either way.
+
+  A second run, with the memory read again 30, 60 and 90 s after the
+  last pass, was started on 2026-11-16 and stopped during its first
+  measured launch, when the owner needed the measuring finished by 16:55
+  UTC. It is not used. The memory difference above therefore rests on
+  two launches each way, read 2 s after the last pass, and is an order
+  of size only.
+- Benchmark: the standard comparison of this pull request alone, six
+  launches a side, was not run. On 2026-11-16 the owner needed the
+  measuring finished by 16:55 UTC and asked for it to be cut down, so
+  one shortened comparison covers this pull request and pull request 110
+  together. Before `e03cdd5`, after `76dfb6a`: a commit made only for
+  the comparison and never pushed, which is `e03cdd5` with both changes
+  as they then stood, four lines added here and four added and three
+  removed in pull request 110. With `--refresh --runs 2`: four launches
+  a side in turns, from 15:50 to 16:42 UTC, macOS 27.2.1, on mains
+  power, on a busy Mac and under the two set-aside rules described in
+  [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed).
+  No reading inside the turns showed input, and the four busiest
+  processes together averaged 60% of a core over the before side's 24
+  readings and 61% over the after side's 25, a ratio of 1.01, so the run
+  stands. The report flagged no launch. The readings, the rules
+  and the scripts are kept beside the results, in
+  `build/bench/results/compare-popover-and-session-snapshot-20261116-155018/conditions`.
+
+  With four launches a side the report cannot give a firm verdict: it
+  says "possibly" at most, where six a side can say "lower" or "higher".
+  The benchmark also never opens the popover, so this pull request's
+  line never runs in it. For this pull request the comparison shows that
+  the app builds and runs the standard workloads with the change in it,
+  and no more. The full comparison is deferred to the next milestone.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 97.8 (93.9 to 103.7) MB | 97.0 (94.1 to 100.5) MB | -0.9 MB, -0.9% | no measurable change (p = 0.686) |
+  | Idle memory the app holds allocated | 55.8 (55.5 to 56.2) MB | 55.8 (54.7 to 56.0) MB | +0.0 MB, +0.1% | no measurable change (p = 0.971) |
+  | Peak memory, launch and history load | 242.1 (241.2 to 243.3) MB | 244.1 (241.0 to 245.5) MB | +2.0 MB, +0.8% | no measurable change (p = 0.486) |
+  | Idle memory growth across the window | 0.3 (0.3 to 0.5) MB | 0.3 (0.0 to 0.5) MB | -0.0 MB, -14.3% | no measurable change (p = 0.657) |
+  | Idle CPU | 0.095 (0.083 to 0.100) s/min | 0.091 (0.079 to 0.101) s/min | -0.004 s/min, -4.2% | no measurable change (p = 0.829) |
+  | Idle CPU wake-ups | 26 (25 to 30) /min | 26 (26 to 30) /min | +0 /min, +1.9% | no measurable change (p = 0.657) |
+  | Idle CPU power | 3.04 (2.91 to 3.28) mW | 3.32 (2.96 to 4.10) mW | +0.28 mW, +9.0% | no measurable change (p = 0.114) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.40 (0.39 to 0.41) s | 0.39 (0.38 to 0.41) s | -0.01 s, -2.5% | no measurable change (p = 0.571) |
+  | Launch to history loaded | 0.51 (0.49 to 0.52) s | 0.51 (0.49 to 0.52) s | +0.00 s | no measurable change (p = 1.000) |
+  | CPU from launch to the idle window | 1.67 (1.64 to 1.68) s | 1.65 (1.63 to 1.74) s | -0.02 s, -1.5% | no measurable change (p = 0.486) |
+  | CPU energy from launch to the idle window | 5.83 (5.72 to 5.88) J | 5.86 (5.76 to 5.96) J | +0.03 J, +0.5% | no measurable change (p = 0.486) |
+  | Python helper start to ready, no network | 0.38 (0.24 to 0.53) s | 0.41 (0.23 to 0.54) s | +0.04 s, +9.3% | no measurable change (p = 1.000) |
+  | Python helper start, CPU | 0.27 (0.23 to 0.31) s | 0.30 (0.23 to 0.34) s | +0.04 s, +13.2% | no measurable change (p = 0.543) |
+  | Python helper memory once started | 71.1 (71.0 to 71.1) MB | 71.2 (71.0 to 71.3) MB | +0.1 MB, +0.1% | no measurable change (p = 0.314) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.326 (3.266 to 3.360) s | 3.336 (3.320 to 3.344) s | +0.010 s, +0.3% | no measurable change (p = 0.686) |
+  | CPU energy over the refresh window | 11.292 (11.039 to 11.485) J | 11.034 (10.412 to 11.363) J | -0.259 J, -2.3% | no measurable change (p = 0.343) |
+  | CPU wake-ups over the refresh window | 1883 (1805 to 1967) wake-ups | 1888 (1814 to 1917) wake-ups | +4 wake-ups, +0.2% | no measurable change (p = 0.886) |
+  | Disk writes over the refresh window | 0.000 (0.000 to 0.000) MB | 0.000 (0.000 to 0.000) MB | +0.000 MB | no measurable change (p = 1.000) |
+  | Memory during the refresh window (physical footprint) | 135.5 (128.5 to 143.7) MB | 140.9 (139.5 to 143.7) MB | +5.4 MB, +4.0% | no measurable change (p = 0.229) |
+  | Allocated memory added by the refreshes | 24.6 (21.6 to 25.4) MB | 24.8 (22.9 to 26.1) MB | +0.1 MB, +0.6% | no measurable change (p = 0.543) |
+
+  Every row is no measurable change, and none is marked "possibly". The
+  largest lean is memory during the refresh window, 5.4 MB higher at the
+  median with the two sides' ranges overlapping: 128.5 to 143.7 MB
+  before, 139.5 to 143.7 MB after. Disk writes over the refresh window
+  are 0.000 MB on both sides: both carry pull request 108, and with two
+  launches a turn the large write of a turn's third launch does not
+  occur.
+- The guard: the second code commit releases the content only if the
+  popover is not shown when its close is reported, so that a close
+  reported late could not empty a popover already open again. An
+  independent review found no path in the app by which a close could be
+  reported after the next open, but when AppKit reports the close of a
+  popover that does not animate is not documented. A standalone check on this Mac, macOS
+  27.2.1, with a popover set up as this one is, showed the close reported
+  before `performClose` returned in each of four closes, the popover
+  reading as not shown inside each report, the content released by the
+  guarded line each time, and a reopen with no pause after a close
+  showing its content. The check's source is kept with the comparison's
+  conditions. The trial and
+  the comparison ran before the guard was added, and neither reaches a
+  late close.
+- Testing: 732 XCTest tests pass with 0 failures with `experimental`
+  merged in and the guard added. `checks` and `docs-check` pass. No test was added: one would have to put a real item
+  in the menu bar, and no existing test builds the menu bar controller.
+  In the trial's first run every measured launch opened and closed the
+  popover twice; with the content released, the two opens drew the
+  popover 6 times and made 2 chart models, the same as with the content
+  kept, so the second open built its content as the first did. An
+  independent review by a reviewer that had not seen the implementation,
+  read-only while the comparison ran, found no defect. It confirmed that
+  the controller is the delegate of this popover only, that the one
+  `show` follows straight after the content is set, that the two other
+  reads of the content return early when there is none, and that the
+  chart's pending work holds the released content weakly. It could not
+  tell from the code when AppKit reports the close, which the guard and
+  the check above answer.
+- Known issues:
+  - Not exercised by hand: reopening the popover after each way it can
+    close, which are a click on the menu bar item, a click outside it,
+    Escape, a change of Space and the buttons in its footer. The trial
+    opened and closed it from code.
+  - The memory saving is not a firm figure, as said above.
+  - Each per-symbol popover also keeps its content after it closes.
+    That is not changed or measured here.
+- Verdict: retained. A closed portfolio popover is no longer redrawn: 16
+  redraws and 16 summaries over four passes became none, and its second
+  chart model is freed. The memory saving is an order of size, and the
+  comparison was shortened and shared as described above; no row of it
+  moved.
 
 ## Rust evaluation, 2026-11-12
 
@@ -3306,6 +3464,7 @@ launch.
 | Pull request 106 | Opus 5.5 (orchestrator), with one independent review by Opus | Done directly: one loop reordered and moved into two functions, a test shown to fail on the old code, and the trial copy's counters run again on the change. The review, read-only while the comparison ran, found no defect and was worth it: a comment gave the wrong reason for looking holdings up by name, the log lines moved more than the description said, and a suspension notice can now lag in one rare case. 24 tool calls, about 153,000 tokens and four and a half minutes |
 | Pull request 107 | Opus 5.5 (orchestrator) for the first code commit, then Fable 5.2 (orchestrator again, at the owner's change of model) for the review fixes, the timing and the comparison, with one independent review by Opus | Done directly: one function given a window, its two callers' paths and three tests, timed in the trial copy before and after. The review, read-only, found no defect and was worth it: it showed the first test would have passed with a margin too small to be safe, that a miss left a stale series counted in the cache, and that two comments overstated what they described. 18 tool calls, about 133,000 tokens and four and a half minutes |
 | Pull request 108 | Fable 5.2 (orchestrator), with one independent review by Opus in two passes | Done directly: one class and three tests, with the cache's file writes counted in the trial copy before and after. The review, read-only, was worth it: it found no defect in the comparison or the locking, but showed that the first version no longer wrote again a file deleted from outside the app, which the second code commit puts right, and corrected two comments. It also said key order does not vary between encodings of one dictionary; a measurement showed it does, and the reviewer withdrew that. First pass 33 tool calls, about 158,000 tokens and seven minutes; the second look at the reworked code 3 tool calls and a minute and a half |
+| Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
