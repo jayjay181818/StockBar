@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.16.11)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.11</link>
+      <pubDate>Mon, 16 Nov 2026 16:56:50 +0000</pubDate>
+      <sparkle:version>370.16.11</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 370.16.11 of Stockbar 3.7.0. Changes since experimental-370.16.10:
+
+- Leave the positions' prices out of the session's portfolio snapshots (#110)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.11/Stockbar-370.16.11.zip" length="7196399" type="application/octet-stream" sparkle:edSignature="Hwaued/UZqjSAJou7Qo4M+hCGCFqgKA89UiijkSeijieW9AP008Qj7o1RuM4z4Rj0Z5+w6v2IQKguhuf7S/2AQ=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16.10)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.10</link>
       <pubDate>Mon, 16 Nov 2026 16:50:29 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Record the promotion to testing and how a promotion is made</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.2/Stockbar-370.16.2.zip" length="7175226" type="application/octet-stream" sparkle:edSignature="aNcfzF+jAZeuS09dWjueFFdzaZ8NRGFlfLCXpCh115jMA4aRlTz2gXZedjDuG+w6mD9+TdEzIfK5Jxj4DkLzCg=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370.0.15)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.0.15</link>
-      <pubDate>Fri, 13 Nov 2026 00:50:28 +0000</pubDate>
-      <sparkle:version>370.0.15</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 370.0.15 of Stockbar 3.7.0. Changes since experimental-370.0.14:
-
-- Refuse to package an app built with test-coverage counters (#94)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.0.15/Stockbar-370.0.15.zip" length="7175228" type="application/octet-stream" sparkle:edSignature="FPGEwcVR0qgILEj+lsfusomSIp+Eq02WuNNG0Pj9Ur1mLo6SfUl4A1NKYSU1k7sMTZ6scaEeLDJGZJqiTxjCCg=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 3PDWnKeqdAfvTzr8B+btrXOL4WGXs92bZ/jPgSpXPX20jEmmp3bvgoEEp1OgLR2kPUbbLf4a5jC6MkdpFlSNAQ==
-length: 10274
+edSignature: xd5rs80mZUbuVY+Hd5e28lsu6Pz21ePrLCfA0u3Aco6mLegjGQBL5SPQ+GMDOympyoCcX+Dcy6cSCMG7LbHYAg==
+length: 10292
 -->
