@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.0 (380.0.1)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-380.0.1</link>
+      <pubDate>Tue, 17 Nov 2026 10:22:55 +0000</pubDate>
+      <sparkle:version>380.0.1</sparkle:version>
+      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 380.0.1 of Stockbar 3.8.0. Changes since experimental-370.29.2:
+
+- Release 3.8.0</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-380.0.1/Stockbar-380.0.1.zip" length="7196397" type="application/octet-stream" sparkle:edSignature="JBaEuJlzJ/DWfra34edG5Gb6FxIzeEslguW/p1MhUM+TpeMR239/jPi3/+jwfBLNDxi3wp/6VpHW9WRiGQIpCQ=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.29.2)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.29.2</link>
       <pubDate>Tue, 17 Nov 2026 09:46:56 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Read and write the Python helper's quote cache once per refresh (#104)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.5/Stockbar-370.16.5.zip" length="7175695" type="application/octet-stream" sparkle:edSignature="wT3u3sZVxJXBN4B27om9CxriGdrWogjImtuoycJf6aLcX5zwAquw2gz0bOSdMOPVpXi2K2f350rfgGfnu6v5Ag=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370.16.4)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.4</link>
-      <pubDate>Fri, 13 Nov 2026 10:18:19 +0000</pubDate>
-      <sparkle:version>370.16.4</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 370.16.4 of Stockbar 3.7.0. Changes since experimental-370.16.3:
-
-- Note in requirements.txt that its pins have GitHub's advisory fixes (#103)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.4/Stockbar-370.16.4.zip" length="7175323" type="application/octet-stream" sparkle:edSignature="o3iVgGp+sfIVhJJjb6btUT0iCHkyMrltpQubgWyI7K3SHaOai+Np69msObI/Ce14bOKGbwLGOgy4MWW77L8TBA=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: t+hl3xs8kvg2CasNKv/Or9lP5VyYjlI94Bc+HLD3EEU9kM5yngJ4qYe34FZ/QKhPqJ2/i36WuK3LntkFcFvEBA==
-length: 10315
+edSignature: iUd9OpqC71Ci4JE2iIsmVVIQ8YTKz9Z1ea/DgJQf7PfLlG9ZsoDWpkGuS1BBpYEl7HagNkm/7xxJPOkVh+/UDg==
+length: 10248
 -->
