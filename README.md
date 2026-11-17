@@ -91,7 +91,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 ### 💼 Portfolio and holdings
 - Grouped sidebar: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Performance, Risk, Allocation), **Maintenance** (Backups, Data Health, Diagnostics) and **Settings**. The footer shows the portfolio source, the last update and a Refresh button.
-- The Holdings table has search, summary tiles and an Edit mode. Day P/L and Total P/L switch between amount and percentage when clicked.
+- The Holdings table has search, summary tiles and an Edit mode. Click a **Today** or **Total P&L** value to switch between amount and percentage.
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
 ### 📊 Menu bar
@@ -117,20 +117,21 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 #### Portfolio And Holdings
 - Native Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Performance, Risk, Allocation), Maintenance (Backups, Data Health, Diagnostics) and Settings. The sidebar footer shows the active portfolio source, the last update and a Refresh button.
-- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus current price, value, Day P/L and Total P/L.
-- Day P/L and Total P/L columns toggle between amount and percentage when clicked.
+- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Today and Total P&L columns.
+- Clicking a Today or Total P&L value toggles that column between amount and percentage.
 - Net Value, Total Net Gains and Tracked Symbols summary cards show currency symbols and thousands separators, with USD equivalents in brackets when USD is not the primary display currency.
 - Manual holdings, watchlist-only symbols, and broker-linked holdings can coexist.
 - UK `.L` holdings and GBX/GBP cost bases are normalized consistently for display and gain calculations.
 
 #### Trading 212 Broker Sync
-- Trading 212 can be enabled from Settings → Connections as a broker/portfolio provider.
+- Trading 212 is off by default and can be enabled from Settings → Connections as a broker/portfolio provider.
 - Credentials are API Key + API Secret and are stored in macOS Keychain only.
-- Supports Live / Real Money and Demo / Paper environments with separated account keys and cache namespaces.
-- Account type and label are configurable, including Stocks & Shares ISA, Invest/general, and Unknown/custom.
+- Supports Live / Real Money and Demo / Paper (the default) environments with separated account keys and cache namespaces.
+- Account type and label are configurable, including Stocks & Shares ISA (the default), Invest/general, and Unknown/custom. CFD accounts can be chosen but are not supported by Trading 212's API, so the actions are disabled.
 - Read-only Test Connection and Preview Import flow before linking anything.
 - Preview maps Trading 212 provider tickers to canonical instruments and audits manual matches, quantity deltas, and conflicts.
-- Link Matched Holdings saves broker links only after user confirmation.
+- Link Matched Holdings saves broker links only after user confirmation. Import Broker-Only Holdings adds clean positions you have not entered by hand.
+- Sync Linked Holdings and Reconcile Holdings Now act at once. An hourly check that applies holding changes, and automatic import of new positions during it, are off by default.
 - Linked Trading 212 holdings use broker-provided live position data by default for quantity, current price, value, average cost, and P/L.
 - Auto-sync uses one bulk Trading 212 positions/account refresh every 5 minutes by default when enabled (selectable: 30 seconds, 1, 5, 15 or 30 minutes).
 - Market-data providers are not called unnecessarily for linked Trading 212 holdings during normal broker sync.
@@ -269,7 +270,7 @@ python3 -m pip install -r Stockbar/Resources/requirements.txt
 6. Use Test Connection.
 7. Use Preview Import to review proposed mappings and conflicts.
 8. If all rows are clean manual matches, use Link Matched Holdings.
-9. Enable auto-sync if you want linked holdings refreshed from Trading 212 (every 5 minutes by default).
+9. Leave auto-sync on (the default) to refresh linked holdings from Trading 212 every 5 minutes.
 
 Trading 212 setup is read-only until you explicitly link matched holdings. Previewing does not mutate holdings, backups, historical data, market caches, or Core Data trade rows.
 
@@ -279,11 +280,11 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 <summary><b>📐 How values, charts and refreshes work</b></summary>
 
 #### Holdings
-- **Current** shows the latest display price for the position source.
+- **Price** shows the latest display price for the position source.
 - **Value** is current price multiplied by units.
-- **Day P/L** compares current price with previous close.
-- **Total P/L** compares current price with normalized average cost.
-- Click either P/L column header or value to toggle that column between amount and percentage.
+- **Today** compares current price with previous close.
+- **Total P&L** compares current price with normalized average cost.
+- Click a Today or Total P&L value to toggle that column between amount and percentage. Clicking the Instrument or Price header sorts the table.
 - Amount mode shows signed currency values with symbols and thousands separators, for example `+$12,345.67`.
 - Summary cards show the primary currency first and add the USD equivalent in brackets when USD is not the selected display currency, for example `£10,000.00 ($12,700.00)`.
 - Linked Trading 212 holdings use broker-provided live position data by default.
@@ -366,6 +367,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
 
 #### Menu Bar Item Missing
+- The portfolio item is off until you turn on Settings → Menu Bar → **Show portfolio total in the menu bar**.
 - A full menu bar, the notch, or a menu-bar manager can hide the portfolio item. Check the manager's hidden section first.
 - Stock items also hide when **Only with an external display** is on and no external display is connected.
 

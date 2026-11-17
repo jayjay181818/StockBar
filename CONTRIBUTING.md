@@ -43,5 +43,5 @@ bash script/develop.sh checks         # lint, invariants, docs
 ## Reporting bugs and asking for features
 
 Open a GitHub issue with the Stockbar and macOS versions, what you did, what
-you expected and what happened. Attach redacted logs from the Debug Logs
+you expected and what happened. Attach redacted logs from the Diagnostics
 screen if they help. For security problems, see [SECURITY.md](SECURITY.md).
