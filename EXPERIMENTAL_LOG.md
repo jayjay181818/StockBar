@@ -10,11 +10,16 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-`experimental` was promoted to `testing` on 2026-11-13, at the owner's
-word. Pull requests 84 to 98 are on `testing` as merge commit `2256b6c`
-and were published as testing build 370.16: see
-[Promotion to `testing`](#promotion-to-testing-2026-11-13). `main` has
-none of it.
+`experimental` has been promoted to `testing` twice, each time at the
+owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
+merge commit `2256b6c`, published as testing build 370.16: see
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). On 2026-11-17
+pull requests 101 to 112 followed as merge commit `78c886b`, published as
+testing build 370.29: see
+[Second promotion to `testing`](#second-promotion-to-testing-2026-11-17).
+`main` has none of it, and no stable release has been made from it. The
+owner considers the overhaul finished: from here `experimental` is kept for
+major overhauls only.
 
 Seven optimisations are merged, and they have been measured together
 against the baseline twice: at [Milestone 1](#milestone-1-2026-11-12), and
@@ -194,7 +199,8 @@ Figures from either side of a break are not compared with each other.
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
 | A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
 | Full comparison of pull requests 109 and 110 | Done 2026-11-16, six launches a side on the merged commit: no row moved firmly. See [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes) |
-| Second promotion to `testing` | Asked for by the owner on 2026-11-17, after this log is brought up to date and the tests pass. Recorded by the pull request that brings `testing` back into `experimental` |
+| Second promotion to `testing` | Done 2026-11-17: pull request 113, merge commit `78c886b` on `testing`, testing build 370.29. See [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17) |
+| Stable release and `main` | Not started. Each waits for the owner's own word |
 
 ### Planned next, in order
 
@@ -905,6 +911,48 @@ is recorded here.
 - The CI workflow's two jobs, three times, as above. Each runs the Python
   helper tests, the script tests, `checks`, a build, the XCTest tests, a
   Release build and a packaging run.
+
+## Second promotion to `testing`, 2026-11-17
+
+The owner asked for it on 2026-11-17, once this log was brought up to date
+and the tests passed, and said they had run the experimental builds for
+several days on a second Mac without a problem. `experimental` at
+`be1bf79`, which is pull requests 101 to 110 and 112, went into `testing`
+through [pull request 113](https://github.com/jayjay181818/StockBar/pull/113),
+merged with a merge commit.
+
+- Branches. `testing` was `2256b6c` and is `78c886b`, a merge commit whose
+  parents are `2256b6c` and `be1bf79` and whose files are those of
+  `be1bf79`. `2256b6c` was already in the history of `be1bf79`, through
+  pull request 101, so the merge resolved nothing. `main` was and is
+  `75be612`. The head was a temporary branch at `be1bf79`,
+  `feature/promote-experimental-to-testing-2`, which GitHub deleted at the
+  merge. No version tag was made and nothing was released on the Stable
+  channel. No repository setting was changed.
+- Tests, on `be1bf79` before the pull request was opened, macOS 27.2.1
+  and Xcode 27.2: 732 XCTest tests with 0 failures, 69 Python helper tests
+  pass, and `checks` and `build-release` pass. CI's two jobs, with Xcode 26
+  and Xcode 27, passed on the pull request. It was the first time CI ran on
+  pull requests 102 to 112, and their first build with Xcode 26.
+- The testing build. The merge published build 370.29 as the prerelease
+  `testing-370.29`: `78c886b` is the 29th commit on `testing` since the
+  tag `v3.7.0`. Checked after it: the feed's signature and the archive's
+  signature are valid, the archive's length, 7,196,394 bytes, matches the
+  feed, the unpacked app is build 370.29 of 3.7.0, its code signature
+  verifies and its executable has no coverage counters. The feed offers
+  370.29 and 370.16 on the Testing channel and the release 370.
+- Experimental builds. Until `testing` is brought back, experimental
+  builds would be numbered below 370.29. The pull request that records
+  this section starts from `78c886b`, so with it merged `experimental`
+  holds the promotion's merge commit and its builds are numbered 370.29
+  with a third part.
+- Not measured for this promotion: the promoted commit as a whole against
+  the baseline. The owner asked for the measuring to stop on 2026-11-16.
+  Each pull request's own comparison is in its entry, and pull requests
+  109 and 110 were measured together on the merged commit.
+- Not exercised by hand: reopening the portfolio popover after each way it
+  can close. The owner's use of the experimental builds on a second Mac is
+  the only use on real data.
 
 ## Pull requests
 
@@ -3422,7 +3470,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   2026-11-17 under [Where things stand](#where-things-stand), with the
   milestone table and the plan paragraph brought up to date; and a row
   in "Who did what". Only this file changes.
-- Merged: not yet. The next pull request fills this in.
+- Merged: 2026-11-17, squash commit `be1bf79`. The merge published
+  experimental build 370.16.12, whose app is that of 370.16.11.
 - Benchmark: no before/after run. No file that goes into the app changes
   (nothing under `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`),
   so before, `10129ab`, and after build the same app. What this pull
@@ -3436,6 +3485,27 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   measurements that changes no code.
 - Known issues: the third launch of every comparison turn writes 1.3 to
   1.6 MB in its refresh window, on both sides; not looked into.
+- Verdict: retained.
+
+### 114: Bring `testing` back into `experimental` and record the second promotion
+
+- What: the [second promotion](#second-promotion-to-testing-2026-11-17)
+  recorded, with "Where things stand", the milestone table and the merge
+  line of pull request 112 brought up to date, and a row in "Who did
+  what". The branch starts from `testing` at `78c886b`, the promotion's
+  merge commit, so merging it brings that commit into `experimental`.
+  Only this file changes.
+- Merged: with a merge commit, the exception to the squash rule described
+  under [How this branch works](#how-this-branch-works). Its merge record
+  is on the pull request, since no later pull request into `experimental`
+  is planned.
+- Benchmark: no before/after run. `78c886b` has the files of `be1bf79`,
+  and this pull request changes only this file, so the app is the same.
+- Testing: `docs-check` passes on this branch. The tests of the promoted
+  commit are under the second promotion.
+- Review: read by its author, with each figure checked against the
+  published build and the pull requests it names.
+- Known issues: none known.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -3688,6 +3758,7 @@ launch.
 | Pull request 108 | Fable 5.2 (orchestrator), with one independent review by Opus in two passes | Done directly: one class and three tests, with the cache's file writes counted in the trial copy before and after. The review, read-only, was worth it: it found no defect in the comparison or the locking, but showed that the first version no longer wrote again a file deleted from outside the app, which the second code commit puts right, and corrected two comments. It also said key order does not vary between encodings of one dictionary; a measurement showed it does, and the reviewer withdrew that. First pass 33 tool calls, about 158,000 tokens and seven minutes; the second look at the reworked code 3 tool calls and a minute and a half |
 | Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
 | The full comparison of pull requests 109 and 110, the dropped separate comparisons, the trial's third run and pull request 112 | Fable 5.2 (orchestrator) for the measuring on 2026-11-16, then Opus 5.5 (orchestrator, at the owner's change of model) for this record | Done directly: unattended runs with readings taken beside them and set-aside rules fixed before any figure existed. Two of the three comparisons were set aside under those rules, and a rule that sent one "possibly" row to two more comparisons cost about four hours before the owner stopped it. Next time the owner should get that choice before the extra runs start |
+| The second promotion to `testing` and pull request 114 | Opus 5.5 (orchestrator) | Done directly: the tests on the promoted commit, two pull requests and the checks on the published build |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
