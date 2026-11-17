@@ -59,6 +59,8 @@ class DataModel {
     /// Nil until read, or when Folync cannot give a figure to trust.
     var folyncNetDeposits: FolyncNetDeposits?
     @ObservationIgnored var folyncNetDepositsCheckedAt: Date?
+    /// When Folync last answered with a history, whether or not it gave a figure.
+    @ObservationIgnored var folyncNetDepositsReadAt: Date?
     private(set) var isInitialPortfolioSourceResolved = false
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.

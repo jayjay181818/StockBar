@@ -306,10 +306,14 @@ struct FolyncPortfolioHistory: Codable, Equatable, Sendable {
 /// last point of a portfolio history's net contribution series.
 struct FolyncNetDeposits: Equatable, Sendable {
     /// The history range read for it: the cheapest one, served from Folync's
-    /// stored daily snapshots, which it rebuilds every five minutes.
+    /// stored daily snapshots. Folync rebuilds those a minute or two after
+    /// importing a deposit, and every five minutes regardless.
     static let historyRange = "3m"
-    /// How often it is read again. More often finds nothing new.
+    /// How often it is read again while Folync answers.
     static let refreshInterval: TimeInterval = 300
+    /// How long a figure is kept while Folync's history cannot be read.
+    /// After that, P&L is measured against the cost of the holdings.
+    static let maximumAge: TimeInterval = 900
 
     let scopeID: String
     let currency: String?

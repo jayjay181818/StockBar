@@ -236,6 +236,7 @@ extension DataModel {
         folyncSupplementalStatuses = [:]
         folyncNetDeposits = nil
         folyncNetDepositsCheckedAt = nil
+        folyncNetDepositsReadAt = nil
         await deps.supplementalCoordinator.clearInMemoryState()
         deps.settingsStore.save(FolyncStoredSettings(
             isEnabled: true,
@@ -693,8 +694,14 @@ extension DataModel {
     /// Reads net deposits from the scope's portfolio history, at most every
     /// `FolyncNetDeposits.refreshInterval` unless `force`d. Portfolio history
     /// belongs to the portfolio source, so no supplemental route gates it. A
-    /// failed request keeps the figure already read; a history that cannot
-    /// give one clears it, so P&L falls back to the cost of the holdings.
+    /// history that cannot give a figure clears it, so P&L falls back to the
+    /// cost of the holdings.
+    ///
+    /// When Folync does not answer, the route serves the last history it
+    /// cached, marked stale. That can be from an earlier day, and deposits
+    /// since would count as gain, so it is not used: the figure already read
+    /// is kept for up to `FolyncNetDeposits.maximumAge`, and the next refresh
+    /// tries again.
     func refreshFolyncNetDeposits(force: Bool = false, now: Date = Date()) async {
         let refreshGeneration = folyncRefreshGeneration
         let deps = folyncSessionDependencies
@@ -707,12 +714,17 @@ extension DataModel {
         folyncNetDepositsCheckedAt = now
         let result = await deps.supplementalCoordinator.routePortfolioHistory(range: FolyncNetDeposits.historyRange)
         guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings) else { return }
-        switch result {
-        case .folync(let history, _):
+        if case .folync(let history, let status) = result, status != .stale {
             folyncNetDeposits = FolyncNetDeposits(history: history)
-        case .legacy, .unavailable:
-            break
+            folyncNetDepositsReadAt = now
+            return
         }
+        folyncNetDepositsCheckedAt = nil
+        if let readAt = folyncNetDepositsReadAt,
+           now.timeIntervalSince(readAt) <= FolyncNetDeposits.maximumAge {
+            return
+        }
+        folyncNetDeposits = nil
     }
 
     func applyFolyncBenchmarkOverlays(_ benchmarks: [FolyncBenchmark]) {
@@ -817,6 +829,7 @@ extension DataModel {
         folyncPortfolioSnapshot = nil
         folyncNetDeposits = nil
         folyncNetDepositsCheckedAt = nil
+        folyncNetDepositsReadAt = nil
         folyncCapabilities = nil
         folyncSupplementalStatuses = [:]
         folyncConnectionState = .notConfigured

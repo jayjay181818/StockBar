@@ -1516,25 +1516,38 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         ))
         let stub = FolyncHTTPStub()
         FolyncURLProtocolStub.stub = stub
+        let historyPath = "/api/client/v2/scopes/all/history"
+        let snapshotBody = versionTwoSnapshotJSON
         func answer(netDeposits: Double) -> FolyncHTTPStub.Handler {
             let body = Self.portfolioHistoryJSON(netContribution: [500, netDeposits])
             return { request in
-                XCTAssertEqual(request.url?.path, "/api/client/v2/scopes/all/history")
-                let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
-                    .queryItems?.first { $0.name == "range" }?.value
-                XCTAssertEqual(range, "3m", "the cheapest history range, from Folync's stored daily snapshots")
-                return Self.httpResponse(request, status: 200, body: body)
+                switch request.url?.path {
+                case "/api/client/v2/capabilities":
+                    return Self.httpResponse(request, status: 200, body: Self.capabilitiesJSON)
+                case "/api/client/v2/scopes/all/snapshot":
+                    return Self.httpResponse(request, status: 200, body: snapshotBody)
+                case historyPath:
+                    let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first { $0.name == "range" }?.value
+                    XCTAssertEqual(range, "3m", "the cheapest history range, from Folync's stored daily snapshots")
+                    return Self.httpResponse(request, status: 200, body: body)
+                default:
+                    XCTFail("unexpected request \(request.url?.path ?? "")")
+                    return Self.httpResponse(request, status: 404, body: "{}")
+                }
             }
         }
+        func historyReads() -> Int { stub.requests.filter { $0.url?.path == historyPath }.count }
         stub.handler = answer(netDeposits: 600)
         let dataModel = makeTestDataModel(dependencies: env.dependencies)
         // Value 1,100 with 800 of it cash; holdings cost 201 with an unrealised gain of 99.
         dataModel.folyncPortfolioSnapshot = try JSONDecoder().decode(
-            FolyncPortfolioSnapshot.self, from: Data(versionTwoSnapshotJSON.utf8)
+            FolyncPortfolioSnapshot.self, from: Data(snapshotBody.utf8)
         )
 
+        // The minute-by-minute supplemental refresh reads it, with every route switched off.
+        await dataModel.refreshFolyncSupplementalMarketData()
         let start = Date()
-        await dataModel.refreshFolyncNetDeposits(now: start)
         XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 600)
         let summary = dataModel.calculateDisplayPortfolioSummary()
         XCTAssertEqual(summary.netDeposits, 600)
@@ -1556,16 +1569,34 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 600, "not read again within five minutes")
         await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(301))
         XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 700)
-        XCTAssertEqual(stub.requests.count, 2)
+        XCTAssertEqual(historyReads(), 2)
         stub.handler = answer(netDeposits: 750)
-        await dataModel.refreshFolyncNetDeposits(force: true, now: start.addingTimeInterval(302))
-        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 750, "a manual refresh reads it at once")
+        await dataModel.refreshFolyncPortfolio()
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 750, "Refresh Now reads it at once")
 
         // Net deposits read for one scope never measure another.
         dataModel.folyncPortfolioSnapshot = try JSONDecoder().decode(
             FolyncPortfolioSnapshot.self, from: Data(snapshotJSON.utf8)
         )
         XCTAssertNil(dataModel.calculateDisplayPortfolioSummary().netDeposits)
+
+        // When Folync's answer cannot be used, the route serves the history it
+        // cached earlier, marked stale. That may be from an earlier day, so it
+        // is not taken: the figure already read is kept while it is recent,
+        // and the next refresh tries again rather than waiting five minutes.
+        stub.handler = { request in
+            Self.httpResponse(request, status: 200, body: Self.portfolioHistoryJSON(
+                netContribution: [500, 900], quality: "unavailable"
+            ))
+        }
+        // The manual refresh read it just after `start`.
+        let readsBeforeFailure = historyReads()
+        await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(603))
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 750, "a figure read ten minutes ago is kept")
+        await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(663))
+        XCTAssertEqual(historyReads(), readsBeforeFailure + 2, "tried again a minute later")
+        await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(910))
+        XCTAssertNil(dataModel.folyncNetDeposits, "neither kept past fifteen minutes nor taken from the cached history")
 
         dataModel.deactivateFolyncPortfolio(persistSetting: false)
         XCTAssertNil(dataModel.folyncNetDeposits)
