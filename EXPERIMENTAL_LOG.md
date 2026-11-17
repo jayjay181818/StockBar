@@ -10,15 +10,26 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-Seven optimisations are merged, and the first milestone has been measured:
-see the table below and [Milestone 1](#milestone-1-2026-11-12). The
-candidates that remain are small or would change what the app does, so no
-further optimisation is planned. Since the milestone the owner has asked
-for three things, none an optimisation of its own: an update channel that
+`experimental` has been promoted to `testing` twice, each time at the
+owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
+merge commit `2256b6c`, published as testing build 370.16: see
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). On 2026-11-17
+pull requests 101 to 112 followed as merge commit `78c886b`, published as
+testing build 370.29: see
+[Second promotion to `testing`](#second-promotion-to-testing-2026-11-17).
+`main` has none of it, and no stable release has been made from it. The
+owner considers the overhaul finished: from here `experimental` is kept for
+major overhauls only.
+
+Seven optimisations are merged, and they have been measured together
+against the baseline twice: at [Milestone 1](#milestone-1-2026-11-12), and
+on the promoted commit, which is the table below. The candidates that
+remain are small or would change what the app does, so no further
+optimisation is planned. Since the first milestone the owner has asked for
+three things, none an optimisation of its own: an update channel that
 follows `experimental` (pull request 97, merged), a switch for the Python
 helper's early exit (pull request 86, merged) and a switch for the rolling
-digits (pull request 98, merged). On 2026-11-13 the owner asked for pull
-request 94 to be merged and for `experimental` to be promoted to `testing`.
+digits (pull request 98, merged).
 
 - Release builds no longer carry test-coverage counters (pull request 85).
   The executable is 6.7 MB smaller and none of the fifteen measured rows
@@ -49,11 +60,11 @@ request 94 to be merged and for `experimental` to be promoted to `testing`.
   (pull request 97). Every push to `experimental` is now built, signed and
   published as a prerelease, so every merge here distributes a build. The
   merge itself published the first, 370.0.12.
-- The idle Python helper can be made to quit after 90 seconds, with
-  **Settings → Advanced → Memory → Quit Python Helper When Idle** (pull
-  request 86). Off, which is the default, nothing changes: the helper is
-  kept for 15 minutes. What the switch saves on real data is expected, not
-  measured.
+- The idle Python helper quits after 90 seconds, with **Settings →
+  Advanced → Memory → Quit Python Helper When Idle** (pull request 86). The
+  switch is on unless turned off since pull request 102, at the owner's
+  word; turned off, the helper is kept for 15 minutes as before. What it
+  saves on real data is expected, not measured.
 - The rolling digits of the figures can be turned off, with **Settings →
   Advanced → Memory → Roll Digits When Figures Change** (pull request 98).
   On, which is the default, nothing changes. Off, the system's cache of
@@ -67,21 +78,60 @@ request 94 to be merged and for `experimental` to be promoted to `testing`.
 
 Waiting for a decision:
 
-- Whether the helper's switch (pull request 86) should be on unless turned
-  off. It is off, because on trades memory for CPU.
 - Whether the market data fetch should leave Python. The
   [Rust evaluation](#rust-evaluation-2026-11-12) sets out the options; no
   component was moved to Rust.
 
-Decided on 2026-11-13: `experimental` is promoted to `testing`. The owner
+Decided on 2026-11-13:
+
+- The helper's switch is on unless turned off (pull request 102). The
+  owner chose it, knowing that on trades memory for CPU.
+- "The rest of core" is the code the benchmark never runs, because it keeps
+  live providers off: the price refresh and its network path, the Core
+  Data writes made while prices are recorded, and the menu bar's updates.
+  It starts with a read-only review whose findings go to the owner, and a
+  refresh on made-up data added to the benchmark, so that changes there can
+  be measured. Nothing in it is changed before the owner has seen the
+  findings.
+- The review's findings went to the owner, who chose for each what happens
+  next. They are listed under
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  Four are to be fixed, two to be looked into and reported before anything
+  changes, and three left as they are. The first fix is pull request 104.
+- Findings 6 and 7 were looked into and reported, with a larger finding
+  of the same profile: the main window redraws once per symbol in every
+  refresh, and goes on doing so after it is closed. The owner chose to
+  apply each refresh's quotes together (pull request 106), to fix finding
+  6 (pull request 107), and to leave finding 7. See
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).
+- Pull request 106 halved the CPU and CPU energy of the refresh passes and
+  raised their CPU wake-ups by 32%. Asked the same day, with the figures
+  and a check that ties the wake-ups to the rolling digits, the owner
+  chose to merge it.
+- The eight Dependabot alerts for `urllib3` and `requests` were dismissed
+  as inaccurate. `main` has pinned the fixed versions since 2026-11-05, but
+  GitHub's dependency graph still holds `requirements.txt` as it was
+  before. A small change to the file (pull request 103) goes to
+  `experimental`, so that GitHub reads it again when it reaches `main`.
+
+Decided on 2026-11-16: the two separate comparisons of pull requests 109
+and 110 that a rule fixed before their full comparison called for were
+dropped at the owner's word ("Lets drop them"). See
+[pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes).
+
+Decided on 2026-11-17: the overhaul is finished. The owner asked for
+`experimental` to be promoted to `testing` again once the tests pass on it,
+after this log is brought up to date, and for a stable release and `main`
+to follow, each on their own word. They had run the experimental builds for
+several days on a second Mac without a problem. From then on `experimental`
+is for major overhauls of the app only, and ordinary changes go to
+`testing` through pull requests as before the transition.
+
+Done on 2026-11-13: `experimental` is promoted to `testing`. The owner
 asked for it without the two trading days of use that the recommendation
-at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first; what
-that section says the measurements do not cover still holds. The promotion
-is a pull request from `experimental` into `testing`, opened once pull
-request 94 is merged. Its outcome is recorded by the pull request that
-brings `testing` back into `experimental` afterwards. Asked for at the
-same time: a look at "the rest of core" after the promotion. What that
-covers is not yet settled with the owner.
+at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first. What
+that section says the measurements do not cover still holds, now for the
+testing build.
 
 Decided on 2026-11-12 and done in pull request 98: the rolling digits of
 the figures, which cost 6 to 10 MB of cached glyphs after a launch like the
@@ -91,25 +141,25 @@ This comparison is re-measured, baseline commit against the head of
 `experimental` in turns on the same day, at each milestone. Figures from
 different days are not set side by side, because the machine's state drifts.
 
-Milestone 1 was measured on 2026-11-12 with `experimental` at `c4f4cff`, six
-launches a side in turns. The head since then, `c3c21ec`, adds only pull
-request 95, whose code the benchmark does not run. These are the rows that
-moved. The full table, the soak runs, what the idle memory now consists of
-and what is left are under [Milestone 1](#milestone-1-2026-11-12).
+It was last measured on 2026-11-13, after the promotion, against `2256b6c`:
+the commit the promotion put on `testing`, whose files are those of
+`experimental` at `3cf549b`. Six launches a side in turns. These are the
+rows that moved, the same six as at Milestone 1. The full table is under
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). The soak runs,
+what the idle memory consists of and what is left are under
+[Milestone 1](#milestone-1-2026-11-12).
 
-| Metric | Baseline `47c1bda` | `experimental` at `c4f4cff` | Change |
+| Metric | Baseline `47c1bda` | Promoted commit `2256b6c` | Change |
 | --- | --- | --- | --- |
-| Idle memory (physical footprint) | 121.5 MB | 98.3 MB | -23.2 MB, -19.1% |
-| Idle memory the app holds allocated | 60.4 MB | 54.0 MB | -6.4 MB, -10.5% |
-| Peak memory, launch and history load | 281.1 MB | 244.4 MB | -36.7 MB, -13.0% |
-| Launch to history loaded | 1.88 s | 0.72 s | -1.15 s, -61.3% |
-| CPU from launch to the idle window | 2.46 s | 2.07 s | -0.39 s, -16.0% |
-| CPU energy from launch to the idle window | 7.76 J | 6.37 J | -1.39 J, -18.0% |
+| Idle memory (physical footprint) | 119.9 MB | 95.8 MB | -24.2 MB, -20.1% |
+| Idle memory the app holds allocated | 63.8 MB | 54.5 MB | -9.3 MB, -14.6% |
+| Peak memory, launch and history load | 285.1 MB | 244.9 MB | -40.1 MB, -14.1% |
+| Launch to history loaded | 1.20 s | 0.63 s | -0.57 s, -47.3% |
+| CPU from launch to the idle window | 2.64 s | 1.88 s | -0.76 s, -28.8% |
+| CPU energy from launch to the idle window | 7.85 J | 6.07 J | -1.78 J, -22.6% |
 
-Idle CPU, wake-ups, idle CPU power, disk writes and the three Python helper
-rows did not change measurably. Launch to first window came out "possibly
-lower", 0.61 s against 0.97 s (p = 0.024), which does not count without a
-repeat.
+Idle CPU, wake-ups, idle CPU power, disk writes, launch to first window and
+the three Python helper rows did not change measurably.
 
 ### Breaks in the measuring environment
 
@@ -142,10 +192,15 @@ Figures from either side of a break are not compared with each other.
 | --- | --- |
 | `experimental` created, earlier work moved onto it | Done 2026-11-11 |
 | Benchmark procedure and baseline in the repository | Done 2026-11-12, pull request 84 |
-| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
+| Carried-over changes re-measured and merged one by one | Done 2026-11-12, pull requests 85 to 93. Pull request 86 became a switch that is off by default, on by default since pull request 102; pull request 94 waited for a decision and was merged on the owner's word on 2026-11-13 |
 | Stage 3 changes | Done 2026-11-12. Plan items 8, 9, 11 and 12 were measured and none gave a change worth making; pull request 88 records the Rust evaluation |
 | First checkpoint tag and soak run against the baseline | Done 2026-11-12: [Milestone 1](#milestone-1-2026-11-12), tag `experimental-checkpoint-2026-11-12-milestone-1` |
-| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13; it follows pull request 94 |
+| Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
+| Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
+| A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
+| Full comparison of pull requests 109 and 110 | Done 2026-11-16, six launches a side on the merged commit: no row moved firmly. See [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes) |
+| Second promotion to `testing` | Done 2026-11-17: pull request 113, merge commit `78c886b` on `testing`, testing build 370.29. See [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17) |
+| Stable release and `main` | Asked for by the owner on 2026-11-17, after they had used testing build 370.29 and experimental build 370.29.2 and checked the portfolio popover by hand: version 3.8.0, released from `testing` by its own pull request and tag, with `main` brought up to date afterwards. Pull request 111, the weekly Python package update, is not in it: the recommendation was for it to follow the release, so that the release installs the packages that were tested |
 
 ### Planned next, in order
 
@@ -157,7 +212,8 @@ Figures from either side of a break are not compared with each other.
 2. Done in pull request 86, as a switch that is off by default: the idle
    Python helper quits after 90 seconds. As a fixed change it traded memory
    for CPU and waited for a decision; the owner asked for a switch. Its
-   effect shows only on real data.
+   effect shows only on real data. The owner asked on 2026-11-13 for it to
+   be on by default, which pull request 102 does.
 3. Done in pull request 87: portfolio history read in batches.
 4. Done in pull request 89: stored history read at launch away from the main
    actor.
@@ -242,11 +298,149 @@ Figures from either side of a break are not compared with each other.
     it off against 9.4 to 9.9 MB with it on. On unless turned off. The
     standard benchmark was not run, at the owner's instruction.
 
-No further optimisation is planned. Open for the owner are whether the
-helper's switch should be on unless turned off and whether the fetch
-should leave Python. Promotion to `testing` was asked for on 2026-11-13.
-What could still be done, and what each would cost, is listed at the end
-of [Milestone 1](#milestone-1-2026-11-12).
+No further optimisation of what the benchmark runs is planned. Under way
+is "the rest of core": the owner's choices from the
+[review of the refresh path](#review-of-the-refresh-path-2026-11-13), one
+pull request each. Done: finding 1 (pull request 104), the refresh
+workload (pull request 105), the redraw per symbol (pull request 106,
+which halves the refresh passes' CPU and raises their wake-ups, a
+trade-off the owner accepted), finding 6 (pull request 107), finding 5
+(pull request 108), finding 9 (pull request 109) and finding 8 (pull
+request 110), which completes the findings the owner chose to fix. The
+last two shared a shortened comparison when they were merged, and a full
+one on the merged commit the same day, in which no row moved firmly. Open
+for the owner are whether the fetch should leave Python, the cached quote
+shown as just updated, the price alerts' repeated rewrite, and whether the
+per-symbol popovers should release their content as pull request 109 does
+for the portfolio's. None of them holds the promotion. `experimental` was
+promoted to `testing` on 2026-11-13, and the owner asked on 2026-11-17 for
+it to be promoted again. What could still be done, and what
+each would cost, is listed at the end of
+[Milestone 1](#milestone-1-2026-11-12).
+
+## Review of the refresh path, 2026-11-13
+
+A read-only review of the code the benchmark never runs: the price refresh
+and its network path, the Core Data writes made while prices are recorded,
+and the menu bar's updates. An Opus subagent that had not seen the code did
+the reading. Findings 1 and 4 and the first possible fault were checked
+again in the code before they went to the owner. The costs are counted from
+the code, not measured.
+
+Possible faults, with the owner:
+
+- A quote served from the Python helper's quote cache is stamped by the app
+  as updated at the time it arrives. "Refresh now" within about four and a
+  half minutes of the last fetch can show an old price as fresh, and at a
+  one-minute refresh with more than about six symbols the later symbols
+  are fetched only every other pass while the repeated price is saved as a
+  new sample.
+- The FTSE 100 index, `^FTSE`, has no London suffix, so the app gives it
+  New York's market hours. It is polled at full rate from 09:00 to 01:00
+  London time, mostly while London is shut, and only every 30 minutes from
+  07:00 to 09:00, while London is open.
+
+Where the refresh does more work than it needs, ranked by expected benefit,
+with the owner's decision on each:
+
+| # | Finding | Owner's decision |
+| --- | --- | --- |
+| 1 | The Python helper rewrites its whole quote cache file, and forces it to disk twice, for every symbol of every refresh. The cache also almost never answers, because its entries live for 0.9 of the refresh interval | Fix. Pull request 104 |
+| 2 | Two requests to the provider per symbol per refresh: the helper downloads five days of daily prices every time, to get the previous close | Leave as it is |
+| 3 | Symbols whose market is closed are still fetched every 30 minutes, all night and at weekends, and each fetch saves a portfolio snapshot that the weekly clean-up later deletes | Leave as it is |
+| 4 | The two benchmark indices, the S&P 500 and the FTSE 100, are fetched at every refresh | Keep as it is, including the FTSE 100's hours |
+| 5 | The history cache files are rewritten 36 to 48 times an hour while prices are recorded, whether or not anything changed | Fix. Pull request 108 |
+| 6 | The menu bar rebuilds each symbol's merged price history about three times per refresh | Looked into: confirmed, about 66 ms of the main thread per refresh. Fixed in pull request 107 |
+| 7 | Each refresh makes three separate Core Data transactions, and one of them rewrites every position's price row | Looked into: confirmed, under 10 ms per refresh. Leave as it is |
+| 8 | Each portfolio snapshot taken during the session stores every position's price, which nothing reads | Fix. Pull request 110 |
+| 9 | The portfolio popover keeps its content after it closes, and recalculates its summary at every refresh | Fix. Pull request 109 |
+
+Also found, not yet put to the owner as an item of its own: price alerts
+rewrite the whole saved list of last prices once for each symbol with an
+alert, at every refresh, where once per refresh would do.
+
+The review also recommended adding a refresh on made-up data to the
+benchmark, so that findings 5 to 9 can be measured. That was part of what
+the owner settled on 2026-11-13 for "the rest of core". It is pull request
+105: `Scripts/perf/compare.sh --refresh`.
+
+### Findings 6 and 7 looked into, 2026-11-13
+
+Measured in the benchmark's isolated copy of the app, `experimental` at
+`93198fc`, on the refresh workload of pull request 105: four passes 30 s
+apart, eleven holdings and two indices, 69,982 stored prices in memory over
+22 series, and the main window open, as in every benchmark launch. Nothing
+was changed. Two tools, three runs:
+
+- `sample` over the 122 s of the four passes, one sample every 1.33 ms of
+  every thread. 3,234 samples found a thread at work rather than waiting,
+  2,895 of them on the main thread.
+- The same launch with Core Data's SQL log on
+  (`-com.apple.CoreData.SQLDebug 1`), for what each pass writes.
+- A trial copy, never committed, that wrote a line to standard error for
+  each evaluation of the main window's overview page, each ticker item's
+  update and the start and end of each pass. Three refresh launches in
+  turn: window open, window closed by the copy 5 s before the first pass,
+  window open again. CPU over the 120 s from `Scripts/perf/proc_usage`.
+
+Where the work of a refresh goes, in busy samples over the four passes:
+
+| Work | Busy samples | Share |
+| --- | --- | --- |
+| Main window: SwiftUI updates, the overview chart, Core Animation commits, a blurred shadow drawn on the CPU, AppKit layout | 2,738 | 85% |
+| Menu bar ticker items | 229 | 7% |
+| The refused history backfill that starts two minutes after launch; not part of the refresh | 99 | 3% |
+| Recording the portfolio snapshot and thinning the stored prices | 74 | 2% |
+| The refresh pass itself | 26 | 1% |
+| Core Data, on its own threads | 17 | 0.5% |
+| The rest | 51 | 1.5% |
+
+The main window, a finding of its own. A pass applied each quote and then
+waited on the cache coordinator and the log before the next. Each wait let
+SwiftUI redraw what observes the holdings, so the overview page was
+evaluated again after every symbol: 18 or 19 times a pass, about every 45
+ms, in all three trial launches. A pass took 0.73 to 0.80 s from start to
+end, most of it those redraws. The window keeps its content when it is
+closed (`isReleasedWhenClosed` is off and the controller holds it), and
+closing it saved nothing: 3.80 s/min of CPU over the refresh window with
+it closed, against 3.60 and 3.59 with it open, and the same 18 or 19
+evaluations a pass. The window is shown at every launch
+(`AppDelegate.swift`), so in normal use it is open or closed after being
+open, and either way it does this work. Inside each redraw, the chart's
+colour is worked out twice for every one of its 732 points, each time
+reading the chart model's published data again (156 busy samples).
+
+Finding 6, confirmed. Each of the eleven ticker items updates three times a
+pass: when its quote is applied, when the holdings list announces a change
+just after the pass, and 250 ms after the stored prices change. Each update
+asks for the symbol's last 24 hours, and that merges the symbol's whole
+stored series with its live samples
+(`InstrumentAliasHistoryLookup.combinedSnapshots`) to keep 71 to 85 points
+of it. The cache in front of the merge, `AliasPriceSnapshotCache`, holds
+7,200 points in all, against 69,982 in memory, and is emptied whenever a
+price or a live sample is recorded, so during a refresh it does not
+answer. The merge is 198 of the menu bar's 229 busy samples: about 66 ms
+of the main thread a pass, growing with the stored history.
+
+Finding 7, confirmed and cheap. Each pass makes three write transactions,
+each after an empty one: the eleven holdings' saved price rows are
+updated, 13 price samples are added, and one portfolio snapshot is added
+with its 11 positions. Each also writes Core Data's change history, one row
+for each object changed, 35 a pass, which nothing in the app reads except
+the clean-up that deletes it, and posts a change notification. 17 busy
+samples over the four passes, under 10 ms a pass. Pull request 105 measured
+0.046 MB written over the four passes in four refresh launches of six.
+
+The owner's decisions, the same day:
+
+- The main window: apply each pass's quotes together before waiting on
+  anything, so the window redraws once a pass rather than once a symbol.
+  Pull request 106. Not chosen: working out the chart's colour once per
+  redraw, and dropping the window's content when it is closed.
+- Finding 6: read only the last day of the sorted history. Pull request
+  107.
+- Finding 7: leave as it is. Recorded under
+  [Tried and rejected](#tried-and-rejected).
 
 ## Baseline
 
@@ -473,7 +667,9 @@ and held 21.8 MB.
 
 Nothing was changed. The cache belongs to the system, the animation is
 deliberate, and in normal use the app starts without a window, so the
-figures are ready long before one is opened. The cache was still held after
+figures are ready long before one is opened. (Corrected on 2026-11-13: the
+app shows its main window at every launch, from `AppDelegate.swift`, so the
+cache is filled in normal use as in the benchmark.) The cache was still held after
 the 30 minutes of the soak below; whether it is ever emptied was not
 measured beyond that. Pull request 98 has since made the rolling a setting.
 
@@ -584,8 +780,9 @@ real portfolio, through two trading days, and promote after that.
 
 On 2026-11-13 the owner asked for the promotion without that wait, and for
 pull request 94 to be merged first. The promotion therefore carries every
-pull request from 84 to 98. The list below is unchanged by that: it is
-what the testing build has not been through.
+pull request from 84 to 98, and was made the same day: see
+[Promotion to `testing`](#promotion-to-testing-2026-11-13). The list below
+is unchanged by that: it is what the testing build has not been through.
 
 What the measurements do not cover:
 
@@ -600,6 +797,162 @@ What the measurements do not cover:
   on a store that has grown over years.
 - The popover chart fix was checked by drawing the app's own view with
   made-up data, not on the Mac that showed the fault.
+
+## Promotion to `testing`, 2026-11-13
+
+The owner asked for it on 2026-11-13. `experimental` at `3cf549b`, which is
+pull requests 84 to 98, went into `testing` through
+[pull request 100](https://github.com/jayjay181818/StockBar/pull/100). It
+was merged with a merge commit, so each change is still a commit of its own
+on `testing` and can be reverted alone.
+
+- Branches. `testing` was `47c1bda` and is `2256b6c`, a merge commit whose
+  parents are `47c1bda` and `3cf549b` and whose files are those of
+  `3cf549b`. `main` was and is `75be612`. `experimental` stayed at
+  `3cf549b`. The branch `appcast`, which holds the stable and testing feed,
+  went from `4dfd943` to `e313178`: that is the release workflow adding the
+  testing build. No version tag was made and nothing was released on the
+  Stable channel.
+- Pull request 99 was opened first, from `experimental` itself, and was
+  closed unmerged. GitHub deletes a merged pull request's branch, and the
+  repository's one ruleset protects only `main` and `testing` from
+  deletion, so merging it would have deleted `experimental`. Pull request
+  100 came from a temporary branch at the same commit,
+  `feature/promote-experimental-to-testing`, which GitHub deleted at the
+  merge. No repository setting was changed.
+- CI. The CI workflow does not run for `experimental`, so it ran on this
+  code for the first time here: on pull request 99, on pull request 100 and
+  on `testing` after the merge. Both of its jobs passed all three times.
+  One builds and tests with Xcode 26, which this code had not been built
+  with before, and one with Xcode 27.
+- The testing build. The merge published build 370.16 as the prerelease
+  `testing-370.16`: `2256b6c` is the sixteenth commit on `testing` since
+  the tag `v3.7.0`, fifteen changes and the merge. Checked after it: the
+  feed's signature and the archive's signature are valid, the archive's
+  length matches the feed, the unpacked app is build 370.16 of 3.7.0, its
+  code signature verifies and its executable has no `__llvm_prf` section.
+  The feed offers two builds, 370.16 on the Testing channel and the release
+  370. This was the first testing build made by the workflow as pull
+  request 97 changed it. The four experimental prereleases, 370.0.12 to
+  370.0.15, were still listed afterwards.
+- Experimental builds. Until `testing` is brought back, the next
+  experimental build would be numbered 370.15.1: below testing build
+  370.16, so a Mac that has 370.16 would not be offered it. The pull
+  request that records this section merges `testing` into `experimental`
+  with a merge commit. After it, experimental builds are numbered 370.16
+  with a third part, which is above it.
+
+### Comparison with the baseline
+
+```bash
+bash Scripts/perf/compare.sh 47c1bda 2256b6c --label milestone-2
+```
+
+Six launches a side in turns, between 01:18 and 01:50 UTC on 2026-11-13,
+after the promotion, on macOS 27.2.1 and mains power. All twelve launches
+ran with the screen unlocked and the display awake. The load average was
+not recorded. These figures are not set beside Milestone 1's, which are
+from another day: the baseline, the same build both times, loaded its
+history in 1.88 s then and 1.20 s now.
+
+| Metric | Before: median (range) | After: median (range) | Change | Verdict |
+| --- | --- | --- | --- | --- |
+| Idle memory (physical footprint) | 119.9 (102.3 to 134.9) MB | 95.8 (81.4 to 100.4) MB | -24.2 MB, -20.1% | lower (p = 0.002) |
+| Idle memory the app holds allocated | 63.8 (60.7 to 64.5) MB | 54.5 (40.7 to 56.2) MB | -9.3 MB, -14.6% | lower (p = 0.002) |
+| Peak memory, launch and history load | 285.1 (276.5 to 289.7) MB | 244.9 (241.3 to 248.4) MB | -40.1 MB, -14.1% | lower (p = 0.002) |
+| Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-15.1 to 0.1) MB | +0.0 MB | no measurable change (p = 0.515) |
+| Idle CPU | 0.093 (0.083 to 0.099) s/min | 0.089 (0.082 to 0.102) s/min | -0.005 s/min, -4.8% | no measurable change (p = 0.515) |
+| Idle CPU wake-ups | 27 (23 to 31) /min | 24 (21 to 29) /min | -4 /min, -13.0% | no measurable change (p = 0.167) |
+| Idle CPU power | 4.13 (3.38 to 4.65) mW | 3.97 (3.27 to 4.45) mW | -0.16 mW, -3.9% | no measurable change (p = 0.485) |
+| Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+| Launch to first window | 0.58 (0.47 to 1.11) s | 0.52 (0.46 to 0.75) s | -0.06 s, -10.3% | no measurable change (p = 0.582) |
+| Launch to history loaded | 1.20 (1.06 to 2.41) s | 0.63 (0.54 to 0.74) s | -0.57 s, -47.3% | lower (p = 0.002) |
+| CPU from launch to the idle window | 2.64 (2.25 to 2.94) s | 1.88 (1.84 to 1.90) s | -0.76 s, -28.8% | lower (p = 0.002) |
+| CPU energy from launch to the idle window | 7.85 (6.85 to 9.25) J | 6.07 (5.94 to 6.22) J | -1.78 J, -22.6% | lower (p = 0.002) |
+| Python helper start to ready, no network | 0.31 (0.28 to 0.62) s | 0.29 (0.28 to 0.60) s | -0.02 s, -4.8% | no measurable change (p = 0.853) |
+| Python helper start, CPU | 0.30 (0.28 to 0.37) s | 0.29 (0.28 to 0.38) s | -0.01 s, -1.7% | no measurable change (p = 0.859) |
+| Python helper memory once started | 71.0 (70.9 to 71.0) MB | 71.0 (71.0 to 71.2) MB | +0.0 MB, +0.0% | no measurable change (p = 0.273) |
+
+- The six rows that were lower at Milestone 1 are lower again, and no row
+  is higher. Launch to first window, "possibly lower" at Milestone 1, shows
+  no measurable change here.
+- Pull requests 97, 86, 98 and 94 were merged after Milestone 1. Pull
+  request 86's comparison stands for itself in its entry. Pull request 98
+  was not benchmarked, at the owner's instruction, and pull requests 97 and
+  94 change no code the benchmark runs. This is therefore the first run of
+  the standard benchmark on an app that has pull request 98 in it. Both
+  switches were as they ship: the helper kept for 15 minutes and the digits
+  rolling.
+- The baseline idled at two levels again (plan item 9): 102.3, 107.3 and
+  108.3 MB in its first round and 131.5, 132.4 and 134.9 MB in its second.
+- One launch of `2256b6c` is the low end of three ranges: it idled at 81.4
+  MB, held 40.7 MB allocated and gave back 15.1 MB during the idle window.
+  The app's log shows why. macOS sent it a memory pressure warning at
+  01:41:15, about 20 seconds into that window, and between the samples at
+  15 and 30 seconds its footprint fell from 95.9 to 80.8 MB. No other
+  launch on either side had a warning. At the end of the window that launch
+  held 8.6 MB of allocations with no class, where the launch before it held
+  22.5 MB. What those were was not identified. The other five launches
+  idled at 94.7 to 100.4 MB and held 53.5 to 56.2 MB allocated. Without the
+  launch the two medians are 95.9 and 54.7 MB, and with or without it every
+  launch of `2256b6c` is below every launch of the baseline in both rows.
+
+Not measured for the promotion: a soak run, last made at Milestone 1 on
+`c3c21ec`; anything on a real portfolio, on another Mac or on an older
+macOS; a refresh over the network. No use of the testing build by the owner
+is recorded here.
+
+### Tests
+
+- On the files that were promoted, run for pull request 94 before its
+  merge: 724 XCTest tests with 0 failures, 66 Python helper tests and 91
+  script tests pass; `checks`, `docs-check` and `build-release` pass; one
+  full packaging run ended without error.
+- The CI workflow's two jobs, three times, as above. Each runs the Python
+  helper tests, the script tests, `checks`, a build, the XCTest tests, a
+  Release build and a packaging run.
+
+## Second promotion to `testing`, 2026-11-17
+
+The owner asked for it on 2026-11-17, once this log was brought up to date
+and the tests passed, and said they had run the experimental builds for
+several days on a second Mac without a problem. `experimental` at
+`be1bf79`, which is pull requests 101 to 110 and 112, went into `testing`
+through [pull request 113](https://github.com/jayjay181818/StockBar/pull/113),
+merged with a merge commit.
+
+- Branches. `testing` was `2256b6c` and is `78c886b`, a merge commit whose
+  parents are `2256b6c` and `be1bf79` and whose files are those of
+  `be1bf79`. `2256b6c` was already in the history of `be1bf79`, through
+  pull request 101, so the merge resolved nothing. `main` was and is
+  `75be612`. The head was a temporary branch at `be1bf79`,
+  `feature/promote-experimental-to-testing-2`, which GitHub deleted at the
+  merge. No version tag was made and nothing was released on the Stable
+  channel. No repository setting was changed.
+- Tests, on `be1bf79` before the pull request was opened, macOS 27.2.1
+  and Xcode 27.2: 732 XCTest tests with 0 failures, 69 Python helper tests
+  pass, and `checks` and `build-release` pass. CI's two jobs, with Xcode 26
+  and Xcode 27, passed on the pull request. It was the first time CI ran on
+  pull requests 102 to 112, and their first build with Xcode 26.
+- The testing build. The merge published build 370.29 as the prerelease
+  `testing-370.29`: `78c886b` is the 29th commit on `testing` since the
+  tag `v3.7.0`. Checked after it: the feed's signature and the archive's
+  signature are valid, the archive's length, 7,196,394 bytes, matches the
+  feed, the unpacked app is build 370.29 of 3.7.0, its code signature
+  verifies and its executable has no coverage counters. The feed offers
+  370.29 and 370.16 on the Testing channel and the release 370.
+- Experimental builds. Until `testing` is brought back, experimental
+  builds would be numbered below 370.29. The pull request that records
+  this section starts from `78c886b`, so with it merged `experimental`
+  holds the promotion's merge commit and its builds are numbered 370.29
+  with a third part.
+- Not measured for this promotion: the promoted commit as a whole against
+  the baseline. The owner asked for the measuring to stop on 2026-11-16.
+  Each pull request's own comparison is in its entry, and pull requests
+  109 and 110 were measured together on the merged commit.
+- Not exercised by hand: reopening the portfolio popover after each way it
+  can close. The owner's use of the experimental builds on a second Mac is
+  the only use on real data.
 
 ## Pull requests
 
@@ -1348,8 +1701,14 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   waited for a decision from 2026-11-12. The owner asked for it to be
   merged on 2026-11-13. `experimental` had moved by five pull requests in
   between and was merged into the branch; nothing conflicted.
-- Merged: the date and squash commit are filled in by the pull request
-  after it.
+- Merged: 2026-11-13, squash commit `3cf549b`. The merge published
+  experimental build 370.0.15 as the prerelease `experimental-370.0.15`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.0.15 of 3.7.0, its code signature verifies and its executable has no
+  `__llvm_prf` section. That release run was the check's first run in
+  GitHub Actions, and it let the build through. `main`, `testing` and the
+  stable and testing feed did not move.
 - Benchmark: not run. No file that goes into the app differs between
   `7ed5e85` and this branch (nothing under `Stockbar/`, `StockbarTests/`,
   `PythonTests/` or `Stockbar.xcodeproj`), so before and after are the same
@@ -1919,6 +2278,1236 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained, as a switch that is on unless turned off. Nothing
   changes for anyone who leaves it alone.
 
+### 101: Bring `testing` back into `experimental` and record the promotion
+
+- What: merges `testing` at `2256b6c` into `experimental`, so that the
+  merge commit of the promotion is in its history and its builds are
+  numbered above testing build 370.16. Records the promotion and the
+  comparison made after it in this log
+  ([Promotion to `testing`](#promotion-to-testing-2026-11-13)), fills in
+  pull request 94's merge, and adds three sentences to
+  `Docs/Development.md` on how a promotion is made. The merge brings one
+  commit, whose files are the ones `experimental` already had, so no file
+  of the app, its tests or its scripts changes.
+- Merged: 2026-11-13, merge commit `e43a8c0`, with a merge commit as
+  planned: after a squash `2256b6c` would not be in the history of
+  `experimental`, and its builds would stay numbered below 370.16. The
+  merge published experimental build 370.16.2 as the prerelease
+  `experimental-370.16.2`. Checked after it: the feed's signature and the
+  archive's signature are valid, the archive's length matches the feed,
+  the unpacked app is build 370.16.2 of 3.7.0, its code signature verifies
+  and its executable has no `__llvm_prf` section. `main` and `testing` did
+  not move.
+- Benchmark: before, `3cf549b`, and after are the same app, so all fifteen
+  rows are "not measured" for this pull request. The comparison of the
+  baseline with the promoted commit was run for it and is under
+  [Promotion to `testing`](#promotion-to-testing-2026-11-13).
+- Testing: `docs-check` and `checks` pass on the branch. The tests were not
+  run again here. The files they build are those of `2256b6c`, on which
+  both CI jobs passed after the promotion.
+- Known issues: none known. Each later promotion needs the same two steps,
+  which `Docs/Development.md` now names.
+- Verdict: retained.
+
+### 102: Turn on Quit Python Helper When Idle by default
+
+- What: the switch from pull request 86, **Settings → Advanced → Memory →
+  Quit Python Helper When Idle**, is on unless turned off. A helper nobody
+  is using quits about 90 seconds after its last request instead of 15
+  minutes. The owner asked for it on 2026-11-13. Only a setting that was
+  never changed takes the default, so a Mac where the switch was turned
+  off keeps it off. `PythonWorkerPool.quitWhenIdleDefault` is the one
+  default, read by the pool and by the Settings switch. The switch's
+  description, the user guide and the architecture note describe both
+  states and say it is on by default. A pool made without a timeout, which
+  only tests do, still keeps its workers for 15 minutes.
+- Merged: 2026-11-13, squash commit `267cf3b`. The merge published
+  experimental build 370.16.3 as the prerelease `experimental-370.16.3`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.3 of 3.7.0 and carries the new description, its code signature
+  verifies and its executable has no `__llvm_prf` section. `main` and
+  `testing` did not move.
+- Benchmark: before `e43a8c0`, after `ea7aa22`, six launches a side in
+  turns from 09:30 to 10:05 UTC on 2026-11-13, macOS 27.2.1 and mains
+  power, all twelve launches with the screen unlocked and the display
+  awake. The Mac had restarted at 09:03 UTC, and the load average was 15.9
+  when the run started and 5.2 when it ended. Named in advance: no row
+  expected to move. The benchmark never starts a helper through the pool
+  (the helper was alive in none of the samples of any of the twelve
+  launches), and its three helper rows start one directly. No row moved.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.2 (94.7 to 97.8) MB | 96.7 (89.4 to 99.5) MB | +0.5 MB, +0.6% | no measurable change (p = 0.818) |
+  | Idle memory the app holds allocated | 51.5 (50.1 to 53.8) MB | 52.4 (51.4 to 53.6) MB | +0.9 MB, +1.6% | no measurable change (p = 0.271) |
+  | Peak memory, launch and history load | 251.6 (240.1 to 255.9) MB | 255.8 (249.3 to 261.4) MB | +4.3 MB, +1.7% | no measurable change (p = 0.310) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (0.0 to 0.0) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.080 (0.066 to 0.085) s/min | 0.081 (0.078 to 0.087) s/min | +0.001 s/min, +1.3% | no measurable change (p = 0.613) |
+  | Idle CPU wake-ups | 26 (24 to 31) /min | 28 (25 to 43) /min | +2 /min, +7.8% | no measurable change (p = 0.323) |
+  | Idle CPU power | 4.26 (4.16 to 4.70) mW | 4.17 (4.14 to 4.93) mW | -0.08 mW, -2.0% | no measurable change (p = 0.260) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.53 to 0.60) s | 0.56 (0.54 to 1.35) s | -0.02 s, -3.4% | no measurable change (p = 1.000) |
+  | Launch to history loaded | 0.65 (0.61 to 0.69) s | 0.60 (0.57 to 1.34) s | -0.05 s, -7.7% | no measurable change (p = 0.431) |
+  | CPU from launch to the idle window | 1.90 (1.81 to 2.19) s | 1.88 (1.80 to 1.91) s | -0.01 s, -0.5% | no measurable change (p = 0.418) |
+  | CPU energy from launch to the idle window | 5.37 (4.22 to 6.02) J | 5.80 (5.56 to 6.26) J | +0.43 J, +8.1% | no measurable change (p = 0.368) |
+  | Python helper start to ready, no network | 0.32 (0.30 to 0.57) s | 0.35 (0.28 to 0.65) s | +0.03 s, +9.4% | no measurable change (p = 0.844) |
+  | Python helper start, CPU | 0.32 (0.29 to 0.36) s | 0.34 (0.28 to 0.40) s | +0.02 s, +6.3% | no measurable change (p = 0.797) |
+  | Python helper memory once started | 71.1 (71.1 to 71.3) MB | 71.0 (71.0 to 71.2) MB | -0.0 MB, -0.1% | no measurable change (p = 0.121) |
+
+- On real data: not measured. What the switch saves is in pull request
+  86's entry, and is still theoretical: at the default five-minute refresh,
+  app and helper together are expected to average about 114 MB in place of
+  the 175 MB measured on the installed 3.7.0, for about 0.06 s/min more
+  CPU. Sampling the owner's Mac with the switch on, with
+  `Scripts/measure_performance.sh`, would turn that into a measurement.
+- Testing: 724 XCTest tests with 0 failures; the pool's test now checks that
+  an unchanged setting is on, that turned off the app's pool keeps its
+  workers for 15 minutes without a restart, and that a pool given no
+  timeout keeps them for 15 minutes. 66 Python helper tests and 91 script
+  tests pass. `checks`, `docs-check` and `build-release` pass.
+
+  The switch was read on screen, driven by Sonnet, in an isolated copy of
+  the measured build of `ea7aa22` (made-up data, live providers off, a new
+  store). Under Settings → Advanced → Memory it was on, and its description
+  read word for word as in the diff. Roll Digits When Figures Change was on
+  too. Nothing was clicked. Afterwards none of the copy's four settings
+  files held `pythonHelper.quitWhenIdle`, so the switch showed the default,
+  not a stored value.
+- Known issues:
+  - Everyone who never changed the switch gets the new behaviour. At a
+    refresh interval of five minutes or longer, every refresh pass starts a
+    helper: about a third of a second of CPU, and that pass's first price
+    arrives about as much later.
+  - A settings export carries only settings that were changed. Importing
+    one made before the switch was turned off, or by a build without the
+    switch, leaves it on.
+- Verdict: retained. The owner's decision, made knowing the trade.
+
+### 103: Note in `requirements.txt` that its pins have GitHub's advisory fixes
+
+- What: two comment lines in `Stockbar/Resources/requirements.txt`, saying
+  that the `requests` and `urllib3` pins have the fixes for the eight
+  advisories GitHub raised against them. No pin changes.
+
+  The point is the change itself. `main` has pinned `urllib3==2.8.0` and
+  `requests==2.34.2` since `c61f882` (2026-11-05 13:27 UTC), but GitHub's
+  dependency graph still holds the file as it was at that commit, whose
+  lines for Apple's Python 3.9 pinned `urllib3==1.26.20` and
+  `requests==2.32.5`. So eight Dependabot alerts stayed open, and a new
+  advisory would be matched against versions Stockbar does not install.
+  The graph has re-read the workflow files and `Package.resolved` since,
+  but not this file, which no push to `main` has changed since 2026-11-05
+  15:02 UTC. A change to the file on `main` is expected to make GitHub read
+  it again. The owner chose on 2026-11-13 to dismiss the eight alerts as
+  inaccurate at once, which was done the same day, and to let this change
+  reach `main` with the next promotion.
+- Merged: 2026-11-13, squash commit `25b450d`. The merge published
+  experimental build 370.16.4 as the prerelease `experimental-370.16.4`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.4 of 3.7.0 and its bundled `requirements.txt` carries the new
+  comment, its code signature verifies and its executable has no
+  `__llvm_prf` section. `main` and `testing` did not move.
+- Benchmark: not run, and all fifteen rows are "not measured". The one file
+  of the app that changes is this text file, and only in comments. The
+  launch-time check reads it for its pins and skips comment lines, as its
+  tests show. Deferred to the next milestone comparison.
+- Testing: `bash script/update_python_lock.sh --check`, which CI runs,
+  reports that `requirements.lock` still matches. The 7
+  `PythonRequirementsTests` pass with 0 failures. The script tests, the 66
+  Python helper tests, `checks` and `docs-check` pass.
+- Known issues:
+  - That GitHub reads the file again when it changes on `main` is
+    expected, not verified: GitHub does not say what makes it re-read a
+    file. If the graph is still stale after the change reaches `main`, the
+    next step is to ask GitHub Support.
+  - Until then, Dependabot matches new advisories for `urllib3`,
+    `requests` and `yfinance` against old versions. A fix for the versions
+    Stockbar installs could be missed, and a stale alert raised.
+- Verdict: retained.
+
+### 104: Read and write the Python helper's quote cache once per refresh
+
+- What: finding 1 of the
+  [review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  `get_stock_data.py` read its quote cache file three times for each symbol
+  of a refresh and rewrote the whole file, forcing it to disk twice, once
+  for each symbol fetched. Now a refresh reads the file once to look up
+  every symbol, and stores everything it fetched with one locked read,
+  merge and atomic write at the end. The lock, the atomic replace and both
+  forced writes are unchanged, and entries another process stored meanwhile
+  are kept. Nothing is written when every symbol came from the cache.
+  `get_cached` and `set_cache` are replaced by `get_cached_quotes` and
+  `update_cache`; `fetch_batch` no longer reads or writes the cache, which
+  `main` does around it. A symbol given twice is fetched once, as before,
+  when the second lookup found the first one's cached quote.
+- Merged: 2026-11-13, squash commit `19a51de`. The merge published
+  experimental build 370.16.5 as the prerelease `experimental-370.16.5`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.5 of 3.7.0 and its bundled `get_stock_data.py` has the new cache
+  functions, its code signature verifies and its executable has no
+  `__llvm_prf` section. `main` and `testing` did not move.
+- Measured offline, with `measure.py` (not in the repository): `main()` run
+  with fresh globals, as the app's worker runs it, on a cache that holds a
+  stale entry for every symbol, which is its state at each refresh. The
+  provider fetch was replaced by a stub that returns a full quote, and the
+  one-second spacing between requests was skipped. Fifty calls a side, in
+  ten alternating rounds of five, on 2026-11-13 from 10:50 to 10:51 UTC.
+  Before is the script at `25b450d`, after is this pull request's. Median
+  (range):
+
+  | Per refresh | Before, 22 symbols | After, 22 symbols | Before, 50 symbols | After, 50 symbols |
+  | --- | --- | --- | --- | --- |
+  | Reads of the cache file | 66 | 2 | 150 | 2 |
+  | Writes of the cache file | 22 | 1 | 50 | 1 |
+  | Forced writes to disk | 44 | 2 | 100 | 2 |
+  | Bytes written | 296,509 (296,250 to 296,864) | 13,476 (13,449 to 13,504) | 1,531,399 (1,530,093 to 1,533,174) | 30,621 (30,560 to 30,680) |
+  | CPU | 20.9 (19.8 to 25.2) ms | 1.5 (1.2 to 2.7) ms | 80.4 (77.0 to 103.3) ms | 2.4 (2.1 to 3.1) ms |
+  | Elapsed | 21.4 (20.0 to 25.8) ms | 1.6 (1.2 to 5.4) ms | 81.2 (77.8 to 114.5) ms | 2.4 (2.1 to 3.3) ms |
+
+  22 symbols is the benchmark fixture's portfolio. The time a refresh
+  spends waiting for the provider, about a second a symbol, is not
+  changed.
+- Benchmark: before `25b450d`, after `22f7565` (the code commit; the
+  second commit changes only this log), six launches a side in turns from
+  10:54 to 11:29 UTC on 2026-11-13, macOS 27.2.1 and mains power, all
+  twelve launches with the screen unlocked and the display awake. The load
+  average was 5.9 when the run started and 4.4 when it ended. Named in
+  advance: no row expected to move. The benchmark never fetches a price, and
+  its three helper rows start the helper without running this script. No
+  row moved.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 100.8 (100.4 to 101.5) MB | 101.3 (99.2 to 102.4) MB | +0.5 MB, +0.4% | no measurable change (p = 0.671) |
+  | Idle memory the app holds allocated | 55.9 (55.6 to 56.6) MB | 56.1 (54.0 to 56.9) MB | +0.2 MB, +0.4% | no measurable change (p = 0.671) |
+  | Peak memory, launch and history load | 250.4 (243.4 to 264.2) MB | 253.2 (248.6 to 259.8) MB | +2.8 MB, +1.1% | no measurable change (p = 0.729) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (-0.1 to 0.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.172 (0.159 to 0.203) s/min | 0.167 (0.165 to 0.171) s/min | -0.005 s/min, -2.9% | no measurable change (p = 0.095) |
+  | Idle CPU wake-ups | 25 (24 to 27) /min | 26 (25 to 28) /min | +2 /min, +6.0% | no measurable change (p = 0.184) |
+  | Idle CPU power | 4.48 (4.40 to 4.79) mW | 4.53 (4.45 to 4.67) mW | +0.04 mW, +1.0% | no measurable change (p = 0.866) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.60 (0.58 to 0.66) s | 0.56 (0.56 to 0.71) s | -0.04 s, -6.6% | no measurable change (p = 0.065) |
+  | Launch to history loaded | 0.59 (0.56 to 0.64) s | 0.58 (0.56 to 0.76) s | -0.01 s, -1.7% | no measurable change (p = 0.848) |
+  | CPU from launch to the idle window | 2.06 (2.01 to 2.19) s | 2.08 (2.04 to 2.16) s | +0.02 s, +0.7% | no measurable change (p = 0.617) |
+  | CPU energy from launch to the idle window | 6.07 (5.58 to 6.32) J | 6.25 (5.98 to 6.52) J | +0.18 J, +3.0% | no measurable change (p = 0.180) |
+  | Python helper start to ready, no network | 0.42 (0.29 to 0.61) s | 0.31 (0.28 to 0.58) s | -0.11 s, -25.3% | no measurable change (p = 0.387) |
+  | Python helper start, CPU | 0.39 (0.29 to 0.41) s | 0.30 (0.27 to 0.38) s | -0.09 s, -23.1% | no measurable change (p = 0.139) |
+  | Python helper memory once started | 71.0 (70.0 to 71.4) MB | 71.2 (71.0 to 71.5) MB | +0.1 MB, +0.1% | no measurable change (p = 0.180) |
+
+  Not measured by it: the change itself, which is measured offline above.
+- Testing: the 69 Python helper tests pass, three of them new: a refresh of
+  twelve symbols, one of them given twice, reads the file twice, writes it
+  once, fetches each symbol once and keeps the entry already stored for a
+  symbol it was not asked for; a refresh served from
+  the cache writes nothing; a fresh entry that is not a valid quote is
+  fetched again and replaced, or dropped when the fetch fails. The test of
+  eight processes storing at once still finds all eight entries. The
+  single-symbol text-mode test now uses a different symbol for its no-data
+  half, because its first half's quote is now cached by `main`, not by the
+  `fetch_batch` the test replaces with a mock. 724 XCTest tests pass with
+  0 failures, as do the 91 script tests, `checks` and `docs-check`. Every
+  path of `main` ran in the offline measurement and the tests, with the
+  provider replaced; no live provider was called.
+- Known issues:
+  - A quote fetched in a refresh that then fails as a whole, with an
+    exception outside the per-symbol fetches, is no longer cached. Before,
+    each quote was stored as soon as it arrived. The refresh reports a
+    network error either way, and the next one fetches again.
+  - The app stops the helper after the batch's time limit as a backstop.
+    A refresh stopped that way stores nothing, where before it kept the
+    quotes fetched so far. The script stops starting new symbols 15 seconds
+    before that limit, and gives up waiting on any one symbol by then, so
+    this needs the script to overrun its own time limit by 15 seconds.
+- Verdict: retained.
+
+### 105: Add a refresh workload to the benchmark
+
+- What: the benchmark keeps live providers off, so it never refreshed a
+  price and could not measure the refresh path, where findings 5 to 9 of
+  the [review](#review-of-the-refresh-path-2026-11-13) lie.
+  `Scripts/perf/benchmark.sh --refresh`, and `compare.sh --refresh`, now
+  make as many launches again after the usual ones. `--settle` seconds
+  after each, the script sends the app `SIGUSR1`, and the app runs four
+  "Refresh now" passes, 30 s apart, on made-up quotes, with no network and
+  no Python. Chart Data Collection is set to 30 s for these runs, so
+  every pass records price rows and a portfolio snapshot, as every refresh
+  does at the default settings. CPU, CPU energy, wake-ups, disk writes,
+  footprint and heap growth over those 120 s get seven rows of their own,
+  shown only when a side measured them.
+
+  In the app, `BenchmarkRefreshSettings` takes the workload only in an
+  acceptance run with live providers off whose environment asks for it.
+  `DataModel` then uses `BenchmarkQuoteService`, which refuses every quote,
+  as the Python service does in an acceptance run, until the signal
+  arrives. So the launch and the idle window are measured as without it.
+  `BenchmarkRefreshDriver` runs the passes through the refresh service's
+  normal forced path. A build without the workload never logs that it is
+  ready, is not signalled, and shows "not measured" on its side of the new
+  rows; the report now shows a side's figures when only that side measured
+  a row. Without `--refresh` nothing changes, and a comparison still takes
+  about 35 minutes; with it, about 75. `Scripts/README_PERFORMANCE.md` and
+  `Docs/Architecture.md` describe it.
+
+  The first version measured the refreshes in the same launches, after the
+  idle window. Its comparison, before `19a51de` and after `03af500`, from
+  11:47 to 12:41 UTC, was set aside: a refresh changes the stored data the
+  next launch starts from, and in the second and third launch of each of
+  this branch's turns the idle window drew 0.39 to 0.45 mW of CPU power
+  against 4.51 to 4.76 mW in every other launch, and used 0.085 to 0.104
+  s/min of CPU against 0.157 to 0.174. So the usual rows were no longer
+  measured on the same data as the other build's. What makes the idle
+  window cheaper after a refresh was not looked into; the benchmark's
+  fixture holds prices last updated when it was made, marked closed. Its
+  refresh rows were steady: 7.01 to 7.28 s of CPU and 23.95 to 25.37 J
+  over the four passes in all six launches.
+- Merged: 2026-11-13, squash commit `93198fc`. The merge published
+  experimental build 370.16.6 as the prerelease `experimental-370.16.6`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.6 of 3.7.0 and carries the workload, its code signature verifies
+  and its executable has no coverage counters. `main` and `testing` were
+  unchanged.
+- A first launch with the workload, from this branch on 2026-11-13 at 11:39
+  UTC: all four passes completed and updated 13 symbols each. Over the 120
+  s the app used 7.29 s of CPU and 25.5 J of CPU energy, woke 699 times,
+  wrote 0.05 MB, and held 35.3 MB more allocated afterwards than before;
+  its footprint was 144.3 MB against 100.4 MB idle. The first pass took
+  0.7 s from start to "Refresh completed", the later ones 1.7 to 1.8 s.
+  That is about 1.7 s of CPU a pass for eleven holdings, against 0.19 s a
+  minute idle, so the refresh path is where most of the app's work goes
+  while prices are being fetched. One launch, so read it as an order of
+  size; the comparison below has six. The benchmark's launches show the
+  main window, which redraws as prices change; how much of that cost is the
+  window's is for finding 6 to look into.
+- Benchmark: before `19a51de`, after `97bb986` (the second of the two
+  code commits; the commits after it change only this log and one comment
+  in `compare_report.py`), with `--refresh`:
+  six launches a side in turns from 12:36 to 13:29 UTC on 2026-11-13,
+  macOS 27.2.1 and mains power, the screen unlocked and the display awake
+  in every launch and every refresh window. The load average was 5.8 when
+  the run started and 3.3 when it ended. Named in advance: no usual row
+  expected to move, since the workload refuses quotes as before until it is
+  signalled, and the refresh launches come after the others. No usual row
+  moved. The refresh rows are this pull request's to add, so the build
+  before it has none; they are the figures later pull requests are
+  measured against.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 101.0 (100.3 to 103.6) MB | 101.4 (100.7 to 102.9) MB | +0.4 MB, +0.3% | no measurable change (p = 0.617) |
+  | Idle memory the app holds allocated | 56.0 (55.2 to 56.4) MB | 56.1 (55.4 to 56.4) MB | +0.1 MB, +0.3% | no measurable change (p = 0.504) |
+  | Peak memory, launch and history load | 249.3 (246.4 to 257.0) MB | 248.1 (244.1 to 253.7) MB | -1.2 MB, -0.5% | no measurable change (p = 0.416) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.1 (0.0 to 0.1) MB | +0.1 MB | no measurable change (p = 0.545) |
+  | Idle CPU | 0.168 (0.161 to 0.172) s/min | 0.164 (0.154 to 0.168) s/min | -0.004 s/min, -2.1% | no measurable change (p = 0.240) |
+  | Idle CPU wake-ups | 24 (23 to 29) /min | 24 (23 to 26) /min | +0 /min, +2.1% | no measurable change (p = 0.740) |
+  | Idle CPU power | 4.56 (4.38 to 4.72) mW | 4.59 (4.27 to 4.76) mW | +0.03 mW, +0.5% | no measurable change (p = 0.851) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.52 to 0.62) s | 0.58 (0.57 to 0.63) s | +0.01 s, +0.9% | no measurable change (p = 0.420) |
+  | Launch to history loaded | 0.59 (0.56 to 0.82) s | 0.63 (0.58 to 0.72) s | +0.04 s, +6.8% | no measurable change (p = 0.452) |
+  | CPU from launch to the idle window | 2.02 (2.01 to 2.19) s | 2.07 (1.98 to 2.23) s | +0.05 s, +2.5% | no measurable change (p = 0.387) |
+  | CPU energy from launch to the idle window | 6.25 (5.75 to 6.51) J | 6.37 (5.53 to 6.54) J | +0.12 J, +1.9% | no measurable change (p = 0.513) |
+  | Python helper start to ready, no network | 0.33 (0.28 to 0.63) s | 0.28 (0.28 to 0.57) s | -0.05 s, -15.2% | no measurable change (p = 0.372) |
+  | Python helper start, CPU | 0.32 (0.28 to 0.40) s | 0.28 (0.28 to 0.36) s | -0.04 s, -12.5% | no measurable change (p = 0.351) |
+  | Python helper memory once started | 71.1 (71.0 to 71.3) MB | 71.0 (71.0 to 71.1) MB | -0.0 MB, -0.1% | no measurable change (p = 0.448) |
+  | Refresh passes completed in the refresh window | not measured | 4 (4 to 4) passes | | |
+  | CPU over the refresh window | not measured | 7.360 (7.220 to 7.422) s | | |
+  | CPU energy over the refresh window | not measured | 25.569 (24.613 to 25.705) J | | |
+  | CPU wake-ups over the refresh window | not measured | 718 (702 to 759) wake-ups | | |
+  | Disk writes over the refresh window | not measured | 0.046 (0.046 to 1.406) MB | | |
+  | Memory during the refresh window (physical footprint) | not measured | 142.2 (136.1 to 146.0) MB | | |
+  | Allocated memory added by the refreshes | not measured | 36.5 (34.6 to 53.1) MB | | |
+
+  The disk writes are 0.046 MB in four of the six refresh launches and 1.4
+  MB in the other two, each the third refresh launch of its turn, which
+  also added 50.8 and 53.1 MB of allocated memory against 34.6 to 37.2 in
+  the others. What happens in the third launch was not looked into.
+- Testing: 726 XCTest tests pass with 0 failures, two of them new: the
+  workload is taken only in an acceptance run with live providers off
+  whose environment asks for it, with figures in range; and the quotes are
+  refused as in any acceptance run until the service is armed, then move
+  with each batch from a fixed price per symbol, while history stays
+  refused. The 92 script tests pass, one of them new: refresh rows appear
+  only when a side measured them, with that side's figures. `checks` and
+  `docs-check` pass. Two runs of the benchmark itself, a trial launch and
+  the comparison above, completed all four passes in every refresh launch.
+- Known issues:
+  - The benchmark's launches keep the main window open, as they always
+    have, and it redraws as prices change. In normal use it is closed. So
+    the refresh rows include a window that is usually not there.
+    (Corrected on 2026-11-13: the app shows the window at every launch, and
+    a closed window goes on redrawing, so the refresh rows are those of
+    normal use. See
+    [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).)
+  - The refresh launches start from the data the one before left, so
+    their figures drift a little across a turn. Both sides run the same
+    sequence.
+  - A build from before this pull request shows a warning that its
+    launches "were builds without the refresh workload".
+- Verdict: retained.
+
+### 106: Apply a refresh pass's quotes together before waiting on anything
+
+- What: the first change chosen after
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13).
+  `RefreshService.runRefreshPass` applied one symbol's quote, then waited
+  on the cache actor and on the logger before the next symbol. Each wait
+  let other main-actor work run, so SwiftUI redrew the main window, open
+  or closed, once for each symbol. Now `applyQuotes` applies every
+  result, with its price sample and alert check, without waiting on
+  anything, and `recordPassOutcome` then does the cache bookkeeping and
+  the log lines. The quote status, the save, the portfolio sample and the
+  snapshot task now come before the cache and log calls instead of after
+  them. The symbols, the values recorded, the failure handling and the
+  back-off are unchanged. Holdings are still looked up by name, so a
+  symbol held in two rows still updates the first of them each time it is
+  listed. No Rust, native macOS API, dependency or architectural change.
+- Merged: 2026-11-13, squash commit `f1dce15`, after the owner chose to
+  merge it with the wake-up trade-off below. The merge published
+  experimental build 370.16.7 as the prerelease `experimental-370.16.7`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.7 of 3.7.0 and carries `applyQuotes`, its code signature verifies
+  and its executable has no coverage counters. The build job waited 23
+  minutes for a runner and then took its usual 4. `main` and `testing`
+  were unchanged.
+- Redraws counted in the trial copy, with the counters of
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
+  applied to this branch's code commit `cd291fa` and run on the same
+  fixture in the same way on 2026-11-13 from 14:19 to 14:30 UTC: four
+  forced passes 30 s apart, with the window open, closed, and open again.
+  The trial copy is never committed. One launch each, so read the CPU
+  figures as an order of size; the benchmark below has six a side.
+
+  | Per refresh pass | Before (`93198fc`) | After (`cd291fa`) |
+  | --- | --- | --- |
+  | Main window redraws | 18 to 19 | 5 |
+  | Menu bar item updates | 33 | 33 |
+  | Pass, start to end | 0.73 to 0.80 s | 0.29 to 0.42 s |
+  | App CPU over the 120 s, window open | 3.60 and 3.59 s/min | 1.64 and 1.63 s/min |
+  | App CPU over the 120 s, window closed | 3.80 s/min | 1.93 s/min |
+
+  What each of the five remaining redraws comes from was not looked into.
+  The 33 menu bar updates are finding 6's, the next pull request.
+- Benchmark: before `93198fc`, after `cd291fa` (the code commit; the
+  commit after it changes one comment and this log), with `--refresh`:
+  six launches a side in turns, from 14:30 to 15:45 UTC on 2026-11-13,
+  macOS 27.2.1. The Mac was on battery power for this run, where the
+  earlier comparisons were on mains power, so its figures are not
+  comparable with theirs: idle CPU, for one, is 0.080 s/min here against
+  0.164 to 0.168 in pull request 105's run. Both sides of this run were
+  measured in the same conditions, and the report flagged no launch for a
+  locked screen or a sleeping display. No usual row moved. Four refresh
+  rows moved, three of them down and one up:
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.8 (94.6 to 98.0) MB | 96.1 (90.7 to 100.0) MB | -0.7 MB, -0.7% | no measurable change (p = 1.000) |
+  | Idle memory the app holds allocated | 52.2 (49.5 to 52.8) MB | 52.1 (50.4 to 53.8) MB | -0.1 MB, -0.1% | no measurable change (p = 0.729) |
+  | Peak memory, launch and history load | 252.9 (247.1 to 260.2) MB | 254.8 (239.6 to 261.4) MB | +1.9 MB, +0.8% | no measurable change (p = 0.699) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.0) MB | 0.0 (-2.1 to 0.5) MB | +0.0 MB | no measurable change (p = 0.727) |
+  | Idle CPU | 0.080 (0.077 to 0.083) s/min | 0.084 (0.078 to 0.090) s/min | +0.004 s/min, +5.6% | no measurable change (p = 0.149) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 24 (23 to 26) /min | -1 /min, -3.9% | no measurable change (p = 0.335) |
+  | Idle CPU power | 4.05 (3.99 to 4.19) mW | 4.11 (3.41 to 4.26) mW | +0.05 mW, +1.4% | no measurable change (p = 0.729) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.56 (0.52 to 0.60) s | 0.56 (0.52 to 0.97) s | -0.01 s, -0.9% | no measurable change (p = 0.792) |
+  | Launch to history loaded | 0.58 (0.55 to 0.74) s | 0.60 (0.54 to 0.90) s | +0.02 s, +3.4% | no measurable change (p = 1.000) |
+  | CPU from launch to the idle window | 1.81 (1.74 to 1.98) s | 1.81 (1.75 to 1.98) s | +0.00 s, +0.3% | no measurable change (p = 0.835) |
+  | CPU energy from launch to the idle window | 5.78 (5.66 to 6.11) J | 5.90 (5.67 to 6.39) J | +0.12 J, +2.2% | no measurable change (p = 0.310) |
+  | Python helper start to ready, no network | 0.29 (0.28 to 0.64) s | 0.29 (0.28 to 0.61) s | -0.01 s, -3.4% | no measurable change (p = 0.394) |
+  | Python helper start, CPU | 0.29 (0.28 to 0.39) s | 0.29 (0.28 to 0.36) s | -0.00 s, -1.7% | no measurable change (p = 0.589) |
+  | Python helper memory once started | 71.1 (71.0 to 71.3) MB | 71.0 (71.0 to 71.1) MB | -0.1 MB, -0.1% | no measurable change (p = 0.405) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 6.797 (6.722 to 6.922) s | 3.367 (3.292 to 3.486) s | -3.430 s, -50.5% | lower (p = 0.002) |
+  | CPU energy over the refresh window | 23.674 (22.946 to 24.269) J | 11.267 (10.939 to 11.526) J | -12.407 J, -52.4% | lower (p = 0.002) |
+  | CPU wake-ups over the refresh window | 683 (641 to 775) wake-ups | 902 (822 to 987) wake-ups | +218 wake-ups, +32.0% | higher (p = 0.002) |
+  | Disk writes over the refresh window | 0.046 (0.046 to 1.406) MB | 0.046 (0.046 to 1.406) MB | +0.000 MB | no measurable change (p = 1.000) |
+  | Memory during the refresh window (physical footprint) | 141.6 (138.0 to 148.0) MB | 131.2 (128.4 to 135.1) MB | -10.4 MB, -7.3% | lower (p = 0.002) |
+  | Allocated memory added by the refreshes | 49.9 (46.9 to 52.8) MB | 27.9 (24.9 to 29.3) MB | -22.0 MB, -44.1% | lower (p = 0.002) |
+
+  The wake-ups are the trade-off: 218 more over the four passes, about
+  55 a pass, while CPU and CPU energy halve. The trial copy shows the same
+  direction, 355 against 536 wake-ups a minute with the window open.
+
+  The likely cause is the main window's rolling digits, which animate
+  when prices change: before this change the main thread was too busy
+  redrawing to run many of their frames. To check, the trial copy of
+  `cd291fa` ran three more launches on 2026-11-13 from 15:46 to 15:59 UTC,
+  on battery power, with the rolling digits on, off, and on again:
+
+  | Over the 120 s of refreshes | Rolling on | Rolling off | Rolling on again |
+  | --- | --- | --- | --- |
+  | App CPU wake-ups | 426 /min | 340 /min | 440.5 /min |
+  | App CPU | 1.66 s/min | 0.99 s/min | 1.73 s/min |
+  | App CPU power | 91.8 mW | 53.4 mW | 96.2 mW |
+
+  With them off, the change's wake-ups are below the 355 a minute of the
+  code before it with them on. The code before it was not run with them
+  off, and each figure is from one launch. The wake-ups with them on vary
+  from launch to launch: 426 to 536 a minute across this branch's four
+  such launches.
+- Testing: 727 XCTest tests pass with 0 failures, one of them new: three
+  holdings refreshed in one forced pass, with an observer on their prices
+  whose follow-up task runs at the pass's first wait, must see all three
+  new prices. Against the code before this change it saw
+  `[100.0, nan, nan]`. `checks` and `docs-check` pass. The trial copy's
+  four passes and every benchmark refresh launch completed and updated
+  every symbol. An independent review by a reviewer that had not seen the
+  implementation found no defect; what it raised is below and in the
+  comment fix.
+- Known issues:
+  - The order of the log lines changed. Each line's wording is the same,
+    but all of a pass's "Updated cache" lines now come before its failure
+    lines, and the save and snapshot lines before both.
+  - A symbol whose updates are paused after repeated failures, refreshed
+    successfully late in a forced pass of several symbols that names it
+    without clearing the pause, can keep its "Updates paused" notice in an
+    open popover until its next update, because the cache now hears of
+    the success a few hops later. The manual retry clears the pause first
+    and is not affected, and failures already had the same timing.
+  - The code commit's message gives the wrong reason for looking holdings
+    up by name. The comment in the code and the squash commit give the
+    right one.
+- Verdict: retained, by the owner's decision on 2026-11-13. It was left
+  open for the owner with a recommendation to retain it: CPU and energy,
+  which the wake-ups stand in for, both halve, and the extra wake-ups come
+  with the rolling digits, which now get to animate.
+
+### 107: Read only the requested window of a symbol's price history
+
+- What: finding 6 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  Each menu bar item update reads the last day of its symbol's prices for
+  the rolling day change. `HistoricalDataManager.getPriceSnapshots` built
+  the symbol's whole combined history, about 2,180 prices on the fixture,
+  sorted it and kept the 70 to 85 that fall in the day. The built series
+  is cached, but the cache is emptied whenever a stored price or a live
+  sample changes, so during a refresh every read built and sorted the
+  whole series again. Now `InstrumentAliasHistoryLookup.combinedSnapshots`
+  takes an optional window and merges and sorts only the prices inside it.
+  The whole series keeps one price per millisecond, so the windowed read
+  takes in 2 ms either side of the window, which covers every price that
+  could replace one inside it, and then cuts the result to the window.
+  `aliasAwarePriceSnapshots` passes the window through: an overlay series
+  and a series already in the cache are cut to it, and otherwise the
+  window is read from the prices and the cache is left alone. A read of a
+  whole series is unchanged and still fills the cache. Every caller of
+  `getPriceSnapshots` takes the new path: the menu bar's day change, the
+  previous close worked out from yesterday's prices, the popover chart
+  and its comparison symbol, the check for whether a chart needs more
+  history, and the analytics correlations. A range whose start is after
+  its end returns nothing, as before. No Rust, native macOS API,
+  dependency or architectural change.
+- Merged: 2026-11-13, squash commit `0a1ea40`. The merge published
+  experimental build 370.16.8 as the prerelease `experimental-370.16.8`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.8 of 3.7.0 and carries `cachedSnapshots`, its code signature
+  verifies and its executable has no coverage counters. The build job
+  started three seconds after the merge, with no wait for a runner, and
+  took 5 minutes. `main` and `testing` were unchanged.
+- The read timed in the trial copy, with the counters of
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
+  and a timer around the day read applied to `f1dce15` and to this
+  branch's code commit `d5acb72`. Same fixture, on 2026-11-13 from 17:31
+  to 17:47 UTC on mains power: two launches a side with the main window
+  open, each with four forced passes 30 s apart. The trial copy is never
+  committed. Its output is kept in
+  `build/bench/results/trial-day-window-20261113`.
+
+  | Per launch | Before (`f1dce15`) | After (`d5acb72`) |
+  | --- | --- | --- |
+  | Day reads | 154 and 154 | 154 and 154 |
+  | One day read, median | 2,622 and 2,691 µs | 57 and 60 µs |
+  | One day read, fastest to slowest | 2,336 to 3,256 µs | 48 to 575 µs |
+  | All the launch's day reads together | 406 and 419 ms | 11 and 14 ms |
+  | Prices each read returned | 70 to 78, then 74 to 81 | 70 to 78, then 74 to 81 |
+  | App CPU over the 120 s of refreshes | 1.58 and 1.52 s/min | 1.35 and 1.38 s/min |
+  | App CPU power over the 120 s | 82.8 and 81.6 mW | 71.1 and 69.1 mW |
+  | App CPU wake-ups over the 120 s | 868 and 762 /min | 850 and 832 /min |
+
+  Sorted by symbol, the number of prices each read returned is the same
+  list before and after in both launches. The menu bar item updates and
+  the main window redraws were counted too and did not change. With two
+  launches a side, read the CPU, power and wake-up rows as an order of
+  size; the benchmark below has six a side.
+- Benchmark: before `f1dce15`, after `d5acb72` (the code commit; the
+  commit after it changes only this log), with `--refresh`: six launches
+  a side in turns, from 17:48 to 19:04 UTC on 2026-11-13, macOS 27.2.1,
+  on mains power. The report flagged no launch. Pull request 106's run
+  was on battery power, so the two runs' figures are not comparable: the
+  same app code, `f1dce15` here and `cd291fa` there, shows 1,559 wake-ups
+  over the refresh window here against 902 there, and 1.28 s from launch
+  to first window against 0.56 s. About 9.7 GB of old build folders had
+  also been deleted from this Mac half an hour before the run. Which of
+  the two accounts for the slower launches was not looked into. The
+  before side is the current `experimental` measured again in this run,
+  so both sides share the conditions. One refresh row moved, down:
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 86.4 (84.8 to 87.1) MB | 85.7 (83.6 to 90.5) MB | -0.8 MB, -0.9% | no measurable change (p = 0.615) |
+  | Idle memory the app holds allocated | 47.5 (40.3 to 47.9) MB | 47.0 (46.3 to 48.4) MB | -0.5 MB, -0.9% | no measurable change (p = 1.000) |
+  | Peak memory, launch and history load | 233.8 (230.2 to 248.8) MB | 234.3 (227.0 to 243.1) MB | +0.5 MB, +0.2% | no measurable change (p = 0.937) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-0.2 to 0.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Idle CPU | 0.084 (0.069 to 0.091) s/min | 0.080 (0.075 to 0.100) s/min | -0.005 s/min, -5.4% | no measurable change (p = 1.000) |
+  | Idle CPU wake-ups | 26 (24 to 30) /min | 26 (24 to 30) /min | +0 /min, +0.0% | no measurable change (p = 0.931) |
+  | Idle CPU power | 4.33 (4.16 to 4.61) mW | 4.03 (3.84 to 4.32) mW | -0.30 mW, -7.0% | possibly lower (p = 0.045) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.28 (0.68 to 1.35) s | 1.31 (0.66 to 1.61) s | +0.03 s, +2.7% | no measurable change (p = 0.667) |
+  | Launch to history loaded | 1.26 (0.73 to 1.32) s | 1.27 (0.65 to 1.56) s | +0.01 s, +0.4% | no measurable change (p = 0.667) |
+  | CPU from launch to the idle window | 1.92 (1.64 to 2.06) s | 1.77 (1.57 to 1.91) s | -0.15 s, -8.1% | no measurable change (p = 0.132) |
+  | CPU energy from launch to the idle window | 5.67 (5.30 to 6.04) J | 5.49 (4.90 to 5.66) J | -0.18 J, -3.2% | no measurable change (p = 0.093) |
+  | Python helper start to ready, no network | 0.30 (0.30 to 0.66) s | 0.33 (0.32 to 0.67) s | +0.03 s, +8.2% | no measurable change (p = 0.173) |
+  | Python helper start, CPU | 0.30 (0.29 to 0.42) s | 0.33 (0.31 to 0.42) s | +0.03 s, +8.3% | no measurable change (p = 0.195) |
+  | Python helper memory once started | 71.0 (71.0 to 71.2) MB | 71.1 (71.0 to 71.3) MB | +0.0 MB, +0.1% | no measurable change (p = 0.675) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 2.963 (2.756 to 3.660) s | 2.715 (2.324 to 3.012) s | -0.248 s, -8.4% | no measurable change (p = 0.065) |
+  | CPU energy over the refresh window | 9.387 (8.828 to 11.150) J | 8.246 (6.888 to 9.302) J | -1.141 J, -12.2% | lower (p = 0.009) |
+  | CPU wake-ups over the refresh window | 1559 (1237 to 1660) wake-ups | 1668 (1333 to 1816) wake-ups | +110 wake-ups, +7.0% | no measurable change (p = 0.310) |
+  | Disk writes over the refresh window | 0.046 (0.046 to 1.406) MB | 0.046 (0.046 to 1.578) MB | +0.000 MB | no measurable change (p = 1.000) |
+  | Memory during the refresh window (physical footprint) | 116.7 (113.4 to 124.9) MB | 115.9 (97.8 to 120.1) MB | -0.8 MB, -0.7% | no measurable change (p = 0.667) |
+  | Allocated memory added by the refreshes | 31.5 (29.4 to 36.8) MB | 33.9 (12.4 to 39.7) MB | +2.4 MB, +7.6% | no measurable change (p = 0.699) |
+
+  CPU energy over the four passes is 12.2% lower. CPU over them is 8.4%
+  lower at the median, which is inside this run's spread, so it is
+  recorded as no measurable change. Its size agrees with the timing
+  above: about 0.4 s of reads removed from a launch's four passes. The
+  "possibly lower" idle power is a row the report says needs a repeat
+  before it counts, and it is not counted here. No row is higher.
+- Testing: 729 XCTest tests pass with 0 failures, two of them new. One
+  compares a windowed read with the whole series cut to the same window,
+  across two aliases, live samples on an alias, windows whose edges fall
+  inside a millisecond, a single instant and a window over everything.
+  It includes a live sample 0.97 ms before a window's start that shares
+  a millisecond with a stored price just inside it and wins over it, so a
+  read that reached less than 0.97 ms past the edge would return the
+  stored price. The other covers the cache lookup: a miss stores
+  nothing, a hit counts as a use, and a series stored under a different
+  alias list is dropped. The existing rolling-window test also reads a
+  window from a cached series and an inverted range. `checks` and
+  `docs-check` pass. The trial copies' four measured launches completed
+  their four passes. An independent review by a reviewer that had not seen the
+  implementation found no defect; what it raised went into the second
+  code commit: the margin test above, the stale cache entry and the
+  wording of two comments.
+- Known issues:
+  - A windowed read no longer fills the cache. A second read of the same
+    symbol while no price has changed, such as switching the popover
+    chart's range, changing its comparison symbol or recalculating the
+    analytics correlations, was served from the cache and now reads its
+    window from the prices again. This was not measured. For a window
+    that spans the whole history it is the same work as the old read,
+    which took 2.6 ms for 2,180 prices above; for a shorter window it is
+    less. These reads follow something the user does; none is in a
+    redraw.
+  - The first code commit, `661207c`, read 1 ms either side of the
+    window, which floating-point rounding at the edge could fall short
+    of. The second, `d5acb72`, widens it to 2 ms.
+  - The second code commit's message says the test's pair of prices sits
+    either side of a window's end and needs a margin over 1 ms. They sit
+    either side of its start and need 0.97 ms. This entry and the squash
+    commit give it correctly.
+- Verdict: retained. The read is about 45 times faster, CPU energy over
+  the refresh window is lower, and no row is higher. The gain is modest
+  at the size of a whole refresh: about a quarter of a second of CPU in
+  four passes.
+
+### 108: Leave a history cache file alone when its value has not changed
+
+- What: finding 5 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  `HistoricalDataManager.saveHistoricalData()` runs after every recorded
+  portfolio snapshot and stores the portfolio composition, two
+  calculation dates and, when there are any, the earliest history dates
+  in `CacheManager`. `CacheManager.store` encoded the value and rewrote
+  its file every time, so each snapshot rewrote three or four files with
+  the contents they already had. Now `store` compares the encoded value
+  with the one it holds for the key. When they are the same it leaves
+  the file alone, provided the key's last write did not fail and the
+  file is still there. A changed value is written as before. What the
+  comparison rests on:
+  - The value is encoded with sorted keys. Unsorted, `JSONEncoder`
+    orders a dictionary's or a struct's keys differently from one
+    encoding to the next, so an unchanged value would look changed. A
+    standalone check encoded one 20-key dictionary 300 times and got 7
+    and 8 different byte sequences in two runs, and a struct holding an
+    array of structs gave 2 in each run. With sorted keys both gave 1.
+    The check's source and output are kept in
+    `build/bench/results/trial-history-cache-20261113/key-order-check`.
+  - `store` and `remove` queue their file work while holding the lock,
+    so the files change in the same order as the values held in memory.
+  - The check for an unchanged value runs on the file queue, after the
+    file work queued before it. A key whose write failed is recorded
+    until a write of it succeeds, and until then every store of it
+    writes, changed or not.
+  - A value read from its file counts as held, so the first store after
+    a launch leaves the file alone when the value is the same. The read
+    is held only if no file work was queued while it was reading.
+  - After `clearMemoryCache()`, which the app calls when it is short of
+    memory, the next store of each key writes its file once, since
+    nothing then says what the file holds.
+
+  The layout of the files is unchanged, so files written by earlier
+  versions stay readable and the other way round. No Rust, native macOS
+  API, dependency or architectural change.
+- Merged: 2026-11-16, squash commit `e03cdd5`. The merge published
+  experimental build 370.16.9 as the prerelease `experimental-370.16.9`.
+  Checked after it: the feed's signature and the archive's signature are
+  valid, the archive's length matches the feed, the unpacked app is build
+  370.16.9 of 3.7.0, its code signature verifies and its executable has
+  no coverage counters. Its executable carries the names `failedWrites`
+  and `queuedFileWork`, which build 370.16.8's does not. The build job
+  started two seconds after the merge and took under 6 minutes. `main`
+  and `testing` were unchanged. The tool that checks the two signatures
+  was lost when the Mac restarted and was written again; before it was
+  used it passed build 370.16.8 and rejected a copy of that archive with
+  one byte added and a copy of the feed with one version number changed.
+- The writes counted in the trial copy, with the counters of
+  [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13)
+  and two more in `CacheManager`, one for each call of `store` and one
+  for each file written, applied to `0a1ea40` and to this branch's code
+  commit `9e98e63`. Same fixture, on 2026-11-13 on battery power: two
+  launches a side with the main window open, each with four forced
+  passes 30 s apart; before from 19:41 to 19:49 UTC and after from 20:03
+  to 20:11 UTC. All four launches completed their four passes. The trial
+  copy is never committed. Its output and the two counter patches are
+  kept in `build/bench/results/trial-history-cache-20261113`.
+
+  | Per launch | Before (`0a1ea40`) | After (`9e98e63`) |
+  | --- | --- | --- |
+  | Calls of `CacheManager.store` | 15 and 15 | 15 and 15 |
+  | Cache files written | 15 and 15 | 1 and 1 |
+  | Cache files written during the four passes | 12 and 12 | 0 and 0 |
+  | Bytes of file content written | 7,903 and 7,899 | 187 and 187 |
+  | Bytes of file content written during the four passes | 6,322 and 6,318 | 0 and 0 |
+  | App disk writes over the 120 s of refreshes | 0.023 and 0.023 MB/min | 0.000 and 0.000 MB/min |
+  | App CPU over the 120 s | 1.464 and 1.589 s/min | 1.376 and 1.515 s/min |
+  | App CPU wake-ups over the 120 s | 701.5 and 759.5 /min | 850.5 and 723.5 /min |
+  | App CPU power over the 120 s | 70.05 and 76.19 mW | 67.69 and 69.14 mW |
+
+  The 15 calls are three values stored five times: once after the
+  launch's history calculation and once after each pass. The fixture has
+  no earliest history dates, so it stores three values where a portfolio
+  with history stores four. The one file still written is the date of
+  the launch's history calculation, which does change at each launch.
+  The CPU, wake-up and power rows overlap between the two sides and, with
+  two launches a side, are an order of size only. Other processes were
+  keeping this Mac busy straight after the after side, with a load
+  average of 8 to 14 at 20:12 UTC; the load during the before side was
+  not looked at. The counts of calls, files and bytes do not depend on
+  it.
+- Benchmark: before `0a1ea40`, after `9e98e63` (the code commit; the
+  commits after it change only this log), with `--refresh`: six launches
+  a side in turns, from 14:19 to 15:34 UTC on 2026-11-16, macOS 27.2.1,
+  on mains power. The report flagged no launch.
+
+  The run was measured on a busy Mac. It was not run on 2026-11-13
+  because the Mac was on battery power and busy. On 2026-11-16 the Mac
+  had been restarted at about 10:21 UTC, and a start that waited for the
+  CPU to be at least 85% idle did not get it in four hours: a file-sync
+  process and system processes each held about one core, and another
+  job's test runs on the same Mac came in bursts. During the run itself
+  two system processes, one of them serving the file sync, were each
+  above half a core in 56 and 42 of the 76 once-a-minute readings, and
+  another app in 18. The owner
+  asked for the work to go on, so the run started without waiting, under
+  two rules written into its log before it began: it would be set aside
+  and repeated if more than two of the once-a-minute readings inside its
+  turns showed keyboard or pointer input in the minute before, or if the
+  CPU of the four busiest processes together, averaged over each side's
+  turns, was more than 1.5 times higher for one side than the other. No
+  reading showed input. The four busiest together averaged 221% of a
+  core over the before side's 36 readings and 209% over the after side's
+  36, a ratio of 1.06. So the run stands. The installed app, which was
+  running on 2026-11-13, was not running. The readings, the
+  rules and the scripts are kept beside the results, in
+  `build/bench/results/compare-history-cache-20261116-141931/conditions`.
+
+  The figures are not comparable with the run of 2026-11-13. The same
+  app code, `0a1ea40` here and `d5acb72` there (they differ only in this
+  log), shows 96.5 MB of idle memory here against 85.7 MB there, 54.8 MB
+  held allocated against 47.0 MB, 0.58 s from launch to first window
+  against 1.31 s, and 3.343 s of CPU over the refresh window against
+  2.715 s. Which of the restart, the other work on the Mac and the date
+  accounts for each was not looked into. The before side is the current
+  `experimental` measured again in this run, so both sides share the
+  conditions.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.5 (93.3 to 100.5) MB | 93.0 (89.5 to 95.6) MB | -3.5 MB, -3.7% | possibly lower (p = 0.026) |
+  | Idle memory the app holds allocated | 54.8 (54.1 to 55.7) MB | 54.5 (51.5 to 55.4) MB | -0.2 MB, -0.4% | no measurable change (p = 0.331) |
+  | Peak memory, launch and history load | 244.0 (239.4 to 247.3) MB | 244.4 (241.0 to 249.9) MB | +0.4 MB, +0.2% | no measurable change (p = 0.589) |
+  | Idle memory growth across the window | 0.1 (-5.7 to 0.4) MB | 0.0 (-4.2 to 0.6) MB | -0.1 MB | no measurable change (p = 0.848) |
+  | Idle CPU | 0.097 (0.072 to 0.103) s/min | 0.097 (0.073 to 0.106) s/min | +0.000 s/min, +0.0% | no measurable change (p = 0.970) |
+  | Idle CPU wake-ups | 26 (25 to 29) /min | 27 (26 to 28) /min | +0 /min, +1.9% | no measurable change (p = 0.426) |
+  | Idle CPU power | 3.13 (2.96 to 3.94) mW | 3.38 (2.96 to 4.29) mW | +0.25 mW, +8.0% | no measurable change (p = 0.418) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.38 to 0.75) s | 0.80 (0.44 to 1.05) s | +0.22 s, +36.8% | no measurable change (p = 0.104) |
+  | Launch to history loaded | 0.65 (0.50 to 0.78) s | 0.82 (0.57 to 1.04) s | +0.18 s, +27.1% | no measurable change (p = 0.177) |
+  | CPU from launch to the idle window | 1.80 (1.64 to 1.89) s | 1.94 (1.73 to 2.17) s | +0.14 s, +7.5% | no measurable change (p = 0.117) |
+  | CPU energy from launch to the idle window | 5.70 (5.53 to 5.91) J | 5.84 (5.59 to 6.16) J | +0.14 J, +2.5% | no measurable change (p = 0.420) |
+  | Python helper start to ready, no network | 0.25 (0.23 to 0.88) s | 0.33 (0.25 to 0.60) s | +0.08 s, +32.0% | no measurable change (p = 0.381) |
+  | Python helper start, CPU | 0.24 (0.23 to 0.34) s | 0.31 (0.25 to 0.35) s | +0.07 s, +26.5% | no measurable change (p = 0.128) |
+  | Python helper memory once started | 71.0 (70.8 to 71.1) MB | 71.2 (70.9 to 71.4) MB | +0.2 MB, +0.2% | no measurable change (p = 0.067) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.343 (3.216 to 3.504) s | 3.408 (3.256 to 3.584) s | +0.065 s, +1.9% | no measurable change (p = 0.589) |
+  | CPU energy over the refresh window | 10.885 (10.720 to 11.290) J | 10.771 (10.279 to 10.871) J | -0.114 J, -1.1% | no measurable change (p = 0.132) |
+  | CPU wake-ups over the refresh window | 1780 (1596 to 1932) wake-ups | 1750 (1658 to 1802) wake-ups | -30 wake-ups, -1.7% | no measurable change (p = 0.310) |
+  | Disk writes over the refresh window | 0.046 (0.046 to 1.406) MB | 0.000 (0.000 to 1.702) MB | -0.046 MB | no measurable change (p = 0.260) |
+  | Memory during the refresh window (physical footprint) | 128.1 (123.9 to 130.1) MB | 127.2 (105.3 to 131.1) MB | -0.9 MB, -0.7% | no measurable change (p = 0.937) |
+  | Allocated memory added by the refreshes | 25.2 (22.8 to 36.9) MB | 21.1 (13.8 to 37.0) MB | -4.2 MB, -16.5% | no measurable change (p = 0.065) |
+
+  No row is higher. The "possibly lower" idle memory is a row the report
+  says needs a repeat before it counts, and it is not counted here.
+
+  Disk writes over the refresh window are recorded as no measurable
+  change, because the third launch of every turn writes about 1.4 MB on
+  either side: 1.406 and 1.406 MB before, 1.360 and 1.702 MB after. In
+  the other four launches a side, the before side wrote 0.046 MB every
+  time and the after side 0.000 MB every time, which is the cache files
+  counted above. The run of 2026-11-13 shows the same large write on
+  code without this change, 1.406 MB on one side and up to 1.578 MB on
+  the other. What that write is was not looked into.
+
+  The launch rows lean slower on the after side without reaching a
+  verdict, and the lean comes from one turn. In the after side's first
+  turn, from 14:40 to 14:58 UTC, the three launches took 1.05, 0.91 and
+  0.84 s to their first window. In its second turn they took 0.44, 0.76
+  and 0.47 s, as the before side's did: 0.47, 0.70 and 0.70 s, then
+  0.38, 0.75 and 0.40 s. In that same first turn the Python helper,
+  which this change does not touch, was slower too: its second and third
+  starts took 0.30 and 0.35 s of CPU against 0.23 to 0.25 s in the other
+  three turns. The readings do not show more other work in that turn by
+  the four-busiest measure, 209% of a core against 272% and 171% in the
+  before side's turns, so what slowed it was not identified.
+- Testing: 732 XCTest tests pass with 0 failures, three of them new.
+  The first stores a 20-key dictionary, checks that its keys are written
+  in sorted order, and checks that five stores of an equal dictionary
+  built in the opposite order leave the file's bytes and its file number
+  as they were. It then checks that a changed value is written, that a
+  value read from its file counts as held, that the file is written
+  again after `clearMemoryCache()`, and that a store after a remove
+  writes. The second makes a write fail while an older file stays in
+  place, and checks that the next store of the same value writes it,
+  that the store after that leaves the file alone, and that a file
+  deleted by hand or found unreadable is written again. The third runs
+  600 stores, removes and reads of three keys from many threads at once
+  and checks that each file then holds what memory holds. Each safeguard
+  was removed in turn to see a test fail: without the record of failed
+  writes, without the check that the file exists, without clearing the
+  record after a good write, and without sorted keys, the first or
+  second test fails. `checks` and `docs-check` pass. An independent
+  review by a reviewer that had not seen the implementation found no
+  defect in the comparison or the locking. It found that the first code
+  commit, which skipped an unchanged store without looking at the file,
+  no longer wrote again a file deleted from outside the app, and would
+  not retry a store that followed a write still waiting in the queue if
+  that write then failed. The second code commit closes both, and the
+  reviewer's second look at it found no defect.
+- Known issues:
+  - A file changed or damaged from outside the app while it still exists
+    is no longer put right at the next snapshot, only when its value
+    next changes or the app next reads it and finds it unreadable.
+    Before, every snapshot rewrote it. Nothing else in the app or its
+    scripts writes to these files. A file that macOS deletes from the
+    caches folder to free space is written again at the next snapshot,
+    as before.
+  - The time recorded inside each file no longer moves forward at every
+    snapshot. Nothing in this version reads it. A build from before
+    commit `17f29db` dropped a file whose recorded time was over a year
+    old, so going back to such a build after a year without a change to
+    a value would lose that value from the cache, and it would be
+    rebuilt.
+  - An unchanged store still costs a block on the file queue, a lock and
+    one check that the file exists. This was not timed on its own.
+  - The first store of each key after updating to this build rewrites
+    its file once, with its keys in sorted order.
+  - Not covered by a test: that file work is queued in the order the
+    values change. The third test checks only the state at the end and
+    would usually still pass without that. Also not covered: two stores
+    of the same value both queued before the first one's write fails.
+    The second then finds the failure recorded and writes.
+- Verdict: retained. The four passes write no cache file where they
+  wrote twelve, and no row of the benchmark is higher. The saving is
+  small, about 6 KB of file content in four passes, and the benchmark's
+  own row for it does not reach a verdict because of the large write
+  described above.
+
+### 109: Release the portfolio popover's content when it closes
+
+- What: finding 9 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  The portfolio item in the menu bar builds new content for its popover
+  every time the popover opens, but kept the old content after a close
+  until the next open replaced it. Closed, that content was still redrawn
+  at every refresh, working out the portfolio summary each time, and its
+  chart was still reloaded, with nothing on screen. The popover's
+  delegate now releases the content when the popover reports closed,
+  if it is not shown again by then: seven added lines in
+  `Stockbar/StockStatusBar.swift`. The next open
+  builds its content as before. No Rust, dependency or architectural
+  change; the change uses AppKit's existing `popoverDidClose` delegate
+  call.
+- Merged: 2026-11-16, squash commit `7168684`. The merge published
+  experimental build 370.16.10 as the prerelease
+  `experimental-370.16.10`. Checked after it: the feed's signature and
+  the archive's signature are valid, the archive's length matches the
+  feed, the unpacked app is build 370.16.10 of 3.7.0, its code signature
+  verifies and its executable has no coverage counters. The release's
+  tag is on the squash commit; the change adds no name to look for in
+  the executable. The build job started four seconds after the merge and
+  took about 6 minutes. `main` and `testing` were unchanged.
+- What the closed popover does, counted in a trial copy: `0a1ea40` with
+  counters added and this change behind a switch, so that one build
+  serves both sides. A warm-up launch, then four measured launches in
+  turns, content kept and content released. Each opens and closes the
+  popover twice, then runs four forced refresh passes 30 s apart. The
+  trial copy is never committed. Its patches, scripts and output are
+  kept in `build/bench/results/trial-popover-20261113`.
+
+  First run, 2026-11-13 from 20:23 to 20:39 UTC, on battery power with a
+  load average of about 8 from other processes:
+
+  | Over the four passes, popover closed | Content kept | Content released |
+  | --- | --- | --- |
+  | Redraws of the hidden popover | 16 and 16 | 0 and 0 |
+  | Portfolio summaries worked out for it | 16 and 16 | 0 and 0 |
+  | Time in those summaries | 12.7 and 13.7 ms | none |
+  | Chart loads | 16 and 16 | 8 and 8 |
+  | Chart models freed of the 2 made by the two opens | 1 and 1 | 2 and 2 |
+  | Memory footprint, 2 s after the last pass | 163.58 and 166.25 MB | 141.28 and 150.06 MB |
+  | Memory the app holds allocated, same moment | 108.35 and 109.76 MB | 85.72 and 92.66 MB |
+
+  The eight chart loads that remain belong to the main window's own
+  chart. The run's CPU, wake-up and power readings overlapped between
+  the two sides and showed nothing either way.
+
+  A second run, with the memory read again 30, 60 and 90 s after the
+  last pass, was started on 2026-11-16 and stopped during its first
+  measured launch, when the owner needed the measuring finished by 16:55
+  UTC. It is not used.
+
+  A third run, on 2026-11-16 from 19:52 to 20:14 UTC on mains power,
+  used the line as merged, guard included
+  (`trial-counters-run3-guarded.patch`), and read the memory 2, 32, 62
+  and 92 s after the last pass. The rule fixed before it, the same as
+  for the second run: set aside if more than two of its once-a-minute
+  readings showed input in the minute before. None of its 21 readings
+  did, so it stands; the four busiest processes together averaged 58%
+  of a core. In both launches with the content released, the guard
+  released it at both closes and kept it at none.
+
+  | Over the four passes, popover closed | Content kept | Content released |
+  | --- | --- | --- |
+  | Redraws of the hidden popover | 16 and 16 | 0 and 0 |
+  | Portfolio summaries worked out for it | 16 and 16 | 0 and 0 |
+  | Time in those summaries | 16.6 and 9.7 ms | none |
+  | Chart loads | 16 and 16 | 8 and 8 |
+  | Chart models freed of the 2 made by the two opens | 1 and 1 | 2 and 2 |
+  | Memory the app holds allocated, 2 s after the last pass | 99.26 and 111.98 MB | 83.81 and 85.75 MB |
+  | The same, 92 s after the last pass | 97.92 and 110.66 MB | 82.55 and 84.48 MB |
+
+  At each of the four readings, each launch with the content released
+  held 13.4 to 28.2 MB less allocated than each launch with it kept.
+  Every launch's allocated memory fell by about 1.3 MB between the
+  readings at 2 s and 32 s and then held. The memory footprint moved by
+  up to 20 MB between readings within one launch, so no figure is taken
+  from it. The output is in `run3-guarded-20261116` beside the first
+  run's, with `summarise_3.py`. The memory difference still rests on two
+  launches each way and is an order of size only.
+- Benchmark: the standard comparison of this pull request alone, six
+  launches a side, was not run. On 2026-11-16 the owner needed the
+  measuring finished by 16:55 UTC and asked for it to be cut down, so
+  one shortened comparison covers this pull request and pull request 110
+  together. Before `e03cdd5`, after `76dfb6a`: a commit made only for
+  the comparison and never pushed, which is `e03cdd5` with both changes
+  as they then stood, four lines added here and four added and three
+  removed in pull request 110. With `--refresh --runs 2`: four launches
+  a side in turns, from 15:50 to 16:42 UTC, macOS 27.2.1, on mains
+  power, on a busy Mac and under the two set-aside rules described in
+  [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed).
+  No reading inside the turns showed input, and the four busiest
+  processes together averaged 60% of a core over the before side's 24
+  readings and 61% over the after side's 25, a ratio of 1.01, so the run
+  stands. The report flagged no launch. The readings, the rules
+  and the scripts are kept beside the results, in
+  `build/bench/results/compare-popover-and-session-snapshot-20261116-155018/conditions`.
+
+  With four launches a side the report cannot give a firm verdict: it
+  says "possibly" at most, where six a side can say "lower" or "higher".
+  The benchmark also never opens the popover, so this pull request's
+  line never runs in it. For this pull request the comparison shows that
+  the app builds and runs the standard workloads with the change in it,
+  and no more. The full comparison followed the merge; it is the next
+  item.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 97.8 (93.9 to 103.7) MB | 97.0 (94.1 to 100.5) MB | -0.9 MB, -0.9% | no measurable change (p = 0.686) |
+  | Idle memory the app holds allocated | 55.8 (55.5 to 56.2) MB | 55.8 (54.7 to 56.0) MB | +0.0 MB, +0.1% | no measurable change (p = 0.971) |
+  | Peak memory, launch and history load | 242.1 (241.2 to 243.3) MB | 244.1 (241.0 to 245.5) MB | +2.0 MB, +0.8% | no measurable change (p = 0.486) |
+  | Idle memory growth across the window | 0.3 (0.3 to 0.5) MB | 0.3 (0.0 to 0.5) MB | -0.0 MB, -14.3% | no measurable change (p = 0.657) |
+  | Idle CPU | 0.095 (0.083 to 0.100) s/min | 0.091 (0.079 to 0.101) s/min | -0.004 s/min, -4.2% | no measurable change (p = 0.829) |
+  | Idle CPU wake-ups | 26 (25 to 30) /min | 26 (26 to 30) /min | +0 /min, +1.9% | no measurable change (p = 0.657) |
+  | Idle CPU power | 3.04 (2.91 to 3.28) mW | 3.32 (2.96 to 4.10) mW | +0.28 mW, +9.0% | no measurable change (p = 0.114) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.40 (0.39 to 0.41) s | 0.39 (0.38 to 0.41) s | -0.01 s, -2.5% | no measurable change (p = 0.571) |
+  | Launch to history loaded | 0.51 (0.49 to 0.52) s | 0.51 (0.49 to 0.52) s | +0.00 s | no measurable change (p = 1.000) |
+  | CPU from launch to the idle window | 1.67 (1.64 to 1.68) s | 1.65 (1.63 to 1.74) s | -0.02 s, -1.5% | no measurable change (p = 0.486) |
+  | CPU energy from launch to the idle window | 5.83 (5.72 to 5.88) J | 5.86 (5.76 to 5.96) J | +0.03 J, +0.5% | no measurable change (p = 0.486) |
+  | Python helper start to ready, no network | 0.38 (0.24 to 0.53) s | 0.41 (0.23 to 0.54) s | +0.04 s, +9.3% | no measurable change (p = 1.000) |
+  | Python helper start, CPU | 0.27 (0.23 to 0.31) s | 0.30 (0.23 to 0.34) s | +0.04 s, +13.2% | no measurable change (p = 0.543) |
+  | Python helper memory once started | 71.1 (71.0 to 71.1) MB | 71.2 (71.0 to 71.3) MB | +0.1 MB, +0.1% | no measurable change (p = 0.314) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.326 (3.266 to 3.360) s | 3.336 (3.320 to 3.344) s | +0.010 s, +0.3% | no measurable change (p = 0.686) |
+  | CPU energy over the refresh window | 11.292 (11.039 to 11.485) J | 11.034 (10.412 to 11.363) J | -0.259 J, -2.3% | no measurable change (p = 0.343) |
+  | CPU wake-ups over the refresh window | 1883 (1805 to 1967) wake-ups | 1888 (1814 to 1917) wake-ups | +4 wake-ups, +0.2% | no measurable change (p = 0.886) |
+  | Disk writes over the refresh window | 0.000 (0.000 to 0.000) MB | 0.000 (0.000 to 0.000) MB | +0.000 MB | no measurable change (p = 1.000) |
+  | Memory during the refresh window (physical footprint) | 135.5 (128.5 to 143.7) MB | 140.9 (139.5 to 143.7) MB | +5.4 MB, +4.0% | no measurable change (p = 0.229) |
+  | Allocated memory added by the refreshes | 24.6 (21.6 to 25.4) MB | 24.8 (22.9 to 26.1) MB | +0.1 MB, +0.6% | no measurable change (p = 0.543) |
+
+  Every row is no measurable change, and none is marked "possibly". The
+  largest lean is memory during the refresh window, 5.4 MB higher at the
+  median with the two sides' ranges overlapping: 128.5 to 143.7 MB
+  before, 139.5 to 143.7 MB after. Disk writes over the refresh window
+  are 0.000 MB on both sides: both carry pull request 108, and with two
+  launches a turn the large write of a turn's third launch does not
+  occur.
+- Full comparison of this pull request and pull request 110 together,
+  run on 2026-11-16 after both were merged: before `e03cdd5`, after
+  `10129ab`, which is `76dfb6a` with this pull request's guard added and
+  this log. Six launches a side with `--refresh`, in turns from 18:35 to
+  19:47 UTC, macOS 27.2.1, on mains power, under the same two set-aside
+  rules. No reading inside the turns showed input, and the four busiest
+  processes together averaged 58% of a core over the before side's 36
+  readings and 55% over the after side's 36, a ratio of 1.06, so the run
+  stands. The results are in
+  `build/bench/results/compare-popover-and-session-snapshot-full-20261116-183408`,
+  with the run's log, its readings and the scripts in `conditions`.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 95.2 (86.2 to 97.6) MB | 96.2 (94.4 to 97.9) MB | +1.0 MB, +1.0% | no measurable change (p = 0.290) |
+  | Idle memory the app holds allocated | 55.8 (40.0 to 56.0) MB | 55.6 (55.5 to 56.5) MB | -0.1 MB, -0.2% | no measurable change (p = 0.946) |
+  | Peak memory, launch and history load | 244.2 (238.8 to 245.9) MB | 246.8 (241.6 to 247.4) MB | +2.6 MB, +1.1% | no measurable change (p = 0.180) |
+  | Idle memory growth across the window | 0.5 (0.3 to 0.7) MB | 0.3 (0.3 to 0.6) MB | -0.1 MB, -22.2% | no measurable change (p = 0.610) |
+  | Idle CPU | 0.082 (0.073 to 0.102) s/min | 0.097 (0.094 to 0.115) s/min | +0.015 s/min, +17.7% | no measurable change (p = 0.058) |
+  | Idle CPU wake-ups | 26 (23 to 31) /min | 24 (24 to 27) /min | -1 /min, -3.9% | no measurable change (p = 0.751) |
+  | Idle CPU power | 3.44 (3.00 to 4.38) mW | 2.98 (2.92 to 3.27) mW | -0.45 mW, -13.2% | possibly lower (p = 0.017) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.41 (0.40 to 0.44) s | 0.41 (0.37 to 0.43) s | +0.00 s | no measurable change (p = 0.517) |
+  | Launch to history loaded | 0.52 (0.49 to 0.54) s | 0.52 (0.50 to 0.53) s | +0.00 s | no measurable change (p = 0.838) |
+  | CPU from launch to the idle window | 1.67 (1.66 to 1.73) s | 1.69 (1.64 to 1.74) s | +0.02 s, +1.2% | no measurable change (p = 0.675) |
+  | CPU energy from launch to the idle window | 5.76 (5.61 to 5.99) J | 5.77 (5.56 to 5.95) J | +0.01 J, +0.1% | no measurable change (p = 0.853) |
+  | Python helper start to ready, no network | 0.24 (0.23 to 0.95) s | 0.24 (0.23 to 0.50) s | +0.00 s | no measurable change (p = 0.913) |
+  | Python helper start, CPU | 0.24 (0.23 to 0.34) s | 0.24 (0.23 to 0.29) s | +0.00 s | no measurable change (p = 1.000) |
+  | Python helper memory once started | 71.1 (71.1 to 71.1) MB | 71.1 (71.1 to 71.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.350 (3.246 to 3.386) s | 3.355 (3.320 to 3.432) s | +0.005 s, +0.1% | no measurable change (p = 0.485) |
+  | CPU energy over the refresh window | 11.113 (10.894 to 11.159) J | 11.241 (10.879 to 11.634) J | +0.128 J, +1.2% | no measurable change (p = 0.240) |
+  | CPU wake-ups over the refresh window | 1870 (1848 to 1904) wake-ups | 1894 (1849 to 1932) wake-ups | +24 wake-ups, +1.3% | no measurable change (p = 0.310) |
+  | Disk writes over the refresh window | 0.000 (0.000 to 1.562) MB | 0.000 (0.000 to 1.360) MB | +0.000 MB | no measurable change (p = 0.697) |
+  | Memory during the refresh window (physical footprint) | 122.7 (117.7 to 129.4) MB | 122.5 (120.0 to 131.9) MB | -0.2 MB, -0.1% | no measurable change (p = 0.818) |
+  | Allocated memory added by the refreshes | 25.5 (23.0 to 43.6) MB | 26.2 (23.2 to 27.3) MB | +0.7 MB, +2.5% | no measurable change (p = 0.818) |
+
+  21 of the 22 rows are no measurable change. Idle CPU power came out
+  possibly lower, by 0.45 mW (p = 0.017). Idle CPU leaned the other way,
+  17.7% higher (p = 0.058), and the shortened comparison had leaned 0.28
+  mW higher on the same row (p = 0.114). A "possibly" needs a repeat
+  before it counts, and the benchmark never opens the popover, so the
+  row is put down to neither pull request and not claimed. The third
+  launch of every turn wrote 1.3 to 1.6 MB in its refresh window on
+  both sides, as in earlier comparisons; that was not looked into.
+
+  A rule fixed before the run, and written as the first line of its
+  log, called for the two pull requests to be compared separately if
+  any row came out "possibly" or firm, before the change was put down to
+  either. Neither separate comparison was completed. This pull request
+  alone, `e03cdd5` against `7168684` from 20:15 to 21:28 UTC, was set
+  aside under the balance rule: the four busiest processes averaged 35%
+  of a core over the before side and 75% over the after side, a ratio
+  of 2.18. Its repeat was stopped a minute after it started, with no
+  launch measured, when the owner asked for the measuring to stop.
+  Pull request 110 alone, `7168684` against `10129ab` from 21:29 to
+  22:41 UTC, was set aside under the input rule, with input in four
+  readings. Every row of both read no measurable change, but set aside
+  they are not evidence. Both are labelled and kept in the results
+  folder. The owner then dropped both ("Lets drop them").
+- The guard: the second code commit releases the content only if the
+  popover is not shown when its close is reported, so that a close
+  reported late could not empty a popover already open again. An
+  independent review found no path in the app by which a close could be
+  reported after the next open, but when AppKit reports the close of a
+  popover that does not animate is not documented. A standalone check on this Mac, macOS
+  27.2.1, with a popover set up as this one is, showed the close reported
+  before `performClose` returned in each of four closes, the popover
+  reading as not shown inside each report, the content released by the
+  guarded line each time, and a reopen with no pause after a close
+  showing its content. The check's source is kept with the comparison's
+  conditions. The trial's first
+  run and the shortened comparison ran before the guard was added; the
+  trial's third run and the full comparison ran with it. None of them
+  reaches a late close, but in the trial's third run the guard released
+  the content at every close, as it should.
+- Testing: 732 XCTest tests pass with 0 failures with `experimental`
+  merged in and the guard added. `checks` and `docs-check` pass. No test was added: one would have to put a real item
+  in the menu bar, and no existing test builds the menu bar controller.
+  In the trial's first run every measured launch opened and closed the
+  popover twice; with the content released, the two opens drew the
+  popover 6 times and made 2 chart models, the same as with the content
+  kept, so the second open built its content as the first did. An
+  independent review by a reviewer that had not seen the implementation,
+  read-only while the comparison ran, found no defect. It confirmed that
+  the controller is the delegate of this popover only, that the one
+  `show` follows straight after the content is set, that the two other
+  reads of the content return early when there is none, and that the
+  chart's pending work holds the released content weakly. It could not
+  tell from the code when AppKit reports the close, which the guard and
+  the check above answer.
+- Known issues:
+  - Not exercised by hand: reopening the popover after each way it can
+    close, which are a click on the menu bar item, a click outside it,
+    Escape, a change of Space and the buttons in its footer. The trial
+    opened and closed it from code.
+  - The memory saving is not a firm figure, as said above.
+  - Each per-symbol popover also keeps its content after it closes.
+    That is not changed or measured here.
+- Verdict: retained. A closed portfolio popover is no longer redrawn: 16
+  redraws and 16 summaries over four passes became none, and its second
+  chart model is freed, with the guard as merged. The memory saving is an
+  order of size. No row of the shortened comparison moved, and none of
+  the full comparison moved firmly.
+
+### 110: Leave the positions' prices out of the session's portfolio snapshots
+
+- What: finding 8 of the
+  [Review of the refresh path](#review-of-the-refresh-path-2026-11-13).
+  Every recorded snapshot appends a portfolio snapshot to a list the app
+  keeps for the session, up to 1,800 long, and each one carried a price
+  for every position. Nothing reads those prices. The chart's and the
+  performance metrics' fallbacks, the trims and the settings view read
+  each snapshot's time, total value, total gains and currency, or count
+  the list. Each symbol's prices are kept separately, as before. The
+  session's snapshots are now recorded with no prices: four lines added
+  and three removed in `Stockbar/Data/HistoricalDataManager.swift`. The
+  type keeps its field, which snapshots stored by old versions are still
+  decoded with and migrated from. No Rust, dependency or architectural
+  change.
+- Merged: 2026-11-16, squash commit `10129ab`. The merge published
+  experimental build 370.16.11 as the prerelease
+  `experimental-370.16.11`. Checked after it: the feed's signature and
+  the archive's signature are valid, the archive's length, 7,196,399
+  bytes, matches the feed, the unpacked app is build 370.16.11 of 3.7.0,
+  its code signature verifies and its executable has no coverage
+  counters. The release's tag is on the squash commit. `main` and
+  `testing` were unchanged. The merged commit differs from `76dfb6a`,
+  which the shortened comparison measured, only in pull request 109's
+  guard and this log.
+- The size of the list, measured outside the app. A standalone program
+  using the app's own two types built the list at its full length of
+  1,800 snapshots, with and without the prices. Two runs gave the same
+  figures. The program and its output are kept in
+  `build/bench/results/trial-session-snapshot-20261113`.
+
+  | Positions | 1,800 snapshots with prices | Without | Less per snapshot |
+  | --- | --- | --- | --- |
+  | 11 | 2,500,384 bytes | 196,384 bytes | 1,280 bytes |
+  | 30 | 4,804,096 bytes | 196,096 bytes | 2,560 bytes |
+  | 60 | 9,411,584 bytes | 195,584 bytes | 5,120 bytes |
+
+  At the default interval of five minutes the app records 12 snapshots
+  an hour, so the list is full after 150 hours of recording. With 11
+  positions the saving grows by about 15 KB for each hour the app runs,
+  to about 2.3 MB. These are sizes of the data, not a measurement of the
+  running app's memory.
+- Benchmark: the standard comparison of this pull request alone, six
+  launches a side, was not run. It shares the shortened comparison
+  recorded in
+  [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes),
+  whose table is there: before `e03cdd5`, after the local-only commit
+  `76dfb6a` holding this change and pull request 109's, four launches a
+  side with `--refresh --runs 2`, on 2026-11-16 from 15:50 to 16:42 UTC.
+  The benchmark records four snapshots a launch, so for this change it
+  is a check for regressions, not the evidence of the saving. With four
+  launches a side it cannot give a firm verdict. Every row of it is no
+  measurable change, and none is marked "possibly". The full comparison
+  of both, six launches a side on the merged commit, followed the same
+  day and is in pull request 109's entry. No row of it moved firmly, and
+  its one "possibly", idle CPU power lower, is put down to neither pull
+  request.
+- Testing: 732 XCTest tests pass with 0 failures with `experimental`
+  merged in, pull request 109 included. `checks` and `docs-check` pass. No test was added: a test would have to record
+  through the app's shared history manager, which also queues writes to
+  the shared store. An independent review by a reviewer that had not
+  seen the implementation, read-only while the comparison ran, found no
+  defect. It confirmed that every read of the session's list takes the
+  time, the totals, the currency or the count; that nothing encodes or
+  stores the list; that the one reader of a portfolio snapshot's prices,
+  the migration of snapshots stored by old versions, sees only data
+  those versions wrote; that export and settings transfer do not include
+  the list; and that no test builds or records one.
+- Known issues:
+  - The saving is worked out from the sizes of the types. It was not
+    measured in the running app.
+  - Code added later that wanted each position's price from this list
+    would find none. Each symbol's own price list still has them.
+- Verdict: retained. The session's list no longer holds a price for
+  every position in every snapshot, which nothing read: about 2.3 MB less
+  once the list is full with 11 positions, by the sizes of the types. No
+  row of the shortened comparison moved, and none of the full comparison
+  moved firmly.
+
+### 112: Record the full comparison of pull requests 109 and 110 and the end of the overhaul
+
+- What: the full comparison of pull requests 109 and 110 and the
+  separate comparisons that were dropped, in pull request 109's entry;
+  the popover trial's third run, with the guard as merged; the merge
+  line of pull request 110; the owner's decisions of 2026-11-16 and
+  2026-11-17 under [Where things stand](#where-things-stand), with the
+  milestone table and the plan paragraph brought up to date; and a row
+  in "Who did what". Only this file changes.
+- Merged: 2026-11-17, squash commit `be1bf79`. The merge published
+  experimental build 370.16.12, whose app is that of 370.16.11.
+- Benchmark: no before/after run. No file that goes into the app changes
+  (nothing under `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`),
+  so before, `10129ab`, and after build the same app. What this pull
+  request records are the measurements made on 2026-11-16, each kept in
+  the results folder it names.
+- Testing: `docs-check` passes on this pull request's branch. The full
+  test suite and `checks` run on the merged commit before the promotion
+  to `testing`.
+- Review: read by its author, with each figure checked again against the
+  result files it comes from. No independent review, for a record of
+  measurements that changes no code.
+- Known issues: the third launch of every comparison turn writes 1.3 to
+  1.6 MB in its refresh window, on both sides; not looked into.
+- Verdict: retained.
+
+### 114: Bring `testing` back into `experimental` and record the second promotion
+
+- What: the [second promotion](#second-promotion-to-testing-2026-11-17)
+  recorded, with "Where things stand", the milestone table and the merge
+  line of pull request 112 brought up to date, and a row in "Who did
+  what". The branch starts from `testing` at `78c886b`, the promotion's
+  merge commit, so merging it brings that commit into `experimental`.
+  Only this file changes.
+- Merged: with a merge commit, the exception to the squash rule described
+  under [How this branch works](#how-this-branch-works). Its merge record
+  is on the pull request, since no later pull request into `experimental`
+  is planned.
+- Benchmark: no before/after run. `78c886b` has the files of `be1bf79`,
+  and this pull request changes only this file, so the app is the same.
+- Testing: `docs-check` passes on this branch. The tests of the promoted
+  commit are under the second promotion.
+- Review: read by its author, with each figure checked against the
+  published build and the pull requests it names.
+- Known issues: none known.
+- Verdict: retained.
+
 ## Rust evaluation, 2026-11-12
 
 No component was moved to Rust, and none is recommended. The one place where
@@ -2039,10 +3628,19 @@ supervised trial against Yahoo.
 | Precompiled bytecode for the Python helper's own scripts | 2026-11-12, plan item 8 | Compiling all three scripts takes 8.2 ms of a 330 ms helper start | About 2 percent of the start, for a build step and files to keep in step with the scripts. Never written |
 | Thin only the newly aged part of each price series after a recorded snapshot | 2026-11-12, plan item 11 | A full pass costs 32.6 ms on the main actor for each recorded snapshot at the fixture's size, 0.0065 s/min at the default interval | The saving is about 2 s of CPU in a trading day, and it needs remembered state that every place replacing a series must keep true. Never written |
 | Draw the main window's chart as one area plot and one line plot in place of a mark for every point | 2026-11-12, milestone 1 | Three launches of each build: Swift Charts' classes among the 27 largest fell from 5.02 MB to 4.38 MB (2.75 MB in one launch), and the untyped allocations it was meant to lower did not move (19.7 to 20.4 MB before, 20.2 to 20.6 MB after) | About 0.6 MB, for a change to how the chart is built that could be tried on one macOS version only. Appearance and VoiceOver were not compared. Never committed |
-| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window. Six lines if the owner wants the memory more than the animation. Never committed. The owner asked for a switch in its place, which is pull request 98 |
+| Take the rolling-digit transition out of the main window's figures | 2026-11-12, milestone 1 | One launch of each build with allocations named: 6.52 MB of cached glyph bitmaps with the transition and 0.46 MB without | It removes an animation that is there on purpose, to empty a cache the system owns, and in normal use the app starts without a window (corrected on 2026-11-13: it shows the window at every launch). Six lines if the owner wants the memory more than the animation. Never committed. The owner asked for a switch in its place, which is pull request 98 |
+| Combine a refresh's three Core Data transactions, or stop recording Core Data's change history (finding 7) | 2026-11-13, [Findings 6 and 7 looked into](#findings-6-and-7-looked-into-2026-11-13) | `sample` over four refresh passes: 17 busy samples on Core Data's threads of 3,234 in all, under 10 ms a pass. Each pass makes three write transactions and writes 35 change-history rows | A few milliseconds a refresh, too little to measure against the rest. The change history is part of how the store is opened, so turning it off risks the store opening read-only. Left as it is at the owner's choice. Never written |
 
 ## How this branch works
 
+- Since 2026-11-17, at the owner's word, `experimental` is used only for
+  major changes, such as the overhaul this log records, or for temporary
+  testing. Ordinary changes go straight to `testing`. When it is not in
+  use, it is brought up to the latest release and left there. While it is
+  in use, this log changes only through pull requests into
+  `experimental`. When a use ends, its last record goes in with the
+  release pull request into `testing` that ships the work, as for 3.8.0;
+  that pull request is the one exception.
 - `experimental` was created from `testing`. Nothing reaches `testing` or
   `main` from here without an explicit instruction; no releases, no changes to
   repository settings, no force-pushes or history rewrites. Since pull request
@@ -2081,6 +3679,14 @@ supervised trial against Yahoo.
   digit. A checkpoint tag is none of these.
 - The merge date and squash commit of a pull request are filled in by the next
   pull request, since they do not exist until after the merge.
+- A promotion to `testing` is made only at the owner's word, as a pull
+  request from a temporary branch at the commit to promote. It is never
+  made from `experimental` itself: GitHub deletes a merged pull request's
+  branch, and `experimental` is not protected from deletion. It is merged
+  with a merge commit. Straight afterwards `testing` is merged back into
+  `experimental` through a pull request, again with a merge commit, the one
+  exception to the squash rule above: until then experimental builds are
+  numbered below the new testing build.
 
 ## The transition, 2026-11-11
 
@@ -2148,8 +3754,21 @@ launch.
 | Pull request 97, the Experimental update channel | Fable (orchestrator), with a check of the Settings window by Sonnet and one independent review by Opus | Sonnet was used at the owner's instruction for driving the screen: it worked through the trial copy's Settings window and reported what each channel was offered, in 53 tool calls and about 138,000 tokens. The Opus review was worth it: it found that a release would never have reached the channel and that the tests and notes had Sparkle's ordering wrong, in 62 tool calls, about 250,000 tokens and fifteen minutes |
 | Pull request 86 reworked as a switch | Fable (orchestrator), with two checks of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: the first check read and toggled the switch in 23 tool calls and about 128,000 tokens but could not scroll the page; the second settled that it scrolls, through the scroll bar's accessibility buttons, in 15 tool calls and about 128,000 tokens. The Opus review was worth it: no defect in the pool, but it found that the switch's description promised the helper is kept in cases where it is not, and that two tests could not fail, in 23 tool calls, about 155,000 tokens and six minutes. My own reading before it found the one race that was fixed |
 | Pull request 98, the switch for the rolling digits | Fable (orchestrator), with one check of the Settings window by Sonnet and one independent review by Opus | Sonnet drove the screen at the owner's instruction: it read both Memory switches word for word, turned the new one off and looked at the Overview page, in 24 tool calls, about 126,000 tokens and 80 seconds. The Opus review found no defect and was still worth it: the description and the guide stated more than had been measured, the test did not read what a figure does, and nothing kept later figures on the modifier, in 55 tool calls, about 201,000 tokens and eleven minutes. It ran beside pull request 86's first comparison, which had to be repeated on a quiet Mac |
+| The promotion to `testing` and pull request 101 | Fable (orchestrator) | Done directly: two pull requests, the checks on the published build and one comparison. Reading the repository's settings before merging showed that pull request 99 would have deleted `experimental`; it was replaced before anything was merged |
+| Pull request 102, the helper's switch on by default | Opus 5.5 (orchestrator, from here on at the owner's choice of model), with one check of the Settings window by Sonnet | Done directly: a five-file change and its test. Sonnet read the switch in the trial copy in 16 tool calls, about 105,000 tokens and 51 seconds; the copy's window is the main window, with Settings in its sidebar, and making it taller was enough to reach the Memory section. No independent review: a change of default, whose test was read against the diff |
+| The Dependabot alerts and pull request 103 | Opus 5.5 (orchestrator) | Done directly. The alerts' history and GitHub's dependency graph showed the code had been fixed for eight days; the alerts were dismissed through the API with a note, and the comment change was checked against the lock and the launch-time check |
+| The review of the refresh path | Opus 5.5 (orchestrator), with one read-only review by Opus | Worth it. The reviewer had not seen the code and read the refresh path end to end in 26 tool calls, about 287,000 tokens and five and a half minutes, after a first attempt failed on a server error. Three of its claims were checked again in the code before they went to the owner, and held |
+| Pull request 104 | Opus 5.5 (orchestrator) | Done directly: one function pair replaced and three tests, measured with a script that runs the helper's `main()` offline |
+| Pull request 105 | Opus 5.5 (orchestrator) | Done directly: the seam the review had pointed to, the benchmark's extra window and its report rows, tried with one launch before the comparison |
+| Findings 6 and 7 looked into | Opus 5.5 (orchestrator) | Done directly: a profile, an SQL log and a trial copy with counters, each read before choosing the next; nothing independent to hand off |
+| Pull request 106 | Opus 5.5 (orchestrator), with one independent review by Opus | Done directly: one loop reordered and moved into two functions, a test shown to fail on the old code, and the trial copy's counters run again on the change. The review, read-only while the comparison ran, found no defect and was worth it: a comment gave the wrong reason for looking holdings up by name, the log lines moved more than the description said, and a suspension notice can now lag in one rare case. 24 tool calls, about 153,000 tokens and four and a half minutes |
+| Pull request 107 | Opus 5.5 (orchestrator) for the first code commit, then Fable 5.2 (orchestrator again, at the owner's change of model) for the review fixes, the timing and the comparison, with one independent review by Opus | Done directly: one function given a window, its two callers' paths and three tests, timed in the trial copy before and after. The review, read-only, found no defect and was worth it: it showed the first test would have passed with a margin too small to be safe, that a miss left a stale series counted in the cache, and that two comments overstated what they described. 18 tool calls, about 133,000 tokens and four and a half minutes |
+| Pull request 108 | Fable 5.2 (orchestrator), with one independent review by Opus in two passes | Done directly: one class and three tests, with the cache's file writes counted in the trial copy before and after. The review, read-only, was worth it: it found no defect in the comparison or the locking, but showed that the first version no longer wrote again a file deleted from outside the app, which the second code commit puts right, and corrected two comments. It also said key order does not vary between encodings of one dictionary; a measurement showed it does, and the reviewer withdrew that. First pass 33 tool calls, about 158,000 tokens and seven minutes; the second look at the reworked code 3 tool calls and a minute and a half |
+| Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
+| The full comparison of pull requests 109 and 110, the dropped separate comparisons, the trial's third run and pull request 112 | Fable 5.2 (orchestrator) for the measuring on 2026-11-16, then Opus 5.5 (orchestrator, at the owner's change of model) for this record | Done directly: unattended runs with readings taken beside them and set-aside rules fixed before any figure existed. Two of the three comparisons were set aside under those rules, and a rule that sent one "possibly" row to two more comparisons cost about four hours before the owner stopped it. Next time the owner should get that choice before the extra runs start |
+| The second promotion to `testing` and pull request 114 | Opus 5.5 (orchestrator) | Done directly: the tests on the promoted commit, two pull requests and the checks on the published build |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
-requests 97, 86 and 98: nothing else so far has been parallel or self-contained
+requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
 enough to repay a cold start, and most of the elapsed time is benchmark
 runs, which no model speeds up.

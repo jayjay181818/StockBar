@@ -351,7 +351,6 @@ class HistoricalDataManager {
         lastSnapshotTime = now
         Task { await logger.debug("📸 Recording snapshot at \(now)") }
         
-        var currentPriceSnapshots: [PriceSnapshot] = []
         var changedPriceSnapshots: [PriceSnapshot] = []
         var hasValidData = false
         
@@ -376,7 +375,6 @@ class HistoricalDataManager {
                 symbol: trade.trade.name
             )
             
-            currentPriceSnapshots.append(snapshot)
             hasValidData = true
 
             let name = trade.trade.name
@@ -403,12 +401,15 @@ class HistoricalDataManager {
         let gains = dataModel.calculateNetGains()
         let totalValue = calculateTotalPortfolioValue(from: dataModel)
         
+        // The session's snapshots are read only for their totals, so the
+        // positions' prices are left out. Each symbol's prices are kept in
+        // `priceSnapshots`.
         let portfolioSnapshot = PortfolioSnapshot(
             timestamp: now,
             totalValue: totalValue,
             totalGains: gains.amount,
             currency: gains.currency,
-            priceSnapshots: currentPriceSnapshots
+            priceSnapshots: []
         )
         
         portfolioSnapshots.append(portfolioSnapshot)
@@ -1557,11 +1558,11 @@ class HistoricalDataManager {
         to endDate: Date = Date(),
         timeRange: ChartTimeRange? = nil
     ) -> [PriceSnapshot] {
+        guard startDate <= endDate else { return [] }
         let seriesKeys = timeRange.map {
             folyncLineSeriesKeys(for: symbol, timeRange: $0, customFrom: nil, customTo: nil)
         }
-        return aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: seriesKeys)
-            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        return aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: seriesKeys, within: startDate...endDate)
     }
 
     /// Chart consumers explicitly request missing history after reading their current slice.
@@ -1662,9 +1663,11 @@ class HistoricalDataManager {
         return result
     }
 
+    /// The series for `symbol`, oldest first, or only its part inside `window`.
     func aliasAwarePriceSnapshots(
         for symbol: String,
-        folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil
+        folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil,
+        within window: ClosedRange<Date>? = nil
     ) -> [PriceSnapshot] {
         let aliases = instrumentAliasStore.aliases(for: symbol)
         // Folync overlays are per range. Without the caller's range there is no
@@ -1672,13 +1675,26 @@ class HistoricalDataManager {
         // (the most recently fetched overlay could be any range).
         let seriesKeys = requestedSeriesKeys ?? []
         if let overlay = seriesKeys.compactMap({ folyncPriceOverlays[$0] }).first {
-            return overlay
+            return window.map { window in overlay.filter { window.contains($0.timestamp) } } ?? overlay
         }
         if !seriesKeys.isDisjoint(with: folyncUnavailableSeries) {
             return []
         }
         let stored = priceSnapshots
         let live = livePriceSamples
+        if let window {
+            // A window, such as the menu bar's last day, is read from the
+            // prices themselves unless the whole series is already built:
+            // building and sorting all of it to keep a day cost more than
+            // the window. The cache is emptied whenever the stored prices
+            // or the live samples change, so during a refresh it is empty.
+            if let cached = aliasHistoryCache.cachedSnapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
+                return cached.filter { window.contains($0.timestamp) }
+            }
+            return InstrumentAliasHistoryLookup.combinedSnapshots(
+                for: symbol, aliases: aliases, storedBySymbol: stored, liveBySymbol: live, within: window
+            )
+        }
         return aliasHistoryCache.snapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
             InstrumentAliasHistoryLookup.combinedSnapshots(
                 for: symbol, aliases: aliases, storedBySymbol: stored, liveBySymbol: live
