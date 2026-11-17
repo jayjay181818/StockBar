@@ -14,7 +14,7 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 ![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![SwiftUI + AppKit](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF)
 
-[Quick start](#-quick-start) · [Features](#-features) · [User guide](Docs/UserGuide.md) · [FAQ](Docs/FAQ.md) · [Releases](https://github.com/jayjay181818/StockBar/releases)
+[Quick start](#-quick-start) · [Features](#-features) · [User guide](Docs/UserGuide.md) · [FAQ](Docs/FAQ.md) · [Wiki](https://github.com/jayjay181818/StockBar/wiki) · [Releases](https://github.com/jayjay181818/StockBar/releases)
 
 </div>
 
@@ -211,6 +211,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 
 | Guide | What's inside |
 |---|---|
+| 🌐 [Wiki](https://github.com/jayjay181818/StockBar/wiki) | Pages by topic, written from these documents: installing, every screen, Trading 212 and Folync, settings, updates, backups, troubleshooting, and pages for developers |
 | 📘 [User Guide](Docs/UserGuide.md) | Every screen, the menu bar, alerts, currencies, connections and shortcuts |
 | ❓ [FAQ](Docs/FAQ.md) | Common questions and fixes |
 | 🏗️ [Architecture](Docs/Architecture.md) | Components, data flow and source ownership |
