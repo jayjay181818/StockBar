@@ -1261,17 +1261,19 @@ class DataModel {
     /// holdings priced by Folync or Trading 212 never fired. Every price source
     /// now calls this after applying prices.
     func evaluatePriceAlerts(for trades: [RealTimeTrade]) {
+        var checks: [PriceAlertService.PriceCheck] = []
         for trade in trades where !isBenchmarkTrade(trade) {
             let info = trade.realTimeInfo
             let price = info.getCurrentDisplayPrice()
             guard price.isFinite, price > 0 else { continue }
-            PriceAlertService.shared.checkAlerts(
+            checks.append(PriceAlertService.PriceCheck(
                 symbol: trade.trade.name,
                 currentPrice: price,
                 previousPrice: info.prevClosePrice,
                 currency: info.currency ?? "USD"
-            )
+            ))
         }
+        PriceAlertService.shared.checkAlerts(checks)
     }
 
     private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
