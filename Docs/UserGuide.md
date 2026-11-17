@@ -179,7 +179,7 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 
 **Risk or correlation says there is not enough data.** These need stored history; leave Stockbar running and data accumulates.
 
-**Exchange rates look stale.** Rates refresh at most every five minutes; Settings → General → Exchange Rates shows when they were last obtained. If an update fails, Stockbar keeps using the last rates it obtained. Only if it has never obtained any, for example on a new Mac that has not been online, does it use rough built-in rates; Holdings then says that converted values are approximate. A currency with no rate at all is shown as unavailable rather than guessed.
+**Exchange rates look stale.** Rates from exchangerate-api.com are fetched at launch and then about once an hour (with Folync's **Exchange rates** switch on, they come from Folync and are checked every minute); Settings → General → Exchange Rates shows when they were last obtained. If an update fails, Stockbar keeps using the last rates it obtained. Only if it has never obtained any, for example on a new Mac that has not been online, does it use rough built-in rates; Holdings then says that converted values are approximate. A currency with no rate at all is shown as unavailable rather than guessed.
 
 ## Keyboard shortcuts
 

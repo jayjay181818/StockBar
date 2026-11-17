@@ -49,6 +49,8 @@ Work on a branch and open a pull request into `testing`; do not push to `testing
 
 [Dependabot](../.github/dependabot.yml) opens weekly, grouped pull requests into `testing` for GitHub Actions and the pinned Python helper packages. The pins target Stockbar's own environment (Python 3.13; 3.10 is the minimum). The launch-time check reads `name==version` pins and understands only plain `python_version` markers (see `PythonRequirements.swift`). CI runs the Python tests on 3.13; check they pass before merging any helper update. `setup_python_env.sh` downloads a pinned uv when no uv or Python 3.10+ is installed; to update it, change `UV_VERSION` and both `UV_SHA256_*` values together from the release's `.sha256` files, and never remove the checksum check. `Scripts/tests/test_setup_python_env.py` covers the download offline.
 
+The [wiki](https://github.com/jayjay181818/StockBar/wiki) is written from the README and `Docs/`, and no check covers it, so keep it in step by hand. When a pull request changes something a wiki page describes, update that page as part of the same work: corrections to existing text once the pull request merges, and new or changed behaviour when it is released, together with the version in the wiki's `_Footer.md`. The wiki is a separate repository (`https://github.com/jayjay181818/StockBar.wiki.git`): clone it, edit the pages, and push. It is public, so the same search applies before pushing.
+
 Before publishing, search the diff for credentials, tokens, private hostnames, personal paths and real portfolio data. Private notes belong in ignored files (see [.gitignore](../.gitignore)).
 
 ## Release builds and updates
