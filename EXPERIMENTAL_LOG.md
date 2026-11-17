@@ -200,7 +200,7 @@ Figures from either side of a break are not compared with each other.
 | A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
 | Full comparison of pull requests 109 and 110 | Done 2026-11-16, six launches a side on the merged commit: no row moved firmly. See [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes) |
 | Second promotion to `testing` | Done 2026-11-17: pull request 113, merge commit `78c886b` on `testing`, testing build 370.29. See [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17) |
-| Stable release and `main` | Not started. Each waits for the owner's own word |
+| Stable release and `main` | Asked for by the owner on 2026-11-17, after they had used testing build 370.29 and experimental build 370.29.2 and checked the portfolio popover by hand: version 3.8.0, released from `testing` by its own pull request and tag, with `main` brought up to date afterwards. Pull request 111, the weekly Python package update, is not in it: the recommendation was for it to follow the release, so that the release installs the packages that were tested |
 
 ### Planned next, in order
 
@@ -3633,6 +3633,14 @@ supervised trial against Yahoo.
 
 ## How this branch works
 
+- Since 2026-11-17, at the owner's word, `experimental` is used only for
+  major changes, such as the overhaul this log records, or for temporary
+  testing. Ordinary changes go straight to `testing`. When it is not in
+  use, it is brought up to the latest release and left there. While it is
+  in use, this log changes only through pull requests into
+  `experimental`. When a use ends, its last record goes in with the
+  release pull request into `testing` that ships the work, as for 3.8.0;
+  that pull request is the one exception.
 - `experimental` was created from `testing`. Nothing reaches `testing` or
   `main` from here without an explicit instruction; no releases, no changes to
   repository settings, no force-pushes or history rewrites. Since pull request
