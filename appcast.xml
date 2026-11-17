@@ -7,6 +7,20 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.0 (370.33)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-370.33</link>
+      <pubDate>Tue, 17 Nov 2026 10:12:40 +0000</pubDate>
+      <sparkle:version>370.33</sparkle:version>
+      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 370.33 of Stockbar 3.8.0. Changes since testing-370.29:
+
+- Release 3.8.0
+- Record the second promotion to testing</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-370.33/Stockbar-370.33.zip" length="7196397" type="application/octet-stream" sparkle:edSignature="JH1nbMXC40gjV8Qxcy5wRiDvThH8MByrLDSfjaBMclWYwcG8Js833wKPtDlyauV7o4fqEaJnVwLs+tTdIMXbBA=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.29)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-370.29</link>
       <pubDate>Tue, 17 Nov 2026 09:40:32 +0000</pubDate>
@@ -99,6 +113,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PjySfLgw3/cIccMNWHyCtiQBjgtLNkHbPjUWms2+AN5cRUzMuYXeC+7DO4O47NBIEe0uWliuyinz+Qp4aJD8AQ==
-length: 7682
+edSignature: t5CFsJLU6Crk1tRZN0pCQObMdsbToYc05HNRIvPVrKo3IZqd8M0Qejyr50vsyp2f53NwCTkWK9jv4776tZXUBA==
+length: 8603
 -->
