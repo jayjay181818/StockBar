@@ -81,7 +81,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 |---|---|
 | **Stable** (default) | Released versions only. |
 | **Testing** | Every change as it lands in the `testing` branch, before it is released, as well as released versions. May be rough. |
-| **Experimental** | Every change as it lands in the `experimental` branch: work in progress that has not reached `testing` yet. Things may break. A release or a testing build arrives once that branch includes it. |
+| **Experimental** | Builds of the `experimental` branch, which is used only for major changes, such as an overhaul of the app, or for temporary testing. Things may break, and it can go quiet for long periods. A release or a testing build arrives once that branch includes it. |
 
 - Updates are downloaded from this repository's GitHub releases. Each one is checked against a signing key built into Stockbar before it is installed, and a download or update list that fails the check is refused.
 - After every update macOS asks once for access to your saved credentials in the Keychain. Choose **Always Allow**. Stockbar is built without an Apple developer account, so there is no signature macOS would remember from one build to the next.
@@ -173,6 +173,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 - Connections includes API key fields for FMP and Twelve Data (with Save & Test and Remove), the Folync portfolio source, fetch priority/fallback order, and Trading 212 broker configuration.
 - Trading 212 settings include enable/disable, environment, account type, account label, credential status, Test Connection, Preview Import, Link Matched Holdings, auto-sync settings, and missing-position deletion behavior.
 - Sensitive credential fields stay empty after save by design; stored status is shown instead.
+- Advanced → Memory has **Quit Python Helper When Idle** (on by default: the idle helper quits after about 90 seconds; off, it is kept for 15 minutes) and **Roll Digits When Figures Change** (on by default; off saves the 6 to 10 MB macOS keeps for the rolling digits).
 
 #### Reliability, Backups, And Diagnostics
 - Backups view for creating, inspecting, and restoring portfolio backups.
@@ -394,13 +395,14 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 **Contributing**
 - Work on a branch and open a pull request into `testing`; CI runs the Python, tooling, lint, build and test gates, and a Release build, on every PR.
+- `experimental` is used only for major changes, such as an overhaul of the app, or for temporary testing; it reaches `testing` through a promotion pull request. Everything else goes straight to `testing`.
 - Every merge into `testing` publishes a testing build, and every merge into `experimental` an experimental one. Releases are tagged `vX.Y.Z` on the merged commit, and pushing the tag builds and publishes the release.
 - Never commit credentials, tokens, private hostnames or personal portfolio data. The [.gitignore](./.gitignore) excludes common secret, key and local-data files.
 
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- More than 600 XCTest tests plus offline Python tests run in CI.
+- More than 700 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.
@@ -413,7 +415,16 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.7.0 (current): Self-updating
+### 🆕 Version 3.8.0 (current): Lighter and quieter
+- **Memory**: Idle memory is about a fifth lower, and stored history loads at launch in about half the time, in the project's benchmark on a made-up portfolio.
+- **Refreshes**: Each price refresh uses about half the processor time. The Python helper reads and writes its cache once per refresh, and the closed portfolio popover is no longer redrawn.
+- **Python helper**: **Quit Python Helper When Idle** is now on by default. The idle helper quits after 90 seconds and starts again for the next refresh. Turn it off in Settings → Advanced → Memory to keep it for 15 minutes.
+- **Settings**: New **Roll Digits When Figures Change** switch, in the same section.
+- **Updates**: A third channel, Experimental, for builds of the `experimental` branch, which is used only for major changes or temporary testing.
+- **Fix**: Popover chart lines no longer double back across a gap in time.
+- See [Changelogs/release_notes_v3.8.0.md](./Changelogs/release_notes_v3.8.0.md).
+
+### Version 3.7.0: Self-updating
 - **Updates**: Stockbar checks for new versions and installs them. Settings → General → Updates has a Stable and a Testing channel, automatic checks and Check Now.
 - **Keychain**: Every credential is kept in one Keychain item, so macOS asks once after an update. Credentials from earlier versions are imported.
 - **Installing**: Coming from 3.6.0 or earlier, download this version by hand once; later versions arrive through the updater.
@@ -546,6 +557,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 11, 2026 · Version 3.7.0</sub>
+<sub>Last updated: November 17, 2026 · Version 3.8.0</sub>
 
 </div>

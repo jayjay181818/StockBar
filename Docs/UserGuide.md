@@ -151,7 +151,7 @@ Stockbar looks for a new version about once a day. When there is one it shows th
 
 **Settings → General → Updates** shows the version you are running and has:
 
-- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. **Experimental** offers work in progress that has not reached Testing yet, where things may break; a released version or a testing build reaches it once the experimental work includes it. With automatic checks on, changing the channel checks again straight away.
+- **Update Channel** — **Stable** offers released versions only. **Testing** also offers every change as it lands, before it is released; these builds may be rough. **Experimental** offers builds of the `experimental` branch, which is used only for major changes or temporary testing, so it can be quiet for long periods and things may break; a released version or a testing build reaches it once the experimental work includes it. With automatic checks on, changing the channel checks again straight away.
 - **Check Automatically** — turn off to check only when you ask.
 - **Check Now** — the same as **Check for Updates…** in the **Stockbar** menu.
 
