@@ -2514,3 +2514,57 @@ private final class DefaultsWriteCounter: NSObject {
         count += 1
     }
 }
+
+final class PortfolioTotalReturnTests: XCTestCase {
+    private func summary(value: Double = 1_100, netDeposits: Double?) -> DisplayPortfolioSummary {
+        DisplayPortfolioSummary(
+            totalValue: value, totalGain: 99, totalGainPct: 49.25, dayGain: 0, dayGainPct: 0,
+            totalCost: 201, ownedPositionCount: 1, currency: "GBP",
+            valuationSource: .folyncProvided, netDeposits: netDeposits
+        )
+    }
+
+    func testNetDepositsAreUsedOnlyWhenChosenAndKnown() {
+        let chosen = summary(netDeposits: 600).totalReturn(measuredAgainst: .netDeposits)
+        XCTAssertEqual(chosen, PortfolioTotalReturn(
+            gain: 500, percent: 500.0 / 600.0 * 100, basisAmount: 600, isMeasuredAgainstNetDeposits: true
+        ))
+
+        let notChosen = summary(netDeposits: 600).totalReturn(measuredAgainst: .holdingsCost)
+        XCTAssertEqual(notChosen, PortfolioTotalReturn(
+            gain: 99, percent: 49.25, basisAmount: 201, isMeasuredAgainstNetDeposits: false
+        ))
+
+        let unknown = summary(netDeposits: nil).totalReturn(measuredAgainst: .netDeposits)
+        XCTAssertEqual(unknown, notChosen, "without net deposits P&L falls back to the cost of the holdings")
+        XCTAssertEqual(unknown.basisLabel, "Cost Basis")
+        XCTAssertFalse(summary(netDeposits: .nan).totalReturn(measuredAgainst: .netDeposits).isMeasuredAgainstNetDeposits)
+    }
+
+    func testNoPercentageWhenNothingWasPaidInOnBalance() {
+        for deposits in [0.0, -250] {
+            let result = summary(netDeposits: deposits).totalReturn(measuredAgainst: .netDeposits)
+            XCTAssertEqual(result.gain, 1_100 - deposits)
+            XCTAssertTrue(result.percent.isNaN, "\(deposits)")
+            XCTAssertEqual(MenuPopoverFormatter.percent(result.percent), "")
+        }
+    }
+
+    @MainActor
+    func testTheChoiceDefaultsToNetDepositsAndIsRemembered() {
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = PortfolioGainBasis.userDefaultsKey
+        let storedBefore = defaults.object(forKey: key)
+        defer { defaults.set(storedBefore, forKey: key) }
+        defaults.removeObject(forKey: key)
+
+        let model = DataModel(
+            currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false
+        )
+        XCTAssertEqual(model.portfolioGainBasis, .netDeposits)
+        model.portfolioGainBasis = .holdingsCost
+        XCTAssertEqual(defaults.string(forKey: key), "holdingsCost")
+        XCTAssertNotNil(SettingsTransferKeys.settingsKeys[key], "the choice travels with a settings export")
+    }
+}
