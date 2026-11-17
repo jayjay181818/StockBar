@@ -262,11 +262,22 @@ def save_cache_unlocked(value):
             pass
         raise
 
+def with_fetch_time(quote, fetched_at):
+    """A copy of the quote that says when it was fetched from the provider.
+
+    The app shows this as the time the price was updated. A quote served from
+    the cache keeps the time it was first fetched, not the time it was read.
+    """
+    if not isinstance(quote, dict):
+        return quote
+    return {**quote, 'fetchedAt': fetched_at}
+
 def get_cached_quotes(symbols):
     """The cached quotes still fresh enough to use, from one read of the cache file.
 
-    Returns the usable quotes by symbol, and the symbols whose fresh entry is not
-    a valid quote. The caller drops those from the cache when it next writes it.
+    Returns the usable quotes by symbol, each with the time it was fetched, and
+    the symbols whose fresh entry is not a valid quote. The caller drops those
+    from the cache when it next writes it.
     """
     with cache_lock():
         current_cache = load_cache_unlocked()
@@ -280,7 +291,7 @@ def get_cached_quotes(symbols):
         if ts and (time.time() - ts < CACHE_DURATION_SECONDS):
             cached_result = apply_previous_close_backfill(symbol, entry.get('result'))
             if is_valid_quote(cached_result):
-                quotes[symbol] = cached_result
+                quotes[symbol] = with_fetch_time(cached_result, ts)
             else:
                 unusable.append(symbol)
     return quotes, unusable
@@ -310,12 +321,13 @@ def prune_cache(current_cache, now=None):
             removed += 1
     return removed
 
-def update_cache(quotes, drop=()):
+def update_cache(quotes, drop=(), fetched_at=None):
     """Stores the valid quotes among `quotes` and removes the `drop` symbols.
 
     One locked read and one atomic write, however many symbols a refresh has.
     Entries other processes stored meanwhile are kept. Nothing is written when
-    there is nothing to change. Returns the symbols stored.
+    there is nothing to change. Entries are stamped `fetched_at`, or the current
+    time without it. Returns the symbols stored.
     """
     valid = {symbol: quote for symbol, quote in quotes.items() if is_valid_quote(quote)}
     if not valid and not drop:
@@ -325,7 +337,7 @@ def update_cache(quotes, drop=()):
         prune_cache(current_cache)
         for symbol in drop:
             current_cache.pop(symbol, None)
-        now = time.time()
+        now = time.time() if fetched_at is None else fetched_at
         for symbol, quote in valid.items():
             current_cache[symbol] = {
                 'timestamp': now,
@@ -1641,16 +1653,20 @@ def main():
         if symbols_to_fetch:
             try:
                 batch_results = fetch_batch(symbols_to_fetch, time_budget_seconds=args.deadline_seconds)
+                # One time for the batch, reported with each quote and stored
+                # in the cache, so a quote read back from the cache later
+                # reports the same time it did when it was fetched.
+                fetched_at = time.time()
                 for symbol, res in batch_results.items():
                     if res:
-                        results[symbol] = res
+                        results[symbol] = with_fetch_time(res, fetched_at)
                     elif args.json:
                         results[symbol] = None
                     else:
                         results[symbol] = fetch_single(symbol)
                 # One cache write for the whole refresh. fetch_single's text
                 # results are not quotes, so they were never cached.
-                update_cache(batch_results, drop=unusable)
+                update_cache(batch_results, drop=unusable, fetched_at=fetched_at)
             except Exception as e:
                 error_str = str(e)
                 output_error('NETWORK_ERROR', f'Network error: {str(e)}')

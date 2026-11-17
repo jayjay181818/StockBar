@@ -2134,8 +2134,9 @@ extension RealTimeTrade {
         }
         
         // ALWAYS update timestamp, metadata, and market state - even if we retained old price data
-        // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
-        updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+        // lastUpdateTime is when the price was fetched from the provider, which for a quote the
+        // script served from its cache is earlier than now; regularMarketTime is the exchange's time
+        updatedInfo.lastUpdateTime = Int(result.updateDate(now: Date()).timeIntervalSince1970)
         updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
         // A provider that omits these (the FMP fallback does) must not replace
         // a known time zone with GMT or a known name with the ticker.

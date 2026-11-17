@@ -27,6 +27,18 @@ struct StockFetchResult: Sendable {
     /// Why this quote has no usable price. Nil for a successful quote.
     var failure: QuoteFailure?
 
+    /// When the script fetched this quote from the provider, in seconds since
+    /// 1970. A quote served from the script's cache keeps the time it was first
+    /// fetched. Nil when the script did not say.
+    var fetchedAt: TimeInterval?
+
+    /// The time to show as when this price was updated: when it was fetched,
+    /// never later than `now`, or `now` when the script did not say.
+    func updateDate(now: Date) -> Date {
+        guard let fetchedAt, fetchedAt.isFinite, fetchedAt > 0 else { return now }
+        return min(Date(timeIntervalSince1970: fetchedAt), now)
+    }
+
     init(currency: String?, symbol: String, shortName: String?, regularMarketTime: Int?, exchangeTimezoneName: String?, regularMarketPrice: Double, regularMarketPreviousClose: Double, displayPrice: Double, preMarketPrice: Double? = nil, preMarketChange: Double? = nil, preMarketChangePercent: Double? = nil, preMarketTime: Int? = nil, postMarketPrice: Double? = nil, postMarketChange: Double? = nil, postMarketChangePercent: Double? = nil, postMarketTime: Int? = nil, marketState: MarketState? = nil) {
         self.currency = currency
         self.symbol = symbol
