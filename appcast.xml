@@ -7,6 +7,20 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.0 (380.16)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.16</link>
+      <pubDate>Tue, 17 Nov 2026 14:02:08 +0000</pubDate>
+      <sparkle:version>380.16</sparkle:version>
+      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 380.16 of Stockbar 3.8.0. Changes since testing-380.13:
+
+- Never take net deposits from a stale cached history
+- Measure portfolio P&amp;L against net deposits</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.16/Stockbar-380.16.zip" length="7208657" type="application/octet-stream" sparkle:edSignature="ytWHxJcga+yRTpjZTWKe217GvVLYNptjSPa7H1+B6XJRzrgNJ+b34q+hE2TUpIhaV10QjJzLO1Tj7c6Q694XCg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.0 (380.13)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.13</link>
       <pubDate>Tue, 17 Nov 2026 12:53:41 +0000</pubDate>
@@ -183,6 +197,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: wy08cHod0uso89F0kXBGXNZNjTLid4sCtkGrqmh+CkkXzrlNKatgRpdP3Tw7/kG36LaFGU+JA5oANKNzV5vQBw==
-length: 15684
+edSignature: 3077T3RMjKRMhBYTQJLClmfkVvRNvfQjr9hDXDyjMdIdBrWMX5v8W+hYIkeadeJxObxoKbwxAVW6nk2oeme5AA==
+length: 16651
 -->
