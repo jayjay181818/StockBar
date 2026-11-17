@@ -160,7 +160,7 @@ struct StockbarOverviewView: View {
             Text(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
                 .font(.system(size: 42, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
                 .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: summary.totalValue)
                 .fixedSize()
                 .accessibilityLabel("Total portfolio value \(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))")
@@ -179,7 +179,7 @@ struct StockbarOverviewView: View {
                         .font(.system(.title3, design: .rounded).weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(StockbarPalette.signed(amount, neutral: .primary))
-                        .contentTransition(.numericText())
+                        .stockbarRollingDigits()
                     StockbarChangeBadge(percent: percent)
                 }
             } else {

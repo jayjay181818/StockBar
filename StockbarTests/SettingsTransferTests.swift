@@ -1,4 +1,5 @@
 @preconcurrency import CoreData
+import SwiftUI
 import XCTest
 @testable import Stockbar
 
@@ -902,5 +903,71 @@ private final class Counter: @unchecked Sendable {
 
     func increment() {
         lock.withLock { count += 1 }
+    }
+}
+
+/// Settings → Advanced → Memory → Roll Digits When Figures Change.
+@MainActor
+final class RollingDigitsSettingTests: XCTestCase {
+    func testAFigureRollsUnlessTheSwitchIsTurnedOff() {
+        // Under XCTest the app's store is an isolated suite. The switch in
+        // Settings writes to it, and each window's root view reads it.
+        guard StockbarRuntimeStorage.acceptance.defaultsSuiteName != nil else {
+            return XCTFail("Tests must not run against the real defaults")
+        }
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = StockbarRollingDigits.key
+        let original = defaults.object(forKey: key)
+        defer {
+            if let original { defaults.set(original, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        let rolling = ContentTransition.numericText()
+
+        defaults.removeObject(forKey: key)
+        XCTAssertEqual(figureTransition(), rolling, "Never set, a figure must roll as it always has")
+
+        defaults.set(false, forKey: key)
+        let turnedOff = figureTransition()
+        XCTAssertNotNil(turnedOff, "SwiftUI never drew the figure")
+        XCTAssertNotEqual(turnedOff, rolling, "Turned off, a figure must not be given the rolling transition")
+
+        defaults.set(true, forKey: key)
+        XCTAssertEqual(figureTransition(), rolling)
+    }
+
+    func testTheSwitchIsOnTheSettingsExportList() {
+        XCTAssertEqual(SettingsTransferKeys.settingsKeys[StockbarRollingDigits.key], .bool)
+    }
+
+    /// The content transition a figure is drawn with, under a root that
+    /// reads the setting the way the app's window and popovers do. Nil if
+    /// SwiftUI never drew the figure.
+    private func figureTransition() -> ContentTransition? {
+        let seen = RollingDigitsSeen()
+        let host = NSHostingView(
+            rootView: RollingDigitsProbe(seen: seen)
+                .stockbarRollingDigits()
+                .stockbarRollingDigitsSetting()
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+        _ = host.fittingSize
+        host.layoutSubtreeIfNeeded()
+        return seen.value
+    }
+}
+
+@MainActor
+private final class RollingDigitsSeen {
+    var value: ContentTransition?
+}
+
+/// Stands where a figure's text would and records the transition it is given.
+private struct RollingDigitsProbe: View {
+    @Environment(\.contentTransition) private var transition
+    let seen: RollingDigitsSeen
+
+    var body: some View {
+        let _ = (seen.value = transition)
+        Color.clear
     }
 }

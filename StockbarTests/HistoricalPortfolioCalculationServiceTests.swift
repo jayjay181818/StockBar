@@ -64,7 +64,7 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(snapshots.count, 1)
         let snapshot = try XCTUnwrap(snapshots.first)
         XCTAssertEqual(snapshot.totalValue, 250, accuracy: 0.01)
-        XCTAssertEqual(snapshot.portfolioComposition.keys.sorted(), ["GOOD"])
+        XCTAssertEqual(snapshot.portfolioComposition.symbols, ["GOOD"])
     }
 
     func testGainsUseOnlyValuedPositionsWithAReadableCost() async throws {
@@ -142,6 +142,62 @@ final class HistoricalPortfolioCalculationServiceTests: XCTestCase {
         XCTAssertEqual(thinned.filter { $0.price == 1 }.count, 0, "Only the last point of each older day is kept")
         XCTAssertEqual(thinned.filter { $0.price == 3 }.count, 300, "Every point from the last week is kept")
         XCTAssertEqual(thinned.map(\.timestamp), thinned.map(\.timestamp).sorted())
+    }
+
+    func testThinnedPriceHistoryHoldsLittleMoreThanItKeeps() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 12))!
+        // 3000 daily closes, all kept, and the same days with four points each,
+        // three of which are dropped.
+        let daily = (0..<3_000).map {
+            PriceSnapshot(timestamp: now.addingTimeInterval(-Double($0 + 40) * 86_400), price: 1, previousClose: 1, symbol: "AV.L")
+        }
+        let dense = daily.flatMap { close in
+            (0..<4).map {
+                PriceSnapshot(timestamp: close.timestamp.addingTimeInterval(-Double($0) * 600), price: 1, previousClose: 1, symbol: "AV.L")
+            }
+        }
+
+        for stored in [daily, dense] {
+            let thinned = HistoricalDataManager.thinnedPriceHistory(stored, now: now, calendar: calendar)
+
+            XCTAssertEqual(thinned.count, 3_000)
+            // An eighth is the most the thinning leaves; the rest of the
+            // allowance is the allocator rounding a block up.
+            XCTAssertLessThan(thinned.capacity, 3_000 + 3_000 / 8 + 256, "\(stored.count) stored points")
+        }
+    }
+
+    func testAFullPriceSeriesGrowsByAStepAndDoesNotDouble() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func point(_ index: Int) -> PriceSnapshot {
+            PriceSnapshot(timestamp: start.addingTimeInterval(Double(index) * 60), price: 1, previousClose: 1, symbol: "AV.L")
+        }
+        var fitted: [PriceSnapshot] = []
+        fitted.reserveCapacity(3_000)
+        fitted.append(contentsOf: (0..<3_000).map(point))
+        // Held the way the app holds it: in a dictionary keyed by symbol.
+        var series = ["AV.L": fitted]
+        fitted = []
+        let step = HistoricalDataManager.priceHistoryGrowthStep
+        var largestSlack = 0
+
+        for index in 3_000..<4_000 {
+            HistoricalDataManager.appendToPriceHistory(point(index), &series["AV.L", default: []])
+            largestSlack = max(largestSlack, series["AV.L"]!.capacity - series["AV.L"]!.count)
+        }
+
+        XCTAssertEqual(series["AV.L"]?.count, 4_000)
+        XCTAssertEqual(series["AV.L"]?.map(\.timestamp), (0..<4_000).map { point($0).timestamp })
+        // The step, plus the allocator rounding a block up. Doubling at the
+        // first append would have left room for 3000 more.
+        XCTAssertGreaterThanOrEqual(largestSlack, step - 1)
+        XCTAssertLessThan(largestSlack, 1_000)
+
+        var empty: [String: [PriceSnapshot]] = [:]
+        HistoricalDataManager.appendToPriceHistory(point(0), &empty["NEW", default: []])
+        XCTAssertEqual(empty["NEW"]?.count, 1)
     }
 
     func testMergePortfolioHistoryOnlyFillsDaysWithoutRecordedSnapshots() {

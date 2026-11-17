@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ -z "$archive" || -z "$appcast" || -z "$channel" || -z "$url" || -z "$notes_file" ]]; then
-  echo "Usage: bash script/sign_release.sh --archive zip --appcast xml --channel stable|testing --url address --notes-file file [--link page]" >&2
+  echo "Usage: bash script/sign_release.sh --archive zip --appcast xml --channel stable|testing|experimental --url address --notes-file file [--link page]" >&2
   exit 64
 fi
 [[ -f "$archive" ]] || { echo "No archive at $archive" >&2; exit 66; }

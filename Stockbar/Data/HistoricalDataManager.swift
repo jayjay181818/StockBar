@@ -23,6 +23,11 @@ class HistoricalDataManager {
         didSet { aliasHistoryCache.removeAll() }
     }
     private(set) var priceDataRevision: Int = 0
+    /// How often `invalidatePriceData` has run, and the count at which each
+    /// symbol's stored rows last changed underneath. A read of the store that
+    /// began before that holds the old rows and is not taken for the symbol.
+    @ObservationIgnored private(set) var priceInvalidationCount = 0
+    @ObservationIgnored private var lastPriceInvalidation: [String: Int] = [:]
     /// Which series changed with each `priceDataRevision` bump: upper-cased
     /// symbol and alias keys, or nil when every series may have changed.
     let priceDataChanges = PassthroughSubject<Set<String>?, Never>()
@@ -118,18 +123,18 @@ class HistoricalDataManager {
 
     /// The positions worth storing with a portfolio snapshot: those actually
     /// held. Watch-only and zero-unit rows were 13% of the position table.
-    nonisolated static func storedPositions(from trades: [RealTimeTrade]) -> [String: PositionSnapshot] {
-        Dictionary(firstValuesFor: trades.compactMap { trade -> (String, PositionSnapshot)? in
+    nonisolated static func storedPositions(from trades: [RealTimeTrade]) -> PositionSnapshots {
+        PositionSnapshots(firstValuesFor: trades.compactMap { trade -> PositionSnapshot? in
             let units = trade.trade.position.unitSize
             guard !trade.trade.isWatchlistOnly, units.isFinite, units > 0 else { return nil }
             let price = trade.realTimeInfo.currentPrice
-            return (trade.trade.name, PositionSnapshot(
+            return PositionSnapshot(
                 symbol: trade.trade.name,
                 units: units,
                 priceAtDate: price,
                 valueAtDate: price * units,
                 currency: trade.realTimeInfo.currency ?? "USD"
-            ))
+            )
         })
     }
     @ObservationIgnored private var livePriceSamples: [String: [PriceSnapshot]] = [:] {
@@ -172,17 +177,43 @@ class HistoricalDataManager {
     
     // MARK: - Core Data Integration
     
-    /// Load portfolio snapshots from Core Data
-    func loadPortfolioSnapshotsFromCoreData(timeRange: ChartTimeRange) async -> [HistoricalPortfolioSnapshot] {
+    /// Reads portfolio snapshots from Core Data, positions included. Needs
+    /// nothing from the main actor.
+    nonisolated static func readPortfolioSnapshots(
+        timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
+    ) async -> [HistoricalPortfolioSnapshot] {
         do {
             let startDate = timeRange.startDate()
             let endDate = Date()
-            await logger.info("📈 Loading portfolio snapshots from Core Data: startDate=\(startDate), endDate=\(endDate)")
-            let snapshots = try await coreDataService.fetchPortfolioSnapshots(from: startDate, to: endDate)
-            await logger.info("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
+            await Logger.shared.info("📈 Loading portfolio snapshots from Core Data: startDate=\(startDate), endDate=\(endDate)")
+            let snapshots = try await service.fetchPortfolioSnapshots(from: startDate, to: endDate)
+            await Logger.shared.info("📈 Loaded \(snapshots.count) portfolio snapshots from Core Data")
             return snapshots
         } catch {
-            await logger.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            await Logger.shared.error("❌ Failed to load portfolio snapshots from Core Data: \(error)")
+            return []
+        }
+    }
+
+    /// The stored portfolio values in a range, without each snapshot's positions.
+    func loadPortfolioValuesFromCoreData(timeRange: ChartTimeRange) async -> [StoredPortfolioValue] {
+        await Self.readPortfolioValues(timeRange: timeRange, from: coreDataService)
+    }
+
+    /// The read itself. Like `readPortfolioSnapshots` it needs nothing from the
+    /// main actor, so it does not wait for it between its steps.
+    nonisolated static func readPortfolioValues(
+        timeRange: ChartTimeRange, from service: HistoricalDataServiceProtocol
+    ) async -> [StoredPortfolioValue] {
+        do {
+            let startDate = timeRange.startDate()
+            let endDate = Date()
+            await Logger.shared.info("📈 Loading portfolio values from Core Data: startDate=\(startDate), endDate=\(endDate)")
+            let values = try await service.fetchPortfolioValues(from: startDate, to: endDate)
+            await Logger.shared.info("📈 Loaded \(values.count) portfolio values from Core Data")
+            return values
+        } catch {
+            await Logger.shared.error("❌ Failed to load portfolio values from Core Data: \(error)")
             return []
         }
     }
@@ -207,14 +238,14 @@ class HistoricalDataManager {
 
             // Convert HistoricalPortfolioSnapshot to PortfolioSnapshot format
             let portfolioSnapshots: [PortfolioSnapshot] = historicalSnapshots.map { historical in
-                // Convert PositionSnapshot dictionary to PriceSnapshot array
-                let priceSnapshots = historical.portfolioComposition.map { (symbol, position) -> PriceSnapshot in
+                // Convert the positions to a PriceSnapshot array
+                let priceSnapshots = historical.portfolioComposition.map { position -> PriceSnapshot in
                     PriceSnapshot(
                         timestamp: historical.date,
                         price: position.priceAtDate,
                         previousClose: position.priceAtDate, // We don't have previous close in PositionSnapshot
                         volume: nil,
-                        symbol: symbol
+                        symbol: position.symbol
                     )
                 }
 
@@ -320,7 +351,6 @@ class HistoricalDataManager {
         lastSnapshotTime = now
         Task { await logger.debug("📸 Recording snapshot at \(now)") }
         
-        var currentPriceSnapshots: [PriceSnapshot] = []
         var changedPriceSnapshots: [PriceSnapshot] = []
         var hasValidData = false
         
@@ -345,7 +375,6 @@ class HistoricalDataManager {
                 symbol: trade.trade.name
             )
             
-            currentPriceSnapshots.append(snapshot)
             hasValidData = true
 
             let name = trade.trade.name
@@ -357,7 +386,7 @@ class HistoricalDataManager {
             // `now` is normally the newest timestamp, so appending keeps the
             // history sorted without re-sorting thousands of rows per symbol.
             let needsSort = (priceSnapshots[name]?.last?.timestamp ?? .distantPast) > now
-            priceSnapshots[name, default: []].append(snapshot)
+            Self.appendToPriceHistory(snapshot, &priceSnapshots[name, default: []])
             if needsSort {
                 priceSnapshots[name]?.sort { $0.timestamp < $1.timestamp }
             }
@@ -372,12 +401,15 @@ class HistoricalDataManager {
         let gains = dataModel.calculateNetGains()
         let totalValue = calculateTotalPortfolioValue(from: dataModel)
         
+        // The session's snapshots are read only for their totals, so the
+        // positions' prices are left out. Each symbol's prices are kept in
+        // `priceSnapshots`.
         let portfolioSnapshot = PortfolioSnapshot(
             timestamp: now,
             totalValue: totalValue,
             totalGains: gains.amount,
             currency: gains.currency,
-            priceSnapshots: currentPriceSnapshots
+            priceSnapshots: []
         )
         
         portfolioSnapshots.append(portfolioSnapshot)
@@ -1090,21 +1122,31 @@ class HistoricalDataManager {
         let coreDataMasterVersion = 3
 
         if migrationService.migrationVersionStored >= coreDataMasterVersion {
-            Task {
-                await logger.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(migrationService.migrationVersionStored)).")
+            let storedVersion = migrationService.migrationVersionStored
+            let service = coreDataService
+            let invalidations = priceInvalidationCount
+            // The main thread is busy building the first window while this
+            // runs. Reading and thinning the store needs nothing from the main
+            // actor, so only taking the results into memory waits for it.
+            Task.detached(priority: .userInitiated) {
+                await Logger.shared.info("HistoricalDataManager: Prioritizing Core Data for snapshots (version \(storedVersion)).")
 
                 // Core Data is the store of record; load each symbol's history.
-                await self.reloadStoredPriceHistory()
+                let prices = await Self.readStoredPriceHistory(for: nil, from: service)
+                // The portfolio read does not wait for the prices to be taken.
+                async let pricesAdopted: Void = self.adoptStoredPriceHistory(prices, readAfter: invalidations)
 
                 // Load portfolio snapshots from Core Data
                 let coreDataPortfolioSnaps = Self.thinnedPortfolioHistory(
-                    await loadPortfolioSnapshotsFromCoreData(timeRange: .all)
+                    await Self.readPortfolioSnapshots(timeRange: .all, from: service)
                 )
-                await MainActor.run {
+                await pricesAdopted
+                let loadedCount = await MainActor.run {
                     self.historicalPortfolioSnapshots = coreDataPortfolioSnaps
                     self.hasLoadedStoredPortfolioHistory = true
+                    return self.historicalPortfolioSnapshots.count
                 }
-                await logger.info("HistoricalDataManager: Loaded \(self.historicalPortfolioSnapshots.count) historical portfolio snapshots from Core Data.")
+                await Logger.shared.info("HistoricalDataManager: Loaded \(loadedCount) historical portfolio snapshots from Core Data.")
             }
         } else {
             Task { await logger.info("HistoricalDataManager: Falling back to CacheManager/UserDefaults for snapshots (migration version \(migrationService.migrationVersionStored)).") }
@@ -1516,11 +1558,11 @@ class HistoricalDataManager {
         to endDate: Date = Date(),
         timeRange: ChartTimeRange? = nil
     ) -> [PriceSnapshot] {
+        guard startDate <= endDate else { return [] }
         let seriesKeys = timeRange.map {
             folyncLineSeriesKeys(for: symbol, timeRange: $0, customFrom: nil, customTo: nil)
         }
-        return aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: seriesKeys)
-            .filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        return aliasAwarePriceSnapshots(for: symbol, folyncSeriesKeys: seriesKeys, within: startDate...endDate)
     }
 
     /// Chart consumers explicitly request missing history after reading their current slice.
@@ -1621,9 +1663,11 @@ class HistoricalDataManager {
         return result
     }
 
+    /// The series for `symbol`, oldest first, or only its part inside `window`.
     func aliasAwarePriceSnapshots(
         for symbol: String,
-        folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil
+        folyncSeriesKeys requestedSeriesKeys: Set<String>? = nil,
+        within window: ClosedRange<Date>? = nil
     ) -> [PriceSnapshot] {
         let aliases = instrumentAliasStore.aliases(for: symbol)
         // Folync overlays are per range. Without the caller's range there is no
@@ -1631,13 +1675,26 @@ class HistoricalDataManager {
         // (the most recently fetched overlay could be any range).
         let seriesKeys = requestedSeriesKeys ?? []
         if let overlay = seriesKeys.compactMap({ folyncPriceOverlays[$0] }).first {
-            return overlay
+            return window.map { window in overlay.filter { window.contains($0.timestamp) } } ?? overlay
         }
         if !seriesKeys.isDisjoint(with: folyncUnavailableSeries) {
             return []
         }
         let stored = priceSnapshots
         let live = livePriceSamples
+        if let window {
+            // A window, such as the menu bar's last day, is read from the
+            // prices themselves unless the whole series is already built:
+            // building and sorting all of it to keep a day cost more than
+            // the window. The cache is emptied whenever the stored prices
+            // or the live samples change, so during a refresh it is empty.
+            if let cached = aliasHistoryCache.cachedSnapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
+                return cached.filter { window.contains($0.timestamp) }
+            }
+            return InstrumentAliasHistoryLookup.combinedSnapshots(
+                for: symbol, aliases: aliases, storedBySymbol: stored, liveBySymbol: live, within: window
+            )
+        }
         return aliasHistoryCache.snapshots(for: normalizedSeriesKey(symbol), aliases: aliases) {
             InstrumentAliasHistoryLookup.combinedSnapshots(
                 for: symbol, aliases: aliases, storedBySymbol: stored, liveBySymbol: live
@@ -1693,14 +1750,24 @@ class HistoricalDataManager {
 
     /// Drops in-memory price data for symbols whose stored snapshots changed
     /// underneath (e.g. after a data migration) so every view reloads them.
+    /// The caller reloads the symbols afterwards: a read of the store that
+    /// began before this call is not taken for them.
     func invalidatePriceData(for symbols: Set<String>) {
         guard !symbols.isEmpty else { return }
         let keys = Set(symbols.map { $0.uppercased() })
+        priceInvalidationCount += 1
+        for key in keys { lastPriceInvalidation[key] = priceInvalidationCount }
         for key in priceSnapshots.keys where keys.contains(key.uppercased()) {
             priceSnapshots.removeValue(forKey: key)
         }
         symbols.forEach { invalidateStockDataCache(for: $0) }
         notePriceDataRevision(changed: symbols)
+    }
+
+    /// True when `symbol`'s stored rows changed underneath after
+    /// `priceInvalidationCount` stood at `count`.
+    func priceDataInvalidated(for symbol: String, since count: Int) -> Bool {
+        (lastPriceInvalidation[symbol.uppercased()] ?? 0) > count
     }
 
     func invalidateStockDataCache(for symbol: String) {

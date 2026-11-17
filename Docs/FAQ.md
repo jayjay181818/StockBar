@@ -50,7 +50,7 @@ Stockbar is not notarised by Apple, so macOS blocks the first launch of a downlo
 
 ### How do I update Stockbar?
 
-It updates itself. Stockbar checks about once a day and offers a new version with its release notes; **Settings → General → Updates** has **Check Now**, the automatic check, and the channel: **Stable** for released versions, **Testing** for every change before it is released. See [Updates](UserGuide.md#updates) in the User Guide.
+It updates itself. Stockbar checks about once a day and offers a new version with its release notes; **Settings → General → Updates** has **Check Now**, the automatic check, and the channel: **Stable** for released versions, **Testing** for every change before it is released, **Experimental** for builds of major changes or temporary tests before they reach Testing (it can be quiet for long periods). See [Updates](UserGuide.md#updates) in the User Guide.
 
 ### Can Stockbar start at login?
 

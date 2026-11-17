@@ -348,28 +348,72 @@ extension HistoricalDataManager {
     /// Loads stored price history from Core Data for the given symbols (all
     /// stored symbols when nil), merging with anything recorded in memory since.
     func reloadStoredPriceHistory(for symbols: Set<String>? = nil) async {
+        let invalidations = priceInvalidationCount
+        await adoptStoredPriceHistory(
+            await Self.readStoredPriceHistory(for: symbols, from: coreDataService), readAfter: invalidations
+        )
+    }
+
+    /// Stored price history as it is kept in memory, read away from the main actor.
+    struct StoredPriceHistory: Sendable {
+        /// Symbols looked up, with or without stored history.
+        let symbolCount: Int
+        /// Each symbol that has stored history, already thinned.
+        let series: [(symbol: String, snapshots: [PriceSnapshot])]
+    }
+
+    /// Reads and thins stored price history for the given symbols (all stored
+    /// symbols when nil). Nothing here needs the main actor, so a busy main
+    /// thread does not hold the read up. Nil when the store cannot list its symbols.
+    nonisolated static func readStoredPriceHistory(
+        for symbols: Set<String>?, from service: HistoricalDataServiceProtocol
+    ) async -> StoredPriceHistory? {
         let targets: [String]
         if let symbols {
             targets = Array(symbols)
         } else {
             do {
-                targets = try await coreDataService.fetchStoredPriceSymbols()
+                targets = try await service.fetchStoredPriceSymbols()
             } catch {
-                await logger.error("❌ Could not list stored price history: \(error)")
-                return
+                await Logger.shared.error("❌ Could not list stored price history: \(error)")
+                return nil
             }
         }
-        var loadedCount = 0
+        var series: [(symbol: String, snapshots: [PriceSnapshot])] = []
         for symbol in targets {
-            guard let stored = try? await coreDataService.fetchAllPriceSnapshots(for: symbol), !stored.isEmpty else { continue }
+            guard let stored = try? await service.fetchAllPriceSnapshots(for: symbol), !stored.isEmpty else { continue }
+            series.append((symbol, thinnedPriceHistory(stored)))
+        }
+        return StoredPriceHistory(symbolCount: targets.count, series: series)
+    }
+
+    /// Takes stored price history into memory. A point recorded in memory since
+    /// the read is kept unless the store has one at the same timestamp, which
+    /// wins. `invalidations` is `priceInvalidationCount` as it stood when the
+    /// read began: a symbol invalidated since then is left to the reload that
+    /// follows its invalidation, because this read may hold its old rows.
+    func adoptStoredPriceHistory(_ history: StoredPriceHistory?, readAfter invalidations: Int) async {
+        guard let history else { return }
+        var loadedCount = 0
+        for (symbol, stored) in history.series {
+            guard !priceDataInvalidated(for: symbol, since: invalidations) else { continue }
             let inMemory = priceSnapshots[symbol] ?? []
-            let storedKeys = Set(stored.map { snapshotTimestampKey($0.timestamp) })
-            let merged = stored + inMemory.filter { !storedKeys.contains(snapshotTimestampKey($0.timestamp)) }
-            priceSnapshots[symbol] = Self.thinnedPriceHistory(merged)
+            if inMemory.isEmpty {
+                priceSnapshots[symbol] = stored
+            } else {
+                // The stored rows arrive thinned, so a point in memory at the
+                // timestamp of a row thinning dropped is no longer filtered out
+                // here. The thinning below drops it for the reason the row was
+                // dropped: a later point of its day is kept. The result is what
+                // merging with the unthinned rows and thinning once would give.
+                let storedKeys = Set(stored.map { snapshotTimestampKey($0.timestamp) })
+                let merged = stored + inMemory.filter { !storedKeys.contains(snapshotTimestampKey($0.timestamp)) }
+                priceSnapshots[symbol] = Self.thinnedPriceHistory(merged)
+            }
             loadedCount += priceSnapshots[symbol]?.count ?? 0
             notePriceDataChanged(for: symbol)
         }
-        await logger.info("HistoricalDataManager: Loaded stored price history for \(targets.count) symbols (\(loadedCount) points in memory)")
+        await logger.info("HistoricalDataManager: Loaded stored price history for \(history.symbolCount) symbols (\(loadedCount) points in memory)")
     }
 
     /// Performs incremental portfolio update for new dates only

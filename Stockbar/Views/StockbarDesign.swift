@@ -159,7 +159,7 @@ struct StockbarMetricTile: View {
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
             if let detail {
                 Text(detail)
                     .font(.caption)
@@ -189,7 +189,7 @@ struct StockbarChangeBadge: View {
             Text(value.map { String(format: "%.2f%%", abs($0)) } ?? "—")
                 .font(.system(size: size == .small ? 10 : 11, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .stockbarRollingDigits()
         }
         .lineLimit(1)
         .fixedSize()
@@ -220,7 +220,7 @@ struct StockbarDetailRow: View {
                     .monospacedDigit()
                     .foregroundStyle(valueColor)
                     .multilineTextAlignment(.trailing)
-                    .contentTransition(.numericText())
+                    .stockbarRollingDigits()
             }
             .padding(.vertical, 9)
             if showsDivider {
@@ -372,5 +372,72 @@ struct StockbarSearchField: View {
 extension AnyTransition {
     static func stockbarPage(reduceMotion: Bool) -> AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))
+    }
+}
+
+// MARK: - Rolling digits
+
+/// Whether figures roll to a new value or change without rolling.
+///
+/// CoreGraphics keeps the glyph bitmaps drawn while a figure rolls: 6 to
+/// 10 MB when measured after the main window's figures had rolled in at
+/// launch. Settings → Advanced → Memory → Roll Digits When Figures Change
+/// turns the rolling off. On unless turned off.
+///
+/// A figure asks for the rolling with `stockbarRollingDigits()`, never with
+/// the transition itself, and every SwiftUI root that AppKit hosts ends its
+/// body with `stockbarRollingDigitsSetting()`. A figure under a root
+/// without it rolls whatever the setting says.
+enum StockbarRollingDigits {
+    static let key = "figures.rollingDigits"
+    static let defaultValue = true
+}
+
+private struct StockbarRollingDigitsKey: EnvironmentKey {
+    static let defaultValue = StockbarRollingDigits.defaultValue
+}
+
+extension EnvironmentValues {
+    /// Set for a whole window or popover by `stockbarRollingDigitsSetting()`.
+    var stockbarRollingDigits: Bool {
+        get { self[StockbarRollingDigitsKey.self] }
+        set { self[StockbarRollingDigitsKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// For a figure: its digits roll to a new value unless the setting is off.
+    func stockbarRollingDigits() -> some View {
+        modifier(StockbarRollingDigitsTransition())
+    }
+
+    /// For the root view of a window or popover: hands the setting to every
+    /// figure inside, so there is one defaults observer per window and not
+    /// one per figure.
+    func stockbarRollingDigitsSetting() -> some View {
+        modifier(StockbarRollingDigitsSetting())
+    }
+}
+
+private struct StockbarRollingDigitsTransition: ViewModifier {
+    @Environment(\.stockbarRollingDigits) private var rolls
+
+    func body(content: Content) -> some View {
+        // Off leaves the transition out altogether: that is the form whose
+        // glyph cache was measured.
+        if rolls {
+            content.contentTransition(.numericText())
+        } else {
+            content
+        }
+    }
+}
+
+private struct StockbarRollingDigitsSetting: ViewModifier {
+    @AppStorage(StockbarRollingDigits.key, store: StockbarRuntimeStorage.userDefaults)
+    private var rolls = StockbarRollingDigits.defaultValue
+
+    func body(content: Content) -> some View {
+        content.environment(\.stockbarRollingDigits, rolls)
     }
 }
