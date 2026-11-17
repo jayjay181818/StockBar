@@ -43,12 +43,18 @@ actor PythonWorkerPool {
     /// The app's pool. It reads the setting each time it looks for idle
     /// workers, so a change needs no restart.
     static let shared = PythonWorkerPool(idleTimeout: {
-        idleTimeout(quitWhenIdle: StockbarRuntimeStorage.userDefaults.bool(forKey: quitWhenIdleKey))
+        idleTimeout(quitWhenIdle: quitsWhenIdle(in: StockbarRuntimeStorage.userDefaults))
     })
 
-    /// Settings → Advanced → Memory → Quit Python Helper When Idle. Off
-    /// unless it was turned on.
+    /// Settings → Advanced → Memory → Quit Python Helper When Idle. On
+    /// unless it was turned off.
     static let quitWhenIdleKey = "pythonHelper.quitWhenIdle"
+    static let quitWhenIdleDefault = true
+
+    /// The setting, or its default when it was never changed.
+    static func quitsWhenIdle(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: quitWhenIdleKey) == nil ? quitWhenIdleDefault : defaults.bool(forKey: quitWhenIdleKey)
+    }
 
     /// How long a worker nobody is using is kept. An idle worker holds about
     /// 70 MB.
