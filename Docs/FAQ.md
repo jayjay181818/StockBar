@@ -122,7 +122,7 @@ Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, 
 
 ### The portfolio total isn't in the menu bar.
 
-It is usually there but hidden: a full menu bar, the notch or a menu-bar manager can push it out of sight. Open the manager's hidden section, or quit a few other menu-bar apps. Settings → Menu Bar → **Show portfolio total in the menu bar** must also be on.
+It is off until you turn on Settings → Menu Bar → **Show portfolio total in the menu bar**. If it is on and still missing, a full menu bar, the notch or a menu-bar manager can push it out of sight: open the manager's hidden section, or quit a few other menu-bar apps.
 
 ### After an update, Folync says it is waiting for Keychain access.
 
