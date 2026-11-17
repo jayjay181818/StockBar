@@ -109,6 +109,19 @@ Decided on 2026-11-13:
   before. A small change to the file (pull request 103) goes to
   `experimental`, so that GitHub reads it again when it reaches `main`.
 
+Decided on 2026-11-16: the two separate comparisons of pull requests 109
+and 110 that a rule fixed before their full comparison called for were
+dropped at the owner's word ("Lets drop them"). See
+[pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes).
+
+Decided on 2026-11-17: the overhaul is finished. The owner asked for
+`experimental` to be promoted to `testing` again once the tests pass on it,
+after this log is brought up to date, and for a stable release and `main`
+to follow, each on their own word. They had run the experimental builds for
+several days on a second Mac without a problem. From then on `experimental`
+is for major overhauls of the app only, and ordinary changes go to
+`testing` through pull requests as before the transition.
+
 Done on 2026-11-13: `experimental` is promoted to `testing`. The owner
 asked for it without the two trading days of use that the recommendation
 at the end of [Milestone 1](#milestone-1-2026-11-12) suggested first. What
@@ -180,6 +193,8 @@ Figures from either side of a break are not compared with each other.
 | Recommendation to promote to `testing` | Made 2026-11-12, at the end of [Milestone 1](#milestone-1-2026-11-12). The owner asked for the promotion on 2026-11-13 |
 | Promotion to `testing` | Done 2026-11-13: pull request 100, merge commit `2256b6c` on `testing`, testing build 370.16. See [Promotion to `testing`](#promotion-to-testing-2026-11-13) |
 | A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
+| Full comparison of pull requests 109 and 110 | Done 2026-11-16, six launches a side on the merged commit: no row moved firmly. See [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes) |
+| Second promotion to `testing` | Asked for by the owner on 2026-11-17, after this log is brought up to date and the tests pass. Recorded by the pull request that brings `testing` back into `experimental` |
 
 ### Planned next, in order
 
@@ -286,11 +301,14 @@ which halves the refresh passes' CPU and raises their wake-ups, a
 trade-off the owner accepted), finding 6 (pull request 107), finding 5
 (pull request 108), finding 9 (pull request 109) and finding 8 (pull
 request 110), which completes the findings the owner chose to fix. The
-standard comparison for the last two was shortened and shared, and the
-full one is deferred to the next milestone. Open for the owner
-are whether the fetch should leave Python, the cached quote shown as just
-updated, and the price alerts' repeated rewrite. `experimental` was
-promoted to `testing` on 2026-11-13. What could still be done, and what
+last two shared a shortened comparison when they were merged, and a full
+one on the merged commit the same day, in which no row moved firmly. Open
+for the owner are whether the fetch should leave Python, the cached quote
+shown as just updated, the price alerts' repeated rewrite, and whether the
+per-symbol popovers should release their content as pull request 109 does
+for the portfolio's. None of them holds the promotion. `experimental` was
+promoted to `testing` on 2026-11-13, and the owner asked on 2026-11-17 for
+it to be promoted again. What could still be done, and what
 each would cost, is listed at the end of
 [Milestone 1](#milestone-1-2026-11-12).
 
@@ -3123,9 +3141,36 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   A second run, with the memory read again 30, 60 and 90 s after the
   last pass, was started on 2026-11-16 and stopped during its first
   measured launch, when the owner needed the measuring finished by 16:55
-  UTC. It is not used. The memory difference above therefore rests on
-  two launches each way, read 2 s after the last pass, and is an order
-  of size only.
+  UTC. It is not used.
+
+  A third run, on 2026-11-16 from 19:52 to 20:14 UTC on mains power,
+  used the line as merged, guard included
+  (`trial-counters-run3-guarded.patch`), and read the memory 2, 32, 62
+  and 92 s after the last pass. The rule fixed before it, the same as
+  for the second run: set aside if more than two of its once-a-minute
+  readings showed input in the minute before. None of its 21 readings
+  did, so it stands; the four busiest processes together averaged 58%
+  of a core. In both launches with the content released, the guard
+  released it at both closes and kept it at none.
+
+  | Over the four passes, popover closed | Content kept | Content released |
+  | --- | --- | --- |
+  | Redraws of the hidden popover | 16 and 16 | 0 and 0 |
+  | Portfolio summaries worked out for it | 16 and 16 | 0 and 0 |
+  | Time in those summaries | 16.6 and 9.7 ms | none |
+  | Chart loads | 16 and 16 | 8 and 8 |
+  | Chart models freed of the 2 made by the two opens | 1 and 1 | 2 and 2 |
+  | Memory the app holds allocated, 2 s after the last pass | 99.26 and 111.98 MB | 83.81 and 85.75 MB |
+  | The same, 92 s after the last pass | 97.92 and 110.66 MB | 82.55 and 84.48 MB |
+
+  At each of the four readings, each launch with the content released
+  held 13.4 to 28.2 MB less allocated than each launch with it kept.
+  Every launch's allocated memory fell by about 1.3 MB between the
+  readings at 2 s and 32 s and then held. The memory footprint moved by
+  up to 20 MB between readings within one launch, so no figure is taken
+  from it. The output is in `run3-guarded-20261116` beside the first
+  run's, with `summarise_3.py`. The memory difference still rests on two
+  launches each way and is an order of size only.
 - Benchmark: the standard comparison of this pull request alone, six
   launches a side, was not run. On 2026-11-16 the owner needed the
   measuring finished by 16:55 UTC and asked for it to be cut down, so
@@ -3149,7 +3194,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   The benchmark also never opens the popover, so this pull request's
   line never runs in it. For this pull request the comparison shows that
   the app builds and runs the standard workloads with the change in it,
-  and no more. The full comparison is deferred to the next milestone.
+  and no more. The full comparison followed the merge; it is the next
+  item.
 
   | Metric | Before: median (range) | After: median (range) | Change | Verdict |
   | --- | --- | --- | --- | --- |
@@ -3183,6 +3229,66 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   are 0.000 MB on both sides: both carry pull request 108, and with two
   launches a turn the large write of a turn's third launch does not
   occur.
+- Full comparison of this pull request and pull request 110 together,
+  run on 2026-11-16 after both were merged: before `e03cdd5`, after
+  `10129ab`, which is `76dfb6a` with this pull request's guard added and
+  this log. Six launches a side with `--refresh`, in turns from 18:35 to
+  19:47 UTC, macOS 27.2.1, on mains power, under the same two set-aside
+  rules. No reading inside the turns showed input, and the four busiest
+  processes together averaged 58% of a core over the before side's 36
+  readings and 55% over the after side's 36, a ratio of 1.06, so the run
+  stands. The results are in
+  `build/bench/results/compare-popover-and-session-snapshot-full-20261116-183408`,
+  with the run's log, its readings and the scripts in `conditions`.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 95.2 (86.2 to 97.6) MB | 96.2 (94.4 to 97.9) MB | +1.0 MB, +1.0% | no measurable change (p = 0.290) |
+  | Idle memory the app holds allocated | 55.8 (40.0 to 56.0) MB | 55.6 (55.5 to 56.5) MB | -0.1 MB, -0.2% | no measurable change (p = 0.946) |
+  | Peak memory, launch and history load | 244.2 (238.8 to 245.9) MB | 246.8 (241.6 to 247.4) MB | +2.6 MB, +1.1% | no measurable change (p = 0.180) |
+  | Idle memory growth across the window | 0.5 (0.3 to 0.7) MB | 0.3 (0.3 to 0.6) MB | -0.1 MB, -22.2% | no measurable change (p = 0.610) |
+  | Idle CPU | 0.082 (0.073 to 0.102) s/min | 0.097 (0.094 to 0.115) s/min | +0.015 s/min, +17.7% | no measurable change (p = 0.058) |
+  | Idle CPU wake-ups | 26 (23 to 31) /min | 24 (24 to 27) /min | -1 /min, -3.9% | no measurable change (p = 0.751) |
+  | Idle CPU power | 3.44 (3.00 to 4.38) mW | 2.98 (2.92 to 3.27) mW | -0.45 mW, -13.2% | possibly lower (p = 0.017) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.41 (0.40 to 0.44) s | 0.41 (0.37 to 0.43) s | +0.00 s | no measurable change (p = 0.517) |
+  | Launch to history loaded | 0.52 (0.49 to 0.54) s | 0.52 (0.50 to 0.53) s | +0.00 s | no measurable change (p = 0.838) |
+  | CPU from launch to the idle window | 1.67 (1.66 to 1.73) s | 1.69 (1.64 to 1.74) s | +0.02 s, +1.2% | no measurable change (p = 0.675) |
+  | CPU energy from launch to the idle window | 5.76 (5.61 to 5.99) J | 5.77 (5.56 to 5.95) J | +0.01 J, +0.1% | no measurable change (p = 0.853) |
+  | Python helper start to ready, no network | 0.24 (0.23 to 0.95) s | 0.24 (0.23 to 0.50) s | +0.00 s | no measurable change (p = 0.913) |
+  | Python helper start, CPU | 0.24 (0.23 to 0.34) s | 0.24 (0.23 to 0.29) s | +0.00 s | no measurable change (p = 1.000) |
+  | Python helper memory once started | 71.1 (71.1 to 71.1) MB | 71.1 (71.1 to 71.1) MB | +0.0 MB | no measurable change (p = 1.000) |
+  | Refresh passes completed in the refresh window | 4 (4 to 4) passes | 4 (4 to 4) passes | +0 passes | no measurable change (p = 1.000) |
+  | CPU over the refresh window | 3.350 (3.246 to 3.386) s | 3.355 (3.320 to 3.432) s | +0.005 s, +0.1% | no measurable change (p = 0.485) |
+  | CPU energy over the refresh window | 11.113 (10.894 to 11.159) J | 11.241 (10.879 to 11.634) J | +0.128 J, +1.2% | no measurable change (p = 0.240) |
+  | CPU wake-ups over the refresh window | 1870 (1848 to 1904) wake-ups | 1894 (1849 to 1932) wake-ups | +24 wake-ups, +1.3% | no measurable change (p = 0.310) |
+  | Disk writes over the refresh window | 0.000 (0.000 to 1.562) MB | 0.000 (0.000 to 1.360) MB | +0.000 MB | no measurable change (p = 0.697) |
+  | Memory during the refresh window (physical footprint) | 122.7 (117.7 to 129.4) MB | 122.5 (120.0 to 131.9) MB | -0.2 MB, -0.1% | no measurable change (p = 0.818) |
+  | Allocated memory added by the refreshes | 25.5 (23.0 to 43.6) MB | 26.2 (23.2 to 27.3) MB | +0.7 MB, +2.5% | no measurable change (p = 0.818) |
+
+  21 of the 22 rows are no measurable change. Idle CPU power came out
+  possibly lower, by 0.45 mW (p = 0.017). Idle CPU leaned the other way,
+  17.7% higher (p = 0.058), and the shortened comparison had leaned 0.28
+  mW higher on the same row (p = 0.114). A "possibly" needs a repeat
+  before it counts, and the benchmark never opens the popover, so the
+  row is put down to neither pull request and not claimed. The third
+  launch of every turn wrote 1.3 to 1.6 MB in its refresh window on
+  both sides, as in earlier comparisons; that was not looked into.
+
+  A rule fixed before the run, and written as the first line of its
+  log, called for the two pull requests to be compared separately if
+  any row came out "possibly" or firm, before the change was put down to
+  either. Neither separate comparison was completed. This pull request
+  alone, `e03cdd5` against `7168684` from 20:15 to 21:28 UTC, was set
+  aside under the balance rule: the four busiest processes averaged 35%
+  of a core over the before side and 75% over the after side, a ratio
+  of 2.18. Its repeat was stopped a minute after it started, with no
+  launch measured, when the owner asked for the measuring to stop.
+  Pull request 110 alone, `7168684` against `10129ab` from 21:29 to
+  22:41 UTC, was set aside under the input rule, with input in four
+  readings. Every row of both read no measurable change, but set aside
+  they are not evidence. Both are labelled and kept in the results
+  folder. The owner then dropped both ("Lets drop them").
 - The guard: the second code commit releases the content only if the
   popover is not shown when its close is reported, so that a close
   reported late could not empty a popover already open again. An
@@ -3194,9 +3300,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   reading as not shown inside each report, the content released by the
   guarded line each time, and a reopen with no pause after a close
   showing its content. The check's source is kept with the comparison's
-  conditions. The trial and
-  the comparison ran before the guard was added, and neither reaches a
-  late close.
+  conditions. The trial's first
+  run and the shortened comparison ran before the guard was added; the
+  trial's third run and the full comparison ran with it. None of them
+  reaches a late close, but in the trial's third run the guard released
+  the content at every close, as it should.
 - Testing: 732 XCTest tests pass with 0 failures with `experimental`
   merged in and the guard added. `checks` and `docs-check` pass. No test was added: one would have to put a real item
   in the menu bar, and no existing test builds the menu bar controller.
@@ -3222,9 +3330,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     That is not changed or measured here.
 - Verdict: retained. A closed portfolio popover is no longer redrawn: 16
   redraws and 16 summaries over four passes became none, and its second
-  chart model is freed. The memory saving is an order of size, and the
-  comparison was shortened and shared as described above; no row of it
-  moved.
+  chart model is freed, with the guard as merged. The memory saving is an
+  order of size. No row of the shortened comparison moved, and none of
+  the full comparison moved firmly.
 
 ### 110: Leave the positions' prices out of the session's portfolio snapshots
 
@@ -3241,7 +3349,16 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   type keeps its field, which snapshots stored by old versions are still
   decoded with and migrated from. No Rust, dependency or architectural
   change.
-- Merged: not yet. The next pull request fills this in.
+- Merged: 2026-11-16, squash commit `10129ab`. The merge published
+  experimental build 370.16.11 as the prerelease
+  `experimental-370.16.11`. Checked after it: the feed's signature and
+  the archive's signature are valid, the archive's length, 7,196,399
+  bytes, matches the feed, the unpacked app is build 370.16.11 of 3.7.0,
+  its code signature verifies and its executable has no coverage
+  counters. The release's tag is on the squash commit. `main` and
+  `testing` were unchanged. The merged commit differs from `76dfb6a`,
+  which the shortened comparison measured, only in pull request 109's
+  guard and this log.
 - The size of the list, measured outside the app. A standalone program
   using the app's own two types built the list at its full length of
   1,800 snapshots, with and without the prices. Two runs gave the same
@@ -3269,8 +3386,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   The benchmark records four snapshots a launch, so for this change it
   is a check for regressions, not the evidence of the saving. With four
   launches a side it cannot give a firm verdict. Every row of it is no
-  measurable change, and none is marked "possibly". The full
-  comparison is deferred to the next milestone.
+  measurable change, and none is marked "possibly". The full comparison
+  of both, six launches a side on the merged commit, followed the same
+  day and is in pull request 109's entry. No row of it moved firmly, and
+  its one "possibly", idle CPU power lower, is put down to neither pull
+  request.
 - Testing: 732 XCTest tests pass with 0 failures with `experimental`
   merged in, pull request 109 included. `checks` and `docs-check` pass. No test was added: a test would have to record
   through the app's shared history manager, which also queues writes to
@@ -3289,9 +3409,34 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     would find none. Each symbol's own price list still has them.
 - Verdict: retained. The session's list no longer holds a price for
   every position in every snapshot, which nothing read: about 2.3 MB less
-  once the list is full with 11 positions, by the sizes of the types. The
-  comparison was shortened and shared as described above; no row of it
-  moved.
+  once the list is full with 11 positions, by the sizes of the types. No
+  row of the shortened comparison moved, and none of the full comparison
+  moved firmly.
+
+### 112: Record the full comparison of pull requests 109 and 110 and the end of the overhaul
+
+- What: the full comparison of pull requests 109 and 110 and the
+  separate comparisons that were dropped, in pull request 109's entry;
+  the popover trial's third run, with the guard as merged; the merge
+  line of pull request 110; the owner's decisions of 2026-11-16 and
+  2026-11-17 under [Where things stand](#where-things-stand), with the
+  milestone table and the plan paragraph brought up to date; and a row
+  in "Who did what". Only this file changes.
+- Merged: not yet. The next pull request fills this in.
+- Benchmark: no before/after run. No file that goes into the app changes
+  (nothing under `Stockbar/`, `StockbarTests/` or `Stockbar.xcodeproj`),
+  so before, `10129ab`, and after build the same app. What this pull
+  request records are the measurements made on 2026-11-16, each kept in
+  the results folder it names.
+- Testing: `docs-check` passes on this pull request's branch. The full
+  test suite and `checks` run on the merged commit before the promotion
+  to `testing`.
+- Review: read by its author, with each figure checked again against the
+  result files it comes from. No independent review, for a record of
+  measurements that changes no code.
+- Known issues: the third launch of every comparison turn writes 1.3 to
+  1.6 MB in its refresh window, on both sides; not looked into.
+- Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
 
@@ -3542,6 +3687,7 @@ launch.
 | Pull request 107 | Opus 5.5 (orchestrator) for the first code commit, then Fable 5.2 (orchestrator again, at the owner's change of model) for the review fixes, the timing and the comparison, with one independent review by Opus | Done directly: one function given a window, its two callers' paths and three tests, timed in the trial copy before and after. The review, read-only, found no defect and was worth it: it showed the first test would have passed with a margin too small to be safe, that a miss left a stale series counted in the cache, and that two comments overstated what they described. 18 tool calls, about 133,000 tokens and four and a half minutes |
 | Pull request 108 | Fable 5.2 (orchestrator), with one independent review by Opus in two passes | Done directly: one class and three tests, with the cache's file writes counted in the trial copy before and after. The review, read-only, was worth it: it found no defect in the comparison or the locking, but showed that the first version no longer wrote again a file deleted from outside the app, which the second code commit puts right, and corrected two comments. It also said key order does not vary between encodings of one dictionary; a measurement showed it does, and the reviewer withdrew that. First pass 33 tool calls, about 158,000 tokens and seven minutes; the second look at the reworked code 3 tool calls and a minute and a half |
 | Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
+| The full comparison of pull requests 109 and 110, the dropped separate comparisons, the trial's third run and pull request 112 | Fable 5.2 (orchestrator) for the measuring on 2026-11-16, then Opus 5.5 (orchestrator, at the owner's change of model) for this record | Done directly: unattended runs with readings taken beside them and set-aside rules fixed before any figure existed. Two of the three comparisons were set aside under those rules, and a rule that sent one "possibly" row to two more comparisons cost about four hours before the owner stopped it. Next time the owner should get that choice before the extra runs start |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
