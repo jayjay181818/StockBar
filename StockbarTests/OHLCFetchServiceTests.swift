@@ -230,6 +230,7 @@ final class PythonNetworkServiceTests: XCTestCase {
               "regularMarketPrice": 200.0,
               "previousClose": 198.0,
               "timestamp": 1750000000,
+              "fetchedAt": 1750000123.5,
               "currency": "USD"
             }
           },
@@ -272,6 +273,9 @@ final class PythonNetworkServiceTests: XCTestCase {
         XCTAssertEqual(results[1].failure, .rateLimited)
         XCTAssertNil(results[0].failure)
         XCTAssertEqual(results[2].regularMarketPrice, 410)
+        // The key the script writes in PythonTests' test_each_quote_says_when_it_was_fetched.
+        XCTAssertEqual(results[0].fetchedAt, 1750000123.5)
+        XCTAssertNil(results[2].fetchedAt)
         let capturedArguments = await runner.capturedArguments()
         XCTAssertEqual(
             capturedArguments,

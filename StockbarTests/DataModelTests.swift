@@ -167,6 +167,44 @@ class DataModelTests: XCTestCase {
         XCTAssertEqual(probe.pricesSeenByOtherWork, [100, 101, 102])
         XCTAssertEqual(probe.holdings.map(\.realTimeInfo.currentPrice), [100, 101, 102])
     }
+
+    func testAQuoteServedFromTheScriptsCacheKeepsTheTimeItWasFetched() async throws {
+        let suiteName = TestDefaultsSuite.makeName("RefreshFetchTime-")
+        defer { TestDefaultsSuite.remove(suiteName) }
+
+        let fetchedAt = (Date().timeIntervalSince1970 - 120).rounded()
+        func quote(_ symbol: String, price: Double, fetchedAt: TimeInterval?) -> StockFetchResult {
+            var result = StockFetchResult(currency: "USD", symbol: symbol, shortName: symbol, regularMarketTime: 1_700_000_000,
+                                          exchangeTimezoneName: "America/New_York", regularMarketPrice: price,
+                                          regularMarketPreviousClose: 99, displayPrice: price)
+            result.fetchedAt = fetchedAt
+            return result
+        }
+        let network = FakeQuoteNetwork(results: [
+            quote("FETCHCACHED", price: 101, fetchedAt: fetchedAt),
+            quote("FETCHUNSTAMPED", price: 102, fetchedAt: nil),
+            // A time ahead of the clock is never shown as later than now.
+            quote("FETCHFUTURE", price: 103, fetchedAt: Date().timeIntervalSince1970 + 3_600),
+        ])
+        let refresh = RefreshService(networkService: network, cacheCoordinator: CacheCoordinator(defaults: UserDefaults(suiteName: suiteName)!))
+        refresh.setDataModel(dataModel)
+        dataModel.realTimeTrades = ["FETCHCACHED", "FETCHUNSTAMPED", "FETCHFUTURE"].map { makeRealTimeTrade($0) }
+
+        let before = Int(Date().timeIntervalSince1970)
+        await refresh.performRefreshAllTrades(limitedTo: ["FETCHCACHED", "FETCHUNSTAMPED", "FETCHFUTURE"], force: true)
+        let after = Int(Date().timeIntervalSince1970)
+
+        let updated = Dictionary(uniqueKeysWithValues: dataModel.realTimeTrades.map { ($0.trade.name, $0.realTimeInfo.lastUpdateTime) })
+        XCTAssertEqual(updated["FETCHCACHED"], Int(fetchedAt), "the price is shown as updated when it was fetched")
+        for symbol in ["FETCHUNSTAMPED", "FETCHFUTURE"] {
+            let time = try XCTUnwrap(updated[symbol] ?? nil, symbol)
+            XCTAssertTrue((before...after).contains(time), symbol)
+        }
+        // The periodic snapshot, on its own schedule, may add a point at this pass as well.
+        let samples = dataModel.historicalDataManager.allPortfolioMenuPriceSnapshots(for: "FETCHCACHED")
+        XCTAssertTrue(samples.contains { $0.price == 101 && $0.timestamp == Date(timeIntervalSince1970: fetchedAt) },
+                      "the refresh's history point is at the fetch time, not at this pass")
+    }
 }
 
 /// The holdings' prices as other main-actor work first sees them during a refresh.

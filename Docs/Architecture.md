@@ -64,7 +64,7 @@ Settings export/import (`SettingsTransferService`) seals an allowlist of default
 
 `Stockbar/Services/CacheCoordinator.swift` owns freshness, retry intervals and circuit-breaker thresholds. Preserve that policy when adding fetch paths.
 
-- Freshness follows the user's Main Refresh Interval (`RefreshService.freshnessInterval`); the Python quote cache is bounded to match through `STOCKBAR_QUOTE_CACHE_SECONDS` (set by `PythonConfiguration.load`).
+- Freshness follows the user's Main Refresh Interval (`RefreshService.freshnessInterval`); the Python quote cache is bounded to match through `STOCKBAR_QUOTE_CACHE_SECONDS` (set by `PythonConfiguration.load`). Each quote carries `fetchedAt`, when the script fetched it; a quote served from the cache keeps its original time, and the app uses it as the price's update time and for its history point.
 - Symbols with recorded failures are governed only by backoff (`shouldRetry`) and the circuit breaker; `shouldRefresh` never returns true for them. The per-symbol popover exposes suspension state and Retry Now.
 
 ### Currency
