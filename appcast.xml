@@ -7,6 +7,29 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.7.0 (370.29)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-370.29</link>
+      <pubDate>Tue, 17 Nov 2026 09:40:32 +0000</pubDate>
+      <sparkle:version>370.29</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 370.29 of Stockbar 3.7.0. Changes since testing-370.16:
+
+- Record the full comparison of pull requests 109 and 110 and the end of the overhaul (#112)
+- Leave the positions' prices out of the session's portfolio snapshots (#110)
+- Release the portfolio popover's content when it closes (#109)
+- Leave a history cache file alone when its value has not changed (#108)
+- Read only the requested window of a symbol's price history (#107)
+- Apply a refresh pass's quotes together before waiting on anything (#106)
+- Add a refresh workload to the benchmark (#105)
+- Read and write the Python helper's quote cache once per refresh (#104)
+- Note in requirements.txt that its pins have GitHub's advisory fixes (#103)
+- Turn on Quit Python Helper When Idle by default (#102)
+- Record the promotion to testing and how a promotion is made</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-370.29/Stockbar-370.29.zip" length="7196394" type="application/octet-stream" sparkle:edSignature="tB3YpPLaQLW2nnZPWBSfU/K3rTz9d0MhPEGzzSSCuV187zFtobjHyZ9NOt6Wwd5AcVYa61EKirlp4RmLZz0xCg=="></enclosure>
+    </item>
+    <item>
       <title>3.7.0 (370.16)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-370.16</link>
       <pubDate>Fri, 13 Nov 2026 01:12:47 +0000</pubDate>
@@ -76,6 +99,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: nGgQFP6NJbNCgVoM+MODQ9wyV4xEgT+zopKGmwmb+B/8wXVzEffp1hSCM5Pm4/3CD/+bySOe7LOBHmrG6K/QAg==
-length: 6049
+edSignature: PjySfLgw3/cIccMNWHyCtiQBjgtLNkHbPjUWms2+AN5cRUzMuYXeC+7DO4O47NBIEe0uWliuyinz+Qp4aJD8AQ==
+length: 7682
 -->
