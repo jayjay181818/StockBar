@@ -2448,3 +2448,69 @@ final class PriceAlertConditionTests: XCTestCase {
         XCTAssertFalse(alert.conditionMet(currentPrice: 151, previousPrice: 149), "Paused alerts never fire")
     }
 }
+
+@MainActor
+final class PriceAlertBatchTests: XCTestCase {
+    /// A refresh's prices are checked as one batch, so the last checked prices
+    /// are saved once, not once for every alerted symbol whose price moved.
+    func testBatchSavesLastCheckedPricesOnce() {
+        let service = PriceAlertService.shared
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = PriceAlertService.lastKnownPricesKey
+        let storedBefore = defaults.object(forKey: key)
+        // Paused alerts are remembered like active ones but never fire, so the
+        // test sends no notifications and asks for no permission.
+        let symbols = ["BATCHA", "BATCHB", "BATCHC"]
+        let alerts = symbols.map {
+            PriceAlert(symbol: $0, condition: .above, threshold: 1_000_000, isEnabled: false)
+        }
+        for alert in alerts { service.addAlert(alert) }
+        let checks = symbols.enumerated().map { index, symbol in
+            PriceAlertService.PriceCheck(
+                symbol: symbol, currentPrice: 100 + Double(index), previousPrice: 99, currency: "USD"
+            )
+        }
+        defer {
+            for alert in alerts { service.removeAlert(id: alert.id) }
+            service.checkAlerts(checks)  // Forgets the prices of symbols without alerts.
+            defaults.set(storedBefore, forKey: key)
+        }
+
+        let writes = DefaultsWriteCounter(defaults: defaults, key: key)
+        service.checkAlerts(checks)
+        XCTAssertEqual(writes.count, 1, "Three changed prices are saved together")
+        let stored = defaults.dictionary(forKey: key) as? [String: Double]
+        XCTAssertEqual(stored?["BATCHA"], 100)
+        XCTAssertEqual(stored?["BATCHC"], 102)
+
+        service.checkAlerts(checks)
+        XCTAssertEqual(writes.count, 1, "Unchanged prices are not saved again")
+    }
+}
+
+/// Counts writes to one defaults key through key-value observing.
+private final class DefaultsWriteCounter: NSObject {
+    private(set) var count = 0
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+        super.init()
+        defaults.addObserver(self, forKeyPath: key, options: [], context: nil)
+    }
+
+    deinit {
+        defaults.removeObserver(self, forKeyPath: key)
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        count += 1
+    }
+}

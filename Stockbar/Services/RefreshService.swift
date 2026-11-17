@@ -303,6 +303,7 @@ class RefreshService {
         at now: Date
     ) -> AppliedQuotes {
         var applied = AppliedQuotes()
+        var alertChecks: [PriceAlertService.PriceCheck] = []
         for symbol in symbols {
             // Looked up by name, as before: a symbol held in two rows updates
             // the first of them each time it is listed.
@@ -330,13 +331,16 @@ class RefreshService {
                 previousClose: info.prevClosePrice,
                 timestamp: now
             )
-            PriceAlertService.shared.checkAlerts(
+            alertChecks.append(PriceAlertService.PriceCheck(
                 symbol: symbol,
                 currentPrice: price,
                 previousPrice: info.prevClosePrice,
                 currency: info.currency ?? "USD"
-            )
+            ))
         }
+        // One batch, so the alert service saves its last checked prices once
+        // per pass rather than once per alerted symbol.
+        PriceAlertService.shared.checkAlerts(alertChecks)
         return applied
     }
 

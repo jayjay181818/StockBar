@@ -135,9 +135,9 @@ class PriceAlertService {
     private let coreDataStack = CoreDataStack.shared
 
     /// Read-only view context. All **writes** go through `performBackgroundWrite`
-    /// so they never block the main thread — `checkAlerts` runs once per symbol
-    /// per refresh, so a synchronous main-thread save here sat squarely in the
-    /// hot path.
+    /// so they never block the main thread — `checkAlerts` evaluates every
+    /// symbol at each refresh, so a synchronous main-thread save here sat
+    /// squarely in the hot path.
     private var viewContext: NSManagedObjectContext { coreDataStack.viewContext }
 
     /// Runs a Core Data mutation on a background context and saves it there.
@@ -185,14 +185,15 @@ class PriceAlertService {
         return stored.compactMapValues { ($0 as? Double).flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
     }
 
-    private func rememberPrice(_ price: Double, for symbol: String, hasAlerts: Bool) {
+    /// Updates the remembered price in memory only. Returns true when it
+    /// changed, so the caller saves once for a whole batch of prices.
+    private func rememberPrice(_ price: Double, for symbol: String, hasAlerts: Bool) -> Bool {
         guard hasAlerts else {
-            if lastKnownPrices.removeValue(forKey: symbol) != nil { storeLastKnownPrices() }
-            return
+            return lastKnownPrices.removeValue(forKey: symbol) != nil
         }
-        guard lastKnownPrices[symbol] != price else { return }
+        guard lastKnownPrices[symbol] != price else { return false }
         lastKnownPrices[symbol] = price
-        storeLastKnownPrices()
+        return true
     }
 
     private func storeLastKnownPrices() {
@@ -309,8 +310,34 @@ class PriceAlertService {
 
     // MARK: - Price Monitoring
 
-    func checkAlerts(symbol: String, currentPrice: Double, previousPrice: Double, currency: String) {
-        guard currentPrice.isFinite, currentPrice > 0 else { return }
+    /// One symbol's price, as `checkAlerts(_:)` takes it.
+    struct PriceCheck {
+        let symbol: String
+        let currentPrice: Double
+        let previousPrice: Double
+        let currency: String
+    }
+
+    /// Checks one refresh's prices together. The last checked prices are
+    /// saved once for the batch: saving after every symbol rewrote the whole
+    /// record once per alerted symbol whose price moved.
+    func checkAlerts(_ checks: [PriceCheck]) {
+        var rememberedPricesChanged = false
+        for check in checks where evaluateAlerts(for: check) {
+            rememberedPricesChanged = true
+        }
+        if rememberedPricesChanged {
+            storeLastKnownPrices()
+        }
+    }
+
+    /// Fires the symbol's alerts whose condition is met and remembers the
+    /// price in memory. Returns true when the remembered prices changed.
+    private func evaluateAlerts(for check: PriceCheck) -> Bool {
+        let symbol = check.symbol
+        let currentPrice = check.currentPrice
+        let previousPrice = check.previousPrice
+        guard currentPrice.isFinite, currentPrice > 0 else { return false }
         let allSymbolAlerts = getAlerts(for: symbol)
         let symbolAlerts = allSymbolAlerts.filter { $0.isEnabled }
 
@@ -326,11 +353,11 @@ class PriceAlertService {
                 continue
             }
 
-            sendNotification(for: alert, currentPrice: currentPrice, currency: currency)
+            sendNotification(for: alert, currentPrice: currentPrice, currency: check.currency)
             updateLastTriggered(alertId: alert.id)
         }
 
-        rememberPrice(currentPrice, for: symbol, hasAlerts: !allSymbolAlerts.isEmpty)
+        return rememberPrice(currentPrice, for: symbol, hasAlerts: !allSymbolAlerts.isEmpty)
     }
 
     // MARK: - Notifications
@@ -501,7 +528,7 @@ class PriceAlertService {
     }
 
     private func updateLastTriggered(alertId: UUID) {
-        // Reached from checkAlerts() once per symbol per refresh, so this must
+        // Reached from checkAlerts() for every symbol at each refresh, so this must
         // not save synchronously on the main thread.
         let triggeredAt = Date()
 
