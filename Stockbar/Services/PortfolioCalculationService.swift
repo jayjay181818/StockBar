@@ -18,6 +18,9 @@ struct DisplayPortfolioSummary {
     let ownedPositionCount: Int
     let currency: String
     let valuationSource: PortfolioValuationSource
+    /// Money paid into the account less money taken out, in `currency`, when
+    /// the portfolio source reports it. Nil otherwise.
+    let netDeposits: Double?
 
     init(
         totalValue: Double,
@@ -28,7 +31,8 @@ struct DisplayPortfolioSummary {
         totalCost: Double,
         ownedPositionCount: Int,
         currency: String,
-        valuationSource: PortfolioValuationSource = .localCalculationFallback
+        valuationSource: PortfolioValuationSource = .localCalculationFallback,
+        netDeposits: Double? = nil
     ) {
         self.totalValue = totalValue
         self.totalGain = totalGain
@@ -39,7 +43,65 @@ struct DisplayPortfolioSummary {
         self.ownedPositionCount = ownedPositionCount
         self.currency = currency
         self.valuationSource = valuationSource
+        self.netDeposits = netDeposits
     }
+
+    /// The total P&L to show, measured against `basis` when the source reports
+    /// net deposits, otherwise against the cost of the holdings.
+    ///
+    /// Against net deposits it is the whole account's value, cash included,
+    /// less the money paid in: gains on shares already sold, dividends,
+    /// interest and fees all count. Against cost it is the unrealised gain on
+    /// the shares still held.
+    func totalReturn(measuredAgainst basis: PortfolioGainBasis) -> PortfolioTotalReturn {
+        if basis == .netDeposits, let netDeposits, netDeposits.isFinite, totalValue.isFinite {
+            let gain = totalValue - netDeposits
+            return PortfolioTotalReturn(
+                gain: gain,
+                // No percentage of nothing, or of more taken out than paid in.
+                percent: netDeposits > 0 ? gain / netDeposits * 100 : .nan,
+                basisAmount: netDeposits,
+                isMeasuredAgainstNetDeposits: true
+            )
+        }
+        return PortfolioTotalReturn(
+            gain: totalGain,
+            percent: totalGainPct,
+            basisAmount: totalCost,
+            isMeasuredAgainstNetDeposits: false
+        )
+    }
+}
+
+/// What the portfolio's total P&L is measured against (Settings → General).
+enum PortfolioGainBasis: String, CaseIterable, Identifiable, Sendable {
+    /// Money paid in less money taken out. Used where the portfolio source
+    /// reports it (Folync); elsewhere P&L falls back to `holdingsCost`.
+    case netDeposits
+    /// What was paid for the shares still held.
+    case holdingsCost
+
+    static let userDefaultsKey = "portfolioGainBasis"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .netDeposits: "Net Deposits"
+        case .holdingsCost: "Cost of Current Holdings"
+        }
+    }
+}
+
+/// The portfolio's total P&L as shown, and what it is measured against.
+struct PortfolioTotalReturn: Equatable {
+    let gain: Double
+    let percent: Double
+    /// The net deposits or the cost basis, whichever `gain` is measured against.
+    let basisAmount: Double
+    let isMeasuredAgainstNetDeposits: Bool
+
+    var basisLabel: String { isMeasuredAgainstNetDeposits ? "Net Deposits" : "Cost Basis" }
 }
 
 struct PositionProfitLossSummary: Equatable {

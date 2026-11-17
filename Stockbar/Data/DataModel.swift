@@ -55,6 +55,10 @@ class DataModel {
     var folyncConnectionState: FolyncConnectionState = .notConfigured
     var folyncCapabilities: FolyncCapabilities?
     var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
+    /// Net deposits for the Folync scope, read from its portfolio history.
+    /// Nil until read, or when Folync cannot give a figure to trust.
+    var folyncNetDeposits: FolyncNetDeposits?
+    @ObservationIgnored var folyncNetDepositsCheckedAt: Date?
     private(set) var isInitialPortfolioSourceResolved = false
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.
@@ -122,6 +126,15 @@ class DataModel {
     var preferredCurrency: String = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
         didSet {
             StockbarRuntimeStorage.userDefaults.set(preferredCurrency, forKey: "preferredCurrency")
+        }
+    }
+    /// What the portfolio's total P&L is measured against. Net deposits unless
+    /// the user chose otherwise.
+    var portfolioGainBasis: PortfolioGainBasis = StockbarRuntimeStorage.userDefaults
+        .string(forKey: PortfolioGainBasis.userDefaultsKey)
+        .flatMap(PortfolioGainBasis.init(rawValue:)) ?? .netDeposits {
+        didSet {
+            StockbarRuntimeStorage.userDefaults.set(portfolioGainBasis.rawValue, forKey: PortfolioGainBasis.userDefaultsKey)
         }
     }
     var showMarketIndicators: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "showMarketIndicators") {
@@ -1485,7 +1498,8 @@ class DataModel {
                 totalCost: totalCost,
                 ownedPositionCount: snapshot.displayHoldings.count,
                 currency: snapshot.scope.currency ?? preferredCurrency,
-                valuationSource: .folyncProvided
+                valuationSource: .folyncProvided,
+                netDeposits: folyncNetDeposits?.amount(for: snapshot)
             )
         }
         let summaryCurrency = overrideCurrency ?? preferredCurrency

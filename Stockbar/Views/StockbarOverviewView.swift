@@ -328,11 +328,31 @@ struct StockbarOverviewView: View {
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(StockbarPalette.cardStroke))
     }
 
+    /// "+£1,234.00 (5.20%)", or the amount alone when there is no percentage.
+    private static func amountWithPercent(_ amount: Double, percent: Double, currency: String) -> String {
+        let signed = HoldingsCurrencyFormatter.signedAmount(amount, currency: currency)
+        let percentText = MenuPopoverFormatter.percent(percent)
+        return percentText.isEmpty ? signed : "\(signed) (\(percentText))"
+    }
+
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: 4) {
             StockbarSectionTitle(title: "Summary")
                 .padding(.bottom, 4)
             StockbarDetailRow(label: "Portfolio value", value: HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
+            let totalReturn = summary.totalReturn(measuredAgainst: dataModel.portfolioGainBasis)
+            if totalReturn.isMeasuredAgainstNetDeposits {
+                StockbarDetailRow(
+                    label: "Total P&L",
+                    value: totalReturn.gain.isFinite
+                        ? Self.amountWithPercent(totalReturn.gain, percent: totalReturn.percent, currency: summary.currency)
+                        : "—",
+                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
+                )
+                .help("Portfolio value, cash included, less net deposits. Sales, dividends, interest and fees all count.")
+                StockbarDetailRow(label: "Net deposits", value: HoldingsCurrencyFormatter.amount(totalReturn.basisAmount, currency: summary.currency))
+                    .help("Money paid in less money taken out, from Folync.")
+            }
             StockbarDetailRow(
                 label: "Unrealised P&L",
                 value: summary.totalGain.isFinite

@@ -234,6 +234,8 @@ extension DataModel {
         currencyConverter.deactivateFolyncOverlay()
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         folyncSupplementalStatuses = [:]
+        folyncNetDeposits = nil
+        folyncNetDepositsCheckedAt = nil
         await deps.supplementalCoordinator.clearInMemoryState()
         deps.settingsStore.save(FolyncStoredSettings(
             isEnabled: true,
@@ -368,6 +370,8 @@ extension DataModel {
         folyncBackoffUntil = nil
         await folyncSessionDependencies.supplementalCoordinator.clearBackoff()
         await refreshFolyncPortfolio(allowCatchUp: false)
+        // A manual refresh also picks up a deposit made since the last read.
+        await refreshFolyncNetDeposits(force: true)
     }
 
     var isFolyncBackingOff: Bool {
@@ -675,10 +679,39 @@ extension DataModel {
             folyncSupplementalStatuses[.exchangeRates] = currencyConverter.sourceStatus
         }
 
+        await refreshFolyncNetDeposits()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
+
         if let backoff = await deps.supplementalCoordinator.backoffUntil(), backoff > Date() {
             guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
                   supplementalGeneration == folyncSupplementalGeneration else { return }
             folyncBackoffUntil = backoff
+        }
+    }
+
+    /// Reads net deposits from the scope's portfolio history, at most every
+    /// `FolyncNetDeposits.refreshInterval` unless `force`d. Portfolio history
+    /// belongs to the portfolio source, so no supplemental route gates it. A
+    /// failed request keeps the figure already read; a history that cannot
+    /// give one clears it, so P&L falls back to the cost of the holdings.
+    func refreshFolyncNetDeposits(force: Bool = false, now: Date = Date()) async {
+        let refreshGeneration = folyncRefreshGeneration
+        let deps = folyncSessionDependencies
+        let settings = deps.settingsStore.load()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings) else { return }
+        if !force, let checked = folyncNetDepositsCheckedAt,
+           now.timeIntervalSince(checked) < FolyncNetDeposits.refreshInterval {
+            return
+        }
+        folyncNetDepositsCheckedAt = now
+        let result = await deps.supplementalCoordinator.routePortfolioHistory(range: FolyncNetDeposits.historyRange)
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings) else { return }
+        switch result {
+        case .folync(let history, _):
+            folyncNetDeposits = FolyncNetDeposits(history: history)
+        case .legacy, .unavailable:
+            break
         }
     }
 
@@ -782,6 +815,8 @@ extension DataModel {
         folyncSupplementalRefreshTask = nil
         folyncETag = nil
         folyncPortfolioSnapshot = nil
+        folyncNetDeposits = nil
+        folyncNetDepositsCheckedAt = nil
         folyncCapabilities = nil
         folyncSupplementalStatuses = [:]
         folyncConnectionState = .notConfigured

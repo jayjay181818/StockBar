@@ -1507,6 +1507,126 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     }
 
     @MainActor
+    func testNetDepositsFromTheThreeMonthHistorySetTheTotalReturn() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: .disabled
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        func answer(netDeposits: Double) -> FolyncHTTPStub.Handler {
+            let body = Self.portfolioHistoryJSON(netContribution: [500, netDeposits])
+            return { request in
+                XCTAssertEqual(request.url?.path, "/api/client/v2/scopes/all/history")
+                let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "range" }?.value
+                XCTAssertEqual(range, "3m", "the cheapest history range, from Folync's stored daily snapshots")
+                return Self.httpResponse(request, status: 200, body: body)
+            }
+        }
+        stub.handler = answer(netDeposits: 600)
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        // Value 1,100 with 800 of it cash; holdings cost 201 with an unrealised gain of 99.
+        dataModel.folyncPortfolioSnapshot = try JSONDecoder().decode(
+            FolyncPortfolioSnapshot.self, from: Data(versionTwoSnapshotJSON.utf8)
+        )
+
+        let start = Date()
+        await dataModel.refreshFolyncNetDeposits(now: start)
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 600)
+        let summary = dataModel.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(summary.netDeposits, 600)
+        let againstDeposits = summary.totalReturn(measuredAgainst: .netDeposits)
+        XCTAssertTrue(againstDeposits.isMeasuredAgainstNetDeposits)
+        XCTAssertEqual(againstDeposits.gain, 500, "the whole account's value less the money paid in")
+        XCTAssertEqual(againstDeposits.percent, 500.0 / 600.0 * 100, accuracy: 0.000_001)
+        XCTAssertEqual(againstDeposits.basisAmount, 600)
+        XCTAssertEqual(againstDeposits.basisLabel, "Net Deposits")
+        let againstCost = summary.totalReturn(measuredAgainst: .holdingsCost)
+        XCTAssertFalse(againstCost.isMeasuredAgainstNetDeposits)
+        XCTAssertEqual(againstCost.gain, 99)
+        XCTAssertEqual(againstCost.basisAmount, 201)
+        XCTAssertEqual(againstCost.basisLabel, "Cost Basis")
+        XCTAssertEqual(summary.totalGain, 99, "the recorded gain keeps its meaning")
+
+        stub.handler = answer(netDeposits: 700)
+        await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(60))
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 600, "not read again within five minutes")
+        await dataModel.refreshFolyncNetDeposits(now: start.addingTimeInterval(301))
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 700)
+        XCTAssertEqual(stub.requests.count, 2)
+        stub.handler = answer(netDeposits: 750)
+        await dataModel.refreshFolyncNetDeposits(force: true, now: start.addingTimeInterval(302))
+        XCTAssertEqual(dataModel.folyncNetDeposits?.amount, 750, "a manual refresh reads it at once")
+
+        // Net deposits read for one scope never measure another.
+        dataModel.folyncPortfolioSnapshot = try JSONDecoder().decode(
+            FolyncPortfolioSnapshot.self, from: Data(snapshotJSON.utf8)
+        )
+        XCTAssertNil(dataModel.calculateDisplayPortfolioSummary().netDeposits)
+
+        dataModel.deactivateFolyncPortfolio(persistSetting: false)
+        XCTAssertNil(dataModel.folyncNetDeposits)
+    }
+
+    func testNetDepositsAreOnlyTakenFromAHistoryThatCanGiveThem() throws {
+        func netDeposits(_ json: String) throws -> FolyncNetDeposits? {
+            FolyncNetDeposits(history: try JSONDecoder().decode(FolyncPortfolioHistory.self, from: Data(json.utf8)))
+        }
+        let snapshot = try JSONDecoder().decode(FolyncPortfolioSnapshot.self, from: Data(versionTwoSnapshotJSON.utf8))
+
+        let usable = try XCTUnwrap(netDeposits(Self.portfolioHistoryJSON(netContribution: [500, 600], quality: "partial")))
+        XCTAssertEqual(usable.amount, 600, "partial quality does not make net deposits wrong")
+        XCTAssertEqual(usable.asOf, "2026-07-11")
+        XCTAssertEqual(usable.amount(for: snapshot), 600)
+
+        XCTAssertNil(try netDeposits(Self.portfolioHistoryJSON(
+            netContribution: [500, 600], reasonCodes: ["missing_transaction_fx"]
+        )), "a deposit without an exchange rate stops the series early")
+        XCTAssertNil(try netDeposits(Self.portfolioHistoryJSON(
+            netContribution: [500, 600], netContributionDates: ["2026-07-09", "2026-07-10"]
+        )), "a series that ends before the value series is out of date")
+        XCTAssertNil(try netDeposits(Self.portfolioHistoryJSON(netContribution: [0, 0])),
+                     "no deposit records at all, as for a broker account imported without its cash history")
+        XCTAssertNil(try netDeposits(Self.portfolioHistoryJSON(netContribution: [500, 600], quality: "unavailable")))
+
+        let otherCurrency = try XCTUnwrap(netDeposits(Self.portfolioHistoryJSON(netContribution: [500, 600], currency: "USD")))
+        XCTAssertNil(otherCurrency.amount(for: snapshot), "net deposits in another currency than the value")
+        let otherScope = try XCTUnwrap(netDeposits(Self.portfolioHistoryJSON(netContribution: [500, 600], scopeID: "pf_isa")))
+        XCTAssertNil(otherScope.amount(for: snapshot), "net deposits of another portfolio")
+    }
+
+    /// A three-month portfolio history worth 1,000 and then 1,100.
+    private static func portfolioHistoryJSON(
+        netContribution: [Double],
+        netContributionDates: [String] = ["2026-07-10", "2026-07-11"],
+        quality: String = "complete",
+        reasonCodes: [String] = [],
+        currency: String = "GBP",
+        scopeID: String = "all"
+    ) -> String {
+        func series(_ values: [Double], dates: [String]) -> String {
+            "[" + zip(dates, values).map { "{\"date\":\"\($0)\",\"value\":\($1)}" }.joined(separator: ",") + "]"
+        }
+        let dates = ["2026-07-10", "2026-07-11"]
+        let values = series([1_000, 1_100], dates: dates)
+        let reasons = "[" + reasonCodes.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        return """
+        {"schemaVersion":2,"sourceRevision":"history-test",
+         "scope":{"id":"\(scopeID)","name":"All portfolios","kind":"aggregate","currency":"\(currency)"},
+         "range":"3m","interval":"1d","generatedAt":"2026-07-12T12:00:00Z","currency":"\(currency)",
+         "quality":"\(quality)","reasonCodes":\(reasons),
+         "coverage":{"requestedFrom":"2026-04-12","requestedTo":"2026-07-12",
+         "availableFrom":"2026-07-10","availableTo":"2026-07-11","pointCount":2,"complete":false},
+         "portfolioSeries":\(values),"cashSeries":\(values),"holdingsSeries":\(values),
+         "netContributionSeries":\(series(netContribution, dates: netContributionDates)),
+         "gainSeries":\(values),"twrSeries":\(values)}
+        """
+    }
+
+    @MainActor
     private func makeTestDataModel(dependencies: FolyncSessionDependencies) -> DataModel {
         let model = DataModel(
             currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
