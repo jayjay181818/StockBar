@@ -317,7 +317,9 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 #### Refresh Behavior
 - Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
-- Folync portfolio snapshots poll every 60 seconds; Folync benchmarks and FX poll every 15 minutes; Folync chart history loads on demand. All Folync routes use ETags.
+- Folync portfolio snapshots are checked every 60 seconds, five seconds after each minute. Folync chart history loads on demand. All Folync requests use ETags, so an unchanged response costs little.
+- Benchmarks and exchange rates depend on Folync's supplemental switches (Settings → Connections → Folync → Supplemental market data). With **Benchmark market data** or **Exchange rates** on, that data comes from Folync and is checked on the same 60-second cycle. With it off, benchmark data such as the S&P 500 and FTSE 100 comes from the market-data providers like any other symbol, and exchange rates come from exchangerate-api.com at launch and then about once an hour. A new connection turns on each switch the server reports as ready.
+- Folync checks back off after failures: a rejected token is not retried for 15 minutes, a rate limit waits as long as the server asks, and repeated failures slow the checks to every 2 and then 5 minutes.
 - An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data or direct exchange-rate request. Disabling it resumes the existing local pipeline.
 - Freshness, partial coverage, stale cache, local fallback, and unavailable states are shown rather than represented as a valid zero.
 
