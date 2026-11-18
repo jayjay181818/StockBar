@@ -746,11 +746,16 @@ private final class TransferSide {
             : nil
 
         defaultsSuite = suite
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        // In memory, not the suite itself: a suite named by a path goes
+        // through cfprefsd, which on a busy CI runner has handed back a value
+        // the test had already replaced (twice: a removed key that still
+        // read as set, then a setting that read as the imported value after
+        // the rollback had put the old one back). The suite name only backs
+        // anything this class does not override, so nothing reaches the
+        // standard domain.
+        let defaults = try XCTUnwrap(InMemoryTestDefaults(suiteName: suite))
         self.defaults = defaults
-        // The service and the test share one defaults object. A second object
-        // for the same suite can briefly return a value the first has already
-        // removed, which made an assertion after an import fail now and then.
+        // The service and the test share one defaults object.
         let sharedDefaults = SharedTestDefaults(defaults)
         self.configDirectory = configDirectory
         self.configuration = configuration
@@ -786,6 +791,36 @@ private final class TransferSide {
         }
         try? folync.delete()
         try? marketData.deleteAll()
+    }
+}
+
+/// `UserDefaults` kept in a dictionary, so a test reads back exactly what was
+/// last written. The typed getters and setters (`bool`, `string`,
+/// `set(_:forKey:)` with an `Int`, and so on) go through these overrides.
+/// Like the real thing, it accepts only property-list values.
+private final class InMemoryTestDefaults: UserDefaults {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+
+    override func object(forKey defaultName: String) -> Any? {
+        lock.withLock { values[defaultName] }
+    }
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        guard let value else { return removeObject(forKey: defaultName) }
+        precondition(
+            PropertyListSerialization.propertyList(value, isValidFor: .binary),
+            "UserDefaults accepts only property-list values; \(defaultName) is \(type(of: value))"
+        )
+        lock.withLock { values[defaultName] = value }
+    }
+
+    override func removeObject(forKey defaultName: String) {
+        lock.withLock { _ = values.removeValue(forKey: defaultName) }
+    }
+
+    override func dictionaryRepresentation() -> [String: Any] {
+        lock.withLock { values }
     }
 }
 
