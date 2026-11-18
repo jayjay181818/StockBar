@@ -7,44 +7,50 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
-      <title>3.8.2 (381.7)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.7</link>
-      <pubDate>Wed, 18 Nov 2026 15:27:22 +0000</pubDate>
-      <sparkle:version>381.7</sparkle:version>
+      <title>3.8.2 (382)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.8.2</link>
+      <pubDate>Wed, 18 Nov 2026 15:40:24 +0000</pubDate>
+      <sparkle:version>382</sparkle:version>
       <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
       <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 381.7 of Stockbar 3.8.2. Changes since testing-381.5:
+      <description sparkle:format="markdown"># StockBar v3.8.2 Release Notes
 
-- Release 3.8.2</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-381.7/Stockbar-381.7.zip" length="7222607" type="application/octet-stream" sparkle:edSignature="prcRbWZT8RJQGxfeAoUJA0UgDthotENDPOaddaz1GCkfsJQlUPUeRJSwXxDrLJwoH2AEywEzLsU9WpxEvuycCQ=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.1 (381.5)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.5</link>
-      <pubDate>Wed, 18 Nov 2026 15:08:14 +0000</pubDate>
-      <sparkle:version>381.5</sparkle:version>
-      <sparkle:shortVersionString>3.8.1</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 381.5 of Stockbar 3.8.1. Changes since testing-381.2:
+**Status:** Implemented  
+**Date:** 2026-11-18
 
-- Name a stale Folync chart and count any connection failure as unreachable
-- Say when Folync can't be reached</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-381.5/Stockbar-381.5.zip" length="7222607" type="application/octet-stream" sparkle:edSignature="RPBYkvDgg3sMt6jFBgvYF7IAO2BV6Ts9TNjaDVhfZkJgzKjQ99NJSG51kW/I3HYUrsaEhQGAvjY6G5zlE6j7CA=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.1 (381.2)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.2</link>
-      <pubDate>Wed, 18 Nov 2026 10:22:27 +0000</pubDate>
-      <sparkle:version>381.2</sparkle:version>
-      <sparkle:shortVersionString>3.8.1</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 381.2 of Stockbar 3.8.1. Changes since v3.8.1:
+With Folync as the portfolio source, the portfolio chart now appears at once, without waiting for Folync. When Folync doesn't answer, Stockbar now says so rather than asking for more stored history.
 
-- Draw the saved Folync chart while Folync is asked for a newer one</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-381.2/Stockbar-381.2.zip" length="7211570" type="application/octet-stream" sparkle:edSignature="VgVpcrxDN33izsu/VjZOFP6WkqkqsXsTaNpGpC2QnG17A3gpfyWs9/5QVTMlw3aYk/jDk7NLsgFvnl8j7Te3BA=="></enclosure>
+## After updating
+
+- Nothing needs doing. Each chart period is saved the first time it loads after the update, so open **1 Week** and **1 Month** once and they show at once from then on.
+- Local and Trading 212 portfolios are not affected.
+- This version arrives through the updater. As before, allow Keychain access once after the update.
+
+## The portfolio chart appears at once with Folync
+
+The portfolio popover and the Overview used to leave the chart empty until Folync answered. Each time, Stockbar asks Folync whether the history for that period has changed.
+
+- Stockbar now saves the history from Folync's last answer for each period, and draws it straight away, marked **Checking Folync**.
+- When Folync answers, the chart and its label update. If nothing has changed, Folync answers with a short "not modified", and the same chart stays.
+- A saved chart is drawn only if Folync answered or confirmed it in the last day. An older one waits for Folync, as before.
+- Period P&amp;L is not shown from a saved chart until Folync confirms it.
+
+## When Folync can't be reached
+
+If Folync doesn't answer, for example because the machine it runs on has stopped responding:
+
+- **A period with a saved chart** keeps it, marked **Folync · stale cache**. The Overview's period change says **No current history from Folync**, where it used to say Folync marked the period partial.
+- **A period with nothing saved** now says **Couldn't reach Folync** in the popover and the Overview, and next to the Overview's period change. It used to say there was not enough stored history, which pointed at the wrong cause.
+- Stockbar counts as "couldn't reach" any request that got no answer at all, such as a timeout, a lost connection or a failed secure connection, and a 502, 503 or 504 from the server in front of Folync. If Folync answers with any other error, or with data Stockbar can't use, the chart still says the history is unavailable.
+- **The log** gets one line when a period's history starts failing, with the reason, such as `timeout` or `http-503`, and one when it works again. The line names the period and the reason only, no address, token or amounts.
+
+## For developers
+
+- `FolyncSupplementalCoordinator.savedPortfolioHistory(range:maximumAge:now:)` reads the history saved from Folync's last full answer for a range, from disk, with no request or Keychain read. It is used only if Folync confirmed it, by a full answer or a 304, within `maximumAge` (one day). A 304 doesn't rewrite the file, so confirmations are kept in memory.
+- `routePortfolioHistory` returns the new `FolyncRoutedPortfolioResult.unreachable` when the request fails with nothing usable saved and no HTTP response arrived (`FolyncRefreshSchedule.failureCategory` is `timeout`, `offline`, `unreachable` or `network-&lt;code&gt;`) or the response was 502, 503 or 504. Otherwise it returns `.unavailable`, as before. A usable saved history still comes back as `.folync(_, status: .stale)`, and `allowLegacyFallback` still returns `.legacy`.
+- `PortfolioMenuChartViewModel.folyncUnreachable` and `folyncStale` drive the popover's and the Overview's wording.
+- Not changed: the local day chart still reads stored history on the main thread, which takes about 30 ms.</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/v3.8.2/Stockbar-3.8.2.zip" length="7222604" type="application/octet-stream" sparkle:edSignature="MQTG5BadTPBLGlzi4x98lcRPs055aPKEvzc7F4nS6GezN5aS42ACUHDCc6nnCBD9Nn4ECq3rmp+4JBdLaIMmCQ=="></enclosure>
     </item>
     <item>
       <title>3.8.1 (381)</title>
@@ -162,49 +168,8 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
 - Branches: ordinary changes go through pull requests into `testing`. `experimental` is used only for major changes or temporary testing. See "Branches, releases and dependencies" in `Docs/Development.md`.</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/v3.8.0/Stockbar-3.8.0.zip" length="7196391" type="application/octet-stream" sparkle:edSignature="5H2oOsYBqy9AbgHtzsEcc8UdZFzLU6i92STU5iHNh9bP1D8xm58iviNhwDc/pgBtA+x2Rk7hmhNiS8jMUQ83AA=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.7.0</link>
-      <pubDate>Wed, 11 Nov 2026 17:51:18 +0000</pubDate>
-      <sparkle:version>370</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown"># StockBar v3.7.0 Release Notes
-
-**Status:** Implemented  
-**Date:** 2026-11-11
-
-Stockbar now updates itself, and keeps every credential in one Keychain item so macOS asks for access once after an update, not once per credential. Figures, charts, the Python pins and the database model are the same as in 3.6.0.
-
-## After updating
-
-- **This update is installed by hand**, as before: 3.6.0 and earlier have no updater. Download `Stockbar-3.7.0.zip` from the release page, unzip it and move Stockbar to Applications. Later versions arrive through **Settings → General → Updates**.
-- **First launch of a downloaded copy**: macOS blocks it until you choose **Open Anyway** in System Settings → Privacy &amp; Security. This is needed once per Mac. Updates installed by Stockbar are not blocked.
-- **Keychain prompts**: the first launch asks for access to each credential saved by the earlier version, to move it into the new single item. Choose **Always Allow** each time. After later updates macOS asks once.
-- **Going back to an earlier version** means entering the Folync token, Trading 212 credentials and API keys again: earlier versions do not read the new item.
-
-## Updates
-
-- Stockbar checks for new versions and installs them, using [Sparkle](https://sparkle-project.org). Downloads come from this repository's GitHub releases. An update is installed only if it is signed with Stockbar's update key.
-- **Settings → General → Updates** has the channel, a switch for automatic checks and **Check Now**.
-- Two channels: **Stable** receives released versions. **Testing** also receives a build of every change as it is merged, before it is released. Moving from Testing back to Stable takes effect at the next released version.
-- No profile of your Mac is sent when checking.
-- Builds are made by GitHub Actions and signed without an Apple developer account. That is why a downloaded copy needs **Open Anyway** once, and why macOS asks for Keychain access again after each update.
-
-## Keychain
-
-- The Folync token and its server, the FMP and Twelve Data API keys and the Trading 212 credentials are kept in one Keychain item, "Stockbar credentials". One item means one prompt after an update.
-- Credentials saved by earlier versions are imported the first time they are needed. The old items are removed only after the new item has been written and read back. If a prompt is refused, nothing is removed and Stockbar tries again at the next launch.
-- Checking whether a credential is stored still does not read it, so it never raises a prompt.
-
-## For developers
-
-- A release workflow builds a testing build for every merge into `testing` and a stable release for every version tag, and keeps the signed update feed on the `appcast` branch. See "Release builds and updates" in `Docs/Development.md`.
-- CI packages the Release build the same way the release workflow does.</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/v3.7.0/Stockbar-3.7.0.zip" length="8234986" type="application/octet-stream" sparkle:edSignature="Xp634e1AKEq3ABdVAU+aq5IKn1mU8oB0Br7J3diavT/Omyv48OXq7teGux7EIEivMkdIT92KqvU8M9aWZbv4Bw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: tjzVWqsx2X0cXYIuESs21hDJl9W4eQdWuiBQWC8D/rLXD1Ya969UMF1Eg5TJorOk+0rVMV3w1DRw5q6efstvDA==
-length: 18205
+edSignature: eFPaeHU4FXxWXZCMKFOqs/5nmViYZE2+Jn5GMbuaaCMUjDR4CfEQtMeDtfRvMRqrOFuXVVGcgZZWhZMpq679DQ==
+length: 16083
 -->
