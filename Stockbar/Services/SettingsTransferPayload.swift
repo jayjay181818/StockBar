@@ -145,6 +145,7 @@ enum SettingsTransferKeys {
         "preferredCurrency": .string,
         "showColorCoding": .bool,
         "showMarketIndicators": .bool,
+        PortfolioGainBasis.userDefaultsKey: .string,
         // Menu bar
         "hideAllMenuBarItems": .bool,
         MenuBarDisplaySettings.UserDefaultsKey.displayMode: .string,

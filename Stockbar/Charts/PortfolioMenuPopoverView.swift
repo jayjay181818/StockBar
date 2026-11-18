@@ -539,7 +539,8 @@ struct PortfolioMenuPopoverView: View {
     }
 
     private var statsGrid: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+        let totalReturn = summary.totalReturn(measuredAgainst: dataModel.portfolioGainBasis)
+        return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 MenuPopoverStatBox(
                     label: "Market Value",
@@ -547,9 +548,9 @@ struct PortfolioMenuPopoverView: View {
                 )
                 MenuPopoverStatBox(
                     label: "Total P&L",
-                    value: MenuPopoverFormatter.currencyExact(summary.totalGain, currency: summary.currency, includeSign: true),
-                    subValue: MenuPopoverFormatter.percent(summary.totalGainPct),
-                    valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
+                    value: MenuPopoverFormatter.currencyExact(totalReturn.gain, currency: summary.currency, includeSign: true),
+                    subValue: MenuPopoverFormatter.percent(totalReturn.percent),
+                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
                 )
             }
             GridRow {
@@ -561,8 +562,8 @@ struct PortfolioMenuPopoverView: View {
                     valueColor: StockbarPalette.signed(change?.value, neutral: .primary)
                 )
                 MenuPopoverStatBox(
-                    label: "Cost Basis",
-                    value: MenuPopoverFormatter.currencyExact(summary.totalCost, currency: summary.currency)
+                    label: totalReturn.basisLabel,
+                    value: MenuPopoverFormatter.currencyExact(totalReturn.basisAmount, currency: summary.currency)
                 )
             }
         }

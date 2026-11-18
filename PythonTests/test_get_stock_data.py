@@ -737,6 +737,27 @@ class CommandLineTests(unittest.TestCase):
         batch.assert_not_called()
         writes.assert_not_called()
 
+    def test_each_quote_says_when_it_was_fetched(self):
+        import time
+        fetched_earlier = time.time() - 100
+        with open(self.cache_path, "w") as cache_file:
+            json.dump({"AAPL": {"timestamp": fetched_earlier, "result": self.quote("AAPL", price=42.0)}}, cache_file)
+
+        before = time.time()
+        with mock.patch.object(self.module, "fetch_batch", return_value={"MSFT": self.quote("MSFT", price=7.0)}):
+            code, printed = self.run_main("--json", "AAPL", "MSFT")
+        after = time.time()
+        self.assertIsNone(code)
+        cached, fresh = (entry["quote"] for entry in printed)
+        # The app reads this key; a cached quote keeps the time it was first fetched.
+        self.assertEqual(cached["fetchedAt"], fetched_earlier)
+        self.assertTrue(before <= fresh["fetchedAt"] <= after)
+        # The cache stores the same time, so reading MSFT back later reports it unchanged.
+        stored = self.stored()["MSFT"]
+        self.assertEqual(stored["timestamp"], fresh["fetchedAt"])
+        self.assertNotIn("fetchedAt", stored["result"])
+        self.assertEqual(self.module.get_cached_quotes(["MSFT"])[0]["MSFT"]["fetchedAt"], fresh["fetchedAt"])
+
     def test_an_unusable_fresh_entry_is_refetched_and_dropped(self):
         import time
         with open(self.cache_path, "w") as cache_file:

@@ -299,6 +299,60 @@ struct FolyncPortfolioHistory: Codable, Equatable, Sendable {
     let twrSeries: [SeriesPoint]
 }
 
+/// The money paid into a Folync scope less the money taken out: Folync's
+/// "What if not investing" figure. Folync counts only deposits and
+/// withdrawals, each at its own exchange rate; dividends, interest, fees and
+/// trades are part of the gain instead. The client API gives it only as the
+/// last point of a portfolio history's net contribution series.
+struct FolyncNetDeposits: Equatable, Sendable {
+    /// The history range read for it: the cheapest one, served from Folync's
+    /// stored daily snapshots. Folync rebuilds those a minute or two after
+    /// importing a deposit, and every five minutes regardless.
+    static let historyRange = "3m"
+    /// How often it is read again while Folync answers.
+    static let refreshInterval: TimeInterval = 300
+    /// How long a figure is kept while Folync's history cannot be read.
+    /// After that, P&L is measured against the cost of the holdings.
+    static let maximumAge: TimeInterval = 900
+
+    let scopeID: String
+    let currency: String?
+    let amount: Double
+    let asOf: String
+
+    /// Nil when the history cannot give a figure to trust: it is unavailable;
+    /// a deposit or withdrawal has no exchange rate, which stops the series
+    /// early; the series ends before the value series does; or every point is
+    /// zero against a value that is not, as for a broker account imported
+    /// without its cash history.
+    init?(history: FolyncPortfolioHistory) {
+        guard history.quality != .unavailable,
+              !history.reasonCodes.contains("missing_transaction_fx"),
+              let last = history.netContributionSeries.max(by: { $0.date < $1.date }),
+              last.value.isFinite,
+              let lastValue = history.portfolioSeries.max(by: { $0.date < $1.date }),
+              last.date == lastValue.date else { return nil }
+        if lastValue.value != 0, history.netContributionSeries.allSatisfy({ $0.value == 0 }) {
+            return nil
+        }
+        scopeID = history.scope.id
+        currency = history.currency ?? history.scope.currency
+        amount = last.value
+        asOf = last.date
+    }
+
+    /// The amount, when it describes the snapshot's scope in the currency of
+    /// its total value.
+    func amount(for snapshot: FolyncPortfolioSnapshot) -> Double? {
+        guard scopeID == snapshot.scope.id else { return nil }
+        let valueCurrency = snapshot.totalValue.currency ?? snapshot.scope.currency
+        if let currency, let valueCurrency, currency.uppercased() != valueCurrency.uppercased() {
+            return nil
+        }
+        return amount
+    }
+}
+
 enum FolyncSupplementalSourceStatus: String, Codable, Equatable, Sendable {
     case current
     case partial

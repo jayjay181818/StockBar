@@ -221,7 +221,7 @@ class RefreshService {
                 .filter { applicableSet.contains($0.uppercased()) }
 
             // Nothing from here to `recordPassOutcome` suspends: see `applyQuotes`.
-            let applied = applyQuotes(resultDict, to: symbolsToApply, in: dataModel, at: now)
+            let applied = applyQuotes(resultDict, to: symbolsToApply, in: dataModel)
             dataModel.quoteRefreshStatus.record(
                 attempted: symbolsToApply.count,
                 failures: applied.failures.map(\.failure),
@@ -299,10 +299,12 @@ class RefreshService {
     private func applyQuotes(
         _ results: [String: StockFetchResult],
         to symbols: [String],
-        in dataModel: DataModel,
-        at now: Date
+        in dataModel: DataModel
     ) -> AppliedQuotes {
         var applied = AppliedQuotes()
+        var alertChecks: [PriceAlertService.PriceCheck] = []
+        // Taken now: the pass's start time is before the script fetched anything.
+        let receivedAt = Date()
         for symbol in symbols {
             // Looked up by name, as before: a symbol held in two rows updates
             // the first of them each time it is listed.
@@ -328,15 +330,20 @@ class RefreshService {
                 symbol: symbol,
                 price: price,
                 previousClose: info.prevClosePrice,
-                timestamp: now
+                // When the price was fetched, so a quote the script served from
+                // its cache is not recorded as a new price at a later time.
+                timestamp: result.updateDate(now: receivedAt)
             )
-            PriceAlertService.shared.checkAlerts(
+            alertChecks.append(PriceAlertService.PriceCheck(
                 symbol: symbol,
                 currentPrice: price,
                 previousPrice: info.prevClosePrice,
                 currency: info.currency ?? "USD"
-            )
+            ))
         }
+        // One batch, so the alert service saves its last checked prices once
+        // per pass rather than once per alerted symbol.
+        PriceAlertService.shared.checkAlerts(alertChecks)
         return applied
     }
 

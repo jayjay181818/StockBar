@@ -29,7 +29,7 @@ Shared models (`DataModel`, `RealTimeTrade`, `HistoricalDataManager`, `CurrencyC
 Three sources coexist and must stay non-destructive to each other:
 1. **Local/manual** trades in UserDefaults + Core Data — the base layer, always preserved.
 2. **Trading 212** — broker-linked holdings; linked positions take quantity/price/avg-cost/P&L from the broker and deliberately *skip* market-data providers. Credentials live in Keychain only. Read-only; no order execution.
-3. **Folync** — a self-hosted instance acting as authoritative read-only portfolio source. When active, `legacyPortfolioTrades` holds the shadowed local portfolio so switching back restores it. Folync-backed financial fields are read-only; watchlists, alerts, and menu-bar prefs stay Stockbar-owned. Supplemental routes (line history, OHLCV, benchmarks, FX) are independently toggled and **never splice Folync and legacy points into one series**.
+3. **Folync** — a self-hosted instance acting as authoritative read-only portfolio source. When active, `legacyPortfolioTrades` holds the shadowed local portfolio so switching back restores it. Folync-backed financial fields are read-only; watchlists, alerts, and menu-bar prefs stay Stockbar-owned. Supplemental routes (line history, OHLCV, benchmarks, FX) are independently toggled and **never splice Folync and legacy points into one series**. Net deposits for the "Measure P&L Against" setting come from the last `netContributionSeries` point of Folync's `3m` portfolio history, read at most every five minutes and only for the snapshot's own scope and currency (a stale cached history is never used; a figure is kept for up to fifteen minutes while Folync does not answer); `DisplayPortfolioSummary.totalGain` keeps its cost-basis meaning, and `totalReturn(measuredAgainst:)` chooses between the two.
 
 `InstrumentResolver` maps provider tickers (esp. Trading 212's) to canonical instrument identities; `SymbolMetadata` distinguishes benchmark symbols (`^GSPC`, `^FTSE`) from holdings, and `Trade.isWatchlistOnly` marks symbols with no position math.
 
@@ -64,7 +64,7 @@ Settings export/import (`SettingsTransferService`) seals an allowlist of default
 
 `Stockbar/Services/CacheCoordinator.swift` owns freshness, retry intervals and circuit-breaker thresholds. Preserve that policy when adding fetch paths.
 
-- Freshness follows the user's Main Refresh Interval (`RefreshService.freshnessInterval`); the Python quote cache is bounded to match through `STOCKBAR_QUOTE_CACHE_SECONDS` (set by `PythonConfiguration.load`).
+- Freshness follows the user's Main Refresh Interval (`RefreshService.freshnessInterval`); the Python quote cache is bounded to match through `STOCKBAR_QUOTE_CACHE_SECONDS` (set by `PythonConfiguration.load`). Each quote carries `fetchedAt`, when the script fetched it; a quote served from the cache keeps its original time, and the app uses it as the price's update time and for its history point.
 - Symbols with recorded failures are governed only by backoff (`shouldRetry`) and the circuit breaker; `shouldRefresh` never returns true for them. The per-symbol popover exposes suspension state and Retry Now.
 
 ### Currency
