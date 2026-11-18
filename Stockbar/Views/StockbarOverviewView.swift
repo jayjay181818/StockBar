@@ -49,7 +49,8 @@ struct StockbarOverviewView: View {
     /// Folync can return a full chart and still mark the period partial (carried or stale
     /// prices); the change is then withheld, and more local history would not bring it back.
     private var rangeChangeUnavailableHint: String {
-        summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
+        if summary.valuationSource == .folyncProvided && chartModel.isLoading { return "Checking Folync" }
+        return summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
             ? "Folync marks this period partial"
             : "Needs more stored history"
     }

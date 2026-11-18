@@ -90,6 +90,147 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(stub.requests.count, 4, "Each presentation/range/refresh action should issue one request")
     }
 
+    /// Opening the popover draws the history saved from Folync's last answer
+    /// at once, then replaces it with what the request returns.
+    @MainActor
+    func testPortfolioMenuShowsSavedFolyncHistoryWhileTheRequestRuns() async throws {
+        let suiteName = TestDefaultsSuite.makeName("FolyncMenuSavedHistory-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: .disabled
+        ))
+        let body: @Sendable (String, [Int]) -> String = { range, values in
+            let series = "[" + values.enumerated().map { index, value in
+                "{\"date\":\"2026-09-10T09:0\(index):00Z\",\"value\":\(value)}"
+            }.joined(separator: ",") + "]"
+            return """
+            {"schemaVersion":2,"sourceRevision":"saved-test",
+             "scope":{"id":"all","name":"All portfolios","kind":"aggregate","currency":"GBP"},
+             "range":"\(range)","interval":"5m","generatedAt":"2026-09-10T09:10:00Z","currency":"GBP",
+             "quality":"complete","reasonCodes":[],
+             "coverage":{"pointCount":\(values.count),"complete":true},
+             "portfolioSeries":\(series),"cashSeries":\(series),"holdingsSeries":\(series),
+             "netContributionSeries":\(series),"gainSeries":\(series),"twrSeries":\(series)}
+            """
+        }
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        let release = DispatchSemaphore(value: 0)
+        stub.handler = { request in
+            let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "range" }?.value ?? ""
+            if request.value(forHTTPHeaderField: "If-None-Match") == "\"w1\"" {
+                return Self.httpResponse(request, status: 304, body: "")
+            }
+            if stub.isOffline {
+                // Hold the request open until the test has looked at the chart.
+                _ = release.wait(timeout: .now() + 10)
+                return Self.httpResponse(request, status: 200, body: body(range, [300, 310, 320]))
+            }
+            return Self.httpResponse(request, status: 200, body: body(range, [100, 110]))
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore, cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(), providerPolicy: Self.testProviderPolicy, tokenProvider: { "test-token" }
+        )
+
+        let nothingSaved = await coordinator.savedPortfolioHistory(range: "1d")
+        XCTAssertNil(nothingSaved)
+        guard case .folync = await coordinator.routePortfolioHistory(range: "1d") else {
+            return XCTFail("Expected the first answer to be saved")
+        }
+        let requestsBefore = stub.requests.count
+        let saved = await coordinator.savedPortfolioHistory(range: "1d")
+        XCTAssertEqual(saved?.portfolioSeries.map(\.value), [100, 110])
+        XCTAssertEqual(stub.requests.count, requestsBefore, "Reading the saved history makes no request")
+        let otherRange = await coordinator.savedPortfolioHistory(range: "1w")
+        XCTAssertNil(otherRange, "Only the range asked for")
+        let tooOld = await coordinator.savedPortfolioHistory(range: "1d", now: Date().addingTimeInterval(2 * 24 * 60 * 60))
+        XCTAssertNil(tooOld, "Not when it was received more than a day ago")
+
+        let model = PortfolioMenuChartViewModel(
+            currentValue: 170000, currentTrades: [], preferredCurrency: "GBP", valuationSource: .folyncProvided,
+            folyncCoordinator: coordinator, folyncSettingsStore: settingsStore
+        )
+        defer { model.deactivate() }
+        stub.isOffline = true
+        let shownSaved = expectation(description: "Saved history shown")
+        shownSaved.assertForOverFulfill = false
+        let savedSubscription = model.$chartData.filter { !$0.isEmpty }.sink { _ in shownSaved.fulfill() }
+        model.activate()
+        await fulfillment(of: [shownSaved], timeout: 5)
+        savedSubscription.cancel()
+        XCTAssertEqual(model.chartData.map(\.price), [100, 110], "The saved history is drawn before Folync answers")
+        XCTAssertTrue(model.isLoading, "The request is still running")
+        XCTAssertTrue(model.coverageLabel.hasPrefix("Past 24 hours · Checking Folync"), model.coverageLabel)
+        XCTAssertFalse(model.hasRangeCoverage)
+
+        let loaded = expectation(description: "Folync answered")
+        loaded.assertForOverFulfill = false
+        let loadedSubscription = model.$isLoading.filter { !$0 }.sink { _ in loaded.fulfill() }
+        release.signal()
+        await fulfillment(of: [loaded], timeout: 5)
+        loadedSubscription.cancel()
+        XCTAssertEqual(model.chartData.map(\.price), [300, 310, 320], "Folync's answer replaces the saved history")
+        XCTAssertFalse(model.coverageLabel.contains("Checking"), model.coverageLabel)
+        XCTAssertTrue(model.hasRangeCoverage)
+        XCTAssertEqual(stub.requests.count, requestsBefore + 1, "Still one request per load")
+
+        // A 304 confirms a saved history whose file is not rewritten, so it
+        // still counts as recent although it was received two days ago.
+        let cache = FolyncSupplementalCache(directory: cacheDirectory)
+        let weekPayload = try JSONDecoder().decode(FolyncPortfolioHistory.self, from: Data(body("1w", [200, 210]).utf8))
+        try await cache.save(
+            weekPayload, endpoint: "https://folync.test", scopeID: "all", resource: "portfolio-history",
+            identity: "all", range: "range=1w", etag: "\"w1\"", receiptTime: Date().addingTimeInterval(-2 * 24 * 60 * 60)
+        )
+        let weekBeforeCheck = await coordinator.savedPortfolioHistory(range: "1w")
+        XCTAssertNil(weekBeforeCheck, "Received two days ago and not confirmed since")
+        guard case .folync = await coordinator.routePortfolioHistory(range: "1w") else {
+            return XCTFail("Expected the 304 to return the saved week")
+        }
+        let weekAfterCheck = await coordinator.savedPortfolioHistory(range: "1w")
+        XCTAssertEqual(weekAfterCheck?.portfolioSeries.map(\.value), [200, 210], "A 304 confirms it")
+
+        // When Folync cannot be used, the saved chart shown meanwhile is cleared.
+        stub.isOffline = false
+        let lockedOut = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore, cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(), providerPolicy: Self.testProviderPolicy,
+            tokenProvider: { throw URLError(.userAuthenticationRequired) }
+        )
+        let unusable = PortfolioMenuChartViewModel(
+            currentValue: 170000, currentTrades: [], preferredCurrency: "GBP", valuationSource: .folyncProvided,
+            folyncCoordinator: lockedOut, folyncSettingsStore: settingsStore
+        )
+        defer { unusable.deactivate() }
+        var shownBeforeAnswer: [Double] = []
+        let settled = expectation(description: "Settled without Folync")
+        settled.assertForOverFulfill = false
+        let shownSubscription = unusable.$chartData.filter { !$0.isEmpty }.sink { shownBeforeAnswer = $0.map(\.price) }
+        let settledSubscription = unusable.$isLoading.dropFirst().filter { !$0 }.sink { _ in settled.fulfill() }
+        unusable.activate()
+        await fulfillment(of: [settled], timeout: 5)
+        shownSubscription.cancel()
+        settledSubscription.cancel()
+        XCTAssertEqual(shownBeforeAnswer, [300, 310, 320], "The saved day was shown first")
+        XCTAssertTrue(unusable.chartData.isEmpty, "and is not left on screen when Folync cannot be used")
+        XCTAssertTrue(unusable.coverageLabel.contains("unavailable"), unusable.coverageLabel)
+
+        // Switched off, Folync's saved history is not shown.
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: false, baseURL: "https://folync.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: .disabled
+        ))
+        let whenOff = await coordinator.savedPortfolioHistory(range: "1d")
+        XCTAssertNil(whenOff)
+    }
+
     func testFolyncLineSeriesKeysSeparateRangesAndCustomBounds() {
         let firstStart = Date(timeIntervalSince1970: 1_700_000_000)
         let firstEnd = firstStart.addingTimeInterval(86_400)

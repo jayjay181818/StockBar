@@ -577,6 +577,10 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     private let providerPolicy: StockbarProviderAccessPolicy
     private let backoff: FolyncBackoffCoordinator
     private var memoryCapabilities: [String: FolyncCapabilities] = [:]
+    /// When Folync last confirmed each saved portfolio history, by a full
+    /// answer or a 304. The file is not rewritten on a 304, so its receipt time
+    /// alone would make an unchanged history look old.
+    private var portfolioHistoryConfirmedAt: [String: Date] = [:]
 
     init(
         settingsStore: FolyncSettingsStore = .shared,
@@ -763,7 +767,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         // The optional line-history capability describes individual market prices.
         guard let configuration = await currentConfiguration() else { return .legacy }
         let identity = configuration.settings.scopeID
-        let resource = "portfolio-history"
+        let resource = Self.portfolioHistoryResource
         let query = marketQuery(range: range, from: from, to: to)
         let cacheRange = query.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
         let cached: (payload: FolyncPortfolioHistory, etag: String?, receiptTime: Date)? = try? await cache.load(
@@ -782,7 +786,9 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 query: query,
                 etag: cached?.etag
             )
+            let confirmationKey = portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange)
             if response.statusCode == 304, let cached, isUsablePortfolioHistory(cached.payload) {
+                portfolioHistoryConfirmedAt[confirmationKey] = Date()
                 return .folync(cached.payload, status: sourceStatus(quality: cached.payload.quality, stale: false))
             }
             try await validate(response)
@@ -800,6 +806,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 range: cacheRange,
                 etag: response.etag
             )
+            portfolioHistoryConfirmedAt[confirmationKey] = Date()
             return .folync(payload, status: sourceStatus(quality: payload.quality, stale: false))
         } catch {
             if let cached, isUsablePortfolioHistory(cached.payload) {
@@ -807,6 +814,42 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             }
             return configuration.settings.supplemental.allowLegacyFallback ? .legacy : .unavailable
         }
+    }
+
+    private static let portfolioHistoryResource = "portfolio-history"
+
+    private func portfolioHistoryKey(endpoint: String, scopeID: String, range: String) -> String {
+        "\(endpoint)\n\(scopeID)\n\(range)"
+    }
+
+    /// The portfolio history saved from Folync's last full answer for `range`,
+    /// read from disk: no request and no Keychain read, so it is quick. A chart
+    /// shows it while `routePortfolioHistory` asks Folync whether there is a
+    /// newer one. Nil when Folync is off, nothing usable is saved, or Folync
+    /// last confirmed it, by a full answer or a 304, more than `maximumAge` ago.
+    func savedPortfolioHistory(
+        range: String,
+        maximumAge: TimeInterval = 24 * 60 * 60,
+        now: Date = Date()
+    ) async -> FolyncPortfolioHistory? {
+        let settings = settingsStore.load()
+        guard settings.isEnabled, URL(string: settings.baseURL) != nil else { return nil }
+        let cacheRange = marketQuery(range: range, from: nil, to: nil)
+            .map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
+        guard let saved = try? await cache.load(
+            endpoint: settings.baseURL,
+            scopeID: settings.scopeID,
+            resource: Self.portfolioHistoryResource,
+            identity: settings.scopeID,
+            range: cacheRange,
+            as: FolyncPortfolioHistory.self
+        ) else { return nil }
+        let confirmed = portfolioHistoryConfirmedAt[
+            portfolioHistoryKey(endpoint: settings.baseURL, scopeID: settings.scopeID, range: cacheRange)
+        ]
+        let age = now.timeIntervalSince(max(saved.receiptTime, confirmed ?? .distantPast))
+        guard age >= 0, age <= maximumAge, isUsablePortfolioHistory(saved.payload) else { return nil }
+        return saved.payload
     }
 
     func routeBenchmarks() async -> FolyncRoutedBenchmarkResult {
