@@ -153,6 +153,9 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var coverageLabel = ""
     @Published var hasRangeCoverage = false
+    /// True when Folync did not answer and nothing was saved for this period,
+    /// so the views can say so instead of asking for more stored history.
+    @Published private(set) var folyncUnreachable = false
     /// The period whose data is currently shown; drives the draw-in animation.
     @Published private(set) var loadedRange: MenuChartTimeRange?
 
@@ -279,6 +282,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
             chartData = []
             hasRangeCoverage = false
             coverageLabel = ""
+            folyncUnreachable = false
             shownContext = nil
         }
         if valuationSource == .folyncProvided || selectedTimeRange != .day {
@@ -317,14 +321,21 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                             return
                         }
                         chartData = points
+                        folyncUnreachable = false
                         hasRangeCoverage = history.coverage.complete == true && history.quality == .complete && status == .current && points.count > 1
                         coverageLabel = "\(status.label) · \(history.coverage.pointCount) observations · \(history.interval)"
                         if !hasRangeCoverage { coverageLabel += " · partial history" }
                         // Folync's 1d series is rolling history; Today's P&L still uses its daily reference.
                         if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
+                    case .unreachable:
+                        chartData = []
+                        hasRangeCoverage = false
+                        folyncUnreachable = true
+                        coverageLabel = "Couldn't reach Folync, and nothing is saved for this period yet."
                     case .legacy, .unavailable:
                         chartData = []
                         hasRangeCoverage = false
+                        folyncUnreachable = false
                         coverageLabel = "Folync portfolio history is unavailable for this period. Check the connection and source history."
                     }
                 } else {
@@ -367,6 +378,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     private func showUnavailable(_ message: String, context: LoadContext) {
         chartData = []
         hasRangeCoverage = false
+        folyncUnreachable = false
         coverageLabel = message
         markLoaded(context)
     }
@@ -459,7 +471,9 @@ struct PortfolioMenuPopoverView: View {
                             points: viewModel.chartData,
                             isLoading: viewModel.isLoading,
                             revealTrigger: viewModel.loadedRange?.rawValue ?? "",
-                            emptyMessage: "Portfolio history builds up while Stockbar runs.",
+                            emptyMessage: viewModel.folyncUnreachable
+                                ? "Couldn't reach Folync."
+                                : "Portfolio history builds up while Stockbar runs.",
                             hoveredPoint: $hoveredPoint
                         )
                         .accessibilityLabel("Portfolio history, \(viewModel.selectedTimeRange.description)")

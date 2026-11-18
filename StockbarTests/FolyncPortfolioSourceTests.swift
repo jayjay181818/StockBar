@@ -231,6 +231,106 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertNil(whenOff)
     }
 
+    /// When Folync does not answer and nothing is saved, the chart says
+    /// Folync could not be reached rather than asking for more history.
+    @MainActor
+    func testPortfolioMenuSaysWhenFolyncCannotBeReached() async throws {
+        let suiteName = TestDefaultsSuite.makeName("FolyncMenuUnreachable-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(suiteName)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: .disabled
+        ))
+        let series = "[{\"date\":\"2026-09-10T09:00:00Z\",\"value\":100},{\"date\":\"2026-09-10T09:05:00Z\",\"value\":110}]"
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        let answer = LockedBox<Int?>(nil) // nil: time out; otherwise this HTTP status
+        stub.handler = { request in
+            guard let status = answer.value else { throw URLError(.timedOut) }
+            let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "range" }?.value ?? ""
+            let body = status == 200 && !stub.isOffline ? """
+            {"schemaVersion":2,"sourceRevision":"unreachable-test",
+             "scope":{"id":"all","name":"All portfolios","kind":"aggregate","currency":"GBP"},
+             "range":"\(range)","interval":"1h","generatedAt":"2026-09-10T09:10:00Z","currency":"GBP",
+             "quality":"complete","reasonCodes":[],"coverage":{"pointCount":2,"complete":true},
+             "portfolioSeries":\(series),"cashSeries":\(series),"holdingsSeries":\(series),
+             "netContributionSeries":\(series),"gainSeries":\(series),"twrSeries":\(series)}
+            """ : "{}"
+            return Self.httpResponse(request, status: status, body: body)
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore, cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(), providerPolicy: Self.testProviderPolicy, tokenProvider: { "test-token" }
+        )
+
+        // Folync did not answer: a timeout, or the server in front of it saying so.
+        for status in [nil, 502, 503, 504] as [Int?] {
+            answer.value = status
+            guard case .unreachable = await coordinator.routePortfolioHistory(range: "1w") else {
+                return XCTFail("Expected unreachable for \(status.map(String.init) ?? "a timeout")")
+            }
+        }
+        // Folync answered, but with an error or data Stockbar cannot use.
+        answer.value = 500
+        guard case .unavailable = await coordinator.routePortfolioHistory(range: "1w") else {
+            return XCTFail("A 500 is an answer, not an unreachable server")
+        }
+        answer.value = 200
+        stub.isOffline = true // Answer 200 with an empty object.
+        guard case .unavailable = await coordinator.routePortfolioHistory(range: "1w") else {
+            return XCTFail("Unusable data is not an unreachable server")
+        }
+
+        let model = PortfolioMenuChartViewModel(
+            currentValue: 170000, currentTrades: [], preferredCurrency: "GBP", valuationSource: .folyncProvided,
+            folyncCoordinator: coordinator, folyncSettingsStore: settingsStore
+        )
+        defer { model.deactivate() }
+        func load(_ range: MenuChartTimeRange) async {
+            let loaded = expectation(description: "Loaded \(range)")
+            loaded.assertForOverFulfill = false
+            let subscription = model.$isLoading.dropFirst().filter { !$0 }.sink { _ in loaded.fulfill() }
+            model.activate()
+            model.setTimeRange(range)
+            model.loadChartData()
+            await fulfillment(of: [loaded], timeout: 5)
+            subscription.cancel()
+        }
+
+        answer.value = nil
+        await load(.week)
+        XCTAssertTrue(model.folyncUnreachable)
+        XCTAssertTrue(model.chartData.isEmpty)
+        XCTAssertTrue(model.coverageLabel.hasPrefix("Couldn't reach Folync"), model.coverageLabel)
+
+        // Once Folync answers, the week is saved and the state clears.
+        answer.value = 200
+        stub.isOffline = false
+        await load(.week)
+        XCTAssertFalse(model.folyncUnreachable)
+        XCTAssertEqual(model.chartData.map(\.price), [100, 110])
+
+        // A saved copy is shown, marked stale, rather than "couldn't reach".
+        answer.value = nil
+        await load(.week)
+        XCTAssertFalse(model.folyncUnreachable)
+        XCTAssertEqual(model.chartData.map(\.price), [100, 110])
+        XCTAssertTrue(model.coverageLabel.hasPrefix(FolyncSupplementalSourceStatus.stale.label), model.coverageLabel)
+
+        // A range with nothing saved still says so, and switching away clears it.
+        await load(.month)
+        XCTAssertTrue(model.folyncUnreachable)
+        answer.value = 500
+        await load(.day)
+        XCTAssertFalse(model.folyncUnreachable)
+        XCTAssertTrue(model.coverageLabel.contains("unavailable"), model.coverageLabel)
+    }
+
     func testFolyncLineSeriesKeysSeparateRangesAndCustomBounds() {
         let firstStart = Date(timeIntervalSince1970: 1_700_000_000)
         let firstEnd = firstStart.addingTimeInterval(86_400)
@@ -2094,6 +2194,16 @@ final class FolyncPortfolioSourceTests: XCTestCase {
       }
     }
     """
+}
+
+private final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
 }
 
 private final class FolyncHTTPStub: @unchecked Sendable {

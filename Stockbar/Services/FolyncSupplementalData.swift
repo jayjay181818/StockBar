@@ -407,6 +407,9 @@ enum FolyncRoutedPortfolioResult: Sendable {
     case folync(FolyncPortfolioHistory, status: FolyncSupplementalSourceStatus)
     case legacy
     case unavailable
+    /// Folync did not answer (timeout, no connection, or a 502/503/504 from
+    /// the server in front of it) and nothing usable is saved for the range.
+    case unreachable
 }
 
 enum FolyncRoutedBenchmarkResult: Sendable {
@@ -581,6 +584,9 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     /// answer or a 304. The file is not rewritten on a 304, so its receipt time
     /// alone would make an unchanged history look old.
     private var portfolioHistoryConfirmedAt: [String: Date] = [:]
+    /// Ranges whose last portfolio-history request failed, so the log gets one
+    /// line when a range starts failing and one when it works again.
+    private var portfolioHistoryFailing: Set<String> = []
 
     init(
         settingsStore: FolyncSettingsStore = .shared,
@@ -789,6 +795,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             let confirmationKey = portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange)
             if response.statusCode == 304, let cached, isUsablePortfolioHistory(cached.payload) {
                 portfolioHistoryConfirmedAt[confirmationKey] = Date()
+                await notePortfolioHistoryRecovered(key: confirmationKey, range: range)
                 return .folync(cached.payload, status: sourceStatus(quality: cached.payload.quality, stale: false))
             }
             try await validate(response)
@@ -807,13 +814,43 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 etag: response.etag
             )
             portfolioHistoryConfirmedAt[confirmationKey] = Date()
+            await notePortfolioHistoryRecovered(key: confirmationKey, range: range)
             return .folync(payload, status: sourceStatus(quality: payload.quality, stale: false))
         } catch {
-            if let cached, isUsablePortfolioHistory(cached.payload) {
-                return .folync(cached.payload, status: .stale)
+            let category = FolyncRefreshSchedule.failureCategory(error)
+            let usableCache = cached.flatMap { isUsablePortfolioHistory($0.payload) ? $0.payload : nil }
+            if category != "cancelled" {
+                await notePortfolioHistoryFailed(
+                    key: portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange),
+                    range: range, category: category, showingSaved: usableCache != nil
+                )
             }
-            return configuration.settings.supplemental.allowLegacyFallback ? .legacy : .unavailable
+            if let usableCache {
+                return .folync(usableCache, status: .stale)
+            }
+            if configuration.settings.supplemental.allowLegacyFallback { return .legacy }
+            return Self.isUnreachable(category: category) ? .unreachable : .unavailable
         }
+    }
+
+    /// True when a failure means Folync did not answer at all, rather than
+    /// answering with an error or data Stockbar cannot use.
+    static func isUnreachable(category: String) -> Bool {
+        ["timeout", "offline", "unreachable", "http-502", "http-503", "http-504"].contains(category)
+    }
+
+    private func notePortfolioHistoryFailed(key: String, range: String, category: String, showingSaved: Bool) async {
+        let fallback = showingSaved ? "showing the saved copy" : "nothing saved to show"
+        if portfolioHistoryFailing.insert(key).inserted {
+            await Logger.shared.warning("Folync portfolio history (\(range)) failed (\(category)); \(fallback)")
+        } else {
+            await Logger.shared.debug("Folync portfolio history (\(range)) failed again (\(category)); \(fallback)")
+        }
+    }
+
+    private func notePortfolioHistoryRecovered(key: String, range: String) async {
+        guard portfolioHistoryFailing.remove(key) != nil else { return }
+        await Logger.shared.info("Folync portfolio history (\(range)) answered again")
     }
 
     private static let portfolioHistoryResource = "portfolio-history"
