@@ -7,6 +7,20 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.1 (381.5)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.5</link>
+      <pubDate>Wed, 18 Nov 2026 15:08:14 +0000</pubDate>
+      <sparkle:version>381.5</sparkle:version>
+      <sparkle:shortVersionString>3.8.1</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 381.5 of Stockbar 3.8.1. Changes since testing-381.2:
+
+- Name a stale Folync chart and count any connection failure as unreachable
+- Say when Folync can't be reached</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-381.5/Stockbar-381.5.zip" length="7222607" type="application/octet-stream" sparkle:edSignature="RPBYkvDgg3sMt6jFBgvYF7IAO2BV6Ts9TNjaDVhfZkJgzKjQ99NJSG51kW/I3HYUrsaEhQGAvjY6G5zlE6j7CA=="></enclosure>
+    </item>
+    <item>
       <title>3.8.1 (381.2)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.2</link>
       <pubDate>Wed, 18 Nov 2026 10:22:27 +0000</pubDate>
@@ -178,6 +192,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 379K2cQssFrsMy9zS9jpHHM3K3JZaR/1KpvEBjtOCEhXGRhWorcfWSp/7Xbze19RdNXETdXs9ZZUGwLZVzSgCA==
-length: 16364
+edSignature: 8UrprKJTqdloswnTXIHJbWCmJfZWiM7gwg9ZJLY7JT4A6jjbp2v5XUEpEJVPbXZr6aIrJUjUCYJxzfcOjaurCg==
+length: 17332
 -->
