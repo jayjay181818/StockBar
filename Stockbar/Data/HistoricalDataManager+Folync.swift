@@ -288,7 +288,7 @@ extension HistoricalDataManager {
             let coverage = "\(history.coverage.pointCount) points · \(history.interval) · \(completeness)"
             folyncCoverageBySeries[valueKey] = coverage
             folyncCoverageBySeries[gainKey] = coverage
-        case .unavailable:
+        case .unavailable, .unreachable:
             folyncPortfolioValueOverlays.removeValue(forKey: valueKey)
             folyncPortfolioGainOverlays.removeValue(forKey: gainKey)
             folyncUnavailableSeries.insert(valueKey)
