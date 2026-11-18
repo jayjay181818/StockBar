@@ -7,6 +7,20 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.3</link>
+      <pubDate>Wed, 18 Nov 2026 18:13:10 +0000</pubDate>
+      <sparkle:version>382.3</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.3 of Stockbar 3.8.2. Changes since v3.8.2:
+
+- Say "Couldn't reach Folync" on the Performance tab's portfolio charts
+- Keep the settings-transfer tests' defaults in memory</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.3/Stockbar-382.3.zip" length="7225945" type="application/octet-stream" sparkle:edSignature="GJ9HQMiPht2J5TBjSKFYXWwCxLdgykasPj3Jnkh5Mu9s23hLe6FJDXWXHBxxqt8JfSqb+qNR9naQiH1U92FYCQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.8.2</link>
       <pubDate>Wed, 18 Nov 2026 15:40:24 +0000</pubDate>
@@ -170,6 +184,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: eFPaeHU4FXxWXZCMKFOqs/5nmViYZE2+Jn5GMbuaaCMUjDR4CfEQtMeDtfRvMRqrOFuXVVGcgZZWhZMpq679DQ==
-length: 16083
+edSignature: 75cnBL4vGo7eooeJLspai4vpSZ08YB43QvuOPv15WudgCZC2nMaHYhPdI8VgH9FL/e294Zv19UIau5tcp9gCDg==
+length: 17060
 -->
