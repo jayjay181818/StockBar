@@ -291,6 +291,21 @@ final class PortfolioMenuChartViewModel: ObservableObject {
             historyTask = Task { [weak self] in
                 guard let self, !Task.isCancelled else { return }
                 if source == .folyncProvided {
+                    // Show the history saved last time while Folync is asked for
+                    // a newer one, so the chart does not wait on the network.
+                    if chartData.isEmpty,
+                       let saved = await folyncCoordinator.savedPortfolioHistory(range: range.chartTimeRange.folyncRange),
+                       !Task.isCancelled, chartData.isEmpty,
+                       revision == historicalDataManager.folyncSupplementalConfigurationRevision,
+                       let points = PortfolioMenuChartDataBuilder.providerPoints(
+                           saved, scopeID: scopeID, currency: currency, range: range
+                       ) {
+                        chartData = points
+                        loadedRange = range
+                        coverageLabel = "Checking Folync · \(saved.coverage.pointCount) observations · \(saved.interval)"
+                        if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
+                    }
+                    guard !Task.isCancelled else { return }
                     let result = await folyncCoordinator.routePortfolioHistory(range: range.chartTimeRange.folyncRange)
                     guard !Task.isCancelled, revision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                     switch result {
