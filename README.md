@@ -420,7 +420,12 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.8.1 (current): P&L against net deposits
+### 🆕 Version 3.8.2 (current): Folync chart without the wait
+- **Portfolio chart**: With Folync, the popover and Overview chart draws the history saved from Folync's last answer at once, marked **Checking Folync**, and updates when Folync replies.
+- **Folync outages**: A period with nothing saved says **Couldn't reach Folync** instead of asking for more stored history, and the log records why a request failed.
+- See [Changelogs/release_notes_v3.8.2.md](./Changelogs/release_notes_v3.8.2.md).
+
+### Version 3.8.1: P&L against net deposits
 - **Total P&L**: With Folync as the portfolio source, total P&L in the portfolio popover and the Overview is measured against net deposits by default: the money paid in less the money taken out, the figure Folync shows as "What if not investing". Choose **Cost of Current Holdings** in Settings → General → Measure P&L Against for the old figure.
 - **Fix**: "Updated" shows when a cached price was fetched, not when Stockbar received it.
 - **Fix**: Price alerts save their last checked prices once per refresh.
@@ -568,6 +573,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 18, 2026 · Version 3.8.1</sub>
+<sub>Last updated: November 18, 2026 · Version 3.8.2</sub>
 
 </div>

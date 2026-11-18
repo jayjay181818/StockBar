@@ -49,7 +49,10 @@ struct StockbarOverviewView: View {
     /// Folync can return a full chart and still mark the period partial (carried or stale
     /// prices); the change is then withheld, and more local history would not bring it back.
     private var rangeChangeUnavailableHint: String {
-        summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
+        if summary.valuationSource == .folyncProvided && chartModel.isLoading { return "Checking Folync" }
+        if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable { return "Couldn't reach Folync" }
+        if summary.valuationSource == .folyncProvided && chartModel.folyncStale { return "No current history from Folync" }
+        return summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
             ? "Folync marks this period partial"
             : "Needs more stored history"
     }
@@ -293,6 +296,13 @@ struct StockbarOverviewView: View {
             .chartReveal(trigger: chartRevealKey)
             .accessibilityLabel("Portfolio value over \(chartModel.selectedTimeRange.description), in \(summary.currency)")
             .accessibilityValue(rangeChange.map { String(format: "%+.2f percent", $0.percent) } ?? "Change unavailable")
+        } else if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable {
+            ContentUnavailableView(
+                "Couldn't reach Folync",
+                systemImage: "wifi.exclamationmark",
+                description: Text("Folync didn't answer, and nothing is saved for this period yet. The chart appears once Folync answers.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
                 chartModel.selectedTimeRange == .day && summary.valuationSource == .folyncProvided
