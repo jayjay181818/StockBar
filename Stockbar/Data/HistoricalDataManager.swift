@@ -44,6 +44,10 @@ class HistoricalDataManager {
     private(set) var hasLoadedStoredPortfolioHistory = false
     // Written only in HistoricalDataManager+Folync.swift.
     var folyncCoverageBySeries: [String: String] = [:]
+    /// Folync portfolio series whose last request got no answer from Folync
+    /// (see `FolyncRoutedPortfolioResult.unreachable`) with nothing saved to show.
+    // Written only in HistoricalDataManager+Folync.swift.
+    var folyncUnreachableSeries: Set<String> = []
     
     // MARK: - Enhanced Portfolio Storage
     

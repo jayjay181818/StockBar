@@ -922,21 +922,42 @@ struct PerformanceChartView: View {
     }
     
     private var emptyChartView: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
+        let unreachable = selectedPortfolioFolyncUnreachable
+        return VStack(spacing: 8) {
+            Image(systemName: unreachable ? "wifi.exclamationmark" : "chart.line.uptrend.xyaxis")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
                 .accessibilityHidden(true)
 
-            Text("No Data Available")
+            Text(unreachable ? "Couldn't reach Folync" : "No Data Available")
                 .font(.headline)
                 .foregroundColor(.secondary)
 
-            Text("Charts will appear after collecting price data")
+            Text(unreachable
+                 ? "Folync didn't answer, and nothing is saved for this period yet. The chart appears once Folync answers."
+                 : "Charts will appear after collecting price data")
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(height: 250)
+    }
+
+    /// A portfolio chart whose Folync history got no answer, with nothing saved.
+    private var selectedPortfolioFolyncUnreachable: Bool {
+        guard !isCandlestickActive else { return false }
+        let kind: String
+        switch selectedChartType {
+        case .portfolioValue: kind = "portfolio-value"
+        case .portfolioGains: kind = "portfolio-gain"
+        case .individualStock: return false
+        }
+        return historicalDataManager.folyncPortfolioUnreachable(
+            kind: kind,
+            timeRange: selectedTimeRange,
+            customFrom: queryCustomFrom,
+            customTo: queryCustomTo
+        )
     }
 
     /// Money for the chart's labels, written the same way as the holdings table.

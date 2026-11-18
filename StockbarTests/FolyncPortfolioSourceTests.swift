@@ -231,6 +231,48 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertNil(whenOff)
     }
 
+    /// The Performance tab's portfolio charts say Folync couldn't be reached,
+    /// beside the "Unavailable" badge, only for the series it didn't answer.
+    @MainActor
+    func testPerformancePortfolioChartSaysWhenFolyncCannotBeReached() {
+        let manager = HistoricalDataManager.shared
+        manager.clearFolyncSupplementalOverlays()
+        defer { manager.clearFolyncSupplementalOverlays() }
+
+        func state(_ kind: String, _ range: ChartTimeRange) -> (FolyncSupplementalSourceStatus?, Bool, String?) {
+            (manager.folyncPortfolioSourceStatus(kind: kind, timeRange: range),
+             manager.folyncPortfolioUnreachable(kind: kind, timeRange: range),
+             manager.folyncPortfolioCoverage(kind: kind, timeRange: range))
+        }
+
+        manager.applyFolyncPortfolioHistory(.unreachable, timeRange: .week, customFrom: nil, customTo: nil)
+        for kind in ["portfolio-value", "portfolio-gain"] {
+            let (status, unreachable, coverage) = state(kind, .week)
+            XCTAssertEqual(status, .unavailable, kind)
+            XCTAssertTrue(unreachable, kind)
+            XCTAssertEqual(coverage, "Couldn't reach Folync", kind)
+        }
+        XCTAssertFalse(manager.folyncPortfolioUnreachable(kind: "portfolio-value", timeRange: .month))
+
+        // Folync answered with an error or unusable data: unavailable, no reason given.
+        manager.applyFolyncPortfolioHistory(.unavailable, timeRange: .week, customFrom: nil, customTo: nil)
+        var (status, unreachable, coverage) = state("portfolio-value", .week)
+        XCTAssertEqual(status, .unavailable)
+        XCTAssertFalse(unreachable)
+        XCTAssertNil(coverage)
+
+        manager.applyFolyncPortfolioHistory(.unreachable, timeRange: .week, customFrom: nil, customTo: nil)
+        manager.applyFolyncPortfolioHistory(.legacy, timeRange: .week, customFrom: nil, customTo: nil)
+        (status, unreachable, coverage) = state("portfolio-gain", .week)
+        XCTAssertEqual(status, .legacy)
+        XCTAssertFalse(unreachable)
+        XCTAssertNil(coverage)
+
+        manager.applyFolyncPortfolioHistory(.unreachable, timeRange: .month, customFrom: nil, customTo: nil)
+        manager.clearFolyncSupplementalOverlays()
+        XCTAssertFalse(manager.folyncPortfolioUnreachable(kind: "portfolio-value", timeRange: .month))
+    }
+
     /// When Folync does not answer and nothing is saved, the chart says
     /// Folync could not be reached rather than asking for more history.
     @MainActor
