@@ -7,109 +7,64 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
-      <title>3.8.1 (380.18)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.18</link>
-      <pubDate>Wed, 18 Nov 2026 09:19:14 +0000</pubDate>
-      <sparkle:version>380.18</sparkle:version>
+      <title>3.8.1 (381)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.8.1</link>
+      <pubDate>Wed, 18 Nov 2026 09:23:37 +0000</pubDate>
+      <sparkle:version>381</sparkle:version>
       <sparkle:shortVersionString>3.8.1</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
       <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.18 of Stockbar 3.8.1. Changes since testing-380.16:
+      <description sparkle:format="markdown"># StockBar v3.8.1 Release Notes
 
-- Release 3.8.1</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.18/Stockbar-380.18.zip" length="7208657" type="application/octet-stream" sparkle:edSignature="v/H2WdcswpjQ5xYgap9S08Ir8ky5Gtea0oXS6OSMfW6SiwTN6tGI3zall2RCrqCkxH8XG5MQwrxvhbAs3TKbCA=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.16)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.16</link>
-      <pubDate>Tue, 17 Nov 2026 14:02:08 +0000</pubDate>
-      <sparkle:version>380.16</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.16 of Stockbar 3.8.0. Changes since testing-380.13:
+**Status:** Implemented  
+**Date:** 2026-11-18
 
-- Never take net deposits from a stale cached history
-- Measure portfolio P&amp;L against net deposits</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.16/Stockbar-380.16.zip" length="7208657" type="application/octet-stream" sparkle:edSignature="ytWHxJcga+yRTpjZTWKe217GvVLYNptjSPa7H1+B6XJRzrgNJ+b34q+hE2TUpIhaV10QjJzLO1Tj7c6Q694XCg=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.13)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.13</link>
-      <pubDate>Tue, 17 Nov 2026 12:53:41 +0000</pubDate>
-      <sparkle:version>380.13</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.13 of Stockbar 3.8.0. Changes since testing-380.11:
+With Folync as the portfolio source, total P&amp;L is now measured against the money you paid in, less what you took out, rather than against what the shares you hold cost. This release also fixes when "Updated" says a cached price was fetched, and saves price alerts' last checked prices less often.
 
-- Show when a cached quote was fetched, not when it was read</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.13/Stockbar-380.13.zip" length="7198312" type="application/octet-stream" sparkle:edSignature="Qugc3WyEQEMFgPDrDUa0jAEMvIEW421UxeBSHAgW9tAIu/p5bbcA1WNOmBbU76GB0dcHMh0MGpe6OwOL4tvmCg=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.11)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.11</link>
-      <pubDate>Tue, 17 Nov 2026 12:24:32 +0000</pubDate>
-      <sparkle:version>380.11</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.11 of Stockbar 3.8.0. Changes since testing-380.9:
+## After updating
 
-- Save price alerts' last checked prices once per refresh</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.11/Stockbar-380.11.zip" length="7197489" type="application/octet-stream" sparkle:edSignature="ky7f/3pLZow6xY8NBeOguXT6Elg1Q7nI8i4C/J/+FM0SafOhAdvg2NGio8TTR1iU6A9XirHBoql36z+CTkjXDA=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.9)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.9</link>
-      <pubDate>Tue, 17 Nov 2026 11:48:02 +0000</pubDate>
-      <sparkle:version>380.9</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.9 of Stockbar 3.8.0. Changes since testing-380.7:
+- **Total P&amp;L changes for a Folync portfolio.** In the portfolio popover and the Overview summary it is now measured against **net deposits** by default. That is the figure Folync's web dashboard shows as "What if not investing". The figure will usually differ from the one shown in 3.8.0. To go back to the old figure, choose **Cost of Current Holdings** in **Settings → General → Measure P&amp;L Against**.
+- Local and Trading 212 portfolios are not affected.
+- This version arrives through the updater. Nothing needs doing by hand, apart from allowing Keychain access once after the update, as before.
 
-- Correct the Folync and exchange-rate intervals; keep the wiki in step</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.9/Stockbar-380.9.zip" length="7196376" type="application/octet-stream" sparkle:edSignature="ADBOG5IulEfjGbTrd4nXwTMFN2ciFFTU0yGMe/odNl3egHGrW4VteAKKzE+TMdsXxSedH9v1sZaccxlEOkDODQ=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.7)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.7</link>
-      <pubDate>Tue, 17 Nov 2026 10:59:41 +0000</pubDate>
-      <sparkle:version>380.7</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.7 of Stockbar 3.8.0. Changes since testing-380.5:
+## Total P&amp;L against net deposits
 
-- Make the docs match the app</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.7/Stockbar-380.7.zip" length="7196378" type="application/octet-stream" sparkle:edSignature="RK+lGdSUZzeN2qZZGl2JORS10eRj+bkOa47GlagyG0uOkkXfsXx7v5TjtYqTUCyLjWXmbhknCQGvICI748pbDA=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.5)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.5</link>
-      <pubDate>Tue, 17 Nov 2026 10:55:03 +0000</pubDate>
-      <sparkle:version>380.5</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.5 of Stockbar 3.8.0. Changes since testing-380.2:
+Total P&amp;L used to be the market value of the shares you hold less what those shares cost. That leaves out cash, sales, dividends, interest and fees, so it is not what the account has made.
 
-- chore(python): update locked packages</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.5/Stockbar-380.5.zip" length="7196377" type="application/octet-stream" sparkle:edSignature="ZnS5xZhyzud3nibFMV2J3YvKs6gJrA4S/UobBu83mQJw05sajMv/eIPqZSJTE8sCQbVkSEmei9xTJ2YzLb+pAA=="></enclosure>
-    </item>
-    <item>
-      <title>3.8.0 (380.2)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-380.2</link>
-      <pubDate>Tue, 17 Nov 2026 10:50:40 +0000</pubDate>
-      <sparkle:version>380.2</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>testing</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Testing build 380.2 of Stockbar 3.8.0. Changes since v3.8.0:
+For a Folync portfolio, Stockbar now reads net deposits, the money paid in less the money taken out, from Folync's portfolio history. It measures the portfolio value against them, and that value includes cash. An example with invented amounts:
 
-- Link the wiki from the README</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-380.2/Stockbar-380.2.zip" length="7196396" type="application/octet-stream" sparkle:edSignature="vfOgdcXOt9fdCVSNZkuOjW+WENxv96JX2KaTrJyHuv9axMonBfARpUzPXdRI5pnQ4eHN6SovQ9HP3XSBDuA/DQ=="></enclosure>
+| | Amount |
+|---|---|
+| Net deposits | £8,800 |
+| Shares, at market value | £8,000 |
+| Cash | £1,600 |
+| Portfolio value | £9,600 |
+| What the shares cost | £7,500 |
+| **P&amp;L against cost of current holdings** | +£500 (+6.67%) |
+| **P&amp;L against net deposits** | +£800 (+9.09%) |
+
+- **Portfolio popover:** **Total P&amp;L** uses the basis you choose. The box beside it shows **Net Deposits** or **Cost Basis**, with its amount.
+- **Overview:** when P&amp;L is measured against net deposits, the summary adds **Total P&amp;L** and **Net deposits** rows. It keeps **Unrealised P&amp;L** and **Cost basis**.
+- **Timing:** net deposits are read at launch and then at most every five minutes. Folync adds a new deposit to its history a minute or two after Trading 212 lists it. Until Stockbar reads it, which takes up to about ten minutes, the deposit counts as gain. **Refresh Now** in Stockbar's Folync settings reads it at once.
+- **When Folync cannot give net deposits,** for example because its history is missing exchange rates for some transactions, or it cannot be read for fifteen minutes, total P&amp;L is measured against cost basis and the popover box says **Cost Basis**.
+- **No percentage** is shown when net deposits are zero or negative.
+- **Not changed:** the menu bar item, which shows the day's change; the per-stock popovers; the Holdings table; the Performance charts; recorded history.
+
+## Settings
+
+- **Settings → General → Measure P&amp;L Against:** **Net Deposits** (the default) or **Cost of Current Holdings**. It is included in Settings export.
+
+## Fixes
+
+- **"Updated" shows when a price was fetched.** The Python helper can serve a price it fetched a few minutes earlier, for example after **Refresh Now**. Stockbar used to stamp it with the time it received it, so "Updated" said "just now" and the history point was recorded at the later time. It now uses the time the price was fetched.
+- **Price alerts** saved the record of last checked prices once for every alerted symbol whose price moved. They now save it once per refresh, and only when a remembered price changed.
+
+## For developers
+
+- `FolyncNetDeposits` (`FolyncSupplementalData.swift`) takes the last point of the `3m` history's `netContributionSeries`. `refreshFolyncNetDeposits(force:now:)` in `FolyncPortfolioSession.swift` reads it through `routePortfolioHistory` and never uses a history marked stale. `DisplayPortfolioSummary.totalReturn(measuredAgainst:)` chooses the basis; `totalGain` keeps its cost-basis meaning.
+- Each quote from the Python helper carries `fetchedAt`, which its cache keeps.
+- The locked Python helper packages were updated (pandas 3.1.1, platformdirs 4.14.5, soupsieve 4.0.1). The pins Stockbar checks at launch are unchanged.
+- The docs were checked against the app: keyboard shortcuts, Trading 212 defaults, alerts, chart ranges and the Folync and exchange-rate intervals. The README links the [wiki](https://github.com/jayjay181818/StockBar/wiki).</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/v3.8.1/Stockbar-3.8.1.zip" length="7208655" type="application/octet-stream" sparkle:edSignature="WbDRMOLAdtyx9h2wdAqzwp7DaMOM6L4gYSc8VVtn1bmvdgMlo3tYjtmzu7bd5SNG4/KeKEg2emYiPJm+NXULDg=="></enclosure>
     </item>
     <item>
       <title>3.8.0 (380)</title>
@@ -210,6 +165,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: sneS6CrF4wCzqcm93g14wGbsMoar0UeWCpfwH6y25CgS6RbmLYK4/8C0LxxnQDZlWyISPMeuQTJTq/HdxrVvDg==
-length: 17531
+edSignature: eJcRQHcYmyDj9ia9HmfOsYw1qA06dz9kAarBsl3BZ4QK70AYQZg65lwSmJvlil7mXVT5nDLXqMmZwI7RZY9qBQ==
+length: 15446
 -->
