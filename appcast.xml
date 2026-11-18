@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.1 (381.2)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-381.2</link>
+      <pubDate>Wed, 18 Nov 2026 10:22:27 +0000</pubDate>
+      <sparkle:version>381.2</sparkle:version>
+      <sparkle:shortVersionString>3.8.1</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 381.2 of Stockbar 3.8.1. Changes since v3.8.1:
+
+- Draw the saved Folync chart while Folync is asked for a newer one</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-381.2/Stockbar-381.2.zip" length="7211570" type="application/octet-stream" sparkle:edSignature="VgVpcrxDN33izsu/VjZOFP6WkqkqsXsTaNpGpC2QnG17A3gpfyWs9/5QVTMlw3aYk/jDk7NLsgFvnl8j7Te3BA=="></enclosure>
+    </item>
+    <item>
       <title>3.8.1 (381)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/v3.8.1</link>
       <pubDate>Wed, 18 Nov 2026 09:23:37 +0000</pubDate>
@@ -165,6 +178,6 @@ Stockbar now updates itself, and keeps every credential in one Keychain item so 
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: eJcRQHcYmyDj9ia9HmfOsYw1qA06dz9kAarBsl3BZ4QK70AYQZg65lwSmJvlil7mXVT5nDLXqMmZwI7RZY9qBQ==
-length: 15446
+edSignature: 379K2cQssFrsMy9zS9jpHHM3K3JZaR/1KpvEBjtOCEhXGRhWorcfWSp/7Xbze19RdNXETdXs9ZZUGwLZVzSgCA==
+length: 16364
 -->
