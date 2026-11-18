@@ -95,7 +95,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
 ### 📊 Menu bar
-- The portfolio item shows total value and today's change, with a popover chart (Today, 1 Week, 1 Month).
+- The portfolio item shows total value and today's change, with a popover chart (Today, 1 Week, 1 Month). With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
 - Per-stock items have their own display modes or a custom template (`{symbol} {price} {arrow}{changePct}`), plus a popover with an optional S&P 500 or FTSE 100 benchmark line.
 - Stock items can be limited to times when an external display is connected.
 
@@ -420,7 +420,13 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.8.0 (current): Lighter and quieter
+### 🆕 Version 3.8.1 (current): P&L against net deposits
+- **Total P&L**: With Folync as the portfolio source, total P&L in the portfolio popover and the Overview is measured against net deposits by default: the money paid in less the money taken out, the figure Folync shows as "What if not investing". Choose **Cost of Current Holdings** in Settings → General → Measure P&L Against for the old figure.
+- **Fix**: "Updated" shows when a cached price was fetched, not when Stockbar received it.
+- **Fix**: Price alerts save their last checked prices once per refresh.
+- See [Changelogs/release_notes_v3.8.1.md](./Changelogs/release_notes_v3.8.1.md).
+
+### Version 3.8.0: Lighter and quieter
 - **Memory**: Idle memory is about a fifth lower, and stored history loads at launch in about half the time, in the project's benchmark on a made-up portfolio.
 - **Refreshes**: Each price refresh uses about half the processor time. The Python helper reads and writes its cache once per refresh, and the closed portfolio popover is no longer redrawn.
 - **Python helper**: **Quit Python Helper When Idle** is now on by default. The idle helper quits after 90 seconds and starts again for the next refresh. Turn it off in Settings → Advanced → Memory to keep it for 15 minutes.
@@ -562,6 +568,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 17, 2026 · Version 3.8.0</sub>
+<sub>Last updated: November 18, 2026 · Version 3.8.1</sub>
 
 </div>
