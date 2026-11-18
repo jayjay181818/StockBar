@@ -407,7 +407,7 @@ enum FolyncRoutedPortfolioResult: Sendable {
     case folync(FolyncPortfolioHistory, status: FolyncSupplementalSourceStatus)
     case legacy
     case unavailable
-    /// Folync did not answer (timeout, no connection, or a 502/503/504 from
+    /// Folync did not answer (no HTTP response at all, or a 502/503/504 from
     /// the server in front of it) and nothing usable is saved for the range.
     case unreachable
 }
@@ -833,10 +833,13 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         }
     }
 
-    /// True when a failure means Folync did not answer at all, rather than
-    /// answering with an error or data Stockbar cannot use.
+    /// True when a failure means Folync did not answer at all: no HTTP
+    /// response (any connection error, see `FolyncRefreshSchedule.failureCategory`)
+    /// or a gateway saying it could not reach Folync. An error status or data
+    /// Stockbar cannot use is an answer.
     static func isUnreachable(category: String) -> Bool {
         ["timeout", "offline", "unreachable", "http-502", "http-503", "http-504"].contains(category)
+            || category.hasPrefix("network-")
     }
 
     private func notePortfolioHistoryFailed(key: String, range: String, category: String, showingSaved: Bool) async {

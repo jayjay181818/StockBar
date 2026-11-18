@@ -51,6 +51,7 @@ struct StockbarOverviewView: View {
     private var rangeChangeUnavailableHint: String {
         if summary.valuationSource == .folyncProvided && chartModel.isLoading { return "Checking Folync" }
         if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable { return "Couldn't reach Folync" }
+        if summary.valuationSource == .folyncProvided && chartModel.folyncStale { return "No current history from Folync" }
         return summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
             ? "Folync marks this period partial"
             : "Needs more stored history"

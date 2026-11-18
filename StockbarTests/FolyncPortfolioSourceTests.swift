@@ -248,9 +248,11 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         let series = "[{\"date\":\"2026-09-10T09:00:00Z\",\"value\":100},{\"date\":\"2026-09-10T09:05:00Z\",\"value\":110}]"
         let stub = FolyncHTTPStub()
         FolyncURLProtocolStub.stub = stub
-        let answer = LockedBox<Int?>(nil) // nil: time out; otherwise this HTTP status
+        // nil: time out; negative: fail with that URLError code; otherwise this HTTP status.
+        let answer = LockedBox<Int?>(nil)
         stub.handler = { request in
             guard let status = answer.value else { throw URLError(.timedOut) }
+            if status < 0 { throw URLError(URLError.Code(rawValue: status)) }
             let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "range" }?.value ?? ""
             let body = status == 200 && !stub.isOffline ? """
@@ -268,8 +270,9 @@ final class FolyncPortfolioSourceTests: XCTestCase {
             session: Self.stubSession(), providerPolicy: Self.testProviderPolicy, tokenProvider: { "test-token" }
         )
 
-        // Folync did not answer: a timeout, or the server in front of it saying so.
-        for status in [nil, 502, 503, 504] as [Int?] {
+        // Folync did not answer: a timeout, any other connection failure such
+        // as TLS, or the server in front of it saying so.
+        for status in [nil, URLError.Code.secureConnectionFailed.rawValue, 502, 503, 504] as [Int?] {
             answer.value = status
             guard case .unreachable = await coordinator.routePortfolioHistory(range: "1w") else {
                 return XCTFail("Expected unreachable for \(status.map(String.init) ?? "a timeout")")
@@ -305,6 +308,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         answer.value = nil
         await load(.week)
         XCTAssertTrue(model.folyncUnreachable)
+        XCTAssertFalse(model.folyncStale)
         XCTAssertTrue(model.chartData.isEmpty)
         XCTAssertTrue(model.coverageLabel.hasPrefix("Couldn't reach Folync"), model.coverageLabel)
 
@@ -313,18 +317,21 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         stub.isOffline = false
         await load(.week)
         XCTAssertFalse(model.folyncUnreachable)
+        XCTAssertFalse(model.folyncStale)
         XCTAssertEqual(model.chartData.map(\.price), [100, 110])
 
         // A saved copy is shown, marked stale, rather than "couldn't reach".
         answer.value = nil
         await load(.week)
         XCTAssertFalse(model.folyncUnreachable)
+        XCTAssertTrue(model.folyncStale, "The Overview says there is no current history, not that the period is partial")
         XCTAssertEqual(model.chartData.map(\.price), [100, 110])
         XCTAssertTrue(model.coverageLabel.hasPrefix(FolyncSupplementalSourceStatus.stale.label), model.coverageLabel)
 
         // A range with nothing saved still says so, and switching away clears it.
         await load(.month)
         XCTAssertTrue(model.folyncUnreachable)
+        XCTAssertFalse(model.folyncStale)
         answer.value = 500
         await load(.day)
         XCTAssertFalse(model.folyncUnreachable)
