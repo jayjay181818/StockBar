@@ -7,6 +7,33 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.2)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.2</link>
+      <pubDate>Thu, 19 Nov 2026 21:34:11 +0000</pubDate>
+      <sparkle:version>382.3.2</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.2 of Stockbar 3.8.2. Changes since experimental-380.0.1:
+
+- Say "Couldn't reach Folync" on the Performance tab's portfolio charts
+- Keep the settings-transfer tests' defaults in memory
+- Release 3.8.2
+- Name a stale Folync chart and count any connection failure as unreachable
+- Say when Folync can't be reached
+- Draw the saved Folync chart while Folync is asked for a newer one
+- Release 3.8.1
+- Never take net deposits from a stale cached history
+- Measure portfolio P&amp;L against net deposits
+- Show when a cached quote was fetched, not when it was read
+- Save price alerts' last checked prices once per refresh
+- Correct the Folync and exchange-rate intervals; keep the wiki in step
+- Make the docs match the app
+- Link the wiki from the README
+- chore(python): update locked packages</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.2/Stockbar-382.3.2.zip" length="7225945" type="application/octet-stream" sparkle:edSignature="hW9XLSYOP7eeMktyJsdDVigFHgrjGaVIawKy4f7AgRf32h3RXAOp7w45qDkvrjTvYdPLblhJ/8V60/xRBxaNCg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.0 (380.0.1)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-380.0.1</link>
       <pubDate>Tue, 17 Nov 2026 10:22:55 +0000</pubDate>
@@ -123,21 +150,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Add a refresh workload to the benchmark (#105)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.6/Stockbar-370.16.6.zip" length="7190630" type="application/octet-stream" sparkle:edSignature="67N8TdnekgKtpuRE99zXTkGsPv4xpOW+x6JEDxuyR7AflyljtGzBfxJkk65RR2dJ48AbPJBuXZONA5Q3AScfAQ=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370.16.5)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.5</link>
-      <pubDate>Fri, 13 Nov 2026 11:35:20 +0000</pubDate>
-      <sparkle:version>370.16.5</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 370.16.5 of Stockbar 3.7.0. Changes since experimental-370.16.4:
-
-- Read and write the Python helper's quote cache once per refresh (#104)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.5/Stockbar-370.16.5.zip" length="7175695" type="application/octet-stream" sparkle:edSignature="wT3u3sZVxJXBN4B27om9CxriGdrWogjImtuoycJf6aLcX5zwAquw2gz0bOSdMOPVpXi2K2f350rfgGfnu6v5Ag=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: iUd9OpqC71Ci4JE2iIsmVVIQ8YTKz9Z1ea/DgJQf7PfLlG9ZsoDWpkGuS1BBpYEl7HagNkm/7xxJPOkVh+/UDg==
-length: 10248
+edSignature: 0LLEAYdjBaZBZ+khcL7QrVhtiXjTqOncSEDC4aJ6FBfszPNz2SKiovAbiDS5psrJnEC946me0QnB8q4MMEmuCA==
+length: 10902
 -->
