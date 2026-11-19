@@ -112,7 +112,7 @@ USD, GBP, EUR, JPY, CAD and AUD (Settings → General → Preferred Currency). H
 
 ### How do exchange rates update?
 
-Automatically, at most every five minutes, from exchangerate-api.com or from Folync if that route is enabled. Settings → General → Exchange Rates shows when rates were last obtained. A failed update doesn't reset that time.
+Automatically. From exchangerate-api.com, Stockbar fetches rates at launch and then about once an hour, retries a failed fetch after five minutes, and never fetches automatically more often than every five minutes. With Folync's **Exchange rates** switch on, rates come from Folync instead and are checked every minute along with the rest of Folync's data. Settings → General → Exchange Rates shows when rates were last obtained. A failed update doesn't reset that time.
 
 ## Menu bar
 
@@ -122,7 +122,7 @@ Check Settings → Menu Bar → Menu Bar Visibility: stock items may be hidden, 
 
 ### The portfolio total isn't in the menu bar.
 
-It is usually there but hidden: a full menu bar, the notch or a menu-bar manager can push it out of sight. Open the manager's hidden section, or quit a few other menu-bar apps. Settings → Menu Bar → **Show portfolio total in the menu bar** must also be on.
+It is off until you turn on Settings → Menu Bar → **Show portfolio total in the menu bar**. If it is on and still missing, a full menu bar, the notch or a menu-bar manager can push it out of sight: open the manager's hidden section, or quit a few other menu-bar apps.
 
 ### After an update, Folync says it is waiting for Keychain access.
 

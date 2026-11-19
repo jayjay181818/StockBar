@@ -288,7 +288,7 @@ actor PythonNetworkService: NetworkService {
 
         Task { await logger.debug("Fetched quote for \(symbol): state=\(marketStateString ?? "nil")") }
 
-        return StockFetchResult(
+        var result = StockFetchResult(
             currency: detectedCurrency,
             symbol: symbol,
             shortName: symbol,
@@ -307,6 +307,8 @@ actor PythonNetworkService: NetworkService {
             postMarketTime: postMarketTime,  // Use specific post-market timestamp
             marketState: marketState
         )
+        result.fetchedAt = data["fetchedAt"] as? Double
+        return result
     }
 
     func fetchBatchQuotes(for symbols: [String]) async throws -> [StockFetchResult] {

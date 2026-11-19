@@ -14,7 +14,7 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 ![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![SwiftUI + AppKit](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF)
 
-[Quick start](#-quick-start) · [Features](#-features) · [User guide](Docs/UserGuide.md) · [FAQ](Docs/FAQ.md) · [Releases](https://github.com/jayjay181818/StockBar/releases)
+[Quick start](#-quick-start) · [Features](#-features) · [User guide](Docs/UserGuide.md) · [FAQ](Docs/FAQ.md) · [Wiki](https://github.com/jayjay181818/StockBar/wiki) · [Releases](https://github.com/jayjay181818/StockBar/releases)
 
 </div>
 
@@ -91,11 +91,11 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 ### 💼 Portfolio and holdings
 - Grouped sidebar: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Performance, Risk, Allocation), **Maintenance** (Backups, Data Health, Diagnostics) and **Settings**. The footer shows the portfolio source, the last update and a Refresh button.
-- The Holdings table has search, summary tiles and an Edit mode. Day P/L and Total P/L switch between amount and percentage when clicked.
+- The Holdings table has search, summary tiles and an Edit mode. Click a **Today** or **Total P&L** value to switch between amount and percentage.
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
 ### 📊 Menu bar
-- The portfolio item shows total value and today's change, with a popover chart (Today, 1 Week, 1 Month).
+- The portfolio item shows total value and today's change, with a popover chart (Today, 1 Week, 1 Month). With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
 - Per-stock items have their own display modes or a custom template (`{symbol} {price} {arrow}{changePct}`), plus a popover with an optional S&P 500 or FTSE 100 benchmark line.
 - Stock items can be limited to times when an external display is connected.
 
@@ -117,20 +117,21 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 #### Portfolio And Holdings
 - Native Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Performance, Risk, Allocation), Maintenance (Backups, Data Health, Diagnostics) and Settings. The sidebar footer shows the active portfolio source, the last update and a Refresh button.
-- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus current price, value, Day P/L and Total P/L.
-- Day P/L and Total P/L columns toggle between amount and percentage when clicked.
+- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Today and Total P&L columns.
+- Clicking a Today or Total P&L value toggles that column between amount and percentage.
 - Net Value, Total Net Gains and Tracked Symbols summary cards show currency symbols and thousands separators, with USD equivalents in brackets when USD is not the primary display currency.
 - Manual holdings, watchlist-only symbols, and broker-linked holdings can coexist.
 - UK `.L` holdings and GBX/GBP cost bases are normalized consistently for display and gain calculations.
 
 #### Trading 212 Broker Sync
-- Trading 212 can be enabled from Settings → Connections as a broker/portfolio provider.
+- Trading 212 is off by default and can be enabled from Settings → Connections as a broker/portfolio provider.
 - Credentials are API Key + API Secret and are stored in macOS Keychain only.
-- Supports Live / Real Money and Demo / Paper environments with separated account keys and cache namespaces.
-- Account type and label are configurable, including Stocks & Shares ISA, Invest/general, and Unknown/custom.
+- Supports Live / Real Money and Demo / Paper (the default) environments with separated account keys and cache namespaces.
+- Account type and label are configurable, including Stocks & Shares ISA (the default), Invest/general, and Unknown/custom. CFD accounts can be chosen but are not supported by Trading 212's API, so the actions are disabled.
 - Read-only Test Connection and Preview Import flow before linking anything.
 - Preview maps Trading 212 provider tickers to canonical instruments and audits manual matches, quantity deltas, and conflicts.
-- Link Matched Holdings saves broker links only after user confirmation.
+- Link Matched Holdings saves broker links only after user confirmation. Import Broker-Only Holdings adds clean positions you have not entered by hand.
+- Sync Linked Holdings and Reconcile Holdings Now act at once. An hourly check that applies holding changes, and automatic import of new positions during it, are off by default.
 - Linked Trading 212 holdings use broker-provided live position data by default for quantity, current price, value, average cost, and P/L.
 - Auto-sync uses one bulk Trading 212 positions/account refresh every 5 minutes by default when enabled (selectable: 30 seconds, 1, 5, 15 or 30 minutes).
 - Market-data providers are not called unnecessarily for linked Trading 212 holdings during normal broker sync.
@@ -211,6 +212,7 @@ Market-data providers run in Stockbar's own Python. Trading 212 and Folync work 
 
 | Guide | What's inside |
 |---|---|
+| 🌐 [Wiki](https://github.com/jayjay181818/StockBar/wiki) | Pages by topic, written from these documents: installing, every screen, Trading 212 and Folync, settings, updates, backups, troubleshooting, and pages for developers |
 | 📘 [User Guide](Docs/UserGuide.md) | Every screen, the menu bar, alerts, currencies, connections and shortcuts |
 | ❓ [FAQ](Docs/FAQ.md) | Common questions and fixes |
 | 🏗️ [Architecture](Docs/Architecture.md) | Components, data flow and source ownership |
@@ -268,7 +270,7 @@ python3 -m pip install -r Stockbar/Resources/requirements.txt
 6. Use Test Connection.
 7. Use Preview Import to review proposed mappings and conflicts.
 8. If all rows are clean manual matches, use Link Matched Holdings.
-9. Enable auto-sync if you want linked holdings refreshed from Trading 212 (every 5 minutes by default).
+9. Leave auto-sync on (the default) to refresh linked holdings from Trading 212 every 5 minutes.
 
 Trading 212 setup is read-only until you explicitly link matched holdings. Previewing does not mutate holdings, backups, historical data, market caches, or Core Data trade rows.
 
@@ -278,11 +280,11 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 <summary><b>📐 How values, charts and refreshes work</b></summary>
 
 #### Holdings
-- **Current** shows the latest display price for the position source.
+- **Price** shows the latest display price for the position source.
 - **Value** is current price multiplied by units.
-- **Day P/L** compares current price with previous close.
-- **Total P/L** compares current price with normalized average cost.
-- Click either P/L column header or value to toggle that column between amount and percentage.
+- **Today** compares current price with previous close.
+- **Total P&L** compares current price with normalized average cost.
+- Click a Today or Total P&L value to toggle that column between amount and percentage. Clicking the Instrument or Price header sorts the table.
 - Amount mode shows signed currency values with symbols and thousands separators, for example `+$12,345.67`.
 - Summary cards show the primary currency first and add the USD equivalent in brackets when USD is not the selected display currency, for example `£10,000.00 ($12,700.00)`.
 - Linked Trading 212 holdings use broker-provided live position data by default.
@@ -315,7 +317,9 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 #### Refresh Behavior
 - Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
-- Folync portfolio snapshots poll every 60 seconds; Folync benchmarks and FX poll every 15 minutes; Folync chart history loads on demand. All Folync routes use ETags.
+- Folync portfolio snapshots are checked every 60 seconds, five seconds after each minute. Folync chart history loads on demand. All Folync requests use ETags, so an unchanged response costs little.
+- Benchmarks and exchange rates depend on Folync's supplemental switches (Settings → Connections → Folync → Supplemental market data). With **Benchmark market data** or **Exchange rates** on, that data comes from Folync and is checked on the same 60-second cycle. With it off, benchmark data such as the S&P 500 and FTSE 100 comes from the market-data providers like any other symbol, and exchange rates come from exchangerate-api.com at launch and then about once an hour. A new connection turns on each switch the server reports as ready.
+- Folync checks back off after failures: a rejected token is not retried for 15 minutes, a rate limit waits as long as the server asks, and repeated failures slow the checks to every 2 and then 5 minutes.
 - An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data or direct exchange-rate request. Disabling it resumes the existing local pipeline.
 - Freshness, partial coverage, stale cache, local fallback, and unavailable states are shown rather than represented as a valid zero.
 
@@ -365,6 +369,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
 
 #### Menu Bar Item Missing
+- The portfolio item is off until you turn on Settings → Menu Bar → **Show portfolio total in the menu bar**.
 - A full menu bar, the notch, or a menu-bar manager can hide the portfolio item. Check the manager's hidden section first.
 - Stock items also hide when **Only with an external display** is on and no external display is connected.
 
@@ -415,7 +420,18 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 
 ## 🗓️ Release history
 
-### 🆕 Version 3.8.0 (current): Lighter and quieter
+### 🆕 Version 3.8.2 (current): Folync chart without the wait
+- **Portfolio chart**: With Folync, the popover and Overview chart draws the history saved from Folync's last answer at once, marked **Checking Folync**, and updates when Folync replies.
+- **Folync outages**: A period with nothing saved says **Couldn't reach Folync** instead of asking for more stored history, and the log records why a request failed.
+- See [Changelogs/release_notes_v3.8.2.md](./Changelogs/release_notes_v3.8.2.md).
+
+### Version 3.8.1: P&L against net deposits
+- **Total P&L**: With Folync as the portfolio source, total P&L in the portfolio popover and the Overview is measured against net deposits by default: the money paid in less the money taken out, the figure Folync shows as "What if not investing". Choose **Cost of Current Holdings** in Settings → General → Measure P&L Against for the old figure.
+- **Fix**: "Updated" shows when a cached price was fetched, not when Stockbar received it.
+- **Fix**: Price alerts save their last checked prices once per refresh.
+- See [Changelogs/release_notes_v3.8.1.md](./Changelogs/release_notes_v3.8.1.md).
+
+### Version 3.8.0: Lighter and quieter
 - **Memory**: Idle memory is about a fifth lower, and stored history loads at launch in about half the time, in the project's benchmark on a made-up portfolio.
 - **Refreshes**: Each price refresh uses about half the processor time. The Python helper reads and writes its cache once per refresh, and the closed portfolio popover is no longer redrawn.
 - **Python helper**: **Quit Python Helper When Idle** is now on by default. The idle helper quits after 90 seconds and starts again for the next refresh. Turn it off in Settings → Advanced → Memory to keep it for 15 minutes.
@@ -557,6 +573,6 @@ Built with Swift, SwiftUI, AppKit, Core Data and Python/yfinance.
 
 [Releases](https://github.com/jayjay181818/StockBar/releases) · [Issues](https://github.com/jayjay181818/StockBar/issues) · [Changelogs](./Changelogs/)
 
-<sub>Last updated: November 17, 2026 · Version 3.8.0</sub>
+<sub>Last updated: November 18, 2026 · Version 3.8.2</sub>
 
 </div>

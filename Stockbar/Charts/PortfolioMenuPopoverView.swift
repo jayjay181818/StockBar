@@ -153,6 +153,12 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var coverageLabel = ""
     @Published var hasRangeCoverage = false
+    /// True when Folync did not answer and nothing was saved for this period,
+    /// so the views can say so instead of asking for more stored history.
+    @Published private(set) var folyncUnreachable = false
+    /// True when the chart shows Folync history marked stale: a saved copy
+    /// shown because Folync did not answer, or history Folync itself marks stale.
+    @Published private(set) var folyncStale = false
     /// The period whose data is currently shown; drives the draw-in animation.
     @Published private(set) var loadedRange: MenuChartTimeRange?
 
@@ -279,6 +285,8 @@ final class PortfolioMenuChartViewModel: ObservableObject {
             chartData = []
             hasRangeCoverage = false
             coverageLabel = ""
+            folyncUnreachable = false
+            folyncStale = false
             shownContext = nil
         }
         if valuationSource == .folyncProvided || selectedTimeRange != .day {
@@ -291,6 +299,21 @@ final class PortfolioMenuChartViewModel: ObservableObject {
             historyTask = Task { [weak self] in
                 guard let self, !Task.isCancelled else { return }
                 if source == .folyncProvided {
+                    // Show the history saved last time while Folync is asked for
+                    // a newer one, so the chart does not wait on the network.
+                    if chartData.isEmpty,
+                       let saved = await folyncCoordinator.savedPortfolioHistory(range: range.chartTimeRange.folyncRange),
+                       !Task.isCancelled, chartData.isEmpty,
+                       revision == historicalDataManager.folyncSupplementalConfigurationRevision,
+                       let points = PortfolioMenuChartDataBuilder.providerPoints(
+                           saved, scopeID: scopeID, currency: currency, range: range
+                       ) {
+                        chartData = points
+                        loadedRange = range
+                        coverageLabel = "Checking Folync · \(saved.coverage.pointCount) observations · \(saved.interval)"
+                        if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
+                    }
+                    guard !Task.isCancelled else { return }
                     let result = await folyncCoordinator.routePortfolioHistory(range: range.chartTimeRange.folyncRange)
                     guard !Task.isCancelled, revision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                     switch result {
@@ -302,14 +325,24 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                             return
                         }
                         chartData = points
+                        folyncUnreachable = false
+                        folyncStale = status == .stale
                         hasRangeCoverage = history.coverage.complete == true && history.quality == .complete && status == .current && points.count > 1
                         coverageLabel = "\(status.label) · \(history.coverage.pointCount) observations · \(history.interval)"
                         if !hasRangeCoverage { coverageLabel += " · partial history" }
                         // Folync's 1d series is rolling history; Today's P&L still uses its daily reference.
                         if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
+                    case .unreachable:
+                        chartData = []
+                        hasRangeCoverage = false
+                        folyncUnreachable = true
+                        folyncStale = false
+                        coverageLabel = "Couldn't reach Folync, and nothing is saved for this period yet."
                     case .legacy, .unavailable:
                         chartData = []
                         hasRangeCoverage = false
+                        folyncUnreachable = false
+                        folyncStale = false
                         coverageLabel = "Folync portfolio history is unavailable for this period. Check the connection and source history."
                     }
                 } else {
@@ -352,6 +385,8 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     private func showUnavailable(_ message: String, context: LoadContext) {
         chartData = []
         hasRangeCoverage = false
+        folyncUnreachable = false
+        folyncStale = false
         coverageLabel = message
         markLoaded(context)
     }
@@ -444,7 +479,9 @@ struct PortfolioMenuPopoverView: View {
                             points: viewModel.chartData,
                             isLoading: viewModel.isLoading,
                             revealTrigger: viewModel.loadedRange?.rawValue ?? "",
-                            emptyMessage: "Portfolio history builds up while Stockbar runs.",
+                            emptyMessage: viewModel.folyncUnreachable
+                                ? "Couldn't reach Folync."
+                                : "Portfolio history builds up while Stockbar runs.",
                             hoveredPoint: $hoveredPoint
                         )
                         .accessibilityLabel("Portfolio history, \(viewModel.selectedTimeRange.description)")
@@ -539,7 +576,8 @@ struct PortfolioMenuPopoverView: View {
     }
 
     private var statsGrid: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+        let totalReturn = summary.totalReturn(measuredAgainst: dataModel.portfolioGainBasis)
+        return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 MenuPopoverStatBox(
                     label: "Market Value",
@@ -547,9 +585,9 @@ struct PortfolioMenuPopoverView: View {
                 )
                 MenuPopoverStatBox(
                     label: "Total P&L",
-                    value: MenuPopoverFormatter.currencyExact(summary.totalGain, currency: summary.currency, includeSign: true),
-                    subValue: MenuPopoverFormatter.percent(summary.totalGainPct),
-                    valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
+                    value: MenuPopoverFormatter.currencyExact(totalReturn.gain, currency: summary.currency, includeSign: true),
+                    subValue: MenuPopoverFormatter.percent(totalReturn.percent),
+                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
                 )
             }
             GridRow {
@@ -561,8 +599,8 @@ struct PortfolioMenuPopoverView: View {
                     valueColor: StockbarPalette.signed(change?.value, neutral: .primary)
                 )
                 MenuPopoverStatBox(
-                    label: "Cost Basis",
-                    value: MenuPopoverFormatter.currencyExact(summary.totalCost, currency: summary.currency)
+                    label: totalReturn.basisLabel,
+                    value: MenuPopoverFormatter.currencyExact(totalReturn.basisAmount, currency: summary.currency)
                 )
             }
         }

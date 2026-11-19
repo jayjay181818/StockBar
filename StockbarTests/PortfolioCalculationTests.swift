@@ -2448,3 +2448,123 @@ final class PriceAlertConditionTests: XCTestCase {
         XCTAssertFalse(alert.conditionMet(currentPrice: 151, previousPrice: 149), "Paused alerts never fire")
     }
 }
+
+@MainActor
+final class PriceAlertBatchTests: XCTestCase {
+    /// A refresh's prices are checked as one batch, so the last checked prices
+    /// are saved once, not once for every alerted symbol whose price moved.
+    func testBatchSavesLastCheckedPricesOnce() {
+        let service = PriceAlertService.shared
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = PriceAlertService.lastKnownPricesKey
+        let storedBefore = defaults.object(forKey: key)
+        // Paused alerts are remembered like active ones but never fire, so the
+        // test sends no notifications and asks for no permission.
+        let symbols = ["BATCHA", "BATCHB", "BATCHC"]
+        let alerts = symbols.map {
+            PriceAlert(symbol: $0, condition: .above, threshold: 1_000_000, isEnabled: false)
+        }
+        for alert in alerts { service.addAlert(alert) }
+        let checks = symbols.enumerated().map { index, symbol in
+            PriceAlertService.PriceCheck(
+                symbol: symbol, currentPrice: 100 + Double(index), previousPrice: 99, currency: "USD"
+            )
+        }
+        defer {
+            for alert in alerts { service.removeAlert(id: alert.id) }
+            service.checkAlerts(checks)  // Forgets the prices of symbols without alerts.
+            defaults.set(storedBefore, forKey: key)
+        }
+
+        let writes = DefaultsWriteCounter(defaults: defaults, key: key)
+        service.checkAlerts(checks)
+        XCTAssertEqual(writes.count, 1, "Three changed prices are saved together")
+        let stored = defaults.dictionary(forKey: key) as? [String: Double]
+        XCTAssertEqual(stored?["BATCHA"], 100)
+        XCTAssertEqual(stored?["BATCHC"], 102)
+
+        service.checkAlerts(checks)
+        XCTAssertEqual(writes.count, 1, "Unchanged prices are not saved again")
+    }
+}
+
+/// Counts writes to one defaults key through key-value observing.
+private final class DefaultsWriteCounter: NSObject {
+    private(set) var count = 0
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+        super.init()
+        defaults.addObserver(self, forKeyPath: key, options: [], context: nil)
+    }
+
+    deinit {
+        defaults.removeObserver(self, forKeyPath: key)
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        count += 1
+    }
+}
+
+final class PortfolioTotalReturnTests: XCTestCase {
+    private func summary(value: Double = 1_100, netDeposits: Double?) -> DisplayPortfolioSummary {
+        DisplayPortfolioSummary(
+            totalValue: value, totalGain: 99, totalGainPct: 49.25, dayGain: 0, dayGainPct: 0,
+            totalCost: 201, ownedPositionCount: 1, currency: "GBP",
+            valuationSource: .folyncProvided, netDeposits: netDeposits
+        )
+    }
+
+    func testNetDepositsAreUsedOnlyWhenChosenAndKnown() {
+        let chosen = summary(netDeposits: 600).totalReturn(measuredAgainst: .netDeposits)
+        XCTAssertEqual(chosen, PortfolioTotalReturn(
+            gain: 500, percent: 500.0 / 600.0 * 100, basisAmount: 600, isMeasuredAgainstNetDeposits: true
+        ))
+
+        let notChosen = summary(netDeposits: 600).totalReturn(measuredAgainst: .holdingsCost)
+        XCTAssertEqual(notChosen, PortfolioTotalReturn(
+            gain: 99, percent: 49.25, basisAmount: 201, isMeasuredAgainstNetDeposits: false
+        ))
+
+        let unknown = summary(netDeposits: nil).totalReturn(measuredAgainst: .netDeposits)
+        XCTAssertEqual(unknown, notChosen, "without net deposits P&L falls back to the cost of the holdings")
+        XCTAssertEqual(unknown.basisLabel, "Cost Basis")
+        XCTAssertFalse(summary(netDeposits: .nan).totalReturn(measuredAgainst: .netDeposits).isMeasuredAgainstNetDeposits)
+    }
+
+    func testNoPercentageWhenNothingWasPaidInOnBalance() {
+        for deposits in [0.0, -250] {
+            let result = summary(netDeposits: deposits).totalReturn(measuredAgainst: .netDeposits)
+            XCTAssertEqual(result.gain, 1_100 - deposits)
+            XCTAssertTrue(result.percent.isNaN, "\(deposits)")
+            XCTAssertEqual(MenuPopoverFormatter.percent(result.percent), "")
+        }
+    }
+
+    @MainActor
+    func testTheChoiceDefaultsToNetDepositsAndIsRemembered() {
+        let defaults = StockbarRuntimeStorage.userDefaults
+        let key = PortfolioGainBasis.userDefaultsKey
+        let storedBefore = defaults.object(forKey: key)
+        defer { defaults.set(storedBefore, forKey: key) }
+        defaults.removeObject(forKey: key)
+
+        let model = DataModel(
+            currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false
+        )
+        XCTAssertEqual(model.portfolioGainBasis, .netDeposits)
+        model.portfolioGainBasis = .holdingsCost
+        XCTAssertEqual(defaults.string(forKey: key), "holdingsCost")
+        XCTAssertNotNil(SettingsTransferKeys.settingsKeys[key], "the choice travels with a settings export")
+    }
+}

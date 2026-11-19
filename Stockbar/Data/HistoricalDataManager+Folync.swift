@@ -60,9 +60,26 @@ extension HistoricalDataManager {
         )]
     }
 
+    /// True when Folync didn't answer for this portfolio series and nothing
+    /// was saved to show instead.
+    func folyncPortfolioUnreachable(
+        kind: String,
+        timeRange: ChartTimeRange,
+        customFrom: Date? = nil,
+        customTo: Date? = nil
+    ) -> Bool {
+        folyncUnreachableSeries.contains(folyncPortfolioSeriesKey(
+            kind: kind,
+            timeRange: timeRange,
+            customFrom: customFrom,
+            customTo: customTo
+        ))
+    }
+
     func clearFolyncSupplementalOverlays() {
         folyncPriceOverlays.removeAll()
         folyncUnavailableSeries.removeAll()
+        folyncUnreachableSeries.removeAll()
         folyncPortfolioHistoryContexts.removeAll()
         folyncPortfolioHistoryFetchRequestTimes.removeAll()
         folyncPortfolioValueOverlays.removeAll()
@@ -253,6 +270,8 @@ extension HistoricalDataManager {
         }
     }
 
+    static let folyncUnreachableLabel = "Couldn't reach Folync"
+
     func applyFolyncPortfolioHistory(
         _ result: FolyncRoutedPortfolioResult,
         timeRange: ChartTimeRange,
@@ -282,26 +301,41 @@ extension HistoricalDataManager {
             folyncPortfolioGainOverlays[gainKey] = gains
             folyncUnavailableSeries.remove(valueKey)
             folyncUnavailableSeries.remove(gainKey)
+            folyncUnreachableSeries.remove(valueKey)
+            folyncUnreachableSeries.remove(gainKey)
             folyncSourceStatusBySeries[valueKey] = status
             folyncSourceStatusBySeries[gainKey] = status
             let completeness = history.coverage.complete.map { $0 ? "complete coverage" : "partial coverage" } ?? "coverage unavailable"
             let coverage = "\(history.coverage.pointCount) points · \(history.interval) · \(completeness)"
             folyncCoverageBySeries[valueKey] = coverage
             folyncCoverageBySeries[gainKey] = coverage
-        case .unavailable:
+        case .unavailable, .unreachable:
             folyncPortfolioValueOverlays.removeValue(forKey: valueKey)
             folyncPortfolioGainOverlays.removeValue(forKey: gainKey)
             folyncUnavailableSeries.insert(valueKey)
             folyncUnavailableSeries.insert(gainKey)
             folyncSourceStatusBySeries[valueKey] = .unavailable
             folyncSourceStatusBySeries[gainKey] = .unavailable
-            folyncCoverageBySeries.removeValue(forKey: valueKey)
-            folyncCoverageBySeries.removeValue(forKey: gainKey)
+            if case .unreachable = result {
+                // Shown beside the "Unavailable" badge, so the Performance tab
+                // says why, as the popover and the Overview do.
+                folyncUnreachableSeries.insert(valueKey)
+                folyncUnreachableSeries.insert(gainKey)
+                folyncCoverageBySeries[valueKey] = Self.folyncUnreachableLabel
+                folyncCoverageBySeries[gainKey] = Self.folyncUnreachableLabel
+            } else {
+                folyncUnreachableSeries.remove(valueKey)
+                folyncUnreachableSeries.remove(gainKey)
+                folyncCoverageBySeries.removeValue(forKey: valueKey)
+                folyncCoverageBySeries.removeValue(forKey: gainKey)
+            }
         case .legacy:
             folyncPortfolioValueOverlays.removeValue(forKey: valueKey)
             folyncPortfolioGainOverlays.removeValue(forKey: gainKey)
             folyncUnavailableSeries.remove(valueKey)
             folyncUnavailableSeries.remove(gainKey)
+            folyncUnreachableSeries.remove(valueKey)
+            folyncUnreachableSeries.remove(gainKey)
             folyncSourceStatusBySeries[valueKey] = .legacy
             folyncSourceStatusBySeries[gainKey] = .legacy
             folyncCoverageBySeries.removeValue(forKey: valueKey)

@@ -71,11 +71,11 @@ The sidebar groups every screen:
 
 Use the arrow keys to move through the sidebar. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. The window remembers its size, position and last screen. Motion follows System Settings → Accessibility → Display → Reduce Motion.
 
-**Overview** shows the total value with today's and the selected period's change, a portfolio chart (hover to read any point), a summary, and details for one position.
+**Overview** shows the total value with today's and the selected period's change (**1D**, **1W** or **1M**), a portfolio chart (hover to read any point), a summary, and details for one position.
 
 ## Holdings
 
-The read-only table shows your positions in your saved order; click a column header to sort, and click a Today or Total P&L value to switch between amount and percentage. Search filters the table without changing portfolio totals.
+The read-only table shows your positions in your saved order; click the Instrument or Price header to sort, and click a Today or Total P&L value to switch between amount and percentage. Search filters the table without changing portfolio totals.
 
 Choose **Edit** to change local holdings, and **Done** when finished (changes save as you type):
 
@@ -88,7 +88,9 @@ Positions provided by a linked Trading 212 account or by Folync are read-only he
 
 ## The menu bar
 
-**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with a chart (Today, 1 Week, 1 Month), market value, total and period P&L, and cost basis. Hover over the chart to read the value at any point.
+**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with a chart (Today, 1 Week, 1 Month), market value, total and period P&L, and what the total P&L is measured against: net deposits or cost basis. Hover over the chart to read the value at any point. With Folync, the chart first shows the history Stockbar saved from Folync's last answer, marked **Checking Folync**, and updates when Folync replies. If Folync doesn't answer, a saved chart stays up marked as a stale cache, and the Overview's period change says **No current history from Folync**; a period with nothing saved says **Couldn't reach Folync**, and so do the portfolio charts on the Performance tab, next to their **Unavailable** badge.
+
+**Total P&L.** With Folync as the portfolio source, total P&L in the portfolio popover and the Overview summary is measured against **net deposits** by default: the money you paid in less what you took out, as Folync reports it. The portfolio value it is measured from includes cash, so sales, dividends, interest and fees all count. To measure it against the cost of the shares you hold instead, choose **Cost of Current Holdings** in Settings → General → **Measure P&L Against**. With a local or Trading 212 portfolio, or when Folync cannot give net deposits, total P&L is measured against cost basis. A new deposit can show as gain for up to about ten minutes; **Refresh Now** in Stockbar's Folync settings reads it at once. The menu bar item and the per-stock popovers are not affected.
 
 **Per-stock items.** Each visible holding can have its own item. Choose a display mode and change format in Settings → Menu Bar, or a **Custom** template using these tokens:
 
@@ -104,11 +106,11 @@ Positions provided by a linked Trading 212 account or by Folync are read-only he
 
 Example: `{symbol} {price} {arrow}{changePct}`.
 
-Click a stock item for its popover: a price chart with an optional benchmark line (S&P 500 or FTSE 100; switch it off in Settings → Menu Bar → Stock Popover), market value, P&L and units. Hover over the chart to read the price at any point. A symbol without stored history shows **No history yet** rather than a flat line. For local holdings, the pencil next to **Units** edits the quantity (the current locale's decimal separator is accepted); a lock means the quantity comes from a linked source. If updates for the symbol have been paused after repeated failures, the popover says so and offers **Retry Now**.
+Click a stock item for its popover: a price chart (**24h**, **1 Week** or **1 Month**; the shortest range covers the last 24 hours rather than today's session) with an optional benchmark line (S&P 500 or FTSE 100; switch it off in Settings → Menu Bar → Stock Popover), market value, P&L and units. Hover over the chart to read the price at any point. A symbol without stored history shows **No history yet** rather than a flat line. For local holdings, the pencil next to **Units** edits the quantity (the current locale's decimal separator is accepted); a lock means the quantity comes from a linked source. If updates for the symbol have been paused after repeated failures, the popover says so and offers **Retry Now**.
 
 Both popovers end with the last update time (click it to refresh) and buttons to open the Stockbar window, open Settings and quit. Popovers follow the **Theme** in Settings → Appearance.
 
-Gains are green and losses red when **Color Coding** is on (Settings → General); unchanged or unknown values are neutral. Settings → Menu Bar → Menu Bar Visibility can hide all stock items or show them only when an external display is connected.
+Gains are green and losses red when **Color Coding** is on (Settings → General); unchanged or unknown values are neutral. **Market Indicators**, also in Settings → General and off by default, marks pre-market, after-hours and closed-market prices. Settings → Menu Bar → Menu Bar Visibility can hide all stock items or show them only when an external display is connected.
 
 ## Analysis
 
@@ -120,7 +122,7 @@ History accumulates as Stockbar runs (Settings → Refresh → Chart Data Collec
 
 ## Alerts
 
-Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves from the previous close by a percentage; the sheet shows the symbol's current price for reference. Above and below alerts fire when the price crosses the level, so the sheet warns if the price is already past it. Alerts work for every holding, including ones priced by Folync or Trading 212. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be paused, resumed or deleted from their row or its right-click menu.
+Alerts → **Add Alert** creates an alert when a price rises above or falls below a threshold, or moves from the previous close by a percentage; the sheet shows the symbol's current price for reference. Above and below alerts fire when the price crosses the level, so the sheet warns if the price is already past it. Alerts work for every holding, including ones priced by Folync or Trading 212. Alerts are delivered as macOS notifications; allow notifications for Stockbar when prompted. Existing alerts can be edited (**Edit Alert…**), paused, resumed or deleted from their row or its right-click menu. An alert that has fired does not fire again for 15 minutes.
 
 ## Currencies and UK stocks
 
@@ -132,7 +134,7 @@ London prices are often quoted in pence (**GBX**, 100 GBX = £1). Stockbar conve
 
 Settings → **Connections** manages optional sources. Credentials are stored in your Keychain.
 
-- **Trading 212** — link a read-only account, preview matches and differences, then link holdings. Linked positions take quantity, price, average cost and P&L from the broker.
+- **Trading 212** — off until you switch on **Enable Trading 212**. Choose the environment (**Demo / Paper** by default, or **Live / Real Money**) and the account type (Stocks & Shares ISA by default, or Invest; CFD accounts are not supported by Trading 212's API). Link a read-only account, preview matches and differences, then link holdings. Linked positions take quantity, price, average cost and P&L from the broker. **Import Broker-Only Holdings** adds positions you have not entered by hand. Linked holdings sync every five minutes by default; **Sync Linked Holdings** and **Reconcile Holdings Now** act at once. An hourly check that applies holding changes, automatic import of new positions during it, and deleting holdings that disappear from Trading 212 are each off until you switch them on.
 - **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Supplemental routes (history, candles, benchmarks, FX) can be switched on or off individually. With VoiceOver, Stockbar speaks the result of each Folync action and of **Refresh Now**, and announces a connection problem once when it starts.
 
 Market-data API keys for FMP and Twelve Data, and the provider order, are also configured here.
@@ -179,7 +181,7 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 
 **Risk or correlation says there is not enough data.** These need stored history; leave Stockbar running and data accumulates.
 
-**Exchange rates look stale.** Rates refresh at most every five minutes; Settings → General → Exchange Rates shows when they were last obtained. If no live rate is available, conversions that would rely on it are shown as unavailable rather than guessed.
+**Exchange rates look stale.** Rates from exchangerate-api.com are fetched at launch and then about once an hour (with Folync's **Exchange rates** switch on, they come from Folync and are checked every minute); Settings → General → Exchange Rates shows when they were last obtained. If an update fails, Stockbar keeps using the last rates it obtained. Only if it has never obtained any, for example on a new Mac that has not been online, does it use rough built-in rates; Holdings then says that converted values are approximate. A currency with no rate at all is shown as unavailable rather than guessed.
 
 ## Keyboard shortcuts
 
@@ -188,7 +190,7 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 | ⌘O | Open Stockbar |
 | ⌘, | Settings |
 | ⌘R | Refresh prices (main window) |
-| ⌘1 – ⌘9 | Show a page of the main window, in sidebar order (also in the **View** menu) |
+| ⌘1 – ⌘9 | Show a page of the main window, in the order of the **View** menu: Overview, Holdings, Performance, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics |
 | ⌘W / ⌘M | Close / minimise window |
 | ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
 | ⌘H | Hide Stockbar |

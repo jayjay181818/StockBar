@@ -49,7 +49,10 @@ struct StockbarOverviewView: View {
     /// Folync can return a full chart and still mark the period partial (carried or stale
     /// prices); the change is then withheld, and more local history would not bring it back.
     private var rangeChangeUnavailableHint: String {
-        summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
+        if summary.valuationSource == .folyncProvided && chartModel.isLoading { return "Checking Folync" }
+        if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable { return "Couldn't reach Folync" }
+        if summary.valuationSource == .folyncProvided && chartModel.folyncStale { return "No current history from Folync" }
+        return summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
             ? "Folync marks this period partial"
             : "Needs more stored history"
     }
@@ -293,6 +296,13 @@ struct StockbarOverviewView: View {
             .chartReveal(trigger: chartRevealKey)
             .accessibilityLabel("Portfolio value over \(chartModel.selectedTimeRange.description), in \(summary.currency)")
             .accessibilityValue(rangeChange.map { String(format: "%+.2f percent", $0.percent) } ?? "Change unavailable")
+        } else if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable {
+            ContentUnavailableView(
+                "Couldn't reach Folync",
+                systemImage: "wifi.exclamationmark",
+                description: Text("Folync didn't answer, and nothing is saved for this period yet. The chart appears once Folync answers.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
                 chartModel.selectedTimeRange == .day && summary.valuationSource == .folyncProvided
@@ -328,11 +338,31 @@ struct StockbarOverviewView: View {
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(StockbarPalette.cardStroke))
     }
 
+    /// "+£1,234.00 (5.20%)", or the amount alone when there is no percentage.
+    private static func amountWithPercent(_ amount: Double, percent: Double, currency: String) -> String {
+        let signed = HoldingsCurrencyFormatter.signedAmount(amount, currency: currency)
+        let percentText = MenuPopoverFormatter.percent(percent)
+        return percentText.isEmpty ? signed : "\(signed) (\(percentText))"
+    }
+
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: 4) {
             StockbarSectionTitle(title: "Summary")
                 .padding(.bottom, 4)
             StockbarDetailRow(label: "Portfolio value", value: HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
+            let totalReturn = summary.totalReturn(measuredAgainst: dataModel.portfolioGainBasis)
+            if totalReturn.isMeasuredAgainstNetDeposits {
+                StockbarDetailRow(
+                    label: "Total P&L",
+                    value: totalReturn.gain.isFinite
+                        ? Self.amountWithPercent(totalReturn.gain, percent: totalReturn.percent, currency: summary.currency)
+                        : "—",
+                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
+                )
+                .help("Portfolio value, cash included, less net deposits. Sales, dividends, interest and fees all count.")
+                StockbarDetailRow(label: "Net deposits", value: HoldingsCurrencyFormatter.amount(totalReturn.basisAmount, currency: summary.currency))
+                    .help("Money paid in less money taken out, from Folync.")
+            }
             StockbarDetailRow(
                 label: "Unrealised P&L",
                 value: summary.totalGain.isFinite

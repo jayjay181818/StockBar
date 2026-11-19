@@ -234,6 +234,9 @@ extension DataModel {
         currencyConverter.deactivateFolyncOverlay()
         HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         folyncSupplementalStatuses = [:]
+        folyncNetDeposits = nil
+        folyncNetDepositsCheckedAt = nil
+        folyncNetDepositsReadAt = nil
         await deps.supplementalCoordinator.clearInMemoryState()
         deps.settingsStore.save(FolyncStoredSettings(
             isEnabled: true,
@@ -368,6 +371,8 @@ extension DataModel {
         folyncBackoffUntil = nil
         await folyncSessionDependencies.supplementalCoordinator.clearBackoff()
         await refreshFolyncPortfolio(allowCatchUp: false)
+        // A manual refresh also picks up a deposit made since the last read.
+        await refreshFolyncNetDeposits(force: true)
     }
 
     var isFolyncBackingOff: Bool {
@@ -675,11 +680,51 @@ extension DataModel {
             folyncSupplementalStatuses[.exchangeRates] = currencyConverter.sourceStatus
         }
 
+        await refreshFolyncNetDeposits()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
+              supplementalGeneration == folyncSupplementalGeneration else { return }
+
         if let backoff = await deps.supplementalCoordinator.backoffUntil(), backoff > Date() {
             guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings),
                   supplementalGeneration == folyncSupplementalGeneration else { return }
             folyncBackoffUntil = backoff
         }
+    }
+
+    /// Reads net deposits from the scope's portfolio history, at most every
+    /// `FolyncNetDeposits.refreshInterval` unless `force`d. Portfolio history
+    /// belongs to the portfolio source, so no supplemental route gates it. A
+    /// history that cannot give a figure clears it, so P&L falls back to the
+    /// cost of the holdings.
+    ///
+    /// When Folync does not answer, the route serves the last history it
+    /// cached, marked stale. That can be from an earlier day, and deposits
+    /// since would count as gain, so it is not used: the figure already read
+    /// is kept for up to `FolyncNetDeposits.maximumAge`, and the next refresh
+    /// tries again.
+    func refreshFolyncNetDeposits(force: Bool = false, now: Date = Date()) async {
+        let refreshGeneration = folyncRefreshGeneration
+        let deps = folyncSessionDependencies
+        let settings = deps.settingsStore.load()
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings) else { return }
+        if !force, let checked = folyncNetDepositsCheckedAt,
+           now.timeIntervalSince(checked) < FolyncNetDeposits.refreshInterval {
+            return
+        }
+        folyncNetDepositsCheckedAt = now
+        let result = await deps.supplementalCoordinator.routePortfolioHistory(range: FolyncNetDeposits.historyRange)
+        guard isFolyncSessionCurrent(generation: refreshGeneration, settings: settings) else { return }
+        if case .folync(let history, let status) = result, status != .stale {
+            folyncNetDeposits = FolyncNetDeposits(history: history)
+            folyncNetDepositsReadAt = now
+            return
+        }
+        folyncNetDepositsCheckedAt = nil
+        if let readAt = folyncNetDepositsReadAt,
+           now.timeIntervalSince(readAt) <= FolyncNetDeposits.maximumAge {
+            return
+        }
+        folyncNetDeposits = nil
     }
 
     func applyFolyncBenchmarkOverlays(_ benchmarks: [FolyncBenchmark]) {
@@ -782,6 +827,9 @@ extension DataModel {
         folyncSupplementalRefreshTask = nil
         folyncETag = nil
         folyncPortfolioSnapshot = nil
+        folyncNetDeposits = nil
+        folyncNetDepositsCheckedAt = nil
+        folyncNetDepositsReadAt = nil
         folyncCapabilities = nil
         folyncSupplementalStatuses = [:]
         folyncConnectionState = .notConfigured

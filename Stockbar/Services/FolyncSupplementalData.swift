@@ -299,6 +299,60 @@ struct FolyncPortfolioHistory: Codable, Equatable, Sendable {
     let twrSeries: [SeriesPoint]
 }
 
+/// The money paid into a Folync scope less the money taken out: Folync's
+/// "What if not investing" figure. Folync counts only deposits and
+/// withdrawals, each at its own exchange rate; dividends, interest, fees and
+/// trades are part of the gain instead. The client API gives it only as the
+/// last point of a portfolio history's net contribution series.
+struct FolyncNetDeposits: Equatable, Sendable {
+    /// The history range read for it: the cheapest one, served from Folync's
+    /// stored daily snapshots. Folync rebuilds those a minute or two after
+    /// importing a deposit, and every five minutes regardless.
+    static let historyRange = "3m"
+    /// How often it is read again while Folync answers.
+    static let refreshInterval: TimeInterval = 300
+    /// How long a figure is kept while Folync's history cannot be read.
+    /// After that, P&L is measured against the cost of the holdings.
+    static let maximumAge: TimeInterval = 900
+
+    let scopeID: String
+    let currency: String?
+    let amount: Double
+    let asOf: String
+
+    /// Nil when the history cannot give a figure to trust: it is unavailable;
+    /// a deposit or withdrawal has no exchange rate, which stops the series
+    /// early; the series ends before the value series does; or every point is
+    /// zero against a value that is not, as for a broker account imported
+    /// without its cash history.
+    init?(history: FolyncPortfolioHistory) {
+        guard history.quality != .unavailable,
+              !history.reasonCodes.contains("missing_transaction_fx"),
+              let last = history.netContributionSeries.max(by: { $0.date < $1.date }),
+              last.value.isFinite,
+              let lastValue = history.portfolioSeries.max(by: { $0.date < $1.date }),
+              last.date == lastValue.date else { return nil }
+        if lastValue.value != 0, history.netContributionSeries.allSatisfy({ $0.value == 0 }) {
+            return nil
+        }
+        scopeID = history.scope.id
+        currency = history.currency ?? history.scope.currency
+        amount = last.value
+        asOf = last.date
+    }
+
+    /// The amount, when it describes the snapshot's scope in the currency of
+    /// its total value.
+    func amount(for snapshot: FolyncPortfolioSnapshot) -> Double? {
+        guard scopeID == snapshot.scope.id else { return nil }
+        let valueCurrency = snapshot.totalValue.currency ?? snapshot.scope.currency
+        if let currency, let valueCurrency, currency.uppercased() != valueCurrency.uppercased() {
+            return nil
+        }
+        return amount
+    }
+}
+
 enum FolyncSupplementalSourceStatus: String, Codable, Equatable, Sendable {
     case current
     case partial
@@ -353,6 +407,9 @@ enum FolyncRoutedPortfolioResult: Sendable {
     case folync(FolyncPortfolioHistory, status: FolyncSupplementalSourceStatus)
     case legacy
     case unavailable
+    /// Folync did not answer (no HTTP response at all, or a 502/503/504 from
+    /// the server in front of it) and nothing usable is saved for the range.
+    case unreachable
 }
 
 enum FolyncRoutedBenchmarkResult: Sendable {
@@ -523,6 +580,13 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     private let providerPolicy: StockbarProviderAccessPolicy
     private let backoff: FolyncBackoffCoordinator
     private var memoryCapabilities: [String: FolyncCapabilities] = [:]
+    /// When Folync last confirmed each saved portfolio history, by a full
+    /// answer or a 304. The file is not rewritten on a 304, so its receipt time
+    /// alone would make an unchanged history look old.
+    private var portfolioHistoryConfirmedAt: [String: Date] = [:]
+    /// Ranges whose last portfolio-history request failed, so the log gets one
+    /// line when a range starts failing and one when it works again.
+    private var portfolioHistoryFailing: Set<String> = []
 
     init(
         settingsStore: FolyncSettingsStore = .shared,
@@ -709,7 +773,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         // The optional line-history capability describes individual market prices.
         guard let configuration = await currentConfiguration() else { return .legacy }
         let identity = configuration.settings.scopeID
-        let resource = "portfolio-history"
+        let resource = Self.portfolioHistoryResource
         let query = marketQuery(range: range, from: from, to: to)
         let cacheRange = query.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
         let cached: (payload: FolyncPortfolioHistory, etag: String?, receiptTime: Date)? = try? await cache.load(
@@ -728,7 +792,10 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 query: query,
                 etag: cached?.etag
             )
+            let confirmationKey = portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange)
             if response.statusCode == 304, let cached, isUsablePortfolioHistory(cached.payload) {
+                portfolioHistoryConfirmedAt[confirmationKey] = Date()
+                await notePortfolioHistoryRecovered(key: confirmationKey, range: range)
                 return .folync(cached.payload, status: sourceStatus(quality: cached.payload.quality, stale: false))
             }
             try await validate(response)
@@ -746,13 +813,83 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 range: cacheRange,
                 etag: response.etag
             )
+            portfolioHistoryConfirmedAt[confirmationKey] = Date()
+            await notePortfolioHistoryRecovered(key: confirmationKey, range: range)
             return .folync(payload, status: sourceStatus(quality: payload.quality, stale: false))
         } catch {
-            if let cached, isUsablePortfolioHistory(cached.payload) {
-                return .folync(cached.payload, status: .stale)
+            let category = FolyncRefreshSchedule.failureCategory(error)
+            let usableCache = cached.flatMap { isUsablePortfolioHistory($0.payload) ? $0.payload : nil }
+            if category != "cancelled" {
+                await notePortfolioHistoryFailed(
+                    key: portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange),
+                    range: range, category: category, showingSaved: usableCache != nil
+                )
             }
-            return configuration.settings.supplemental.allowLegacyFallback ? .legacy : .unavailable
+            if let usableCache {
+                return .folync(usableCache, status: .stale)
+            }
+            if configuration.settings.supplemental.allowLegacyFallback { return .legacy }
+            return Self.isUnreachable(category: category) ? .unreachable : .unavailable
         }
+    }
+
+    /// True when a failure means Folync did not answer at all: no HTTP
+    /// response (any connection error, see `FolyncRefreshSchedule.failureCategory`)
+    /// or a gateway saying it could not reach Folync. An error status or data
+    /// Stockbar cannot use is an answer.
+    static func isUnreachable(category: String) -> Bool {
+        ["timeout", "offline", "unreachable", "http-502", "http-503", "http-504"].contains(category)
+            || category.hasPrefix("network-")
+    }
+
+    private func notePortfolioHistoryFailed(key: String, range: String, category: String, showingSaved: Bool) async {
+        let fallback = showingSaved ? "showing the saved copy" : "nothing saved to show"
+        if portfolioHistoryFailing.insert(key).inserted {
+            await Logger.shared.warning("Folync portfolio history (\(range)) failed (\(category)); \(fallback)")
+        } else {
+            await Logger.shared.debug("Folync portfolio history (\(range)) failed again (\(category)); \(fallback)")
+        }
+    }
+
+    private func notePortfolioHistoryRecovered(key: String, range: String) async {
+        guard portfolioHistoryFailing.remove(key) != nil else { return }
+        await Logger.shared.info("Folync portfolio history (\(range)) answered again")
+    }
+
+    private static let portfolioHistoryResource = "portfolio-history"
+
+    private func portfolioHistoryKey(endpoint: String, scopeID: String, range: String) -> String {
+        "\(endpoint)\n\(scopeID)\n\(range)"
+    }
+
+    /// The portfolio history saved from Folync's last full answer for `range`,
+    /// read from disk: no request and no Keychain read, so it is quick. A chart
+    /// shows it while `routePortfolioHistory` asks Folync whether there is a
+    /// newer one. Nil when Folync is off, nothing usable is saved, or Folync
+    /// last confirmed it, by a full answer or a 304, more than `maximumAge` ago.
+    func savedPortfolioHistory(
+        range: String,
+        maximumAge: TimeInterval = 24 * 60 * 60,
+        now: Date = Date()
+    ) async -> FolyncPortfolioHistory? {
+        let settings = settingsStore.load()
+        guard settings.isEnabled, URL(string: settings.baseURL) != nil else { return nil }
+        let cacheRange = marketQuery(range: range, from: nil, to: nil)
+            .map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
+        guard let saved = try? await cache.load(
+            endpoint: settings.baseURL,
+            scopeID: settings.scopeID,
+            resource: Self.portfolioHistoryResource,
+            identity: settings.scopeID,
+            range: cacheRange,
+            as: FolyncPortfolioHistory.self
+        ) else { return nil }
+        let confirmed = portfolioHistoryConfirmedAt[
+            portfolioHistoryKey(endpoint: settings.baseURL, scopeID: settings.scopeID, range: cacheRange)
+        ]
+        let age = now.timeIntervalSince(max(saved.receiptTime, confirmed ?? .distantPast))
+        guard age >= 0, age <= maximumAge, isUsablePortfolioHistory(saved.payload) else { return nil }
+        return saved.payload
     }
 
     func routeBenchmarks() async -> FolyncRoutedBenchmarkResult {

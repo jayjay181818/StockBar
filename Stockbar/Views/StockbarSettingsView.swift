@@ -114,6 +114,14 @@ struct StockbarSettingsView: View {
                     Text(currency).tag(currency)
                 }
             }
+            Picker(selection: $dataModel.portfolioGainBasis) {
+                ForEach(PortfolioGainBasis.allCases) { basis in
+                    Text(basis.title).tag(basis)
+                }
+            } label: {
+                Text("Measure P&L Against")
+                Text("Net deposits are the money you paid in less what you took out, as Folync reports them. Where they are not available, P&L is measured against the cost of the shares you hold.")
+            }
             Toggle(isOn: $dataModel.showColorCoding) {
                 Text("Color Coding")
                 Text("Green for gains and red for losses in the menu bar. Unchanged values stay neutral.")

@@ -218,7 +218,7 @@ struct TradingInfo: Codable {
         // UI timestamp: exchange-reported time for the current quote (pre/post/regular)
         let exchangeDate = Date(timeIntervalSince1970: TimeInterval(displayTimestamp))
 
-        // Time-ago: when we actually refreshed locally
+        // Time-ago: when the price was fetched (earlier than the refresh for a cached quote)
         let refreshDate: Date
         if let lastUpdateTime, lastUpdateTime > 0 {
             refreshDate = Date(timeIntervalSince1970: TimeInterval(lastUpdateTime))

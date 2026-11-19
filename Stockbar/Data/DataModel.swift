@@ -55,6 +55,12 @@ class DataModel {
     var folyncConnectionState: FolyncConnectionState = .notConfigured
     var folyncCapabilities: FolyncCapabilities?
     var folyncSupplementalStatuses: [FolyncSupplementalRoute: FolyncSupplementalSourceStatus] = [:]
+    /// Net deposits for the Folync scope, read from its portfolio history.
+    /// Nil until read, or when Folync cannot give a figure to trust.
+    var folyncNetDeposits: FolyncNetDeposits?
+    @ObservationIgnored var folyncNetDepositsCheckedAt: Date?
+    /// When Folync last answered with a history, whether or not it gave a figure.
+    @ObservationIgnored var folyncNetDepositsReadAt: Date?
     private(set) var isInitialPortfolioSourceResolved = false
     /// True after the startup load failed; portfolio writes are refused until a
     /// restore or import succeeds.
@@ -122,6 +128,15 @@ class DataModel {
     var preferredCurrency: String = StockbarRuntimeStorage.userDefaults.string(forKey: "preferredCurrency") ?? "USD" { // Keep as is
         didSet {
             StockbarRuntimeStorage.userDefaults.set(preferredCurrency, forKey: "preferredCurrency")
+        }
+    }
+    /// What the portfolio's total P&L is measured against. Net deposits unless
+    /// the user chose otherwise.
+    var portfolioGainBasis: PortfolioGainBasis = StockbarRuntimeStorage.userDefaults
+        .string(forKey: PortfolioGainBasis.userDefaultsKey)
+        .flatMap(PortfolioGainBasis.init(rawValue:)) ?? .netDeposits {
+        didSet {
+            StockbarRuntimeStorage.userDefaults.set(portfolioGainBasis.rawValue, forKey: PortfolioGainBasis.userDefaultsKey)
         }
     }
     var showMarketIndicators: Bool = StockbarRuntimeStorage.userDefaults.bool(forKey: "showMarketIndicators") {
@@ -1261,17 +1276,19 @@ class DataModel {
     /// holdings priced by Folync or Trading 212 never fired. Every price source
     /// now calls this after applying prices.
     func evaluatePriceAlerts(for trades: [RealTimeTrade]) {
+        var checks: [PriceAlertService.PriceCheck] = []
         for trade in trades where !isBenchmarkTrade(trade) {
             let info = trade.realTimeInfo
             let price = info.getCurrentDisplayPrice()
             guard price.isFinite, price > 0 else { continue }
-            PriceAlertService.shared.checkAlerts(
+            checks.append(PriceAlertService.PriceCheck(
                 symbol: trade.trade.name,
                 currentPrice: price,
                 previousPrice: info.prevClosePrice,
                 currency: info.currency ?? "USD"
-            )
+            ))
         }
+        PriceAlertService.shared.checkAlerts(checks)
     }
 
     private func applyTrading212BrokerSyncPlan(_ plan: Trading212BrokerSyncPlan) {
@@ -1483,7 +1500,8 @@ class DataModel {
                 totalCost: totalCost,
                 ownedPositionCount: snapshot.displayHoldings.count,
                 currency: snapshot.scope.currency ?? preferredCurrency,
-                valuationSource: .folyncProvided
+                valuationSource: .folyncProvided,
+                netDeposits: folyncNetDeposits?.amount(for: snapshot)
             )
         }
         let summaryCurrency = overrideCurrency ?? preferredCurrency
@@ -2132,8 +2150,9 @@ extension RealTimeTrade {
         }
         
         // ALWAYS update timestamp, metadata, and market state - even if we retained old price data
-        // lastUpdateTime reflects when we fetched/refreshed; regularMarketTime reflects exchange-reported time
-        updatedInfo.lastUpdateTime = Int(Date().timeIntervalSince1970)
+        // lastUpdateTime is when the price was fetched from the provider, which for a quote the
+        // script served from its cache is earlier than now; regularMarketTime is the exchange's time
+        updatedInfo.lastUpdateTime = Int(result.updateDate(now: Date()).timeIntervalSince1970)
         updatedInfo.regularMarketTime = result.regularMarketTime ?? Int(Date().timeIntervalSince1970)
         // A provider that omits these (the FMP fallback does) must not replace
         // a known time zone with GMT or a known name with the ticker.
