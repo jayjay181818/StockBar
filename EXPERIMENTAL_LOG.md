@@ -318,6 +318,13 @@ it to be promoted again. What could still be done, and what
 each would cost, is listed at the end of
 [Milestone 1](#milestone-1-2026-11-12).
 
+From 2026-11-19, at the owner's word, `experimental` is in use again for a
+major change: the Glass redesign and the new Folync pages. Pull request 133
+brought it up to `testing` first, with merge commit `01d4768`. The owner
+said the benchmark for this work can wait until after 02:30 on 2026-11-20
+or later, so the before/after table of pull request 134 is to be added
+then.
+
 ## Review of the refresh path, 2026-11-13
 
 A read-only review of the code the benchmark never runs: the price refresh
@@ -3507,6 +3514,98 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   published build and the pull requests it names.
 - Known issues: none known.
 - Verdict: retained.
+
+### 134: Let the acceptance copy reach a Folync on this Mac
+
+- What: in an acceptance run, a Folync request is let through when its
+  endpoint is on this Mac (`127.0.0.1`, `localhost` or `::1`). Everything
+  else stays refused. The owner approved it on 2026-11-19. Until now
+  `StockbarProviderAccessPolicy` refused every provider in an acceptance
+  run, so the acceptance copy could never read the Folync stand-in on
+  loopback that `script/run_folync_acceptance.sh` and the bootstrap
+  require. The redesign's Folync pages could not be tried on made-up data.
+
+  `StockbarAcceptanceRuntime` gains `loopbackFolyncAllowed`. It is true
+  only for an explicit acceptance run, and false for the automatic XCTest
+  isolation and for a normal run. The policy gains
+  `authorize(_:endpoint:)`. It allows everything when live requests are
+  allowed. Otherwise it allows only `.folync`, with the exception on, to
+  an `http` or `https` URL whose host is exactly one of the three; the
+  host is compared whole, with no name lookup. `authorize(_:)` without an
+  endpoint behaves as before. `FolyncPortfolioSource` and
+  `FolyncSupplementalCoordinator` pass their base URL on every request,
+  before the endpoint check and before any network use. Changing the
+  address inside the acceptance copy to another machine is therefore still
+  refused. These are the only two Folync calls to the policy, and no other
+  provider's gate changes. The preflight report gains
+  `loopbackFolyncAllowed`, so the evidence shows the exception, and
+  `Docs/Development.md` describes it.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: pending, see [Where things stand](#where-things-stand). The
+  benchmark's launches are acceptance runs with no Folync set up, so they
+  never reach the exception, and no row is expected to move. That is
+  expected, not measured.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 754 XCTest tests with 0
+  failures. Twelve are new. Eight in `StockbarProviderAccessPolicyTests`
+  cover the policy: the three loopback forms allowed; ten other forms
+  refused, among them `127.0.0.1.example.com`, `localhost.example.com`,
+  `http://127.0.0.1@example.com/`, an address on the local network, a URL
+  with no host and schemes other than HTTP; the other three providers
+  refused even on loopback; Folync without an endpoint still refused; the
+  automatic XCTest runtime refused; a normal run allowed everything. Four
+  in `FolyncPortfolioSourceTests` go through a stubbed `URLSession`. With
+  the policy of an explicit acceptance run, both the source and the
+  supplemental coordinator reach a stub at `http://127.0.0.1:49152`. For
+  addresses elsewhere neither sends a request, and both fail with
+  `disabledForAcceptance(.folync)`. The source's own endpoint check refuses
+  plain HTTP on the local network before the policy is asked, so its test
+  uses HTTPS addresses to reach the policy. The runtime and preflight tests
+  assert the new field.
+
+  The tests were shown to fail on broken code. With `isLoopback` returning
+  true for every URL, four tests failed. With the exception granted without
+  the runtime's flag, the two tests of a policy without it failed. Both
+  mutations were then removed. The policy's initialiser was tidied after
+  them, in lines neither mutation touched, and everything below was run
+  again on the result.
+
+  `checks`, `docs-check` and `build-release` pass, and so do 92 script
+  tests. 70 Python helper tests pass, none skipped. They ran with Homebrew
+  Python 3.15.2, which has no yfinance, rather than the app's own
+  environment, which this work did not touch; CI uses Python 3.13 with the
+  lock file. No Python changed.
+
+  An acceptance copy was built from this branch and run against
+  `build/design/acceptance/stub_folync.py`, a stand-in kept in the
+  untracked `build/` folder, for nearly three minutes, with
+  debug logging, and counted after it had stopped. The stub answered 32
+  requests, all with 200: the snapshot seven times, the portfolio history
+  ten, capabilities six, FX five and benchmarks four. The app logged seven
+  Folync polls with success and none without, and no
+  `provider_access_denied` line, warning or error. A poll reports success
+  only after a 304, or a 200 whose snapshot was decoded and applied, and
+  every answer was a 200; there is no log line of its own for applying. The app also wrote the snapshot cache and five route
+  caches, which it does only after a response passes its checks. The
+  preflight evidence held `liveProviderRequestsAllowed` false and
+  `loopbackFolyncAllowed` true. The session lead then ran the copy again
+  and looked at its window: the Overview and Holdings showed the stand-in's
+  made-up portfolio, labelled as a Folync portfolio.
+- Review: the session lead (Fable 5.2) read the policy, both call sites
+  and the tests against the specification. Written by an Opus subagent from
+  that specification. No independent second review.
+- Known issues:
+  - The stand-in answers 200 with a new body every time, so the app's 304
+    path was not exercised in the run.
+  - A manifest with `http://[::1]:<port>` passes the launcher, the
+    bootstrap and the new policy, but not `FolyncEndpointPolicy`, which
+    allows plain HTTP only to `localhost` and `127.0.0.1`. Such a run would
+    still fail, now with the HTTPS message. Not changed here.
+  - `URLSession` follows redirects, and nothing asks the policy about a
+    redirect's target. A Folync on this Mac that redirected elsewhere would
+    be followed. The stand-in never redirects, and a normal run behaves the
+    same way. Not changed here.
+- Verdict: pending the benchmark.
 
 ## Rust evaluation, 2026-11-12
 

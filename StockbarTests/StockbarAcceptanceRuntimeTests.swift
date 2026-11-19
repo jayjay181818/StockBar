@@ -24,6 +24,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.folyncKeychainService, "com.stockbar.folync")
         XCTAssertEqual(runtime.credentialsKeychainService, "com.stockbar.credentials")
         XCTAssertTrue(runtime.liveProviderRequestsAllowed)
+        XCTAssertFalse(runtime.loopbackFolyncAllowed)
     }
 
     func testCurrentProcessRuntimeAutomaticallyIsolatesXCTest() throws {
@@ -42,6 +43,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.isEnabled)
         XCTAssertEqual(runtime.runID, "xctest-4242-run-0001")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
+        XCTAssertFalse(runtime.loopbackFolyncAllowed, "a test run must not reach a Folync on this Mac")
         XCTAssertEqual(
             runtime.defaultsSuiteName,
             try runtime.root.unwrap().appendingPathComponent("Preferences/com.stockbar.acceptance.xctest-4242-run-0001").path
@@ -113,6 +115,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         // Then: The caller-provided acceptance identity wins over automatic XCTest isolation.
         XCTAssertEqual(runtime.root, root.standardizedFileURL)
         XCTAssertEqual(runtime.runID, "acceptance-12345678")
+        XCTAssertTrue(runtime.loopbackFolyncAllowed)
     }
 
     func testAcceptanceRuntimeConfinesAllResolvedStorageAndDisablesProviders() throws {
@@ -128,6 +131,7 @@ final class StockbarAcceptanceRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.folyncKeychainService, "com.stockbar.folync.acceptance.\(runID)")
         XCTAssertEqual(runtime.credentialsKeychainService, "com.stockbar.credentials.acceptance.\(runID)")
         XCTAssertFalse(runtime.liveProviderRequestsAllowed)
+        XCTAssertTrue(runtime.loopbackFolyncAllowed, "the harness's Folync stand-in on this Mac is the one exception")
         XCTAssertTrue(try runtime.applicationSupportRoot.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.bundleApplicationSupportRoot.unwrap().isDescendant(of: root))
         XCTAssertTrue(try runtime.cacheRoot.unwrap().isDescendant(of: root))
@@ -511,11 +515,11 @@ final class StockbarAutosavePolicyTests: XCTestCase {
     private let production = StockbarAcceptanceRuntime(
         root: nil, runID: nil,
         folyncKeychainService: StockbarAcceptanceRuntime.productionFolyncKeychainService,
-        liveProviderRequestsAllowed: true)
+        liveProviderRequestsAllowed: true, loopbackFolyncAllowed: false)
     private let acceptance = StockbarAcceptanceRuntime(
         root: URL(fileURLWithPath: "/tmp/stockbar-acceptance-test", isDirectory: true), runID: "run-12345678",
         folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
-        liveProviderRequestsAllowed: false)
+        liveProviderRequestsAllowed: false, loopbackFolyncAllowed: true)
 
     func testProductionKeepsTheRealAutosaveNames() {
         XCTAssertEqual(StockbarAutosavePolicy.windowFrameName("StockbarMainWindow", acceptance: production), "StockbarMainWindow")

@@ -1234,7 +1234,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         query: [URLQueryItem],
         etag: String?
     ) async throws -> HTTPResult {
-        try providerPolicy.authorize(.folync)
+        try providerPolicy.authorize(.folync, endpoint: baseURL)
         try FolyncEndpointPolicy.validate(baseURL)
         if await backoff.isBackingOff() {
             throw FolyncPortfolioSourceError.rateLimited(retryAfter: nil)

@@ -468,7 +468,8 @@ final class SettingsTransferTests: XCTestCase {
             root: acceptanceRoot,
             runID: "acceptance-run-0001",
             folyncKeychainService: "com.stockbar.folync.acceptance.acceptance-run-0001",
-            liveProviderRequestsAllowed: false
+            liveProviderRequestsAllowed: false,
+            loopbackFolyncAllowed: true
         )
         let acceptancePlan = try StockbarRelauncher.launchPlan(
             runtime: acceptance, bundleURL: bundle, executableURL: executable,
@@ -483,7 +484,8 @@ final class SettingsTransferTests: XCTestCase {
         let production = StockbarAcceptanceRuntime(
             root: nil, runID: nil,
             folyncKeychainService: StockbarAcceptanceRuntime.productionFolyncKeychainService,
-            liveProviderRequestsAllowed: true
+            liveProviderRequestsAllowed: true,
+            loopbackFolyncAllowed: false
         )
         let productionPlan = try StockbarRelauncher.launchPlan(
             runtime: production, bundleURL: bundle, executableURL: executable,
