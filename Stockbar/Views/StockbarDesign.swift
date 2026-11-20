@@ -857,9 +857,9 @@ struct StockbarSplitFigure: View {
     @Environment(\.stockbarPopoverText) private var textStyle
 
     /// The whole part and the fraction with its separator. A figure with no
-    /// fraction, or text that is not a figure ("-"), stays whole.
-    static func split(_ text: String, locale: Locale = .current) -> (whole: String, fraction: String) {
-        let separator = locale.decimalSeparator ?? "."
+    /// fraction, or text that is not a figure ("-"), stays whole. The app's
+    /// money figures (`HoldingsCurrencyFormatter`) always use a full stop.
+    static func split(_ text: String, separator: String = ".") -> (whole: String, fraction: String) {
         guard let range = text.range(of: separator, options: .backwards) else { return (text, "") }
         let digits = text[range.upperBound...]
         guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return (text, "") }
