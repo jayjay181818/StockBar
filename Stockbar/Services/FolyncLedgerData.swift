@@ -146,7 +146,6 @@ struct FolyncDividendEvent: Codable, Equatable, Sendable {
 }
 
 struct FolyncDividendSummary: Codable, Equatable, Sendable {
-    /// Net income received over the last twelve months.
     let receivedIncome: Double?
     let grossIncome: Double?
     let withholdingTax: Double?
@@ -157,7 +156,6 @@ struct FolyncDividendSummary: Codable, Equatable, Sendable {
     let estimatedIncome: Double?
     let knownProjectedIncome: Double?
     let incomplete: Bool
-    /// Projected income over the next twelve months.
     let projectedAnnualIncome: Double?
     let yoyChangePct: Double?
     let portfolioYieldTTMPct: Double?
@@ -174,8 +172,8 @@ struct FolyncDividendHoldingCoverage: Codable, Equatable, Sendable {
     let marketValue: FolyncFinancialMetric
 }
 
-/// Whole-scope discovery totals, independent of paging and date filters.
-/// The undated announcements and per-source coverage are not decoded.
+/// Discovery totals for the scope. The undated announcements and the
+/// per-source coverage lists are not decoded.
 struct FolyncDividendDiscoverySummary: Codable, Equatable, Sendable {
     let knownDeclaredIncome: Double?
     let knownEstimatedIncome: Double?
@@ -246,7 +244,6 @@ struct FolyncTradeStats: Codable, Equatable, Sendable {
     let unavailableBenchmarkComparisons: Int
     let openLotComparisonDate: String?
     let benchmarkBreakdown: [FolyncTradeBenchmarkBreakdown]
-    /// Over all lots, open and closed.
     let totalTradeGain: Double?
     let unavailableAttributionLots: Int
 }
@@ -265,8 +262,13 @@ struct FolyncActivityPeriod: Codable, Equatable, Sendable {
     let turnoverPct: Double?
 }
 
+enum FolyncBenchmarkComparisonQuality: String, Hashable, Sendable {
+    case complete
+    case unavailable
+}
+
 struct FolyncTradeBenchmarkComparison: Codable, Equatable, Sendable {
-    let quality: FolyncFinancialQuality
+    let quality: FolyncOpenEnum<FolyncBenchmarkComparisonQuality>
     let reasonCodes: [String]
     let requestedStartDate: String
     let requestedEndDate: String?
@@ -283,7 +285,6 @@ struct FolyncTradeLot: Codable, Equatable, Sendable {
     let ticker: String
     let side: FolyncOpenEnum<FolyncTradeSide>
     let openDate: String
-    /// Per share, in the portfolio currency (`currency`), charges included.
     let price: Double
     let currency: String
     let shares: Double
@@ -305,8 +306,7 @@ struct FolyncTradeLot: Codable, Equatable, Sendable {
     let identity: FolyncInstrumentIdentity
 }
 
-/// `GET v2/scopes/{scope}/trade-analysis`. `stats` and `activity` cover the
-/// whole scope; `lots` is paged.
+/// `GET v2/scopes/{scope}/trade-analysis`. Only `lots` is paged.
 struct FolyncTradeAnalysisResponse: FolyncLedgerResponse {
     let schemaVersion: Int
     let sourceRevision: String
@@ -368,12 +368,10 @@ struct FolyncTransaction: Codable, Equatable, Sendable {
     let grossAmount: Double
     let commission: Double
     let tax: Double
-    /// Settlement currency of `grossAmount`, `commission` and `tax`.
     let currency: String
     let portfolioCurrency: String
     let fxRateToPortfolioCurrency: Double?
     let fxRateSource: FolyncOpenEnum<FolyncFXRateSource>?
-    /// The gross amount in the portfolio currency; commission and tax are not deducted.
     let portfolioAmount: FolyncFinancialMetric
     let source: String
     let importOwned: Bool

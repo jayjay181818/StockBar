@@ -2455,6 +2455,7 @@ extension FolyncPortfolioSourceTests {
         let settingsStore: FolyncSettingsStore
         let clock: LockedBox<Date>
         let responder: LockedBox<LedgerResponder?>
+        let cacheDirectory: URL
 
         /// Requests to the ledger routes only; the capabilities request is left out.
         var ledgerRequests: [URLRequest] {
@@ -2518,7 +2519,8 @@ extension FolyncPortfolioSourceTests {
             tokenProvider: { "test-token" }
         )
         return LedgerHarness(
-            coordinator: coordinator, stub: stub, settingsStore: settingsStore, clock: clock, responder: responder
+            coordinator: coordinator, stub: stub, settingsStore: settingsStore, clock: clock, responder: responder,
+            cacheDirectory: cacheDirectory
         )
     }
 
@@ -2965,13 +2967,29 @@ extension FolyncPortfolioSourceTests {
 
     func testLedgerProviderPolicyOffSendsNoRequest() async throws {
         for route in FolyncLedgerRoute.allCases {
-            let harness = try makeLedgerHarness(providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false))
+            // Saved capabilities and a saved page one, so the request itself is reached.
+            let harness = try makeLedgerHarness()
             harness.respond { _ in (200, Self.ledgerJSON(route), nil) }
+            _ = await Self.ledger(route, harness)
+            let sentBefore = harness.stub.requests.count
+            let refused = FolyncSupplementalCoordinator(
+                settingsStore: harness.settingsStore,
+                cache: FolyncSupplementalCache(directory: harness.cacheDirectory),
+                session: Self.stubSession(),
+                providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+                tokenProvider: { "test-token" }
+            )
 
-            let result = await Self.ledger(route, harness)
+            let result: LedgerOutcome = switch route {
+            case .dividends: Self.outcome(await refused.routeDividends()) { $0.events.map(\.eventId) }
+            case .tradeAnalysis: Self.outcome(await refused.routeTradeAnalysis()) { $0.lots.map(\.id) }
+            case .transactions: Self.outcome(await refused.routeTransactions()) { $0.transactions.map(\.id) }
+            }
 
-            XCTAssertEqual(result, .unavailable)
-            XCTAssertTrue(harness.stub.requests.isEmpty, "\(route): the provider policy refuses before anything is sent")
+            guard case .folync(.stale, .firstPage, _, _) = result else {
+                return XCTFail("\(route): a refused request shows the saved copy, got \(result)")
+            }
+            XCTAssertEqual(harness.stub.requests.count, sentBefore, "\(route): the provider policy refuses before anything is sent")
         }
     }
 
@@ -3091,16 +3109,16 @@ extension FolyncPortfolioSourceTests {
 
     func testLedgerPageInvalidatedRestartsFromPageOne() async throws {
         try await assertPagingRestarts("409") { _ in
-            (409, #"{"statusCode":409,"statusMessage":"Changed","data":{"code":"page_invalidated","retryable":true}}"#, nil)
+            (409, #"{"statusCode":409,"statusMessage":"Start again","data":{"code":"page_invalidated","retryable":true}}"#, nil)
         }
     }
 
     func testLedgerRefusedCursorRestartsFromPageOne() async throws {
         try await assertPagingRestarts("invalid_cursor") { _ in
-            (400, #"{"statusCode":400,"statusMessage":"Invalid query","data":{"code":"invalid_cursor","retryable":false}}"#, nil)
+            (400, #"{"statusCode":400,"statusMessage":"Cursor refused","data":{"code":"invalid_cursor","retryable":false}}"#, nil)
         }
         try await assertPagingRestarts("cursor field error") { _ in
-            (400, #"{"statusCode":400,"statusMessage":"Invalid query","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"cursor":["bad"]}}}"#, nil)
+            (400, #"{"statusCode":400,"statusMessage":"Cursor refused","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"cursor":["unknown cursor"]}}}"#, nil)
         }
     }
 
@@ -3108,7 +3126,7 @@ extension FolyncPortfolioSourceTests {
         let harness = try makeLedgerHarness()
         harness.respond { request in
             if Self.queryValue(request, "cursor") == "cursor-2" {
-                return (400, #"{"statusCode":400,"statusMessage":"Invalid query","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"to":["bad"]}}}"#, nil)
+                return (400, #"{"statusCode":400,"statusMessage":"Limit refused","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"limit":["too large"]}}}"#, nil)
             }
             return (200, Self.ledgerJSON(.dividends, hasMore: true, nextCursor: "cursor-2"), nil)
         }
@@ -3191,13 +3209,54 @@ extension FolyncPortfolioSourceTests {
         _ = await harness.coordinator.capabilitiesForCurrentSettings()
         harness.stub.delay = 0.2
 
+        // Refreshes, so the reuse window cannot stand in for sharing.
         async let first = Self.ledger(.transactions, harness, forceRefresh: true)
         async let second = Self.ledger(.transactions, harness, forceRefresh: true)
-        async let third = Self.ledger(.transactions, harness)
+        async let third = Self.ledger(.transactions, harness, forceRefresh: true)
         let results = await [first, second, third]
 
         XCTAssertEqual(harness.ledgerRequests.count, 1, "Callers asking for the same thing share one request")
         XCTAssertEqual(Set(results.map { "\($0)" }).count, 1)
+    }
+
+    func testLedgerFetchPolicyRefreshDoesNotJoinARequestThatMayReuse() async throws {
+        let policy = FolyncLedgerFetchPolicy()
+        let key = FolyncLedgerFetchPolicy.Key(
+            route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: "", cursor: nil
+        )
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        let ran = LockedBox<[String]>([])
+        let held = Task {
+            await policy.perform(key) {
+                ran.value.append("held")
+                for await _ in release { break }
+                return .init(result: "held", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let joining = Task {
+            await policy.perform(key) {
+                ran.value.append("joining")
+                return .init(result: "joining", firstPageToKeep: nil)
+            }
+        }
+        let refreshing = Task {
+            await policy.perform(key, forceRefresh: true) {
+                ran.value.append("refreshing")
+                return .init(result: "refreshing", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        releaser.yield()
+        releaser.finish()
+
+        let heldResult = await held.value
+        let joiningResult = await joining.value
+        let refreshingResult = await refreshing.value
+        XCTAssertEqual(heldResult, "held")
+        XCTAssertEqual(joiningResult, "held", "The same request under way is shared")
+        XCTAssertEqual(refreshingResult, "refreshing", "A refresh asks again, in its own turn")
+        XCTAssertEqual(ran.value, ["held", "refreshing"])
     }
 
     func testLedgerFetchPolicyRunsOperationsOneAtATimeInOrder() async {
