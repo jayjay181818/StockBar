@@ -2389,6 +2389,1003 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     """
 }
 
+// MARK: - Ledger routes
+
+extension FolyncPortfolioSourceTests {
+    /// The capabilities fixture with the three ledger resources, each usable
+    /// unless named in `notReady` or `unsupported`, or left out in `absent`.
+    fileprivate static func ledgerCapabilitiesJSON(
+        notReady: Set<String> = [],
+        unsupported: Set<String> = [],
+        absent: Set<String> = []
+    ) -> String {
+        let entries = ["dividends", "tradeAnalysis", "transactions"].filter { !absent.contains($0) }.map { key in
+            "\"\(key)\": {\"supported\":\(!unsupported.contains(key)),\"ready\":\(!notReady.contains(key)),\"reasonCodes\":[]},"
+        }
+        // Only the top-level resources; the market identities have their own.
+        var json = capabilitiesJSON
+        guard let range = json.range(of: "\"resources\": {\n") else { return json }
+        json.replaceSubrange(range, with: "\"resources\": {\n" + entries.joined(separator: "\n") + "\n")
+        return json
+    }
+
+    func testCapabilitiesSavedWithoutLedgerResourcesAreAskedForInFull() async throws {
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-ledger-caps-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = FolyncSupplementalCache(directory: cacheDirectory)
+        // Saved by a build that did not know the ledger resources.
+        try await cache.save(
+            FolyncCapabilities.fixture(lineHistory: true, candlesticks: true, benchmarks: true, exchangeRates: true),
+            endpoint: "https://folync.test", scopeID: "-", resource: "capabilities", identity: "-", range: "-",
+            etag: "W/\"saved-before\""
+        )
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        let body = Self.ledgerCapabilitiesJSON()
+        stub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/client/v2/capabilities")
+            if request.value(forHTTPHeaderField: "If-None-Match") != nil {
+                return Self.httpResponse(request, status: 304, body: "")
+            }
+            return Self.httpResponse(request, status: 200, body: body, etag: "W/\"with-ledger\"")
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            cache: cache, session: Self.stubSession(), providerPolicy: Self.testProviderPolicy, tokenProvider: { "test-token" }
+        )
+        let baseURL = try XCTUnwrap(URL(string: "https://folync.test"))
+
+        let first = try await coordinator.fetchCapabilities(baseURL: baseURL, token: "test-token")
+        XCTAssertNil(stub.requests.first?.value(forHTTPHeaderField: "If-None-Match"),
+                     "A document saved without the ledger resources must not be confirmed by a 304")
+        XCTAssertEqual(first?.resources.dividends?.isUsable, true)
+
+        let second = try await coordinator.fetchCapabilities(baseURL: baseURL, token: "test-token")
+        XCTAssertEqual(stub.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "W/\"with-ledger\"")
+        XCTAssertEqual(second?.resources.transactions?.isUsable, true, "The 304 returns the saved document with its ledger resources")
+    }
+
+    // MARK: Ledger harness
+
+    fileprivate typealias LedgerResponder = @Sendable (URLRequest) throws -> (status: Int, body: String, etag: String?)
+
+    fileprivate struct LedgerHarness: Sendable {
+        let coordinator: FolyncSupplementalCoordinator
+        let stub: FolyncHTTPStub
+        let settingsStore: FolyncSettingsStore
+        let clock: LockedBox<Date>
+        let responder: LockedBox<LedgerResponder?>
+        let cacheDirectory: URL
+
+        /// Requests to the ledger routes only; the capabilities request is left out.
+        var ledgerRequests: [URLRequest] {
+            stub.requests.filter { $0.url?.path.hasPrefix("/api/client/v2/scopes/") == true }
+        }
+
+        func respond(_ responder: @escaping LedgerResponder) {
+            self.responder.value = responder
+        }
+
+        func advance(_ seconds: TimeInterval) {
+            clock.value = clock.value.addingTimeInterval(seconds)
+        }
+    }
+
+    fileprivate static let ledgerSettingsOn = FolyncSupplementalSettings(
+        historicalLineCharts: false,
+        candlestickCharts: false,
+        benchmarkMarketData: false,
+        exchangeRates: false,
+        allowLegacyFallback: false
+    )
+
+    fileprivate func makeLedgerHarness(
+        scopeID: String = "all",
+        supplemental: FolyncSupplementalSettings = ledgerSettingsOn,
+        folyncEnabled: Bool = true,
+        capabilities: String? = ledgerCapabilitiesJSON(),
+        providerPolicy: StockbarProviderAccessPolicy = testProviderPolicy
+    ) throws -> LedgerHarness {
+        let suiteName = TestDefaultsSuite.makeName("FolyncLedger-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-ledger-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let settingsStore = FolyncSettingsStore(defaults: defaults)
+        settingsStore.save(FolyncStoredSettings(
+            isEnabled: folyncEnabled, baseURL: "https://folync.test", scopeID: scopeID,
+            pollingIntervalSeconds: 60, supplemental: supplemental
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        let responder = LockedBox<LedgerResponder?>(nil)
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/capabilities" {
+                guard let capabilities else { return Self.httpResponse(request, status: 404, body: "{}") }
+                return Self.httpResponse(request, status: 200, body: capabilities, etag: "W/\"caps\"")
+            }
+            guard let respond = responder.value else { throw URLError(.badServerResponse) }
+            let (status, body, etag) = try respond(request)
+            return Self.httpResponse(request, status: status, body: body, etag: etag)
+        }
+        let clock = LockedBox(Date(timeIntervalSince1970: 1_780_000_000))
+        let coordinator = FolyncSupplementalCoordinator(
+            settingsStore: settingsStore,
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: providerPolicy,
+            ledgerPolicy: FolyncLedgerFetchPolicy(now: { clock.value }),
+            tokenProvider: { "test-token" }
+        )
+        return LedgerHarness(
+            coordinator: coordinator, stub: stub, settingsStore: settingsStore, clock: clock, responder: responder,
+            cacheDirectory: cacheDirectory
+        )
+    }
+
+    /// A route's result reduced to what the tests compare.
+    fileprivate enum LedgerOutcome: Equatable {
+        case folync(FolyncSupplementalSourceStatus, FolyncLedgerPaging, rows: [String], next: FolyncLedgerContinuation?)
+        case disabled
+        case unavailable
+        case unreachable
+
+        var continuation: FolyncLedgerContinuation? {
+            if case .folync(_, _, _, let next) = self { return next }
+            return nil
+        }
+    }
+
+    fileprivate static func outcome<Response: FolyncLedgerResponse>(
+        _ result: FolyncRoutedLedgerResult<Response>,
+        rows: (Response) -> [String]
+    ) -> LedgerOutcome {
+        switch result {
+        case .folync(let response, let status, let paging):
+            return .folync(status, paging, rows: rows(response), next: response.page.continuation)
+        case .disabled: return .disabled
+        case .unavailable: return .unavailable
+        case .unreachable: return .unreachable
+        }
+    }
+
+    /// Page one of `route` with its default query, or the page after `continuation`.
+    fileprivate static func ledger(
+        _ route: FolyncLedgerRoute,
+        _ harness: LedgerHarness,
+        forceRefresh: Bool = false,
+        after continuation: FolyncLedgerContinuation? = nil
+    ) async -> LedgerOutcome {
+        let coordinator = harness.coordinator
+        switch route {
+        case .dividends:
+            let query = FolyncDividendsQuery()
+            var result = await coordinator.routeDividends(query, forceRefresh: forceRefresh)
+            if let continuation { result = await coordinator.loadMoreDividends(query, after: continuation) }
+            return Self.outcome(result) { $0.events.map(\.eventId) }
+        case .tradeAnalysis:
+            let query = FolyncTradeAnalysisQuery()
+            var result = await coordinator.routeTradeAnalysis(query, forceRefresh: forceRefresh)
+            if let continuation { result = await coordinator.loadMoreTradeAnalysis(query, after: continuation) }
+            return Self.outcome(result) { $0.lots.map(\.id) }
+        case .transactions:
+            let query = FolyncTransactionsQuery()
+            var result = await coordinator.routeTransactions(query, forceRefresh: forceRefresh)
+            if let continuation { result = await coordinator.loadMoreTransactions(query, after: continuation) }
+            return Self.outcome(result) { $0.transactions.map(\.id) }
+        }
+    }
+
+    fileprivate static func queryValue(_ request: URLRequest, _ name: String) -> String? {
+        request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
+            .queryItems?.first { $0.name == name }?.value
+    }
+
+    // MARK: Ledger fixtures (invented figures)
+
+    fileprivate static func ledgerRevision(_ character: Character) -> String {
+        String(repeating: String(character), count: 64)
+    }
+
+    fileprivate static func rowPrefix(_ route: FolyncLedgerRoute) -> String {
+        switch route {
+        case .dividends: "div"
+        case .tradeAnalysis: "lot"
+        case .transactions: "tx"
+        }
+    }
+
+    private static let ledgerIdentity = """
+    {"assetId":"asset_alpha","canonicalTicker":"ALPHA","displayTicker":"ALPHA","quoteSymbol":"ALPHA.L","aliases":["ALPHA"],"isin":null}
+    """
+
+    private static func ledgerMetric(_ value: String, quality: String = "complete") -> String {
+        "{\"value\":\(value),\"currency\":\"GBP\",\"quality\":\"\(quality)\",\"reasonCodes\":[],\"asOfDate\":\"2026-03-02\"}"
+    }
+
+    private static let ledgerFreshness = """
+    {"responseGeneratedAt":"2026-03-02T09:00:00.000Z","asOf":"2026-03-02","status":"current","reasonCodes":[],
+     "sources":{"snapshots":{"asOfDate":"2026-03-02","status":"clean","generation":7,"dirtySince":null,
+     "rebuildStartedAt":null,"failedAt":null,"completedAt":"2026-03-02T08:59:00.000Z"},
+     "prices":{"asOfDate":"2026-03-02","ageSeconds":60,"missingCount":0},
+     "fx":{"asOfDate":"2026-03-02","ageSeconds":60,"missingCount":0},
+     "provider":{"lastSuccessfulSyncAt":"2026-03-02T08:58:00.000Z","ageSeconds":120,"requiredCount":3,"coveredCount":3,"missingCount":0}}}
+    """
+
+    private static func dividendRows(_ rowID: String) -> String {
+        """
+        "events":[{"eventId":"div-\(rowID)","portfolioId":"pf_one","portfolioName":"Example","assetId":"asset_alpha",
+         "identity":\(ledgerIdentity),"transactionId":null,"exDate":"2026-02-10","payDate":"2026-03-01","status":"received",
+         "amount":12.5,"currency":"GBP","portfolioAmount":\(ledgerMetric("12.5")),"futureField":{"nested":true},
+         "discovery":{"eventId":"div-\(rowID)","exDate":"2026-02-10","declarationDate":null,"recordDate":null,
+          "amountCertainty":"published","dateCertainty":"estimated","source":"example","sourceUrl":null,"lastCheckedAt":null,
+          "entitlementBasis":"current_holdings","quantity":10,"originalCurrency":"GBP","perShare":1.25,"fxAsOfDate":null,
+          "fxEstimated":false,"receiptStatus":"received","issues":[]}},
+         {"eventId":"div-\(rowID)b","portfolioId":"pf_one","portfolioName":"Example","assetId":"asset_alpha",
+         "identity":\(ledgerIdentity),"transactionId":null,"exDate":null,"payDate":"2026-06-01","status":"announced_later",
+         "amount":null,"currency":"GBP","portfolioAmount":\(ledgerMetric("null", quality: "unavailable"))}],
+        "holdingCoverage":{"totalHoldings":2,"valuedHoldings":1,"missingHoldings":1,"marketValue":\(ledgerMetric("1000"))},
+        "liabilityCoverage":{"scope":"current_open_positions","status":"not_applicable","shortHoldingCount":0},
+        "valuation":\(ledgerMetric("1000")),
+        "summary":{"receivedIncome":120.5,"grossIncome":130,"withholdingTax":9.5,"fees":0,"netIncome":120.5,
+         "withholdingProvenance":"actual","declaredIncome":null,"estimatedIncome":40,"knownProjectedIncome":40,
+         "incomplete":false,"projectedAnnualIncome":null,"yoyChangePct":null,"portfolioYieldTTMPct":2.1,
+         "yieldOnCostTTMPct":2.4,"avgMonthlyIncome":10.04,"avgDailyIncome":0.33,"dividendPayingAssets":2},
+        "discovery":{"undatedAnnouncements":[],"coverage":[],"issues":[],"knownDeclaredIncome":null,
+         "knownEstimatedIncome":40,"incomplete":true}
+        """
+    }
+
+    private static func tradeRows(_ rowID: String) -> String {
+        """
+        "costBasisMethod":"fifo",
+        "stats":{"attributionLots":3,"closedAttributionLots":1,"winRatePct":66.7,"wins":2,"losses":1,
+         "winRateVsSp500Pct":null,"winsVsSp500":1,"lossesVsSp500":1,"comparisonScope":"configured_benchmarks",
+         "benchmarkWinRatePct":50,"benchmarkWins":1,"benchmarkLosses":1,"unavailableBenchmarkComparisons":1,
+         "openLotComparisonDate":"2026-03-01","benchmarkBreakdown":[{"benchmarkId":"bench-1","benchmarkName":"Example index",
+         "wins":1,"losses":1,"unavailable":1,"winRatePct":50}],"totalTradeGain":42.5,"unavailableAttributionLots":0},
+        "activity":[{"period":"2025","fees":3.5,"feesPctOfAvgValue":0.1,"buyCount":4,"sellCount":1,"tradeCount":5,
+         "buyValue":800,"sellValue":150,"tradeValue":950,"turnoverPct":null}],
+        "lots":[{"id":"lot-\(rowID)","ticker":"ALPHA","side":"Long","openDate":"2025-06-02","price":10.5,"currency":"GBP",
+         "shares":10,"openedShares":10,"costBasis":105,"totalGain":null,"totalReturnPct":null,"comparisonReturnPct":null,
+         "alphaPct":null,"benchmarkId":"bench-1","benchmarkName":"Example index","benchmarkReturnPct":3.2,
+         "benchmarkComparison":{"quality":"complete","reasonCodes":[],"requestedStartDate":"2025-06-02",
+          "requestedEndDate":"2026-03-01","startPriceDate":"2025-06-02","endPriceDate":"2026-02-27",
+          "holdingPriceDate":"2026-02-27","awaitingHoldingClose":false,"awaitedHoldingCloseDate":null,"holdingPriceFinal":false},
+         "holdingDays":272,"status":"Reopened","valuation":\(ledgerMetric("110")),"portfolioId":"pf_one",
+         "assetId":"asset_alpha","identity":\(ledgerIdentity)}]
+        """
+    }
+
+    private static func transactionRows(_ rowID: String) -> String {
+        """
+        "mode":"input",
+        "transactions":[{"id":"tx-\(rowID)","portfolioId":"pf_one","portfolioName":"Example","assetId":"asset_alpha",
+         "identity":\(ledgerIdentity),"date":"2026-02-03","action":"buy","quantity":10,"price":10.5,"priceCurrency":"GBP",
+         "grossAmount":105,"commission":1,"tax":0.5,"currency":"GBP","portfolioCurrency":"GBP",
+         "fxRateToPortfolioCurrency":1,"fxRateSource":"same_currency","fxRateBasis":"settlement_currency_to_portfolio_currency",
+         "portfolioAmount":\(ledgerMetric("105")),"source":"manual","importOwned":false},
+         {"id":"tx-\(rowID)b","portfolioId":"pf_one","portfolioName":"Example","assetId":null,"identity":null,
+         "date":"2026-01-15","action":"gift_received","quantity":0,"price":0,"priceCurrency":null,"grossAmount":250,
+         "commission":0,"tax":0,"currency":"USD","portfolioCurrency":"GBP","fxRateToPortfolioCurrency":null,
+         "fxRateSource":"unresolved","fxRateBasis":"settlement_currency_to_portfolio_currency",
+         "portfolioAmount":\(ledgerMetric("null", quality: "unavailable")),"source":"manual","importOwned":false,
+         "adjusted":true,"adjustedReason":"example"}]
+        """
+    }
+
+    /// One page of `route`, built to the pinned contract's shape with made-up values.
+    fileprivate static func ledgerJSON(
+        _ route: FolyncLedgerRoute,
+        scopeID: String = "all",
+        rowID: String = "1",
+        revision: String = ledgerRevision("a"),
+        hasMore: Bool = false,
+        nextCursor: String? = nil,
+        schemaVersion: Int = 2
+    ) -> String {
+        let rows = switch route {
+        case .dividends: dividendRows(rowID)
+        case .tradeAnalysis: tradeRows(rowID)
+        case .transactions: transactionRows(rowID)
+        }
+        let kind = scopeID == "all" ? "aggregate" : "portfolio"
+        let cursor = nextCursor.map { "\"\($0)\"" } ?? "null"
+        return """
+        {"schemaVersion":\(schemaVersion),"sourceRevision":"\(ledgerRevision("f"))","generatedAt":"2026-03-02T09:00:00.000Z",
+         "scope":{"id":"\(scopeID)","name":"Example","kind":"\(kind)","currency":"GBP"},"currency":"GBP",
+         "quality":"complete","reasonCodes":[],"freshness":\(ledgerFreshness),"unknownTopLevelKey":[1,2,3],
+         \(rows),
+         "page":{"limit":50,"hasMore":\(hasMore),"nextCursor":\(cursor),"collectionRevision":"\(revision)"}}
+        """
+    }
+
+    // MARK: Ledger tests
+
+    func testLedgerRoutesReturnPageOneFromTheirOwnPaths() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let harness = try makeLedgerHarness()
+            harness.respond { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+                XCTAssertNil(Self.queryValue(request, "cursor"), "Page one carries no cursor")
+                return (200, Self.ledgerJSON(route), "W/\"one\"")
+            }
+
+            let result = await Self.ledger(route, harness)
+
+            let rows = route == .tradeAnalysis ? ["lot-1"] : ["\(Self.rowPrefix(route))-1", "\(Self.rowPrefix(route))-1b"]
+            XCTAssertEqual(result, .folync(.current, .firstPage, rows: rows, next: nil), "\(route)")
+            XCTAssertEqual(harness.ledgerRequests.map { $0.url?.path }, ["/api/client/v2/scopes/all/\(route.pathComponent)"])
+        }
+    }
+
+    func testLedgerQueriesUseTheContractParameterNamesAndLimits() throws {
+        let day = FolyncLedgerDay(year: 2026, month: 1, day: 31)
+        let later = FolyncLedgerDay(year: 2026, month: 3, day: 2)
+        // Midnight on 1 July in London is still 30 June in UTC; the day asked
+        // for is the one the user chose.
+        let londonMidnight = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-06-30T23:00:00Z"))
+        let london = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        XCTAssertEqual(FolyncLedgerDay(londonMidnight, in: london).string, "2026-07-01")
+        XCTAssertEqual(FolyncLedgerDay(londonMidnight, in: try XCTUnwrap(TimeZone(secondsFromGMT: 0))).string, "2026-06-30")
+        XCTAssertEqual(
+            FolyncDividendsQuery(status: .upcoming, from: day, to: later, limit: 900).queryItems,
+            [URLQueryItem(name: "status", value: "upcoming"), URLQueryItem(name: "from", value: "2026-01-31"),
+             URLQueryItem(name: "to", value: "2026-03-02"), URLQueryItem(name: "limit", value: "200")]
+        )
+        XCTAssertEqual(
+            FolyncTradeAnalysisQuery(status: .closed, assetId: "asset_alpha", limit: 0).queryItems,
+            [URLQueryItem(name: "status", value: "closed"), URLQueryItem(name: "assetId", value: "asset_alpha"),
+             URLQueryItem(name: "limit", value: "1")]
+        )
+        let transactions = FolyncTransactionsQuery(
+            mode: .adjusted, instrument: .ticker("ALPHA"), actions: [.sell, .buy, .dividend], limit: 9_999
+        )
+        XCTAssertEqual(transactions.queryItems, [
+            URLQueryItem(name: "mode", value: "adjusted"), URLQueryItem(name: "ticker", value: "ALPHA"),
+            URLQueryItem(name: "actions", value: "buy,sell,dividend"), URLQueryItem(name: "limit", value: "500")
+        ])
+        XCTAssertEqual(FolyncTransactionsQuery(instrument: .assetId("asset_alpha")).queryItems,
+                       [URLQueryItem(name: "assetId", value: "asset_alpha")])
+        XCTAssertEqual(transactions.queryItems(cursor: "next").last, URLQueryItem(name: "cursor", value: "next"))
+        XCTAssertFalse(transactions.cacheKey.contains("cursor"), "Saved copies are keyed without the cursor")
+        XCTAssertEqual(FolyncDividendsQuery().queryItems, [], "Unset parameters are left to Folync's defaults")
+    }
+
+    func testLedgerResponsesKeepNullFiguresAndTolerateUnknownValuesAndKeys() throws {
+        let dividends = try JSONDecoder().decode(
+            FolyncDividendsResponse.self, from: Data(Self.ledgerJSON(.dividends).utf8)
+        )
+        XCTAssertNil(dividends.summary.projectedAnnualIncome, "A null figure stays unknown, never zero")
+        XCTAssertNil(dividends.summary.declaredIncome)
+        XCTAssertEqual(try XCTUnwrap(dividends.summary.receivedIncome), 120.5, accuracy: 0.0001)
+        XCTAssertEqual(dividends.summary.withholdingProvenance, .known(.actual))
+        XCTAssertNil(dividends.events[1].amount)
+        XCTAssertNil(dividends.events[1].portfolioAmount.value)
+        XCTAssertEqual(dividends.events[1].portfolioAmount.quality, .unavailable)
+        XCTAssertEqual(dividends.events[0].status, .known(.received))
+        XCTAssertEqual(dividends.events[1].status, .unknown("announced_later"), "An unknown status is kept, not a failure")
+        XCTAssertEqual(dividends.events[0].discovery?.dateCertainty, .known(.estimated))
+        XCTAssertNil(dividends.events[1].discovery)
+        XCTAssertNil(dividends.discovery?.knownDeclaredIncome)
+        XCTAssertEqual(dividends.discovery?.incomplete, true)
+
+        let trades = try JSONDecoder().decode(
+            FolyncTradeAnalysisResponse.self, from: Data(Self.ledgerJSON(.tradeAnalysis).utf8)
+        )
+        XCTAssertNil(trades.lots[0].totalGain)
+        XCTAssertNil(trades.lots[0].alphaPct)
+        XCTAssertNil(trades.stats.winRateVsSp500Pct)
+        XCTAssertNil(trades.activity[0].turnoverPct)
+        XCTAssertEqual(try XCTUnwrap(trades.stats.totalTradeGain), 42.5, accuracy: 0.0001)
+        XCTAssertEqual(trades.lots[0].status, .unknown("Reopened"))
+        XCTAssertEqual(trades.lots[0].side, .known(.long))
+        XCTAssertEqual(trades.costBasisMethod, .known(.fifo))
+
+        let transactions = try JSONDecoder().decode(
+            FolyncTransactionsResponse.self, from: Data(Self.ledgerJSON(.transactions).utf8)
+        )
+        XCTAssertEqual(transactions.transactions[0].action, .known(.buy))
+        XCTAssertEqual(transactions.transactions[1].action, .unknown("gift_received"))
+        XCTAssertNil(transactions.transactions[1].fxRateToPortfolioCurrency)
+        XCTAssertNil(transactions.transactions[1].portfolioAmount.value)
+        XCTAssertNil(transactions.transactions[1].identity)
+        XCTAssertEqual(transactions.transactions[1].adjusted, true)
+        XCTAssertNil(transactions.transactions[0].adjusted)
+
+        // The saved copy is the re-encoded model: nulls and unknown values survive it.
+        let resaved = try JSONDecoder().decode(FolyncDividendsResponse.self, from: JSONEncoder().encode(dividends))
+        XCTAssertEqual(resaved, dividends)
+        XCTAssertNil(resaved.events[1].amount)
+        let resavedTrades = try JSONDecoder().decode(FolyncTradeAnalysisResponse.self, from: JSONEncoder().encode(trades))
+        XCTAssertNil(resavedTrades.lots[0].totalGain)
+        XCTAssertEqual(resavedTrades.lots[0].status, .unknown("Reopened"))
+    }
+
+    func testLedgerSavedCopyKeepsNullFiguresWhenFolyncDoesNotAnswer() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { _ in (200, Self.ledgerJSON(.dividends), "W/\"one\"") }
+        _ = await harness.coordinator.routeDividends()
+        harness.respond { _ in throw URLError(.notConnectedToInternet) }
+
+        let result = await harness.coordinator.routeDividends(forceRefresh: true)
+
+        guard case .folync(let saved, .stale, .firstPage) = result else { return XCTFail("Expected the saved copy, got \(result)") }
+        XCTAssertNil(saved.summary.projectedAnnualIncome)
+        XCTAssertNil(saved.events[1].amount)
+        XCTAssertNil(saved.events[1].portfolioAmount.value)
+    }
+
+    func testLedger304ReturnsTheSavedPageOne() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let harness = try makeLedgerHarness()
+            harness.respond { request in
+                if request.value(forHTTPHeaderField: "If-None-Match") == "W/\"one\"" { return (304, "", "W/\"one\"") }
+                return (200, Self.ledgerJSON(route), "W/\"one\"")
+            }
+            let first = await Self.ledger(route, harness)
+
+            let second = await Self.ledger(route, harness, forceRefresh: true)
+
+            XCTAssertEqual(second, first, "\(route)")
+            XCTAssertEqual(harness.ledgerRequests.count, 2)
+            XCTAssertEqual(harness.ledgerRequests.last?.value(forHTTPHeaderField: "If-None-Match"), "W/\"one\"")
+        }
+    }
+
+    func testLedgerBodyThatDoesNotDecodeOrHasAnotherSchemaIsUnavailableOrStale() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            for body in ["{\"schemaVersion\":2}", "not json", Self.ledgerJSON(route, schemaVersion: 3),
+                         Self.ledgerJSON(route, scopeID: "pf_other")] {
+                let harness = try makeLedgerHarness()
+                harness.respond { _ in (200, body, nil) }
+                let unusable = await Self.ledger(route, harness)
+                XCTAssertEqual(unusable, .unavailable, "\(route): \(body.prefix(40))")
+
+                harness.respond { _ in (200, Self.ledgerJSON(route), "W/\"one\"") }
+                guard case .folync = await Self.ledger(route, harness, forceRefresh: true) else { return XCTFail("\(route)") }
+                harness.respond { _ in (200, body, nil) }
+                guard case .folync(.stale, .firstPage, _, _) = await Self.ledger(route, harness, forceRefresh: true) else {
+                    return XCTFail("\(route): an unusable answer falls back to the saved copy")
+                }
+            }
+        }
+    }
+
+    func testLedgerOfflineShowsTheSavedCopyOrReportsUnreachable() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let empty = try makeLedgerHarness()
+            empty.respond { _ in throw URLError(.notConnectedToInternet) }
+            let nothingSaved = await Self.ledger(route, empty)
+            XCTAssertEqual(nothingSaved, .unreachable, "\(route)")
+
+            let saved = try makeLedgerHarness()
+            saved.respond { _ in (200, Self.ledgerJSON(route), nil) }
+            _ = await Self.ledger(route, saved)
+            saved.respond { _ in throw URLError(.timedOut) }
+            guard case .folync(.stale, .firstPage, let rows, _) = await Self.ledger(route, saved, forceRefresh: true) else {
+                return XCTFail("\(route): expected the saved copy")
+            }
+            XCTAssertEqual(rows.first, "\(Self.rowPrefix(route))-1")
+        }
+    }
+
+    func testLedgerGatewayErrorsAreUnreachableAndOtherErrorsUnavailable() async throws {
+        let expectations: [(Int, LedgerOutcome)] = [(502, .unreachable), (503, .unreachable), (500, .unavailable), (404, .unavailable)]
+        for route in FolyncLedgerRoute.allCases {
+            for (status, expected) in expectations {
+                let empty = try makeLedgerHarness()
+                empty.respond { _ in (status, "{}", nil) }
+                let result = await Self.ledger(route, empty)
+                XCTAssertEqual(result, expected, "\(route) HTTP \(status) with nothing saved")
+                let backingOff = await empty.coordinator.isBackingOff()
+                XCTAssertFalse(backingOff, "\(route) HTTP \(status) must not start the shared backoff")
+
+                let saved = try makeLedgerHarness()
+                saved.respond { _ in (200, Self.ledgerJSON(route), nil) }
+                _ = await Self.ledger(route, saved)
+                saved.respond { _ in (status, "{}", nil) }
+                let withSaved = await Self.ledger(route, saved, forceRefresh: true)
+                if status == 404 {
+                    XCTAssertEqual(withSaved, .unavailable, "\(route): 404 means the server has no such route")
+                } else {
+                    guard case .folync(.stale, _, _, _) = withSaved else {
+                        return XCTFail("\(route) HTTP \(status): expected the saved copy, got \(withSaved)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testLedgerRouteSwitchedOffOrFolyncOffSendsNothing() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            var off = Self.ledgerSettingsOn
+            switch route {
+            case .dividends: off.dividends = false
+            case .tradeAnalysis: off.tradeAnalysis = false
+            case .transactions: off.transactions = false
+            }
+            let switchedOff = try makeLedgerHarness(supplemental: off)
+            switchedOff.respond { _ in (200, Self.ledgerJSON(route), nil) }
+            let disabled = await Self.ledger(route, switchedOff)
+            XCTAssertEqual(disabled, .disabled, "\(route)")
+            XCTAssertTrue(switchedOff.stub.requests.isEmpty, "\(route): no request, not even for capabilities")
+
+            let folyncOff = try makeLedgerHarness(folyncEnabled: false)
+            let disconnected = await Self.ledger(route, folyncOff)
+            XCTAssertEqual(disconnected, .disabled)
+            XCTAssertTrue(folyncOff.stub.requests.isEmpty)
+
+            // Switching a route off also hides a page one still in the reuse window.
+            let kept = try makeLedgerHarness()
+            kept.respond { _ in (200, Self.ledgerJSON(route), nil) }
+            guard case .folync = await Self.ledger(route, kept) else { return XCTFail("\(route)") }
+            var stored = kept.settingsStore.load()
+            stored.supplemental = off
+            kept.settingsStore.save(stored)
+            let afterSwitchingOff = await Self.ledger(route, kept)
+            XCTAssertEqual(afterSwitchingOff, .disabled)
+        }
+    }
+
+    func testLedgerCapabilityAbsentUnsupportedOrNotReadyIsUnavailable() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let key = route.rawValue
+            for capabilities in [
+                Self.ledgerCapabilitiesJSON(absent: [key]),
+                Self.ledgerCapabilitiesJSON(unsupported: [key]),
+                Self.ledgerCapabilitiesJSON(notReady: [key]),
+                nil
+            ] {
+                let harness = try makeLedgerHarness(capabilities: capabilities)
+                harness.respond { _ in (200, Self.ledgerJSON(route), nil) }
+                let result = await Self.ledger(route, harness)
+                XCTAssertEqual(result, .unavailable, "\(route)")
+                XCTAssertTrue(harness.ledgerRequests.isEmpty, "\(route): no ledger request without a usable capability")
+            }
+        }
+    }
+
+    func testLedgerRejectedTokenOrRateLimitStartsTheSharedBackoff() async throws {
+        for (status, retryAfter) in [(401, nil), (429, "120")] as [(Int, String?)] {
+            let harness = try makeLedgerHarness()
+            harness.stub.handler = { request in
+                if request.url?.path == "/api/client/v2/capabilities" {
+                    return Self.httpResponse(request, status: 200, body: Self.ledgerCapabilitiesJSON())
+                }
+                var headers = ["Content-Type": "application/json"]
+                headers["Retry-After"] = retryAfter
+                return (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!,
+                        Data("{}".utf8))
+            }
+
+            let refused = await Self.ledger(.transactions, harness)
+            XCTAssertEqual(refused, .unavailable, "HTTP \(status)")
+            let backingOff = await harness.coordinator.isBackingOff()
+            XCTAssertTrue(backingOff, "HTTP \(status) starts the backoff every Folync request shares")
+
+            let during = await Self.ledger(.dividends, harness, forceRefresh: true)
+            XCTAssertEqual(during, .unavailable)
+            XCTAssertEqual(harness.ledgerRequests.count, 1, "HTTP \(status): nothing is sent while backing off")
+        }
+    }
+
+    func testLedgerProviderPolicyOffSendsNoRequest() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            // Saved capabilities and a saved page one, so the request itself is reached.
+            let harness = try makeLedgerHarness()
+            harness.respond { _ in (200, Self.ledgerJSON(route), nil) }
+            _ = await Self.ledger(route, harness)
+            let sentBefore = harness.stub.requests.count
+            let refused = FolyncSupplementalCoordinator(
+                settingsStore: harness.settingsStore,
+                cache: FolyncSupplementalCache(directory: harness.cacheDirectory),
+                session: Self.stubSession(),
+                providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+                tokenProvider: { "test-token" }
+            )
+
+            let result: LedgerOutcome = switch route {
+            case .dividends: Self.outcome(await refused.routeDividends()) { $0.events.map(\.eventId) }
+            case .tradeAnalysis: Self.outcome(await refused.routeTradeAnalysis()) { $0.lots.map(\.id) }
+            case .transactions: Self.outcome(await refused.routeTransactions()) { $0.transactions.map(\.id) }
+            }
+
+            guard case .folync(.stale, .firstPage, _, _) = result else {
+                return XCTFail("\(route): a refused request shows the saved copy, got \(result)")
+            }
+            XCTAssertEqual(harness.stub.requests.count, sentBefore, "\(route): the provider policy refuses before anything is sent")
+        }
+    }
+
+    func testLedgerInvalidScopeSendsNoRequest() async throws {
+        for scopeID in ["a/b", "..", ""] {
+            let harness = try makeLedgerHarness(scopeID: scopeID)
+            harness.respond { _ in (200, Self.ledgerJSON(.dividends), nil) }
+            let result = await Self.ledger(.dividends, harness)
+            XCTAssertEqual(result, .unavailable, scopeID)
+            XCTAssertTrue(harness.ledgerRequests.isEmpty, scopeID)
+        }
+    }
+
+    func testLedgerSavedCopiesAreKeptApartByRouteScopeAndQuery() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { request in
+            let route = FolyncLedgerRoute.allCases.first { request.url?.path.hasSuffix($0.pathComponent) == true }!
+            let scope = request.url!.pathComponents[5]
+            let rowID = "\(scope)-\(Self.queryValue(request, "status") ?? "any")"
+            return (200, Self.ledgerJSON(route, scopeID: scope, rowID: rowID), nil)
+        }
+        let coordinator = harness.coordinator
+        _ = await coordinator.routeDividends(FolyncDividendsQuery(status: .received))
+        _ = await coordinator.routeDividends(FolyncDividendsQuery(status: .upcoming))
+        XCTAssertEqual(harness.ledgerRequests.count, 2, "Another filter is another request")
+
+        harness.respond { _ in throw URLError(.notConnectedToInternet) }
+        let received = Self.outcome(await coordinator.routeDividends(FolyncDividendsQuery(status: .received), forceRefresh: true)) {
+            $0.events.map(\.eventId)
+        }
+        let upcoming = Self.outcome(await coordinator.routeDividends(FolyncDividendsQuery(status: .upcoming), forceRefresh: true)) {
+            $0.events.map(\.eventId)
+        }
+        XCTAssertEqual(received, .folync(.stale, .firstPage, rows: ["div-all-received", "div-all-receivedb"], next: nil))
+        XCTAssertEqual(upcoming, .folync(.stale, .firstPage, rows: ["div-all-upcoming", "div-all-upcomingb"], next: nil))
+        let otherRoute = await Self.ledger(.transactions, harness)
+        XCTAssertEqual(otherRoute, .unreachable, "Dividends saved for this scope are never shown as transactions")
+        let unfiltered = await Self.ledger(.dividends, harness)
+        XCTAssertEqual(unfiltered, .unreachable, "A filtered copy is never shown for another filter")
+
+        var settings = harness.settingsStore.load()
+        settings.scopeID = "pf_two"
+        harness.settingsStore.save(settings)
+        let otherScope = Self.outcome(await coordinator.routeDividends(FolyncDividendsQuery(status: .received))) {
+            $0.events.map(\.eventId)
+        }
+        XCTAssertEqual(otherScope, .unreachable, "Another portfolio's rows are never shown, saved or reused")
+        XCTAssertEqual(harness.ledgerRequests.last?.url?.path, "/api/client/v2/scopes/pf_two/dividends")
+    }
+
+    func testLedgerLoadMoreAsksForTheNextPageAndKeepsItNowhere() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let harness = try makeLedgerHarness()
+            harness.respond { request in
+                if Self.queryValue(request, "cursor") == "cursor-2" {
+                    return (200, Self.ledgerJSON(route, rowID: "2"), nil)
+                }
+                return (200, Self.ledgerJSON(route, hasMore: true, nextCursor: "cursor-2"), "W/\"one\"")
+            }
+            let first = await Self.ledger(route, harness)
+            let continuation = try XCTUnwrap(first.continuation, "\(route)")
+            XCTAssertEqual(continuation, FolyncLedgerContinuation(cursor: "cursor-2", collectionRevision: Self.ledgerRevision("a")))
+
+            let second = await Self.ledger(route, harness, after: continuation)
+            guard case .folync(.current, .nextPage, let rows, nil) = second else { return XCTFail("\(route): \(second)") }
+            XCTAssertEqual(rows.first, "\(Self.rowPrefix(route))-2")
+            XCTAssertNil(harness.ledgerRequests.last?.value(forHTTPHeaderField: "If-None-Match"))
+
+            _ = await Self.ledger(route, harness, after: continuation)
+            XCTAssertEqual(harness.ledgerRequests.count, 3, "\(route): load more is explicit, so it is never answered from the reuse window")
+            let reusedFirst = await Self.ledger(route, harness)
+            XCTAssertEqual(reusedFirst, first, "\(route): page one is still the kept answer, not the later page")
+            XCTAssertEqual(harness.ledgerRequests.count, 3)
+
+            harness.respond { _ in throw URLError(.notConnectedToInternet) }
+            guard case .folync(.stale, .firstPage, let savedRows, _) = await Self.ledger(route, harness, forceRefresh: true) else {
+                return XCTFail("\(route)")
+            }
+            XCTAssertEqual(savedRows.first, "\(Self.rowPrefix(route))-1", "\(route): only page one is saved")
+            let laterOffline = await Self.ledger(route, harness, after: continuation)
+            XCTAssertEqual(laterOffline, .unreachable, "\(route): a failed later page is not replaced by page one")
+        }
+    }
+
+    /// Serves page one (with "cursor-2"), then answers page two with `pageTwo`,
+    /// then page one again with fresh rows.
+    private func assertPagingRestarts(
+        _ description: String,
+        pageTwo: @escaping @Sendable (FolyncLedgerRoute) -> (status: Int, body: String, etag: String?)
+    ) async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let harness = try makeLedgerHarness()
+            let pageOneServed = LockedBox(0)
+            harness.respond { request in
+                if Self.queryValue(request, "cursor") == "cursor-2" { return pageTwo(route) }
+                pageOneServed.value += 1
+                let rowID = pageOneServed.value == 1 ? "1" : "fresh"
+                let revision = Self.ledgerRevision(pageOneServed.value == 1 ? "a" : "b")
+                return (200, Self.ledgerJSON(route, rowID: rowID, revision: revision, hasMore: true, nextCursor: "cursor-2"), nil)
+            }
+            let pageOne = await Self.ledger(route, harness)
+            let continuation = try XCTUnwrap(pageOne.continuation)
+
+            let restarted = await Self.ledger(route, harness, after: continuation)
+
+            guard case .folync(.current, .restarted, let rows, _) = restarted else {
+                return XCTFail("\(description), \(route): \(restarted)")
+            }
+            XCTAssertEqual(rows.first, "\(Self.rowPrefix(route))-fresh", "\(description), \(route)")
+            XCTAssertEqual(harness.ledgerRequests.map { Self.queryValue($0, "cursor") }, [nil, "cursor-2", nil])
+            let reused = await Self.ledger(route, harness)
+            guard case .folync(_, .firstPage, let reusedRows, _) = reused else { return XCTFail("\(route)") }
+            XCTAssertEqual(reusedRows, rows, "\(description), \(route): the fresh page one is kept for reuse")
+            XCTAssertEqual(harness.ledgerRequests.count, 3)
+        }
+    }
+
+    func testLedgerPageInvalidatedRestartsFromPageOne() async throws {
+        try await assertPagingRestarts("409") { _ in
+            (409, #"{"statusCode":409,"statusMessage":"Start again","data":{"code":"page_invalidated","retryable":true}}"#, nil)
+        }
+    }
+
+    func testLedgerRefusedCursorRestartsFromPageOne() async throws {
+        try await assertPagingRestarts("invalid_cursor") { _ in
+            (400, #"{"statusCode":400,"statusMessage":"Cursor refused","data":{"code":"invalid_cursor","retryable":false}}"#, nil)
+        }
+        try await assertPagingRestarts("cursor field error") { _ in
+            (400, #"{"statusCode":400,"statusMessage":"Cursor refused","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"cursor":["unknown cursor"]}}}"#, nil)
+        }
+    }
+
+    func testLedgerOtherBadRequestOnALaterPageDoesNotRestart() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { request in
+            if Self.queryValue(request, "cursor") == "cursor-2" {
+                return (400, #"{"statusCode":400,"statusMessage":"Limit refused","data":{"code":"invalid_request","retryable":false,"fieldErrors":{"limit":["too large"]}}}"#, nil)
+            }
+            return (200, Self.ledgerJSON(.dividends, hasMore: true, nextCursor: "cursor-2"), nil)
+        }
+        let pageOne = await Self.ledger(.dividends, harness)
+        let continuation = try XCTUnwrap(pageOne.continuation)
+        let result = await Self.ledger(.dividends, harness, after: continuation)
+        XCTAssertEqual(result, .unavailable)
+        XCTAssertEqual(harness.ledgerRequests.count, 2)
+    }
+
+    func testLedgerChangedCollectionRevisionRestartsFromPageOne() async throws {
+        try await assertPagingRestarts("changed revision") { route in
+            (200, Self.ledgerJSON(route, rowID: "2", revision: Self.ledgerRevision("c")), "W/\"changed\"")
+        }
+    }
+
+    func testLedgerPolicyReusesPageOneForFiveMinutes() async throws {
+        for route in FolyncLedgerRoute.allCases {
+            let harness = try makeLedgerHarness()
+            harness.respond { _ in (200, Self.ledgerJSON(route), "W/\"one\"") }
+
+            let first = await Self.ledger(route, harness)
+            harness.advance(299)
+            let reused = await Self.ledger(route, harness)
+            XCTAssertEqual(reused, first)
+            XCTAssertEqual(harness.ledgerRequests.count, 1, "\(route): no request inside five minutes")
+
+            harness.advance(2)
+            _ = await Self.ledger(route, harness)
+            XCTAssertEqual(harness.ledgerRequests.count, 2, "\(route): asked again after five minutes")
+
+            _ = await Self.ledger(route, harness, forceRefresh: true)
+            XCTAssertEqual(harness.ledgerRequests.count, 3, "\(route): an explicit refresh skips the reuse")
+        }
+    }
+
+    func testLedgerPolicyDoesNotReuseAFailedOrStaleAnswer() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { _ in (200, Self.ledgerJSON(.dividends), nil) }
+        _ = await Self.ledger(.dividends, harness)
+        harness.advance(FolyncLedgerFetchPolicy.defaultReuseInterval + 1)
+        harness.respond { _ in (503, "{}", nil) }
+        _ = await Self.ledger(.dividends, harness, forceRefresh: true)
+        harness.respond { _ in (200, Self.ledgerJSON(.dividends, rowID: "2"), nil) }
+
+        let next = await Self.ledger(.dividends, harness)
+
+        guard case .folync(.current, .firstPage, let rows, _) = next else { return XCTFail("\(next)") }
+        XCTAssertEqual(rows.first, "div-2", "A stale copy shown during an outage is not kept for reuse")
+        XCTAssertEqual(harness.ledgerRequests.count, 3)
+    }
+
+    func testLedgerRequestsNeverOverlapAcrossRoutes() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { request in
+            let route = FolyncLedgerRoute.allCases.first { request.url?.path.hasSuffix($0.pathComponent) == true }!
+            return (200, Self.ledgerJSON(route), nil)
+        }
+        _ = await harness.coordinator.capabilitiesForCurrentSettings()
+        harness.stub.delay = 0.15
+
+        async let dividends = Self.ledger(.dividends, harness)
+        async let trades = Self.ledger(.tradeAnalysis, harness)
+        async let transactions = Self.ledger(.transactions, harness)
+        async let filtered = Self.outcome(
+            await harness.coordinator.routeDividends(FolyncDividendsQuery(status: .upcoming))
+        ) { $0.events.map(\.eventId) }
+        let results = await [dividends, trades, transactions, filtered]
+
+        XCTAssertEqual(harness.ledgerRequests.count, 4)
+        XCTAssertEqual(harness.stub.mostInFlight, 1, "Ledger requests take turns, never two at once")
+        for result in results {
+            guard case .folync(.current, .firstPage, _, _) = result else { return XCTFail("\(result)") }
+        }
+    }
+
+    func testLedgerIdenticalConcurrentCallsShareOneRequest() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { _ in (200, Self.ledgerJSON(.transactions), nil) }
+        _ = await harness.coordinator.capabilitiesForCurrentSettings()
+        harness.stub.delay = 0.2
+
+        // Refreshes, so the reuse window cannot stand in for sharing.
+        async let first = Self.ledger(.transactions, harness, forceRefresh: true)
+        async let second = Self.ledger(.transactions, harness, forceRefresh: true)
+        async let third = Self.ledger(.transactions, harness, forceRefresh: true)
+        let results = await [first, second, third]
+
+        XCTAssertEqual(harness.ledgerRequests.count, 1, "Callers asking for the same thing share one request")
+        XCTAssertEqual(Set(results.map { "\($0)" }).count, 1)
+    }
+
+    func testLedgerFetchPolicyRefreshDoesNotJoinARequestThatMayReuse() async throws {
+        let policy = FolyncLedgerFetchPolicy()
+        let key = FolyncLedgerFetchPolicy.Key(
+            route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: "", cursor: nil
+        )
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        let ran = LockedBox<[String]>([])
+        let held = Task {
+            await policy.perform(key) {
+                ran.value.append("held")
+                for await _ in release { break }
+                return .init(result: "held", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let joining = Task {
+            await policy.perform(key) {
+                ran.value.append("joining")
+                return .init(result: "joining", firstPageToKeep: nil)
+            }
+        }
+        let refreshing = Task {
+            await policy.perform(key, forceRefresh: true) {
+                ran.value.append("refreshing")
+                return .init(result: "refreshing", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        releaser.yield()
+        releaser.finish()
+
+        let heldResult = await held.value
+        let joiningResult = await joining.value
+        let refreshingResult = await refreshing.value
+        XCTAssertEqual(heldResult, "held")
+        XCTAssertEqual(joiningResult, "held", "The same request under way is shared")
+        XCTAssertEqual(refreshingResult, "refreshing", "A refresh asks again, in its own turn")
+        XCTAssertEqual(ran.value, ["held", "refreshing"])
+    }
+
+    func testLedgerFetchPolicyRunsOperationsOneAtATimeInOrder() async {
+        let clock = LockedBox(Date(timeIntervalSince1970: 1_780_000_000))
+        let policy = FolyncLedgerFetchPolicy(now: { clock.value })
+        let log = LockedBox<[String]>([])
+        func key(_ query: String) -> FolyncLedgerFetchPolicy.Key {
+            .init(route: .dividends, endpoint: "https://folync.test", scopeID: "all", query: query, cursor: nil)
+        }
+        func run(_ name: String) async -> String? {
+            await policy.perform(key(name)) {
+                log.value.append("start \(name)")
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                log.value.append("end \(name)")
+                return .init(result: name, firstPageToKeep: name)
+            }
+        }
+
+        async let first = run("a")
+        async let second = run("b")
+        let names = await [first, second]
+
+        XCTAssertEqual(names, ["a", "b"])
+        let entries = log.value
+        XCTAssertEqual(entries.count, 4)
+        XCTAssertTrue(entries == ["start a", "end a", "start b", "end b"] || entries == ["start b", "end b", "start a", "end a"],
+                      "Operations never interleave: \(entries)")
+
+        let reused: String? = await policy.perform(key("a")) { .init(result: "not reused", firstPageToKeep: nil) }
+        XCTAssertEqual(reused, "a")
+        clock.value = clock.value.addingTimeInterval(FolyncLedgerFetchPolicy.defaultReuseInterval)
+        let expired: String? = await policy.perform(key("a")) { .init(result: "fresh", firstPageToKeep: nil) }
+        XCTAssertEqual(expired, "fresh")
+    }
+
+    func testLedgerFetchPolicyDropsAQueuedRequestOnceItsCallersAreCancelled() async throws {
+        let policy = FolyncLedgerFetchPolicy()
+        func key(_ query: String) -> FolyncLedgerFetchPolicy.Key {
+            .init(route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: query, cursor: nil)
+        }
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        let ran = LockedBox<[String]>([])
+        func ask(_ name: String, answering answer: String? = nil) -> Task<String?, Never> {
+            Task {
+                await policy.perform(key(name)) {
+                    ran.value.append(answer ?? name)
+                    return .init(result: answer ?? name, firstPageToKeep: nil)
+                }
+            }
+        }
+        let held = Task {
+            await policy.perform(key("held")) {
+                ran.value.append("held")
+                for await _ in release { break }
+                return .init(result: "held", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        // Behind it: a request nobody will want, one two callers share, and
+        // one that is wanted.
+        let superseded = ask("superseded")
+        let leaving = ask("shared")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let staying = ask("shared", answering: "asked twice")
+        let wanted = ask("wanted")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        superseded.cancel()
+        leaving.cancel()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        releaser.yield()
+        releaser.finish()
+
+        let heldResult = await held.value
+        let supersededResult = await superseded.value
+        let leavingResult = await leaving.value
+        let stayingResult = await staying.value
+        let wantedResult = await wanted.value
+        XCTAssertEqual(heldResult, "held")
+        XCTAssertNil(supersededResult, "Nobody waits for it any more, so it is never asked for")
+        XCTAssertEqual(leavingResult, "shared", "A cancelled caller still gets an answer made for someone else")
+        XCTAssertEqual(stayingResult, "shared", "A request one caller still waits for is made")
+        XCTAssertEqual(wantedResult, "wanted")
+        XCTAssertEqual(ran.value, ["held", "shared", "wanted"])
+    }
+
+    func testLedgerFetchPolicyMakesNoRequestForACallerAlreadyCancelled() async {
+        let policy = FolyncLedgerFetchPolicy()
+        let key = FolyncLedgerFetchPolicy.Key(
+            route: .dividends, endpoint: "https://folync.test", scopeID: "all", query: "", cursor: nil
+        )
+        let ran = LockedBox(false)
+        let cancelled = Task { () -> String? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await policy.perform(key) {
+                ran.value = true
+                return .init(result: "asked", firstPageToKeep: nil)
+            }
+        }
+        let result = await cancelled.value
+        XCTAssertNil(result)
+        XCTAssertFalse(ran.value)
+    }
+
+    func testLedgerFetchPolicyForgetsPagesPastTheReuseWindow() async {
+        let clock = LockedBox(Date(timeIntervalSince1970: 1_780_000_000))
+        let policy = FolyncLedgerFetchPolicy(now: { clock.value })
+        func keep(_ name: String) async {
+            let key = FolyncLedgerFetchPolicy.Key(
+                route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: name, cursor: nil
+            )
+            let _: String? = await policy.perform(key) { .init(result: name, firstPageToKeep: name) }
+        }
+        for name in ["a", "b", "c"] { await keep(name) }
+        let held = await policy.keptPageCount
+        XCTAssertEqual(held, 3)
+
+        clock.value = clock.value.addingTimeInterval(FolyncLedgerFetchPolicy.defaultReuseInterval)
+        await keep("d")
+        let heldLater = await policy.keptPageCount
+        XCTAssertEqual(heldLater, 1, "Pages that can no longer be reused are dropped when a new one is kept")
+    }
+}
+
 private final class LockedBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Value
@@ -2405,6 +3402,33 @@ private final class FolyncHTTPStub: @unchecked Sendable {
     private var storedRequests: [URLRequest] = []
     private var storedOffline = false
     private var storedHandler: Handler?
+    private var storedDelay: TimeInterval = 0
+    private var storedInFlight = 0
+    private var storedMostInFlight = 0
+
+    /// When above zero, each answer is sent this long after the request
+    /// starts, without blocking the loading thread, so requests sent together
+    /// are in flight together.
+    var delay: TimeInterval {
+        get { lock.withLock { storedDelay } }
+        set { lock.withLock { storedDelay = newValue } }
+    }
+
+    /// The most delayed requests that were in flight at once.
+    var mostInFlight: Int {
+        lock.withLock { storedMostInFlight }
+    }
+
+    func began() {
+        lock.withLock {
+            storedInFlight += 1
+            storedMostInFlight = max(storedMostInFlight, storedInFlight)
+        }
+    }
+
+    func ended() {
+        lock.withLock { storedInFlight -= 1 }
+    }
 
     var handler: Handler? {
         get { lock.withLock { storedHandler } }
@@ -2437,8 +3461,18 @@ private final class FolyncURLProtocolStub: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        let stub = Self.stub
+        guard stub.delay > 0 else { return finishLoading(with: stub) }
+        stub.began()
+        DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay) { [self] in
+            stub.ended()
+            finishLoading(with: stub)
+        }
+    }
+
+    private func finishLoading(with stub: FolyncHTTPStub) {
         do {
-            let (response, data) = try Self.stub.respond(to: request)
+            let (response, data) = try stub.respond(to: request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !data.isEmpty { client?.urlProtocol(self, didLoad: data) }
             client?.urlProtocolDidFinishLoading(self)

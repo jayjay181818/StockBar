@@ -43,6 +43,10 @@ struct FolyncStoredSettings: Codable, Equatable {
         isEnabled && supplemental.isEnabled(route)
     }
 
+    func isLedgerRouteActive(_ route: FolyncLedgerRoute) -> Bool {
+        isEnabled && supplemental.isEnabled(route)
+    }
+
     static let defaults = FolyncStoredSettings(
         isEnabled: false,
         baseURL: "",
