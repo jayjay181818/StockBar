@@ -16,6 +16,18 @@ do {
     exit(2)
 }
 
+// An acceptance run adopts the Folync settings its bootstrap left in its root,
+// before anything reads the defaults. Never in a normal run or under XCTest.
+do {
+    try StockbarAcceptancePreflight.adoptSeededSettingsIfPresent(
+        runtime: StockbarRuntimeStorage.acceptance,
+        defaults: StockbarRuntimeStorage.userDefaults
+    )
+} catch {
+    FileHandle.standardError.write(Data("Stockbar acceptance launch failed: \(error.localizedDescription)\n".utf8))
+    exit(2)
+}
+
 // Entry point for the application
 // We use MainActor.assumeIsolated because we know the program starts on the main thread,
 // and we need to initialize our @MainActor AppDelegate.

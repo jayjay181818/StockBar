@@ -9,7 +9,7 @@ macOS portfolio tracker with Swift/Python integration. `LSUIElement = false`: th
 ### Lifecycle
 `main.swift` → acceptance preflight hooks → `AppDelegate` → `StockMenuBarController` (owns `DataModel`, `StockStatusBar`, and `StockbarMainWindowController`).
 
-`main.swift` intercepts `--acceptance-preflight` / `--acceptance-bootstrap` and exits before `NSApplicationMain` — keep that block first.
+`main.swift` intercepts `--acceptance-preflight` / `--acceptance-bootstrap` and exits before `NSApplicationMain` — keep that block first. Straight after it, an explicit acceptance run adopts the Folync settings its bootstrap left in a seed file in its root (`StockbarAcceptancePreflight.adoptSeededSettingsIfPresent`), so that the app process is the first to write them; a normal run and the tests' automatic isolation never look for one. Keep that before anything reads the defaults.
 
 ### Data flow (MVVM + Observation)
 ```
