@@ -24,7 +24,7 @@ struct StockbarMainView: View {
             if !sidebarHidden {
                 StockbarSidebar(
                     navigationState: navigationState,
-                    groups: StockbarSidebarModel.groups(),
+                    groups: StockbarSidebarModel.groups(dimmed: dimmedSections, new: newSections),
                     footer: footerInputs,
                     isRefreshing: isRefreshing,
                     refresh: refresh
@@ -101,6 +101,18 @@ struct StockbarMainView: View {
         )
     }
 
+    /// Pages that are new in this release carry a "New" badge.
+    private var newSections: Set<StockbarMainSection> { [.trades] }
+
+    /// Pages with nothing to show for the current portfolio are dimmed, with the reason.
+    private var dimmedSections: [StockbarMainSection: String] {
+        var dimmed: [StockbarMainSection: String] = [:]
+        if !dataModel.isFolyncPortfolioActive {
+            dimmed[.trades] = StockbarTradesView.needsFolyncReason
+        }
+        return dimmed
+    }
+
     private var portfolioSourceTitle: String {
         switch dataModel.displayValuationSource {
         case .folyncProvided: "Folync portfolio"
@@ -129,6 +141,11 @@ struct StockbarMainView: View {
                 PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
             }
             .stockbarPage()
+        case .trades:
+            StockbarTradesView(isFolyncPortfolio: dataModel.isFolyncPortfolioActive) {
+                StockbarSettingsView.showConnectionsTab()
+                navigationState.selectedSection = .settings
+            }
         case .risk:
             RiskAnalyticsView(dataModel: dataModel)
         case .allocation:
@@ -202,6 +219,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     case overview
     case holdings
     case charts
+    case trades
     case risk
     case allocation
     case alerts
@@ -217,7 +235,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// A section is listed only once its page exists.
     static let sidebarGroups: [StockbarSidebarGroup] = [
         StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .alerts]),
-        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .risk, .allocation]),
+        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .trades, .risk, .allocation]),
         StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
 
@@ -237,6 +255,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .overview: "Overview"
         case .holdings: "Holdings"
         case .charts: "Charts"
+        case .trades: "Trades"
         case .risk: "Risk"
         case .allocation: "Allocation"
         case .alerts: "Alerts"
@@ -252,6 +271,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .overview: "chart.xyaxis.line"
         case .holdings: "tablecells"
         case .charts: "chart.line.uptrend.xyaxis"
+        case .trades: "arrow.left.arrow.right"
         case .risk: "waveform.path.ecg"
         case .allocation: "chart.pie"
         case .alerts: "bell"
