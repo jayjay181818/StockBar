@@ -333,9 +333,11 @@ for, and it was merged on 2026-11-20 as `5fa923b`.
 The same day the owner parked the benchmarks: no comparison is run until
 the other project's work on this Mac has been idle for more than 20
 minutes. Pull request 135, the first of the redesign's data work,
-therefore has no table yet. Its benchmark is owed, and whether a pull
-request may be merged with its benchmark owed is the owner's decision,
-asked for on 2026-11-20.
+therefore has no table yet. Asked the same day, the owner chose to merge
+the redesign's pull requests on their local checks and review with the
+benchmark owed. One comparison for each phase is run in the first quiet
+window, and until then each record says that its benchmark is owed. The
+rule is set out under [How this branch works](#how-this-branch-works).
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3775,7 +3777,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   of the standard set are therefore not measured for this pull request,
   and none is carried over from another run. Expected, not measured: no
   row moves, because nothing calls the new routes and the benchmark's
-  launches set up no Folync.
+  launches set up no Folync. It is covered by the phase's comparison in
+  the first quiet window.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 789 XCTest tests with 0
   failures. 35 are new: 29 in `FolyncPortfolioSourceTests` and 6 in
   `Trading212BrokerSyncTests`. They go through a stubbed `URLSession` and
@@ -3848,8 +3851,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - A server whose capabilities list none of the three routes is asked
     for its capabilities in full once after the update, then confirmed
     with 304 as before.
-- Verdict: pending. The benchmark is owed, and merging before it is the
-  owner's decision.
+- Verdict: retained, with its benchmark owed. The owner chose on
+  2026-11-20 to merge on the local checks and the review, and to measure
+  each phase in the first quiet window.
 
 ## Rust evaluation, 2026-11-12
 
@@ -4009,6 +4013,17 @@ supervised trial against Yahoo.
   behaviour still works, the benchmark record is complete, no known
   regression. A change that trades one metric for another stays open for a
   decision. A performance change with no measurable benefit is not merged.
+- From 2026-11-20, at the owner's word, the benchmarks are parked while
+  another project's builds and tests run on the same Mac: no comparison is
+  started until that work has been idle for more than 20 minutes. Until
+  then the redesign's pull requests are merged on their local checks and
+  review, each record saying that its benchmark is owed. One comparison is
+  run for each phase of the redesign in the first quiet window, from the
+  commit before the phase's first pull request to the commit after its
+  last, and its table goes into this log through the next pull request. A
+  row that moves is repeated, and if it holds, the phase's pull requests
+  are measured one by one to find the cause. This replaces, for the
+  redesign, the rule that every pull request carries its own table.
 - The CI workflow does not run for `experimental` or for pull requests into
   it, so every check is run locally: `bash script/develop.sh test`, `checks`,
   `python-tests`, `build-release`, and
