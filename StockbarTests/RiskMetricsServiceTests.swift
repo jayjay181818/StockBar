@@ -778,21 +778,21 @@ final class RiskPageTests: XCTestCase {
         XCTAssertEqual(whole, Shown(
             var95: "£721.47", var99: "£990.51", sharpe: "-2.553", sortino: "-3.247", worstFall: "-11.31%",
             volatility: "13.96%", downside: "10.81%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "55 trading days, peak to low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "55 days, peak to low",
             tradingDays: 59, falls: ["-11.31% 55 days, peak to low"]))
 
         let lastPart = try await shown(Self.lastPart(base, days: 25))
         XCTAssertEqual(lastPart, Shown(
             var95: "£652.94", var99: "£721.47", sharpe: "-2.944", sortino: "-3.699", worstFall: "-5.09%",
             volatility: "14.04%", downside: "11.01%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "9 trading days, peak to low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "9 days, peak to low",
             tradingDays: 24, falls: ["-5.09% 9 days, peak to low", "-5.01% 12 days, peak to low"]))
 
         let longer = try await shown(Self.invented(120, seed: 99))
         XCTAssertEqual(longer, Shown(
             var95: "£804.04", var99: "£1,058.39", sharpe: "0.241", sortino: "0.343", worstFall: "-16.05%",
             volatility: "14.63%", downside: "10.11%", sharpeDetail: "Below average, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "42 trading days, peak to low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "42 days, peak to low",
             tradingDays: 119, falls: ["-16.05% 42 days, peak to low"]))
 
         let rising = try await shown(Self.rising)
@@ -820,7 +820,7 @@ final class RiskPageTests: XCTestCase {
         XCTAssertEqual(RiskText.fall(0.07), "-7.00%")
         XCTAssertEqual(RiskText.fall(0.000_01), "0.00%", "a fall that rounds to nothing has no sign")
         XCTAssertEqual(RiskText.fall(0), "0.00%")
-        XCTAssertEqual(RiskText.worstFallDetail(fall: 0.07, duration: 1), "1 trading day, peak to low")
+        XCTAssertEqual(RiskText.worstFallDetail(fall: 0.07, duration: 1), "1 day, peak to low")
         XCTAssertEqual(RiskText.fallLength(1), "1 day, peak to low")
     }
 

@@ -71,12 +71,14 @@ enum RiskText {
         sortino == nil ? "No falling days" : "Counts only the falls"
     }
 
-    /// "55 trading days, peak to low" under the worst fall; "Never below its peak"
-    /// when there was no fall; nil when the fall is not known.
+    /// "55 days, peak to low" under the worst fall; "Never below its peak"
+    /// when there was no fall; nil when the fall is not known. The service
+    /// counts calendar days from the peak to the low when it has the dates,
+    /// as the page always gives it, so these are not called trading days.
     static func worstFallDetail(fall: Double, duration: Int) -> String? {
         guard fall.isFinite else { return nil }
         guard fall > 0 else { return "Never below its peak" }
-        return "\(duration) trading \(duration == 1 ? "day" : "days"), peak to low"
+        return "\(duration) \(duration == 1 ? "day" : "days"), peak to low"
     }
 
     /// Under the chart: what the worst fall's length counts.

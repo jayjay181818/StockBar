@@ -1353,3 +1353,197 @@ final class StockbarIncomePageTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.needsFolyncReason, StockbarIncomeModel.needsFolyncReason)
     }
 }
+
+/// The Allocation page's groups, text and grid, worked out from invented figures.
+final class AllocationPresentationTests: XCTestCase {
+    private typealias P = AllocationPresentation
+
+    private func group(_ key: String, _ value: Double, share: Double) -> AllocationGroup {
+        AllocationGroup(key: key, label: key, value: value, share: share, dayChangePercent: nil, foldedCount: 0)
+    }
+
+    private func groups(_ count: Int) -> [AllocationGroup] {
+        (0..<count).map { group("H\($0)", Double(100 - $0), share: Double(100 - $0) / 10) }
+    }
+
+    // MARK: Currency
+
+    func testCurrencyGroupsSumValuesByPricingCurrencyWithPenceAsPounds() throws {
+        let result = P.currencyGroups([
+            AllocationHolding(symbol: "ALFA.L", value: 300, currency: "GBp"),
+            AllocationHolding(symbol: "BRVO.L", value: 200, currency: "GBX"),
+            AllocationHolding(symbol: "CHRL.L", value: 100, currency: "GBP"),
+            AllocationHolding(symbol: "DLTA", value: 250, currency: "USD"),
+            AllocationHolding(symbol: "ECHO", value: 150, currency: "eur"),
+            AllocationHolding(symbol: "FXTR", value: 0, currency: "USD"),
+            AllocationHolding(symbol: "GOLF", value: .nan, currency: "USD"),
+            AllocationHolding(symbol: "HOTL", value: 40, currency: " ")
+        ])
+        XCTAssertEqual(result.map(\.key), ["GBP", "USD", "EUR"])
+        XCTAssertEqual(result.map(\.value), [600, 250, 150])
+        XCTAssertEqual(result[0].share, 60, accuracy: 1e-9)
+        XCTAssertEqual(result[1].share, 25, accuracy: 1e-9)
+        XCTAssertEqual(result[2].share, 15, accuracy: 1e-9)
+        XCTAssertTrue(result.allSatisfy { $0.dayChangePercent == nil })
+    }
+
+    func testCurrencyGroupsOfNothingValuedAreEmpty() {
+        XCTAssertEqual(P.currencyGroups([]), [])
+        XCTAssertEqual(P.currencyGroups([AllocationHolding(symbol: "ALFA", value: -5, currency: "USD")]), [])
+    }
+
+    func testOneSymbolInTwoCurrenciesCountsInBoth() {
+        let result = P.currencyGroups([
+            AllocationHolding(symbol: "ALFA", value: 30, currency: "USD"),
+            AllocationHolding(symbol: "ALFA", value: 70, currency: "GBP")
+        ])
+        XCTAssertEqual(result.map(\.key), ["GBP", "USD"])
+        XCTAssertEqual(result.map(\.share), [70, 30])
+    }
+
+    // MARK: Holding and sector
+
+    func testHoldingGroupsUseTheServicesValuesAndSharesLargestFirst() async {
+        let sectors = await SectorAnalysisService().calculateSectorAllocations(
+            positions: ["AAPL": 100, "ZZQX": 300, "MSFT": 100], dayChanges: [:])
+        let result = P.holdingGroups(sectors)
+        XCTAssertEqual(result.map(\.key), ["ZZQX", "AAPL", "MSFT"])
+        XCTAssertEqual(result.map(\.value), [300, 100, 100])
+        XCTAssertEqual(result[0].share, 60, accuracy: 1e-9)
+        XCTAssertEqual(result[1].share, 20, accuracy: 1e-9)
+    }
+
+    func testSectorGroupsKeepTheServicesFiguresAndHideDayChangeWhenIncomplete() async {
+        let sectors = await SectorAnalysisService().calculateSectorAllocations(
+            positions: ["AAPL": 300, "ZZQX": 100], dayChanges: ["AAPL": 30])
+        let shown = P.sectorGroups(sectors, showsDayChange: true)
+        XCTAssertEqual(shown.map(\.label), ["Technology", "Unclassified"])
+        XCTAssertEqual(shown.map(\.value), sectors.map(\.totalValue))
+        XCTAssertEqual(shown.map(\.share), sectors.map(\.percentageOfPortfolio))
+        XCTAssertEqual(shown[0].dayChangePercent, sectors[0].dayChangePercent)
+        XCTAssertEqual(P.dayChangeText(shown[0]), AttributionFormat.signedPercent(sectors[0].dayChangePercent))
+        let hidden = P.sectorGroups(sectors, showsDayChange: false)
+        XCTAssertTrue(hidden.allSatisfy { $0.dayChangePercent == nil })
+        XCTAssertEqual(P.dayChangeText(hidden[0]), "—")
+    }
+
+    // MARK: Folding
+
+    func testEightGroupsAreLeftAlone() {
+        XCTAssertEqual(P.folded(groups(8)), groups(8))
+    }
+
+    func testNineGroupsFoldTheTwoSmallestIntoOther() throws {
+        let result = P.folded(groups(9))
+        XCTAssertEqual(result.count, 8)
+        XCTAssertEqual(Array(result.prefix(7)), Array(groups(9).prefix(7)))
+        let other = try XCTUnwrap(result.last)
+        XCTAssertTrue(other.isOther)
+        XCTAssertEqual(other.foldedCount, 2)
+        XCTAssertEqual(other.value, 93 + 92)
+        XCTAssertEqual(other.share, 9.3 + 9.2, accuracy: 1e-9)
+        XCTAssertNil(other.dayChangePercent)
+        XCTAssertEqual(P.rowLabel(other, grouping: .holding), "Other (2 holdings)")
+        XCTAssertEqual(P.rowLabel(other, grouping: .sector), "Other (2 sectors)")
+        XCTAssertEqual(P.rowLabel(other, grouping: .currency), "Other (2 currencies)")
+        XCTAssertEqual(P.dayChangeText(other), "—")
+    }
+
+    // MARK: Colours
+
+    func testAGroupKeepsItsColourWhenAnotherIsAddedOrRemoved() {
+        var book = AllocationColourBook(paletteCount: 10)
+        book.assign(["ALFA", "BRVO", "CHRL"])
+        let before = ["ALFA", "BRVO", "CHRL"].map { book.index(for: $0) }
+        XCTAssertEqual(before, [0, 1, 2])
+        book.assign(["DLTA", "ALFA", "CHRL"])          // BRVO sold, DLTA bought, order changed
+        XCTAssertEqual(["ALFA", "BRVO", "CHRL"].map { book.index(for: $0) }, before)
+        XCTAssertEqual(book.index(for: "DLTA"), 3)
+        book.assign(["BRVO"])                           // BRVO back: same colour as before
+        XCTAssertEqual(book.index(for: "BRVO"), 1)
+    }
+
+    func testNoSliceIsRedOrGreen() {
+        for colour in StockbarPalette.allocationSlices + [StockbarPalette.allocationOther] {
+            XCTAssertNotEqual(colour, .red)
+            XCTAssertNotEqual(colour, .green)
+            XCTAssertNotEqual(colour, .pink)
+            XCTAssertNotEqual(colour, .mint)
+        }
+        for sector in SectorAnalysisService.Sector.allCases {
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .red, sector.rawValue)
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .green, sector.rawValue)
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .pink, sector.rawValue)
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .mint, sector.rawValue)
+        }
+        XCTAssertEqual(PortfolioAnalyticsView.colorForSector(.technology), .blue)
+        XCTAssertEqual(PortfolioAnalyticsView.colorForSector(.unknown), StockbarPalette.allocationOther)
+    }
+
+    // MARK: Text
+
+    func testRowAndCentreText() {
+        let sector = AllocationGroup(key: "Technology", label: "Technology", value: 30_925.89, share: 36.71,
+                                     dayChangePercent: 1.44, foldedCount: 0)
+        XCTAssertEqual(P.shareText(sector.share), "36.7%")
+        XCTAssertEqual(P.spokenRow(sector, grouping: .sector, currency: "GBP"),
+                       "Technology, £30,925.89, 36.7 percent, day change up 1.44 percent")
+        let unknownDay = AllocationGroup(key: "Energy", label: "Energy", value: 10, share: 5,
+                                         dayChangePercent: nil, foldedCount: 0)
+        XCTAssertEqual(P.spokenRow(unknownDay, grouping: .sector, currency: "GBP"),
+                       "Energy, £10.00, 5.0 percent, day change unavailable")
+        XCTAssertEqual(P.spokenRow(group("USD", 250, share: 25), grouping: .currency, currency: "GBP"),
+                       "USD, £250.00, 25.0 percent")
+        let centre = P.centreText(total: 84_301.47, holdingCount: 9, currency: "GBP")
+        XCTAssertEqual(centre.total, "£84,301")
+        XCTAssertEqual(centre.count, "9 holdings")
+        XCTAssertEqual(P.centreText(total: 120, holdingCount: 1, currency: "GBP").count, "1 holding")
+        XCTAssertEqual(P.scoreText(62.44), "62.4 of 100")
+    }
+
+    // MARK: Grid
+
+    func testGridTakesTheTwelveLargestAndSaysSo() {
+        let symbols = (0..<31).map { String(format: "S%02d", $0) }
+        var values: [String: Double] = [:]
+        for (index, symbol) in symbols.enumerated() where symbol != "S30" { values[symbol] = Double(index) }
+        let grid = P.gridSymbols(symbols, values: values)
+        XCTAssertEqual(grid, (18...29).reversed().map { String(format: "S%02d", $0) })
+        XCTAssertEqual(P.gridNote(totalHoldings: 31), "The 12 largest of 31 holdings.")
+        XCTAssertNil(P.gridNote(totalHoldings: 12))
+        // Twelve or fewer: all of them, largest first, unvalued last.
+        XCTAssertEqual(P.gridSymbols(["ALFA", "BRVO", "CHRL"], values: ["ALFA": 1, "BRVO": 5]), ["BRVO", "ALFA", "CHRL"])
+    }
+
+    func testCellTextAndLabel() {
+        XCTAssertEqual(P.cellText(0.734), ".73")
+        XCTAssertEqual(P.cellText(-0.124), "-.12")
+        XCTAssertEqual(P.cellText(1), "1.00")
+        XCTAssertEqual(P.cellText(-1), "-1.00")
+        XCTAssertEqual(P.cellText(-0.001), ".00")
+        XCTAssertEqual(P.cellText(nil), "–")
+        XCTAssertEqual(P.cellLabel("VUSA", "NVDA", value: 0.734), "VUSA and NVDA, 0.73")
+        XCTAssertEqual(P.cellLabel("VUSA", "NVDA", value: -0.124), "VUSA and NVDA, -0.12")
+        XCTAssertEqual(P.cellLabel("VUSA", "NVDA", value: nil), "VUSA and NVDA, no figure")
+    }
+
+    func testShadeForPositiveZeroNegativeAndUnknown() {
+        XCTAssertEqual(P.shade(0.73), .positive(0.73))
+        XCTAssertEqual(P.shade(0), .none)
+        XCTAssertEqual(P.shade(-0.4), .negative(0.4))
+        XCTAssertEqual(P.shade(nil), .none)
+        XCTAssertEqual(StockbarPalette.correlationFill(.none), .clear)
+        XCTAssertNotEqual(StockbarPalette.correlationFill(.positive(0.5)), StockbarPalette.correlationFill(.negative(0.5)))
+    }
+
+    func testMostAndLeastAlikeLine() {
+        typealias Pair = CorrelationMatrixService.CorrelationPair
+        let top = [Pair(symbol1: "VUSA", symbol2: "MSFT", correlation: 0.781), Pair(symbol1: "A", symbol2: "B", correlation: 0.5)]
+        let bottom = [Pair(symbol1: "AAPL", symbol2: "LGEN", correlation: 0.089), Pair(symbol1: "A", symbol2: "B", correlation: 0.5)]
+        XCTAssertEqual(P.pairsLine(top: top, bottom: bottom),
+                       "Most alike: VUSA and MSFT, 0.78. Least alike: AAPL and LGEN, 0.09.")
+        let only = [Pair(symbol1: "ALFA", symbol2: "BRVO", correlation: -0.2)]
+        XCTAssertEqual(P.pairsLine(top: only, bottom: only), "Most alike: ALFA and BRVO, -0.20.")
+        XCTAssertNil(P.pairsLine(top: [], bottom: []))
+    }
+}

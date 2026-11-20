@@ -4743,8 +4743,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   The User Guide said the Trades switch has three positions. It has had
   four since pull request 142, and the guide is corrected here.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `9292744`. The merge published
+  experimental build 382.3.12 as the prerelease `experimental-382.3.12`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches set up no Folync and never open this page. Covered by the
   comparison set for the night of 2026-11-20, if this is merged by then,
@@ -4806,6 +4808,97 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     reasons Folync gives for the whole answer are.
   - With no currency named, a payment whose amount does name one shows
     "–" in the portfolio column. Not seen with a real Folync.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 144: Allocation: a donut beside its list, three views and the correlations as a grid
+
+- What: the Allocation screen shows the figures it already worked out in
+  the layout of the approved mock-up. No figure's arithmetic changes; the
+  two analysis services are untouched.
+
+  A switch in the header chooses Sector, Holding or Currency. One card
+  holds a donut with its list beside it, or under it when the window is
+  narrow: each group's value and share, and for sectors today's change.
+  The centre of the donut gives the total and the number of holdings.
+  Past eight groups the smallest are folded into one "Other" slice and
+  row that says how many it holds. The Currency view is new: holdings'
+  values in the display currency, added up by the currency each is priced
+  in, with pence counted as pounds. It is a plain sum of values the
+  screen already had.
+
+  The diversification score and the concentration are said once, in one
+  card, with the existing recommendations as lines under them.
+
+  The correlations are drawn as a grid, one row and one column for each
+  holding, every cell showing its figure to two decimals and shaded by
+  it: blue for a positive figure, orange for a negative one, nothing at
+  zero. Each cell has a tooltip and a VoiceOver label ("VUSA and NVDA,
+  0.73"). The grid holds the twelve largest holdings and says so when
+  there are more; the three summary figures beside it still cover every
+  holding. One line under it names the most and the least alike pair.
+  The two lists of pairs that were there before are shown only past
+  twelve holdings, when some of their pairs are not in the grid.
+
+  Four sectors change colour, because their old colours read as gain or
+  loss or sat too close to a neighbour's: Healthcare from red to
+  lavender, Financials from green to teal, Real Estate from pink to sand
+  and Basic Materials from mint to slate. No slice is red or green. A
+  holding or a currency keeps the colour it is first given while the
+  page is open.
+
+  Kept as they were: the range control for the correlations, now beside
+  the grid's heading; the notice when some holdings have no price or
+  exchange rate; the attribution entry at the foot; every number format
+  and every label of a figure. Changing the view recalculates nothing.
+
+  Not built from the mock-up: a Funds group, which needs an instrument
+  type that Folync does not give and Yahoo's has not been tried live; a
+  Cash row, which would change every share the screen shows today; the
+  words "Fair" and "Good" beside figures the screen gives no word to;
+  and the line about a Returns page, which does not exist yet.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches never open this page. Covered by the comparison set for the
+  night of 2026-11-20, if this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 945 XCTest tests with 0
+  failures. Fourteen are new, in `PortfolioAnalyticsServicesTests.swift`:
+  the currency groups, pence with pounds and a holding with no value
+  included; folding at nine groups and eight left alone; the order of
+  each view; a group keeping its colour when another is added or removed;
+  the grid's holdings past twelve and its line; a cell's text and label;
+  the shade for a positive, a zero, a negative and an unknown figure; the
+  line of pairs, with one pair only included; and the donut's centre.
+  `checks`, `docs-check` and `build-release` pass. 103 Python helper
+  tests and 95 script tests passed on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: folding at eight groups; pence kept apart from pounds; a
+  leading zero kept in a cell; colours given by rank; and zero shaded.
+
+  On screen: the worker ran the acceptance copy against the stand-in
+  before and after the change and compared every figure, read from the
+  window's accessibility text: both sectors' value, share and day change,
+  the note about holdings with no known sector, and the two states' texts
+  were the same. It captured the three views in dark, Sector in light,
+  and both appearances at the minimum size.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the grouping, folding
+  and grid functions, and looked at three of the captures and at the
+  worker's off-screen drawing of the grid. It did not read the view or
+  every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The grid, the three figures beside it, the line of pairs and the
+    diversification card with a score were never drawn in the running
+    app.** The stand-in has too little shared price history and most of
+    its portfolio has no known sector. The grid was seen only in a
+    drawing made by a temporary test from a made-up matrix.
+  - More than one currency was not seen on screen; the stand-in's
+    portfolio is all in pounds. It is tested.
+  - VoiceOver was not run; the labels were read as text.
+  - "Least alike" names the lowest figure, which for a strongly negative
+    one means the pair that moves most against each other.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
@@ -5080,6 +5173,9 @@ launch.
 | Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
 | The full comparison of pull requests 109 and 110, the dropped separate comparisons, the trial's third run and pull request 112 | Fable 5.2 (orchestrator) for the measuring on 2026-11-16, then Opus 5.5 (orchestrator, at the owner's change of model) for this record | Done directly: unattended runs with readings taken beside them and set-aside rules fixed before any figure existed. Two of the three comparisons were set aside under those rules, and a rule that sent one "possibly" row to two more comparisons cost about four hours before the owner stopped it. Next time the owner should get that choice before the extra runs start |
 | The second promotion to `testing` and pull request 114 | Opus 5.5 (orchestrator) | Done directly: the tests on the promoted commit, two pull requests and the checks on the published build |
+| The redesign's groundwork, pull requests 135 and 136 | Fable 5.2 (session lead) for the specifications, the review and the records; one Opus 5.5 worker for each pull request's code, in its own worktree | Worth it. The lead's reading found faults in both before they were merged: in 135 the fetch policy never dropped kept pages, a queued request still ran after its callers had gone, and a day given as a date could shift by a day; in 136 the helper read Yahoo's dates in the Mac's time zone and asked again for symbols Yahoo does not know. Each was fixed with a test. The workers' tool calls and tokens were not recorded |
+| The Glass redesign, pull requests 137 to 140 | The same arrangement: one worker for the surfaces, then three in parallel for the popover, the Overview and the shell | Worth it for the building. Merging three branches written at the same time cost the lead a round of conflicts for each, and the popover could not be opened in the acceptance copy until the lead added a launch option. One worker clicked twice outside its own window; the owner was told, and the specifications since require a click to be measured against a capture of the same window |
+| The Folync pages, pull requests 141 to 143 | One worker for the stand-in server's ledger routes, then three in parallel for Activity, Trades and Income | Worth it for the building, with the same cost on merging: all three added a sidebar section, so six files conflicted twice. Later batches add at most one section each. The lead added the Partial position to Trades, removed a guessed currency from Income, and replaced timed waits in three tests with conditions the tests control |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
