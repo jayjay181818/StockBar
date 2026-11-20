@@ -567,6 +567,9 @@ extension DataModel {
         let previous = settingsStore.load().supplemental
         guard previous != supplemental else { return }
         settingsStore.setSupplemental(supplemental)
+        // The Income, Trades and Activity switches only gate their pages,
+        // which ask Folync when opened; flipping one makes no request.
+        guard !previous.hasSameMarketDataRoutes(as: supplemental) else { return }
         if previous.historicalLineCharts && !supplemental.historicalLineCharts {
             HistoricalDataManager.shared.clearFolyncSupplementalOverlays()
         } else if previous.historicalLineCharts != supplemental.historicalLineCharts ||
