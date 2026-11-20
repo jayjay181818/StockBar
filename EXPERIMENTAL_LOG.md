@@ -5044,8 +5044,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   is always a Folync portfolio, so the session lead put the widths back.
   It is wider than the card at the minimum size and scrolls sideways
   there, as it always has. Weight is not shown in it.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `9d87d22`. The merge published
+  experimental build 382.3.15 as the prerelease `experimental-382.3.15`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
   opens the main window on the Overview and never opens this page.
   Covered by the comparison set for the night of 2026-11-20, if this is
@@ -5095,6 +5097,102 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     weighed against a total that leaves it out.
   - An unknown figure in a row is now "–" in every column; Value, Today
     and Total gain used "—".
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 147: Risk: each figure said once, with a chart of the falls
+
+- What: the Risk screen shows the figures it already worked out, each
+  once, in the order of the approved mock-up. No existing figure's
+  arithmetic changes: the same functions of `RiskMetricsService` give the
+  same numbers, to the same number of decimals.
+
+  The header has the title, the line "How bumpy the ride has been", the
+  recalculate control and all five ranges. Under it is a strip of four:
+  volatility, the Sharpe ratio, the Sortino ratio and the worst fall, as
+  a negative percentage with its length. The words under volatility and
+  the Sharpe ratio are the screen's own, with their thresholds unchanged.
+
+  "How far below its peak" is new: a chart of how far the portfolio stood
+  below its highest value so far, day by day, with the lowest point
+  marked and labelled. Its series is the one piece of new arithmetic, a
+  pure function beside the existing ones, over the same values and dates
+  as the maximum drawdown, so its lowest point is the strip's worst fall
+  exactly; a test holds the two together on five series. The chart has a
+  sentence for VoiceOver and its draw-in is off under Reduce Motion.
+
+  "On a bad day" gives the two value-at-risk figures in plain words, once
+  each. "Falls of more than 5%" lists the falls the screen listed before,
+  with their dates and lengths. A footnote replaces "Calculation Details":
+  how many trading days the figures rest on, from when to when, that the
+  history is Stockbar's own and not Folync's (said for a Folync portfolio
+  only), the method, and the risk-free rate. Downside deviation, which
+  the mock-up leaves out, is kept as a small figure above the footnote.
+
+  Gone: the six cards and the three sections that repeated them, with
+  their colour bands for the two ratios and their explanatory captions;
+  the calculation date and the "Time Range" row, which the footnote and
+  the range switch already say.
+
+  **One label is corrected.** The length of the worst fall was called
+  "trading days" on the old screen and in the worker's version. The
+  service counts calendar days from the peak to the low whenever it has
+  the dates, and the screen always gives it the dates, so the strip now
+  says "90 days, peak to low", as the list of falls does. The number is
+  the same.
+
+  Against the mock-up: percentages keep two decimals and ratios three,
+  because the figures must stay what they were; and the screen keeps the
+  recalculate control, the currency notice, the limit of five falls and
+  the note that recovery time is not counted.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 146 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 978 XCTest tests with 0 failures.
+  Fourteen are new, in `RiskMetricsServiceTests.swift`: the series for a
+  history that only rises, one that falls and recovers, one still falling
+  at the end, one day and none; its lowest point against the maximum
+  drawdown; the label of the lowest point and the chart's sentence; the
+  words under each tile, a figure that is not known included; the two
+  bad-day sentences; a row of the falls and the empty line; and the
+  footnote for a Folync and a local portfolio. `checks`, `docs-check` and
+  `build-release` pass on the combined code. 103 Python helper tests and
+  95 script tests passed on the worker's last commit.
+
+  **The figures were held to the old screen's.** Before changing
+  anything the worker ran the old screen's own formatting on four made-up
+  histories and kept what it printed; a test builds the same figures
+  through the new code and compares every one. The only differences are
+  the minus sign on a fall, "–" for an unknown figure where the old
+  screen had "—", and the corrected label above.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a peak that never moved; the minus sign dropped; a
+  Sharpe threshold changed; "not Folync's" always shown; the last of two
+  equal lows taken; percentages to one decimal; and the two bad-day
+  amounts swapped.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read how the length of a
+  fall is counted and worded, looked at the worker's drawing of the
+  filled page, and corrected the label above. It did not read the view
+  or every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The filled page was never seen in the running app.** The
+    acceptance copy has no stored history, so Risk shows "Not enough
+    history" there, before and after. The filled page was seen only in
+    drawings made off screen from made-up histories, in dark and light,
+    at the default and the minimum width.
+  - VoiceOver, Reduce Motion and Increase Contrast were not tried on a
+    running app.
+  - The Sortino ratio no longer has a colour; the colour was the only
+    judgement the old screen gave it.
+  - The horizontal axis shows the months Swift Charts picks, which need
+    not include the first.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
