@@ -1467,10 +1467,12 @@ final class AllocationPresentationTests: XCTestCase {
         for colour in StockbarPalette.allocationSlices + [StockbarPalette.allocationOther] {
             XCTAssertNotEqual(colour, .red)
             XCTAssertNotEqual(colour, .green)
+            XCTAssertNotEqual(colour, .pink)
         }
         for sector in SectorAnalysisService.Sector.allCases {
             XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .red, sector.rawValue)
             XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .green, sector.rawValue)
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), .pink, sector.rawValue)
         }
         XCTAssertEqual(PortfolioAnalyticsView.colorForSector(.technology), .blue)
         XCTAssertEqual(PortfolioAnalyticsView.colorForSector(.unknown), StockbarPalette.allocationOther)

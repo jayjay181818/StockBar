@@ -59,9 +59,10 @@ enum StockbarPalette {
     // MARK: Allocation (donut slices and the correlation grid)
 
     /// Slice colours for groups with no colour of their own (holdings and
-    /// currencies). None is red or green: those mean loss and gain here.
+    /// currencies). None is red, green or pink (which reads as red on a dark card):
+    /// those mean loss and gain here.
     static let allocationSlices: [Color] = [
-        .blue, .orange, .purple, .cyan, .pink, .yellow, .indigo, .brown, .teal, allocationLavender
+        .blue, .orange, .purple, .cyan, allocationSand, .yellow, .indigo, .brown, .teal, allocationLavender
     ]
     /// The "Other" slice, and holdings with no known sector.
     static let allocationOther = Color.gray
@@ -69,6 +70,8 @@ enum StockbarPalette {
     static let allocationLavender = adaptive(light: NSColor(srgbRed: 0.55, green: 0.45, blue: 0.85, alpha: 1),
                                              dark: NSColor(srgbRed: 0.70, green: 0.62, blue: 0.98, alpha: 1))
     static let allocationSectorTeal = Color.teal
+    static let allocationSand = adaptive(light: NSColor(srgbRed: 0.72, green: 0.58, blue: 0.32, alpha: 1),
+                                         dark: NSColor(srgbRed: 0.86, green: 0.74, blue: 0.52, alpha: 1))
     /// Correlation cells: one hue for figures above zero, another below.
     static let correlationPositive = adaptive(light: NSColor(srgbRed: 0.16, green: 0.42, blue: 0.82, alpha: 1),
                                               dark: NSColor(srgbRed: 0.24, green: 0.52, blue: 0.95, alpha: 1))

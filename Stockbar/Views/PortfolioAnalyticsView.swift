@@ -178,7 +178,7 @@ struct PortfolioAnalyticsView: View {
                     HStack(alignment: .center, spacing: 28) {
                         donut(groups)
                         allocationList(groups)
-                            .frame(minWidth: 420)
+                            .frame(minWidth: 420, maxWidth: 620)
                     }
                     VStack(alignment: .center, spacing: 16) {
                         donut(groups)
@@ -606,8 +606,8 @@ struct PortfolioAnalyticsView: View {
 
     // MARK: - Color Helpers
 
-    /// Each sector keeps the colour it had, except Healthcare and Financials, which were red
-    /// and green: those mean loss and gain here.
+    /// Each sector keeps the colour it had, except Healthcare, Financials and Real Estate, which
+    /// were red, green and pink: those read as loss and gain here.
     nonisolated static func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
         switch sector {
         case .technology: return .blue
@@ -618,7 +618,7 @@ struct PortfolioAnalyticsView: View {
         case .industrials: return .brown
         case .energy: return .yellow
         case .utilities: return .cyan
-        case .realEstate: return .pink
+        case .realEstate: return StockbarPalette.allocationSand
         case .basicMaterials: return .mint
         case .communicationServices: return .indigo
         case .unknown: return StockbarPalette.allocationOther
