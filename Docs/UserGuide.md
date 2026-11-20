@@ -60,16 +60,15 @@ Stockbar appears both in the Dock and in the menu bar. Click the Dock icon or ch
 
 ## The main window
 
-The sidebar groups every screen:
+The sidebar floats in its own panel on the left of the window and groups every screen:
 
 | Group | Screens |
 |---|---|
 | Portfolio | **Overview** (value, today's and selected-period movement, chart, position inspector), **Holdings**, **Alerts** |
-| Analysis | **Performance** (charts), **Risk**, **Allocation** (including Attribution) |
-| Maintenance | **Backups**, **Data Health**, **Diagnostics** |
-| | **Settings** |
+| Analysis | **Charts**, **Risk**, **Allocation** (including Attribution) |
+| System | **Data Health**, **Backups**, **Diagnostics**, **Settings** |
 
-Use the arrow keys to move through the sidebar. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. The window remembers its size, position and last screen. Motion follows System Settings → Accessibility → Display → Reduce Motion.
+The page that used to be called Performance is now called **Charts**. Click the sidebar, or press Tab until it has focus, then use the Up and Down arrows to move through it, and Home and End to jump to the first and last screen. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. If Folync stops answering while Stockbar shows the figures it saved, the bottom of the sidebar turns amber and says when those figures are from, for example "Couldn't reach Folync · figures from 14:05". Hide the sidebar with **View → Hide Sidebar** (⌃⌘S) or the sidebar button next to the window's close, minimise and zoom buttons; the page then takes the whole width, and Stockbar remembers your choice. The window remembers its size, position and last screen. Through the window you see a blurred, tinted view of what is behind it; System Settings → Accessibility → Display → Reduce Transparency makes it solid, and Increase Contrast outlines the sidebar. Motion follows Reduce Motion in the same place.
 
 **Overview** shows the total value in large type, with today's change and the selected period's change beside it, a portfolio chart (hover to read any point) and details for one position. The periods are **1D**, **1W**, **1M**, **3M**, **1Y** and **All**, for every portfolio source; with a local or Trading 212 portfolio the longer ones show what Stockbar has stored. A change Stockbar does not know shows as "–" with the reason under it, such as **No current history from Folync**. The period's change is the difference between the first and last values in the chart, so money paid in or taken out during the period counts in it.
 
@@ -92,7 +91,7 @@ Positions provided by a linked Trading 212 account or by Folync are read-only he
 
 ## The menu bar
 
-**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with the total and its change over the chosen period, a chart for **Today**, **1 week** or **1 month** (on Today, a dotted line marks yesterday's close), **Today's movers**, and total return beside what it is measured against: net deposits or cost basis. Today's movers lists every holding with its move today as a bar, biggest gain first; it shows today's moves whatever period the chart shows, and "–" for a holding whose change is not known. Past about a dozen holdings the list scrolls, so the popover always fits on the screen. Hover over the chart to read the value at any point. With Folync, the chart first shows the history Stockbar saved from Folync's last answer, marked **Checking Folync**, and updates when Folync replies. If Folync doesn't answer, a saved chart stays up marked as a stale cache, and the Overview's period change says **No current history from Folync**; a period with nothing saved says **Couldn't reach Folync**, and so do the portfolio charts on the Performance tab, next to their **Unavailable** badge.
+**Portfolio item.** Shows total value and today's change. In Settings → Menu Bar → Portfolio Menu Bar choose the currency, decimal places and **Day Gain** format (*Amount and Percentage*, *Amount*, or *Percentage*); the preview matches the menu bar exactly. Click it for a popover with the total and its change over the chosen period, a chart for **Today**, **1 week** or **1 month** (on Today, a dotted line marks yesterday's close), **Today's movers**, and total return beside what it is measured against: net deposits or cost basis. Today's movers lists every holding with its move today as a bar, biggest gain first; it shows today's moves whatever period the chart shows, and "–" for a holding whose change is not known. Past about a dozen holdings the list scrolls, so the popover always fits on the screen. Hover over the chart to read the value at any point. With Folync, the chart first shows the history Stockbar saved from Folync's last answer, marked **Checking Folync**, and updates when Folync replies. If Folync doesn't answer, a saved chart stays up marked as a stale cache, and the Overview's period change says **No current history from Folync**; a period with nothing saved says **Couldn't reach Folync**, and so do the portfolio charts on the Charts page, next to their **Unavailable** badge.
 
 **Total P&L.** With Folync as the portfolio source, total P&L in the portfolio popover and on the Overview (the total return beside "What … is made of", or the summary table when that card is not shown) is measured against **net deposits** by default: the money you paid in less what you took out, as Folync reports it. The portfolio value it is measured from includes cash, so sales, dividends, interest and fees all count. To measure it against the cost of the shares you hold instead, choose **Cost of Current Holdings** in Settings → General → **Measure P&L Against**. With a local or Trading 212 portfolio, or when Folync cannot give net deposits, total P&L is measured against cost basis. A new deposit can show as gain for up to about ten minutes; **Refresh Now** in Stockbar's Folync settings reads it at once. The menu bar item and the per-stock popovers are not affected.
 
@@ -118,7 +117,7 @@ Gains are green and losses red when **Color Coding** is on (Settings → General
 
 ## Analysis
 
-- **Performance** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons. On the 1 Day and 1 Week ranges the line chart draws nights and weekends narrow, so the hours with prices fill the chart; longer ranges are drawn to scale.
+- **Charts** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons. On the 1 Day and 1 Week ranges the line chart draws nights and weekends narrow, so the hours with prices fill the chart; longer ranges are drawn to scale.
 - **Risk** — value at risk, Sharpe and Sortino ratios, volatility and drawdowns from stored portfolio history. Missing observations are ignored rather than treated as zero.
 - **Allocation** — sector allocation and diversification, a correlation matrix built from at least 20 shared trading days of stored prices, and performance attribution. Benchmarks and watchlist symbols are excluded.
 
@@ -194,7 +193,8 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 | ⌘O | Open Stockbar |
 | ⌘, | Settings |
 | ⌘R | Refresh prices (main window) |
-| ⌘1 – ⌘9 | Show a page of the main window, in the order of the **View** menu: Overview, Holdings, Performance, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics |
+| ⌘1 – ⌘9 | Show a page of the main window, top to bottom in the sidebar: Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics. This order changed with the new sidebar: Alerts moved from ⌘6 to ⌘3, Charts (formerly Performance) from ⌘3 to ⌘4, and Data Health and Backups swapped places |
+| ⌃⌘S | Hide or show the sidebar |
 | ⌘W / ⌘M | Close / minimise window |
 | ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
 | ⌘H | Hide Stockbar |

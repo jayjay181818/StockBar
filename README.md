@@ -29,7 +29,7 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 |  |  |
 |---|---|
 | 📈 **Menu bar first** | Portfolio total and per-stock items in the menu bar, each with a chart popover. |
-| 🗂️ **One window for everything** | Overview, Holdings, Alerts, Performance, Risk, Allocation, Backups, Data Health, Diagnostics and Settings in one sidebar. |
+| 🗂️ **One window for everything** | Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics and Settings in one sidebar. |
 | 🏦 **Bring your own source** | Manual holdings and watchlists, read-only Trading 212 broker sync, or a self-hosted Folync portfolio. |
 | 🌍 **Multi-currency** | USD, GBP, EUR, JPY, CAD and AUD totals, with UK pence (GBX) handled once and correctly. |
 | 🔔 **Alerts** | Price above or below a level, or a percentage move, delivered as macOS notifications. |
@@ -90,7 +90,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 ## 🧭 Features
 
 ### 💼 Portfolio and holdings
-- Grouped sidebar: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Performance, Risk, Allocation), **Maintenance** (Backups, Data Health, Diagnostics) and **Settings**. The footer shows the portfolio source, the last update and a Refresh button.
+- Grouped sidebar in a floating panel: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Charts, Risk, Allocation) and **System** (Data Health, Backups, Diagnostics, Settings). The footer shows the portfolio source, the last update and a Refresh button.
 - The Holdings table has search, summary tiles and an Edit mode. Click a **Today** or **Total P&L** value to switch between amount and percentage.
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
@@ -116,7 +116,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 <summary><b>📖 Full feature reference</b></summary>
 
 #### Portfolio And Holdings
-- Native Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Performance, Risk, Allocation), Maintenance (Backups, Data Health, Diagnostics) and Settings. The sidebar footer shows the active portfolio source, the last update and a Refresh button.
+- Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Charts, Risk, Allocation) and System (Data Health, Backups, Diagnostics, Settings). The sidebar footer shows the active portfolio source, the last update and a Refresh button.
 - Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Today and Total P&L columns.
 - Clicking a Today or Total P&L value toggles that column between amount and percentage.
 - Net Value, Total Net Gains and Tracked Symbols summary cards show currency symbols and thousands separators, with USD equivalents in brackets when USD is not the primary display currency.
@@ -259,7 +259,7 @@ python3 -m pip install -r Stockbar/Resources/requirements.txt
 3. Go to Holdings.
 4. Use Add Holding to add or edit manual positions.
 5. Use Settings → Connections to configure market-data API keys and provider priority if needed.
-6. Use Overview, Performance, Risk, Allocation, Alerts, Backups, Data Health, Diagnostics, and Settings from the sidebar as needed.
+6. Use Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics, and Settings from the sidebar as needed.
 
 #### Trading 212 Setup
 1. Open Settings → Connections.

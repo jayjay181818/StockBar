@@ -2,6 +2,9 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// The main window: a see-through backing, the floating sidebar panel and the
+/// page. The sidebar is drawn by the app (see `StockbarSidebar`), because this
+/// AppKit-hosted window gets no floating sidebar from the system.
 @MainActor
 struct StockbarMainView: View {
     let dataModel: DataModel
@@ -16,95 +19,60 @@ struct StockbarMainView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-        } detail: {
-            // Pin each page to the column's exact size. Pages that fill the
-            // height without their own scroll view (Holdings, Diagnostics)
-            // otherwise take their ideal height and overflow the window.
-            GeometryReader { proxy in
-                ZStack {
-                    detail
-                        .id(navigationState.selectedSection)
-                        .transition(.stockbarPage(reduceMotion: reduceMotion))
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-                .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion),
-                           value: navigationState.selectedSection)
+        let sidebarHidden = navigationState.isSidebarHidden
+        HStack(spacing: 0) {
+            if !sidebarHidden {
+                StockbarSidebar(
+                    navigationState: navigationState,
+                    groups: StockbarSidebarModel.groups(),
+                    footer: footerInputs,
+                    isRefreshing: isRefreshing,
+                    refresh: refresh
+                )
+                .frame(width: StockbarShell.sidebarWidth)
+                .padding(.leading, StockbarShell.panelInset)
+                .padding(.vertical, StockbarShell.panelInset)
+                .transition(.move(edge: .leading).combined(with: .opacity))
             }
+            // Beside the panel, a page starts level with the traffic lights, as in the
+            // mock-ups. With the sidebar hidden it starts below the top strip, so
+            // nothing slides under the traffic lights.
+            detailColumn
+                .padding(.top, sidebarHidden ? StockbarShell.topStripHeight : 12)
         }
-        .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 1060, minHeight: 680)
+        .ignoresSafeArea(edges: .top)
+        .background {
+            StockbarWindowBackground()
+                .ignoresSafeArea()
+        }
+        .background {
+            // ⌘R refreshes whether or not the sidebar, and its refresh button, is showing.
+            Button("Refresh Prices", action: refresh)
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(isRefreshing)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: sidebarHidden)
+        // The window's minimum, 1060 by 680, is set by its controller.
         .preferredColorScheme(appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil)
         .stockbarRollingDigitsSetting()
     }
 
-    private var sidebar: some View {
-        List(selection: Binding(
-            get: { Optional(navigationState.selectedSection) },
-            set: { newValue in
-                if let newValue { navigationState.selectedSection = newValue }
+    // Pin each page to the column's exact size. Pages that fill the
+    // height without their own scroll view (Holdings, Diagnostics)
+    // otherwise take their ideal height and overflow the window.
+    private var detailColumn: some View {
+        GeometryReader { proxy in
+            ZStack {
+                detail
+                    .id(navigationState.selectedSection)
+                    .transition(.stockbarPage(reduceMotion: reduceMotion))
             }
-        )) {
-            Section("Portfolio") {
-                sidebarRows(StockbarMainSection.portfolioSections)
-            }
-            Section("Analysis") {
-                sidebarRows(StockbarMainSection.analysisSections)
-            }
-            Section("Maintenance") {
-                sidebarRows(StockbarMainSection.maintenanceSections)
-            }
-            Section {
-                sidebarRows([.settings])
-            }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            sidebarFooter
-        }
-    }
-
-    private func sidebarRows(_ sections: [StockbarMainSection]) -> some View {
-        ForEach(sections) { section in
-            Label(section.title, systemImage: section.systemImage)
-                .tag(section)
-        }
-    }
-
-    /// Where the numbers come from, when they last changed, and a way to
-    /// refresh them — visible from every section.
-    private var sidebarFooter: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Label(portfolioSourceTitle, systemImage: portfolioSourceIcon)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .help(dataModel.isFolyncPortfolioActive ? dataModel.folyncConnectionState.message : portfolioSourceTitle)
-                    TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(StockbarRelativeTime.updatedText(lastPriceUpdate, now: context.date))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 4)
-                Button(action: refresh) {
-                    StockbarRefreshIcon(isRefreshing: isRefreshing)
-                        .frame(width: 26, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(isRefreshing)
-                .keyboardShortcut("r", modifiers: .command)
-                .help("Refresh prices now (⌘R). Prices fetched very recently may be reused.")
-                .accessibilityLabel(isRefreshing ? "Refreshing prices" : "Refresh prices")
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion),
+                       value: navigationState.selectedSection)
         }
     }
 
@@ -117,16 +85,28 @@ struct StockbarMainView: View {
         }
     }
 
+    /// What the sidebar footer says, read from the status the app already has.
+    /// Nothing here makes a request.
+    private var footerInputs: StockbarSidebarFooterStatus.Inputs {
+        let snapshotTime = dataModel.folyncPortfolioSnapshot.flatMap { FolyncSupplementalDateParser.instant($0.generatedAt) }
+        return StockbarSidebarFooterStatus.Inputs(
+            sourceTitle: portfolioSourceTitle,
+            sourceIcon: dataModel.isFolyncPortfolioActive ? "link" : "internaldrive",
+            sourceHelp: dataModel.isFolyncPortfolioActive ? dataModel.folyncConnectionState.message : portfolioSourceTitle,
+            isFolyncActive: dataModel.isFolyncPortfolioActive,
+            connection: dataModel.folyncConnectionState,
+            failureCategory: dataModel.folyncLastPollFailureCategory,
+            savedAt: snapshotTime ?? dataModel.folyncLastCheckedAt,
+            lastUpdate: lastPriceUpdate
+        )
+    }
+
     private var portfolioSourceTitle: String {
         switch dataModel.displayValuationSource {
         case .folyncProvided: "Folync portfolio"
         case .brokerProvided: "Trading 212"
         case .localCalculationFallback, .marketDataFallback: "Local portfolio"
         }
-    }
-
-    private var portfolioSourceIcon: String {
-        dataModel.isFolyncPortfolioActive ? "link" : "internaldrive"
     }
 
     private var lastPriceUpdate: Date? {
@@ -144,7 +124,8 @@ struct StockbarMainView: View {
             StockbarHoldingsView(dataModel: dataModel)
         case .charts:
             VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
-                StockbarPageHeader("Performance", subtitle: "Portfolio value, gains and individual stocks over time.")
+                StockbarPageHeader(StockbarMainSection.charts.title,
+                                   subtitle: "Portfolio value, gains and individual stocks over time.")
                 PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
             }
             .stockbarPage()
@@ -180,17 +161,41 @@ struct StockbarMainView: View {
 @MainActor
 @Observable
 final class StockbarMainNavigationState {
+    static let selectedSectionKey = "mainWindow.selectedSection"
+    static let sidebarHiddenKey = "mainWindow.sidebarHidden"
+
     var selectedSection: StockbarMainSection {
-        didSet { defaults.set(selectedSection.rawValue, forKey: "mainWindow.selectedSection") }
+        didSet { defaults.set(selectedSection.rawValue, forKey: Self.selectedSectionKey) }
+    }
+    /// View → Hide Sidebar. Remembered across launches.
+    var isSidebarHidden: Bool {
+        didSet { defaults.set(isSidebarHidden, forKey: Self.sidebarHiddenKey) }
     }
     private let defaults: UserDefaults
 
     init(selectedSection: StockbarMainSection? = nil, defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
         self.defaults = defaults
         self.selectedSection = selectedSection
-            ?? defaults.string(forKey: "mainWindow.selectedSection").flatMap(StockbarMainSection.init(rawValue:))
+            ?? defaults.string(forKey: Self.selectedSectionKey).flatMap(StockbarMainSection.init(rawValue:))
             ?? .overview
+        self.isSidebarHidden = Self.storedSidebarHidden(in: defaults)
     }
+
+    /// Whether the sidebar was last hidden; read by the View menu before any window exists.
+    static func storedSidebarHidden(in defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) -> Bool {
+        defaults.bool(forKey: sidebarHiddenKey)
+    }
+
+    func toggleSidebar() {
+        isSidebarHidden.toggle()
+    }
+}
+
+/// One group of sidebar entries, under its heading.
+struct StockbarSidebarGroup: Identifiable, Equatable {
+    let title: String
+    let sections: [StockbarMainSection]
+    var id: String { title }
 }
 
 enum StockbarMainSection: String, CaseIterable, Identifiable {
@@ -207,23 +212,31 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    static var portfolioSections: [StockbarMainSection] {
-        [.overview, .holdings, .alerts]
+    /// The sidebar's groups, top to bottom. The sidebar, the View menu and
+    /// ⌘1 to ⌘9 are all built from this one list, so they cannot drift apart.
+    /// A section is listed only once its page exists.
+    static let sidebarGroups: [StockbarSidebarGroup] = [
+        StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .alerts]),
+        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .risk, .allocation]),
+        StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
+    ]
+
+    /// Every entry in sidebar order, top to bottom.
+    static var sidebarOrder: [StockbarMainSection] {
+        sidebarGroups.flatMap(\.sections)
     }
 
-    static var analysisSections: [StockbarMainSection] {
-        [.charts, .risk, .allocation]
-    }
-
-    static var maintenanceSections: [StockbarMainSection] {
-        [.backups, .dataHealth, .diagnostics]
+    /// The number of the ⌘-number shortcut: the first nine entries in sidebar order.
+    var shortcutNumber: Int? {
+        guard let index = Self.sidebarOrder.firstIndex(of: self), index < 9 else { return nil }
+        return index + 1
     }
 
     var title: String {
         switch self {
         case .overview: "Overview"
         case .holdings: "Holdings"
-        case .charts: "Performance"
+        case .charts: "Charts"
         case .risk: "Risk"
         case .allocation: "Allocation"
         case .alerts: "Alerts"
