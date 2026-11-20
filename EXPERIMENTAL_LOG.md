@@ -338,6 +338,8 @@ the redesign's pull requests on their local checks and review with the
 benchmark owed. One comparison for each phase is run in the first quiet
 window, and until then each record says that its benchmark is owed. The
 rule is set out under [How this branch works](#how-this-branch-works).
+Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
+Pull request 136, the Yahoo lookup the Calendar needs, follows it.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3769,8 +3771,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   caller waiting for it has been cancelled. Date parameters are calendar
   days, not instants, so a day chosen in the user's time zone is the day
   asked for.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `e04e21b`. The merge published
+  experimental build 382.3.4 as the prerelease `experimental-382.3.4`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run. The owner parked the benchmarks on
   2026-11-20, see [Where things stand](#where-things-stand), and the
   other project's work was running while this was built. All fifteen rows
@@ -3854,6 +3858,127 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Verdict: retained, with its benchmark owed. The owner chose on
   2026-11-20 to merge on the local checks and the review, and to measure
   each phase in the first quiet window.
+
+### 136: Ask Yahoo for instrument type, dividend dates and earnings dates
+
+- What: the groundwork for the redesign's Calendar, its reminders, the
+  Funds group in Allocation and an income estimate for local portfolios.
+  Nothing on screen changes, and nothing calls the new service yet.
+
+  A new helper script, `get_instrument_events.py`, asks Yahoo through the
+  pinned yfinance for each symbol's instrument type, ex-dividend date,
+  pay date, earnings date or range, and the dividends of the last twelve
+  months. A field Yahoo does not give is null, never a guess and never
+  zero. A date already past is returned as it is; the app decides with
+  the clock what is still to come. Dividends quoted in pence are turned
+  into pounds by the rule prices already use (`uses_pence_quotes` in
+  `get_ohlc_data.py`). One symbol failing does not fail the others, and a
+  rate-limit answer stops the run and is reported as its own error.
+  yfinance logs most request failures instead of raising them, so the
+  script reads its log for each symbol and reports a timeout or a lost
+  connection as an error, not as a symbol with nothing. While it runs,
+  the script reads the process clock in UTC: yfinance 1.8.0 makes Yahoo's
+  calendar dates with `datetime.fromtimestamp`, in the local zone, and a
+  date stamped at midnight UTC would come out a day early west of UTC.
+
+  The script is listed everywhere the helper scripts are listed: the
+  worker's whitelist, the Swift pool's copy of it and the compile line in
+  `script/develop.sh`. A new test fails if any of the three misses a
+  script.
+
+  `InstrumentEventsService` runs the script only when
+  `StockbarProviderAccessPolicy` allows the Python bridge, so never in an
+  acceptance run or under XCTest isolation. It keeps each symbol's answer
+  for a day under Application Support, written atomically, and removes
+  copies older than thirty days. Everything missing or expired is asked
+  for in one run, and callers asking at the same time share it. When
+  Yahoo does not answer it returns the saved copy, however old, marked
+  stale. After a rate-limit answer it makes no run for an hour, forced or
+  not. A symbol Yahoo has nothing for is not asked for again that day
+  unless a refresh is forced. No timer and no polling.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run. The owner parked the benchmarks on
+  2026-11-20 until the other project's work on this Mac has been idle for
+  more than 20 minutes. All fifteen rows of the standard set are
+  therefore not measured for this pull request, and none is carried over
+  from another run. Expected, not measured: no row moves, because nothing
+  calls the service. The three Python rows start the worker, whose list
+  of scripts gains one name; what it loads at start is unchanged. It is
+  covered by the next comparison run under the rule of 2026-11-20.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 766 XCTest tests with 0
+  failures. Twelve are new, in `OHLCFetchServiceTests.swift`, with the
+  process runner stubbed and the clock injected: every field decoded and
+  null kept as nil; one unreadable entry not failing the others; a saved
+  copy used inside a day and refreshed after it; several symbols in one
+  run, de-duplicated; callers at the same time sharing a run; a stale
+  copy when the run fails; no run when the provider policy refuses; the
+  hour's pause after a rate limit, for one symbol and for the whole run,
+  forced or not; a forced refresh inside the day; a symbol Yahoo does not
+  know left alone that day; the thirty-day clean-up.
+
+  103 Python helper tests pass on the app's own environment (Python
+  3.13, with yfinance 1.8.0 and pandas importable), none skipped. 33 are
+  new, all with a fake `yf` and no request: a share with everything; a
+  London-like share with a past ex-dividend date, no pay date and pence;
+  a fund with no calendar; pounds not divided again; a missing currency;
+  dividends with a currency of their own; unusable amounts left out; the
+  twelve-month boundary and a leap day; an earnings range; `NaT`, `NaN`,
+  `None`, lists and zoned timestamps; an unknown symbol; an exception for
+  one symbol among several; a failure yfinance only logged; a rate limit
+  with and without its exception type; spacing between symbols; the time
+  budget; the command line; calendar dates read in UTC on a Mac set to
+  Los Angeles, with the zone put back; and the registration test above.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed. By the worker, six: pence not converted (three tests
+  failed); a missing date turned into today's date (six); a rate limit
+  not stopping the run (one); failures yfinance only logged ignored
+  (one); the day-long reuse ignored (six); the provider check skipped
+  (one). The four Python breakages were run against the script's first
+  version; its last commit did not touch the lines they altered. By the
+  session lead, two, on the lead's own changes: the clock left in the
+  local zone, and unknown symbols not remembered. One test failed for
+  each.
+
+  `checks`, `docs-check` and `build-release` pass on the final commit,
+  and so do 92 script tests.
+
+  After pull request 135 was merged this branch was brought up to date
+  with it, and everything was run again on the two together: 801 XCTest
+  tests with 0 failures, 103 Python helper tests and 92 script tests,
+  with `checks`, `docs-check` and `build-release`.
+
+  No request was made to Yahoo in building or testing this. What is
+  known of Yahoo's real answers is the one-off check of 2026-11-19: a US
+  share gave every date and twelve months of dividends; a London share
+  gave a past ex-dividend date, no pay date and dividends in pence; a
+  London-listed fund gave no calendar, only its dividend history; the
+  instrument type came back for all three.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the script and the
+  service in full, and the tests' harness and names, and read in yfinance
+  1.8.0's own source how it makes the calendar dates. It changed two
+  things: the UTC clock while the script runs, and the day's memory of
+  symbols Yahoo does not know. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Nothing here has been tried against Yahoo. In particular it is not
+    known whether a fund with no calendar arrives as a logged "not
+    found", which the script reads as no calendar, or as an error it
+    would report as a failure.
+  - An earnings time is turned into a UTC date. That is the exchange's
+    own date for US and London listings, but can be a day off for an
+    exchange far ahead of UTC.
+  - The UTC setting applies to the whole helper process while the script
+    runs. A request left running past its symbol's deadline may finish
+    after the zone is put back; its answer is not used.
+  - The hour's pause after a rate limit and the memory of unknown
+    symbols are held in memory and do not survive a relaunch.
+  - Symbols go to Yahoo exactly as given. The aliases and the `.LON`
+    handling of `get_stock_data.py` are not applied.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20
+  under [How this branch works](#how-this-branch-works).
 
 ## Rust evaluation, 2026-11-12
 
@@ -4018,9 +4143,11 @@ supervised trial against Yahoo.
   started until that work has been idle for more than 20 minutes. Until
   then the redesign's pull requests are merged on their local checks and
   review, each record saying that its benchmark is owed. One comparison is
-  run for each phase of the redesign in the first quiet window, from the
-  commit before the phase's first pull request to the commit after its
-  last, and its table goes into this log through the next pull request. A
+  run for each phase of the redesign, in the first quiet window after the
+  phase's last pull request is merged. It runs from the last commit
+  measured to the newest, so it also covers pull requests of other phases
+  merged in between, and its table goes into this log through the next
+  pull request. A
   row that moves is repeated, and if it holds, the phase's pull requests
   are measured one by one to find the cause. This replaces, for the
   redesign, the rule that every pull request carries its own table.

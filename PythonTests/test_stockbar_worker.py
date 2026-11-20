@@ -85,6 +85,41 @@ class StockbarWorkerTests(unittest.TestCase):
         self.assertIn("unknown script", replies[0]["stderr"])
         self.assertTrue(all(reply["stdout"] == "" for reply in replies))
 
+    def test_every_helper_script_is_listed_wherever_the_scripts_are_listed(self):
+        repository = os.path.dirname(os.path.dirname(os.path.dirname(WORKER_PATH)))
+        with open(os.path.join(repository, "Stockbar", "Data", "Networking", "PythonWorkerPool.swift"), encoding="utf-8") as handle:
+            pool_source = handle.read()
+        with open(os.path.join(repository, "script", "develop.sh"), encoding="utf-8") as handle:
+            develop_source = handle.read()
+        resources = os.path.dirname(WORKER_PATH)
+        helpers = sorted(
+            name for name in os.listdir(resources)
+            if name.startswith("get_") and name.endswith(".py")
+        )
+
+        pool_line = next(line for line in pool_source.splitlines() if "static let workerScripts" in line)
+        compile_line = next(line for line in develop_source.splitlines() if "py_compile" in line)
+        self.assertIn("get_instrument_events.py", helpers)
+        self.assertEqual(sorted(self.worker.SCRIPTS), helpers)
+        for name in helpers:
+            self.assertIn(f'"{name}"', pool_line, name)
+            self.assertIn(f"Stockbar/Resources/{name}", compile_line, name)
+
+    def test_instrument_events_script_runs_in_the_worker_without_a_request(self):
+        # No symbols: the script answers with its usage error before it could
+        # ask any provider for anything.
+        worker = load_worker(os.path.dirname(WORKER_PATH))
+
+        lines = io.StringIO(json.dumps({"id": 1, "script": "get_instrument_events.py", "args": []}) + "\n")
+        replies = io.StringIO()
+        before = list(sys.path)
+        worker.serve(lines, replies)
+
+        reply = json.loads(replies.getvalue())
+        self.assertEqual(reply["exit_code"], 1)
+        self.assertEqual(json.loads(reply["stdout"])["error_code"], "INVALID_REQUEST")
+        self.assertEqual(sys.path, before)
+
     def test_malformed_line_gets_an_error_reply_and_serving_continues(self):
         lines = io.StringIO("not json\n" + json.dumps({"id": 7, "script": "get_stock_data.py", "args": []}) + "\n")
         replies = io.StringIO()
