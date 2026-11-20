@@ -162,7 +162,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private var popoverLocalMonitor: Any?
     private var popoverSpaceObserver: NSObjectProtocol?
     private var stalenessTimer: Timer?
-    private let mainPopoverSize = NSSize(width: 330, height: 410)
+    private let mainPopoverSize = NSSize(width: 340, height: 600)
 
     // MARK: - Initialization
     init(dataModel: DataModel) {
@@ -432,7 +432,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             let hostingController = NSHostingController(
                 rootView: PortfolioMenuPopoverView(
                     dataModel: dataModel,
-                    actions: actionsForCurrentPortfolioPopover()
+                    actions: actionsForCurrentPortfolioPopover(),
+                    maximumHeight: PortfolioMenuPopoverHeight.maximum(
+                        visibleHeight: (sender.window?.screen ?? NSScreen.main)?.visibleFrame.height
+                    )
                 )
             )
             // Size the popover to its SwiftUI content.
