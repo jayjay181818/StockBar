@@ -24,7 +24,7 @@ struct StockbarMainView: View {
             if !sidebarHidden {
                 StockbarSidebar(
                     navigationState: navigationState,
-                    groups: StockbarSidebarModel.groups(),
+                    groups: StockbarSidebarModel.groups(dimmed: sidebarDimmed, new: sidebarNew),
                     footer: footerInputs,
                     isRefreshing: isRefreshing,
                     refresh: refresh
@@ -101,6 +101,13 @@ struct StockbarMainView: View {
         )
     }
 
+    /// Pages that are new in this release, and pages with nothing to show for
+    /// the current portfolio source, with the reason.
+    private var sidebarNew: Set<StockbarMainSection> { [.income] }
+    private var sidebarDimmed: [StockbarMainSection: String] {
+        dataModel.isFolyncPortfolioActive ? [:] : [.income: StockbarIncomeModel.needsFolyncReason]
+    }
+
     private var portfolioSourceTitle: String {
         switch dataModel.displayValuationSource {
         case .folyncProvided: "Folync portfolio"
@@ -129,6 +136,8 @@ struct StockbarMainView: View {
                 PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
             }
             .stockbarPage()
+        case .income:
+            StockbarIncomeView(dataModel: dataModel)
         case .risk:
             RiskAnalyticsView(dataModel: dataModel)
         case .allocation:
@@ -202,6 +211,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     case overview
     case holdings
     case charts
+    case income
     case risk
     case allocation
     case alerts
@@ -217,7 +227,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// A section is listed only once its page exists.
     static let sidebarGroups: [StockbarSidebarGroup] = [
         StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .alerts]),
-        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .risk, .allocation]),
+        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .income, .risk, .allocation]),
         StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
 
@@ -237,6 +247,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .overview: "Overview"
         case .holdings: "Holdings"
         case .charts: "Charts"
+        case .income: "Income"
         case .risk: "Risk"
         case .allocation: "Allocation"
         case .alerts: "Alerts"
@@ -252,6 +263,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .overview: "chart.xyaxis.line"
         case .holdings: "tablecells"
         case .charts: "chart.line.uptrend.xyaxis"
+        case .income: "dollarsign.circle"
         case .risk: "waveform.path.ecg"
         case .allocation: "chart.pie"
         case .alerts: "bell"

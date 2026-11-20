@@ -50,8 +50,8 @@ enum StockbarSidebarModel {
         var id: String { title }
     }
 
-    /// No section is dimmed or marked new yet; later pages switch these on
-    /// by passing them here.
+    /// The main view passes the sections marked new and those dimmed for
+    /// the current portfolio source, with their reasons.
     static func groups(dimmed: [StockbarMainSection: String] = [:],
                        new: Set<StockbarMainSection> = []) -> [Group] {
         let count = StockbarMainSection.sidebarOrder.count

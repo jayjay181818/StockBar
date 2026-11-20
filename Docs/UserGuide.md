@@ -65,7 +65,7 @@ The sidebar floats in its own panel on the left of the window and groups every s
 | Group | Screens |
 |---|---|
 | Portfolio | **Overview** (value, today's and selected-period movement, chart, position inspector), **Holdings**, **Alerts** |
-| Analysis | **Charts**, **Risk**, **Allocation** (including Attribution) |
+| Analysis | **Charts**, **Income**, **Risk**, **Allocation** (including Attribution) |
 | System | **Data Health**, **Backups**, **Diagnostics**, **Settings** |
 
 The page that used to be called Performance is now called **Charts**. Click the sidebar, or press Tab until it has focus, then use the Up and Down arrows to move through it, and Home and End to jump to the first and last screen. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. If Folync stops answering while Stockbar shows the figures it saved, the bottom of the sidebar turns amber and says when those figures are from, for example "Couldn't reach Folync · figures from 14:05". Hide the sidebar with **View → Hide Sidebar** (⌃⌘S) or the sidebar button next to the window's close, minimise and zoom buttons; the page then takes the whole width, and Stockbar remembers your choice. The window remembers its size, position and last screen. Through the window you see a blurred, tinted view of what is behind it; System Settings → Accessibility → Display → Reduce Transparency makes it solid, and Increase Contrast outlines the sidebar. Motion follows Reduce Motion in the same place.
@@ -118,6 +118,7 @@ Gains are green and losses red when **Color Coding** is on (Settings → General
 ## Analysis
 
 - **Charts** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons. On the 1 Day and 1 Week ranges the line chart draws nights and weekends narrow, so the hours with prices fill the chart; longer ranges are drawn to scale.
+- **Income** — new, for a Folync portfolio only: the dividends Folync expects in the next 12 months, with the declared and estimated parts, the yield and the income received as Folync gives them; a chart of the six months up to this one and the six after it; and the payments still to come, soonest first, with ex-dividend dates. **History** lists payments received, newest first; **By holding** sums each paying holding's payments over the chart's months. The chart's bars and the By holding sums are Stockbar's own sums of the payments Folync lists, and say so; a payment with no amount yet adds nothing and is counted under the chart. **Declared** or **Estimated** beside a payment appears only when Folync says which. The page asks Folync when you open it and when you click its refresh button, never on its own; switching between Outlook, History and By holding asks nothing, and opening it again within five minutes reuses the last answer. **Load more** fetches older payments when Folync has more. If Folync doesn't answer, the page shows its saved copy under an amber bar saying when it is from. With a local or Trading 212 portfolio the sidebar entry is dimmed with the reason "Needs a Folync portfolio".
 - **Risk** — value at risk, Sharpe and Sortino ratios, volatility and drawdowns from stored portfolio history. Missing observations are ignored rather than treated as zero.
 - **Allocation** — sector allocation and diversification, a correlation matrix built from at least 20 shared trading days of stored prices, and performance attribution. Benchmarks and watchlist symbols are excluded.
 
@@ -193,7 +194,7 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 | ⌘O | Open Stockbar |
 | ⌘, | Settings |
 | ⌘R | Refresh prices (main window) |
-| ⌘1 – ⌘9 | Show a page of the main window, top to bottom in the sidebar: Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics. This order changed with the new sidebar: Alerts moved from ⌘6 to ⌘3, Charts (formerly Performance) from ⌘3 to ⌘4, and Data Health and Backups swapped places |
+| ⌘1 – ⌘9 | Show a page of the main window, top to bottom in the sidebar: Overview, Holdings, Alerts, Charts, Income, Risk, Allocation, Data Health, Backups. Diagnostics has no number; open it from the sidebar or **Help → Diagnostics**. With the Income page, Risk moved from ⌘5 to ⌘6, Allocation to ⌘7, Data Health to ⌘8 and Backups to ⌘9 |
 | ⌃⌘S | Hide or show the sidebar |
 | ⌘W / ⌘M | Close / minimise window |
 | ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
