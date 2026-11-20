@@ -71,7 +71,11 @@ The sidebar groups every screen:
 
 Use the arrow keys to move through the sidebar. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. The window remembers its size, position and last screen. Motion follows System Settings → Accessibility → Display → Reduce Motion.
 
-**Overview** shows the total value with today's and the selected period's change (**1D**, **1W** or **1M**), a portfolio chart (hover to read any point), a summary, and details for one position.
+**Overview** shows the total value in large type, with today's change and the selected period's change beside it, a portfolio chart (hover to read any point) and details for one position. The periods are **1D**, **1W**, **1M**, **3M**, **1Y** and **All**, for every portfolio source; with a local or Trading 212 portfolio the longer ones show what Stockbar has stored. A change Stockbar does not know shows as "–" with the reason under it, such as **No current history from Folync**. The period's change is the difference between the first and last values in the chart, so money paid in or taken out during the period counts in it.
+
+With Folync, a card under the chart shows what the total is made of: **Net deposits** (the figure **Measure P&L Against** uses), **Unrealised gains** and **Realised gains** as Folync reports them, and **Income, interest and fees**, which is everything else in the total: dividends, interest, fees and anything Folync does not split out. Stockbar cannot split that part further. The four figures always add up to the total shown. A part that is zero or negative has no length in the bar; its figure still shows, in red when negative, and a line under the bar says the bar shows the positive parts only. A figure Folync marks partial is labelled **Partial**. The card is shown only when Folync gives all four figures in the portfolio's currency; otherwise, and with a local or Trading 212 portfolio, the page shows a summary table instead.
+
+When Folync stops answering and Stockbar is showing the figures it saved, an amber bar at the top of the Overview says **Couldn't reach Folync** and when the figures were saved, and the total says "as of" that time. If Folync answered but its figures could not be used, the bar says **Folync didn't send new figures** instead. It goes away when Folync answers again. It makes no request of its own.
 
 ## Holdings
 
