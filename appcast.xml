@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.6)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.6</link>
+      <pubDate>Fri, 20 Nov 2026 14:34:07 +0000</pubDate>
+      <sparkle:version>382.3.6</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.6 of Stockbar 3.8.2. Changes since experimental-382.3.5:
+
+- Give every surface in the main window the Glass look (#137)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.6/Stockbar-382.3.6.zip" length="7318804" type="application/octet-stream" sparkle:edSignature="AM4Jf9Xp9Sig8Lpe1UznmiqzrijcaZHWpOQQPAUVOKUyFJt33TnsXqx4+QkiZ/g4U80soHjg0r5BhMpGw+3DDQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.5)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.5</link>
       <pubDate>Fri, 20 Nov 2026 13:29:58 +0000</pubDate>
@@ -137,21 +150,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Release the portfolio popover's content when it closes (#109)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.10/Stockbar-370.16.10.zip" length="7196320" type="application/octet-stream" sparkle:edSignature="WJ3N53Bi+/TUhEFolvonHItrwVAOEtObQeJryqZ44blKFDeS/MHltfKYpwzuwdIDwdwr9uDCi6OS6VZU6ozhBg=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370.16.9)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.16.9</link>
-      <pubDate>Mon, 16 Nov 2026 15:44:40 +0000</pubDate>
-      <sparkle:version>370.16.9</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 370.16.9 of Stockbar 3.7.0. Changes since experimental-370.16.8:
-
-- Leave a history cache file alone when its value has not changed (#108)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.16.9/Stockbar-370.16.9.zip" length="7196393" type="application/octet-stream" sparkle:edSignature="ezoTcvglswg7XIHgWMf2uY/AhwT5bmUTTFbho/+Js9QwzFkXA0l6frbpVBz1jExLeyfppSjMwb+Z4t2TOZWJAQ=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: A+F2GUeEdB09VwxRpBLwGhipp07wsh43nTY5fVN34/bwp1IR75qKnbgTXEG9vJVOKLuMLz8I7demL/Fsku+BAQ==
-length: 10889
+edSignature: 2yDlJs1U9gxz5nmn2cXgm6bWuH73gKBgF8rJL0nZKAAyK5pki/EluwtXHs+zUKvHOUAfT2vViALEVvw0GOutAw==
+length: 10871
 -->
