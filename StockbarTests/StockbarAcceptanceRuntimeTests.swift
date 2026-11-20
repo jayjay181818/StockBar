@@ -1,4 +1,6 @@
+import AppKit
 import CoreData
+import SwiftUI
 import XCTest
 @testable import Stockbar
 
@@ -618,5 +620,277 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "mainWindow.selectedSection"), "holdings")
         XCTAssertEqual(defaults.string(forKey: "preferredCurrency"), "USD", "an option not given changes nothing")
         XCTAssertEqual(StockbarMainNavigationState(defaults: defaults).selectedSection, .holdings)
+    }
+}
+
+// MARK: - Main window shell
+
+@MainActor
+final class StockbarMainWindowShellTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "StockbarMainWindowShellTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        super.tearDown()
+    }
+
+    // Groups, order, titles and shortcuts
+
+    func testTheSidebarHasThreeGroupsInTheirOrder() {
+        XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.title), ["Portfolio", "Analysis", "System"])
+        XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
+            [.overview, .holdings, .alerts],
+            [.charts, .risk, .allocation],
+            [.dataHealth, .backups, .diagnostics, .settings],
+        ])
+        XCTAssertEqual(Set(StockbarMainSection.sidebarOrder), Set(StockbarMainSection.allCases))
+        XCTAssertEqual(StockbarMainSection.sidebarOrder.count, StockbarMainSection.allCases.count,
+                       "every section appears exactly once")
+    }
+
+    func testThePerformancePageIsTitledCharts() {
+        XCTAssertEqual(StockbarMainSection.charts.title, "Charts")
+        XCTAssertEqual(StockbarMainSection.charts.rawValue, "charts", "the stored value does not change")
+        XCTAssertFalse(StockbarMainSection.allCases.map(\.title).contains("Performance"))
+    }
+
+    func testCommandNumbersFollowTheSidebarTopToBottom() {
+        let numbered = StockbarMainSection.sidebarOrder.map(\.shortcutNumber)
+        XCTAssertEqual(numbered, [1, 2, 3, 4, 5, 6, 7, 8, 9, nil])
+        XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 3)
+        XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 4)
+        XCTAssertEqual(StockbarMainSection.dataHealth.shortcutNumber, 7)
+        XCTAssertNil(StockbarMainSection.settings.shortcutNumber, "Settings keeps ⌘, and takes no number")
+    }
+
+    func testTheViewMenuIsBuiltFromTheSidebarGroups() throws {
+        let menu = StockbarSidebarMenu.makeViewMenu(sectionTarget: nil, sectionAction: #selector(NSResponder.selectAll(_:)),
+                                                    defaults: defaults)
+        let sectionItems = menu.items.filter { $0.representedObject is String }
+        XCTAssertEqual(sectionItems.compactMap { $0.representedObject as? String },
+                       StockbarMainSection.sidebarOrder.map(\.rawValue))
+        XCTAssertEqual(sectionItems.map(\.title), StockbarMainSection.sidebarOrder.map(\.title))
+        XCTAssertEqual(sectionItems.map(\.keyEquivalent), ["1", "2", "3", "4", "5", "6", "7", "8", "9", ""])
+        XCTAssertTrue(sectionItems.allSatisfy { $0.keyEquivalentModifierMask == .command })
+
+        // A separator between groups, and one before the sidebar item.
+        let separators = menu.items.enumerated().filter { $0.element.isSeparatorItem }.map(\.offset)
+        XCTAssertEqual(separators, [3, 7, 12])
+
+        let sidebar = try XCTUnwrap(menu.items.last)
+        XCTAssertEqual(sidebar.title, "Hide Sidebar")
+        XCTAssertEqual(sidebar.keyEquivalent, "s")
+        XCTAssertEqual(sidebar.keyEquivalentModifierMask, [.control, .command])
+        XCTAssertEqual(sidebar.action, #selector(StockbarMainWindowController.toggleStockbarSidebar(_:)))
+        XCTAssertNil(sidebar.target, "it goes to the main window through the responder chain")
+    }
+
+    // Collapse
+
+    func testHidingTheSidebarIsRememberedAcrossLaunches() {
+        let first = StockbarMainNavigationState(defaults: defaults)
+        XCTAssertFalse(first.isSidebarHidden, "shown by default")
+        first.toggleSidebar()
+        XCTAssertTrue(first.isSidebarHidden)
+
+        let relaunched = StockbarMainNavigationState(defaults: defaults)
+        XCTAssertTrue(relaunched.isSidebarHidden)
+        XCTAssertTrue(StockbarMainNavigationState.storedSidebarHidden(in: defaults))
+        let menu = StockbarSidebarMenu.makeViewMenu(sectionTarget: nil, sectionAction: #selector(NSResponder.selectAll(_:)),
+                                                    defaults: defaults)
+        XCTAssertEqual(menu.items.last?.title, "Show Sidebar", "the menu is titled right before any window exists")
+
+        relaunched.toggleSidebar()
+        XCTAssertFalse(StockbarMainNavigationState(defaults: defaults).isSidebarHidden)
+    }
+
+    func testTheSelectedSectionIsStillRestored() {
+        let state = StockbarMainNavigationState(defaults: defaults)
+        state.selectedSection = .charts
+        XCTAssertEqual(StockbarMainNavigationState(defaults: defaults).selectedSection, .charts)
+        XCTAssertEqual(StockbarMainNavigationState(selectedSection: .risk, defaults: defaults).selectedSection, .risk,
+                       "a section opened from elsewhere wins")
+    }
+
+    // Entries: dimmed and New
+
+    func testEntriesReadTheirPositionAndAnyBadgeOrDimmedReason() throws {
+        let plain = StockbarSidebarModel.groups()
+        let entries = plain.flatMap(\.entries)
+        XCTAssertEqual(entries.map(\.section), StockbarMainSection.sidebarOrder)
+        XCTAssertEqual(entries.map(\.position), Array(1...10))
+        XCTAssertTrue(entries.allSatisfy { !$0.isDimmed && !$0.isNew }, "no section uses either state yet")
+        XCTAssertEqual(entries[1].accessibilityValue, "2 of 10")
+
+        let marked = StockbarSidebarModel.groups(dimmed: [.risk: "Needs more history."], new: [.charts]).flatMap(\.entries)
+        let risk = try XCTUnwrap(marked.first { $0.section == .risk })
+        let charts = try XCTUnwrap(marked.first { $0.section == .charts })
+        XCTAssertTrue(risk.isDimmed)
+        XCTAssertEqual(risk.accessibilityValue, "Dimmed. Needs more history., 5 of 10")
+        XCTAssertTrue(charts.isNew)
+        XCTAssertEqual(charts.accessibilityValue, "New, 4 of 10")
+    }
+
+    // Keyboard
+
+    func testArrowsHomeAndEndMoveTheSelection() {
+        typealias Model = StockbarSidebarModel
+        XCTAssertEqual(Model.target(of: .next, from: .overview), .holdings)
+        XCTAssertEqual(Model.target(of: .next, from: .alerts), .charts, "across a group heading")
+        XCTAssertEqual(Model.target(of: .previous, from: .dataHealth), .allocation)
+        XCTAssertNil(Model.target(of: .previous, from: .overview), "stops at the top")
+        XCTAssertNil(Model.target(of: .next, from: .settings), "stops at the bottom")
+        XCTAssertEqual(Model.target(of: .first, from: .risk), .overview)
+        XCTAssertEqual(Model.target(of: .last, from: .risk), .settings)
+        XCTAssertNil(Model.target(of: .last, from: .settings))
+        XCTAssertEqual(Model.move(for: .upArrow), .previous)
+        XCTAssertEqual(Model.move(for: .downArrow), .next)
+        XCTAssertEqual(Model.move(for: .home), .first)
+        XCTAssertEqual(Model.move(for: .end), .last)
+        XCTAssertNil(Model.move(for: .leftArrow))
+    }
+
+    // Footer
+
+    private func footerInputs(connection: FolyncConnectionState = .current(asOf: nil), folync: Bool = true,
+                              category: String? = nil, savedAt: Date? = nil, lastUpdate: Date? = nil)
+        -> StockbarSidebarFooterStatus.Inputs {
+        StockbarSidebarFooterStatus.Inputs(
+            sourceTitle: folync ? "Folync portfolio" : "Local portfolio", sourceIcon: "link", sourceHelp: "",
+            isFolyncActive: folync, connection: connection, failureCategory: category,
+            savedAt: savedAt, lastUpdate: lastUpdate
+        )
+    }
+
+    private func footer(_ inputs: StockbarSidebarFooterStatus.Inputs, now: Date) -> StockbarSidebarFooterStatus {
+        StockbarSidebarFooterStatus.make(inputs, now: now, timeZone: TimeZone(identifier: "UTC")!,
+                                         locale: Locale(identifier: "en_GB"))
+    }
+
+    func testTheFooterSaysWhereThePortfolioComesFromAndHowFreshItIs() {
+        let now = Date(timeIntervalSince1970: 1_795_000_000)
+        let fresh = footer(footerInputs(lastUpdate: now.addingTimeInterval(-20)), now: now)
+        XCTAssertEqual(fresh, StockbarSidebarFooterStatus(title: "Folync portfolio", detail: "Updated just now", isWarning: false))
+        XCTAssertEqual(fresh.accessibilityLabel, "Folync portfolio. Updated just now")
+
+        let older = footer(footerInputs(folync: false, lastUpdate: now.addingTimeInterval(-180)), now: now)
+        XCTAssertEqual(older.title, "Local portfolio")
+        XCTAssertTrue(older.detail.hasPrefix("Updated 3 min"), older.detail)
+        XCTAssertFalse(older.isWarning)
+
+        XCTAssertEqual(footer(footerInputs(), now: now).detail, "Not updated yet")
+    }
+
+    func testTheFooterTurnsToAWarningWhenFolyncIsNotAnswering() {
+        // 2026-11-20 14:05 UTC, and "now" 25 minutes later.
+        let saved = Date(timeIntervalSince1970: 1_795_183_500)
+        let now = saved.addingTimeInterval(25 * 60)
+        let offline = FolyncConnectionState.offlineCached(message: "The request timed out.")
+
+        let unreachable = footer(footerInputs(connection: offline, category: "timeout", savedAt: saved), now: now)
+        XCTAssertTrue(unreachable.isWarning)
+        XCTAssertEqual(unreachable.detail, "Couldn't reach Folync · figures from 14:05")
+        XCTAssertEqual(unreachable.accessibilityLabel, "Folync portfolio. Couldn't reach Folync · figures from 14:05")
+
+        let yesterday = footer(footerInputs(connection: offline, savedAt: saved.addingTimeInterval(-86_400)), now: now)
+        XCTAssertEqual(yesterday.detail, "Couldn't reach Folync · figures from 19 Nov, 14:05")
+
+        XCTAssertEqual(footer(footerInputs(connection: offline), now: now).detail,
+                       "Couldn't reach Folync · showing saved figures", "a cold start from cache has no time")
+        XCTAssertEqual(footer(footerInputs(connection: offline, category: "unauthorized", savedAt: saved), now: now).detail,
+                       "Folync rejected the token · figures from 14:05")
+
+        XCTAssertFalse(footer(footerInputs(connection: .stale(asOf: nil, reasons: []), savedAt: saved), now: now).isWarning,
+                       "a stale answer is still an answer")
+        XCTAssertFalse(footer(footerInputs(connection: offline, folync: false, savedAt: saved), now: now).isWarning,
+                       "only a Folync portfolio shows the warning")
+    }
+
+    func testVoiceOverHearsTheFooterTurnToTheWarningAndBack() {
+        let normal = StockbarSidebarFooterStatus(title: "Folync portfolio", detail: "Updated just now", isWarning: false)
+        let later = StockbarSidebarFooterStatus(title: "Folync portfolio", detail: "Updated 1 min ago", isWarning: false)
+        let warning = StockbarSidebarFooterStatus(title: "Folync portfolio",
+                                                  detail: "Couldn't reach Folync · figures from 14:05", isWarning: true)
+        XCTAssertNil(StockbarSidebarFooterStatus.announcement(from: normal, to: later), "routine ticks stay quiet")
+        XCTAssertEqual(StockbarSidebarFooterStatus.announcement(from: normal, to: warning), warning.accessibilityLabel)
+        XCTAssertEqual(StockbarSidebarFooterStatus.announcement(from: warning, to: normal), normal.accessibilityLabel)
+    }
+
+    // Panel and entry styles
+
+    func testThePanelIsGlassOnlyWhereAvailableAndHonoursAccessibility() {
+        for scheme in [ColorScheme.light, .dark] {
+            let glass = StockbarShellPanelStyle.resolve(scheme: scheme, accessibility: .init(), glassAvailable: true)
+            XCTAssertEqual(glass.kind, .glass)
+            XCTAssertEqual(glass.strokeWidth, 0)
+            let fallback = StockbarShellPanelStyle.resolve(scheme: scheme, accessibility: .init(), glassAvailable: false)
+            XCTAssertEqual(fallback.kind, .material, "macOS 15.4 to 25 get a material")
+            XCTAssertEqual(fallback.strokeWidth, 1, "with a hairline")
+            let contrast = StockbarShellPanelStyle.resolve(scheme: scheme, accessibility: .init(increasedContrast: true),
+                                                           glassAvailable: true)
+            XCTAssertGreaterThan(contrast.strokeWidth, 1, "a visible stroke round the panel")
+            XCTAssertTrue(contrast.strongText)
+            XCTAssertFalse(glass.strongText)
+            let solid = StockbarShellPanelStyle.resolve(scheme: scheme, accessibility: .init(reduceTransparency: true),
+                                                        glassAvailable: true)
+            XCTAssertEqual(solid.kind, .solid)
+            XCTAssertEqual(NSColor(solid.solidFill ?? .clear).usingColorSpace(.sRGB)?.alphaComponent ?? 0, 1, accuracy: 0.001)
+        }
+    }
+
+    func testSelectedHoveredAndPressedEntriesEachLookDifferent() {
+        for scheme in [ColorScheme.light, .dark] {
+            for accessibility in [StockbarSurfaceAccessibility(), .init(increasedContrast: true), .init(reduceTransparency: true)] {
+                let styles = StockbarSidebarEntryState.allCases.map {
+                    StockbarSidebarEntryStyle.resolve($0, scheme: scheme, accessibility: accessibility)
+                }
+                XCTAssertEqual(Set(styles.map(\.fill.description)).count, styles.count,
+                               "\(scheme) \(accessibility): each state has its own fill")
+            }
+        }
+        let solidSelected = StockbarSidebarEntryStyle.resolve(.selected, scheme: .dark, accessibility: .init(reduceTransparency: true))
+        XCTAssertEqual(NSColor(solidSelected.fill).usingColorSpace(.sRGB)?.alphaComponent ?? 0, 1, accuracy: 0.001)
+    }
+
+    func testThePanelDrawsWhatItsSettingsAsk() {
+        XCTAssertEqual(drawnPanel(accessibility: .init(), glass: false)?.kind, .material)
+        XCTAssertEqual(drawnPanel(accessibility: .init(reduceTransparency: true), glass: true)?.kind, .solid)
+        XCTAssertEqual(drawnPanel(accessibility: .init(increasedContrast: true), glass: true)?.strongText, true)
+    }
+
+    private func drawnPanel(accessibility: StockbarSurfaceAccessibility, glass: Bool) -> StockbarShellPanelStyle? {
+        let seen = PanelSeen()
+        let host = NSHostingView(
+            rootView: PanelProbe(seen: seen)
+                .stockbarSidebarPanel()
+                .environment(\.stockbarSurfaceAccessibilityOverride, accessibility)
+                .environment(\.stockbarGlassAvailableOverride, glass)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 80, height: 40)
+        host.layoutSubtreeIfNeeded()
+        return seen.value
+    }
+}
+
+@MainActor
+private final class PanelSeen {
+    var value: StockbarShellPanelStyle?
+}
+
+private struct PanelProbe: View {
+    @Environment(\.stockbarShellPanelStyle) private var style
+    let seen: PanelSeen
+
+    var body: some View {
+        let _ = (seen.value = style)
+        Color.clear
     }
 }

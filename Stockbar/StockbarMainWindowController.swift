@@ -25,7 +25,7 @@ enum StockbarAutosavePolicy {
 }
 
 @MainActor
-final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
+final class StockbarMainWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSToolbarDelegate {
     private enum WindowMetrics {
         static let preferredSize = NSSize(width: 1500, height: 860)
         static let minimumSize = NSSize(width: 1060, height: 680)
@@ -59,11 +59,27 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
         // height, such as the Holdings table.
         hostingController.sizingOptions = [.minSize]
         let window = NSWindow(contentViewController: hostingController)
-        // The sidebar runs the full height of the window, under a transparent
-        // title bar, in the style of current macOS apps.
+        // The Glass shell: content runs under a transparent title bar, and the
+        // window is see-through so the root view's behind-window backing shows
+        // the desktop. Under Reduce Transparency the root draws an opaque fill.
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        // A unified toolbar moves the traffic lights in and down, onto the
+        // floating sidebar panel, and holds the sidebar button beside them. The
+        // button lives in the toolbar because AppKit keeps clicks in the top
+        // strip for itself: a SwiftUI button drawn there on the panel never
+        // received a real click in the acceptance copy.
+        let toolbar = NSToolbar(identifier: "StockbarMainWindowToolbar")
+        toolbar.showsBaselineSeparator = false
+        toolbar.allowsUserCustomization = false
+        toolbar.displayMode = .iconOnly
+        toolbar.delegate = self
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
         window.title = "Stockbar"
         window.isReleasedWhenClosed = false
         window.minSize = WindowMetrics.minimumSize
@@ -103,6 +119,51 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
     func showWindow(section: StockbarMainSection) {
         navigationState.selectedSection = section
         showWindow(nil)
+    }
+
+    /// View → Hide Sidebar / Show Sidebar. Reached through the responder chain
+    /// while this window is key; the menu item is disabled otherwise.
+    @objc func toggleStockbarSidebar(_ sender: Any?) {
+        navigationState.toggleSidebar()
+        updateSidebarToolbarItem()
+    }
+
+    private var sidebarToolbarItem: NSToolbarItem?
+
+    private func updateSidebarToolbarItem() {
+        guard let item = sidebarToolbarItem else { return }
+        let title = StockbarSidebarMenu.title(sidebarHidden: navigationState.isSidebarHidden)
+        item.label = title
+        item.toolTip = "\(title) (⌃⌘S)"
+        item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: title)
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.stockbarToggleSidebar]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.stockbarToggleSidebar]
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard itemIdentifier == .stockbarToggleSidebar else { return nil }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.target = self
+        item.action = #selector(toggleStockbarSidebar(_:))
+        item.isBordered = true
+        item.isNavigational = true
+        sidebarToolbarItem = item
+        updateSidebarToolbarItem()
+        return item
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleStockbarSidebar(_:)) {
+            menuItem.title = StockbarSidebarMenu.title(sidebarHidden: navigationState.isSidebarHidden)
+        }
+        return true
     }
 
     private func initialContentSize() -> NSSize {
@@ -150,4 +211,9 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
         fitted.origin.y = min(max(frame.minY, visibleFrame.minY), visibleFrame.maxY - fitted.height)
         return fitted
     }
+}
+
+extension NSToolbarItem.Identifier {
+    /// Hides or shows the main window's sidebar; sits beside the traffic lights.
+    static let stockbarToggleSidebar = NSToolbarItem.Identifier("StockbarToggleSidebar")
 }

@@ -408,6 +408,262 @@ private struct StockbarRowModifier: ViewModifier {
     }
 }
 
+// MARK: - Window shell
+
+/// The main window's see-through backing and its floating sidebar panel.
+///
+/// The window is drawn by the app: macOS gives no floating sidebar in this
+/// AppKit-hosted window, so the panel, its entries and their states live here.
+/// Real glass is used only on macOS 26 and later, and only for the panel;
+/// earlier systems get a material with a hairline stroke. Reduce Transparency
+/// makes the window and the panel opaque, and Increase Contrast strokes the
+/// panel and strengthens its text.
+enum StockbarShell {
+    /// Width of the sidebar panel. Fixed: the panel cannot be dragged wider.
+    static let sidebarWidth: CGFloat = 228
+    /// Gap between the panel and the window's edges.
+    static let panelInset: CGFloat = 7
+    static let panelRadius: CGFloat = 16
+    static let entryRadius: CGFloat = 9
+    /// Height of the window's top strip, where the traffic lights sit. The
+    /// empty unified toolbar that places them makes it this tall.
+    static let topStripHeight: CGFloat = 52
+
+    /// Whether real glass can be drawn on this system.
+    static var systemHasGlass: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+}
+
+/// How the sidebar panel is drawn.
+struct StockbarShellPanelStyle: Equatable {
+    enum Kind: Equatable {
+        /// `glassEffect`, macOS 26 and later.
+        case glass
+        /// A system material, before macOS 26.
+        case material
+        /// An opaque grey, under Reduce Transparency.
+        case solid
+    }
+
+    var kind: Kind
+    /// The opaque fill for `.solid`; nil otherwise.
+    var solidFill: Color?
+    var stroke: Color
+    var strokeWidth: CGFloat
+    /// Increase Contrast: group headings and secondary footer text are drawn
+    /// in the primary colour.
+    var strongText: Bool
+
+    static func resolve(scheme: ColorScheme, accessibility: StockbarSurfaceAccessibility, glassAvailable: Bool) -> Self {
+        let dark = scheme == .dark
+        let ink = Color(.sRGB, white: dark ? 1 : 0, opacity: 1)
+        let contrast = accessibility.increasedContrast
+        let stroke = contrast ? ink.opacity(dark ? 0.55 : 0.5) : ink.opacity(dark ? 0.14 : 0.08)
+        let width: CGFloat = contrast ? 1.5 : 1
+        if accessibility.reduceTransparency {
+            return Self(kind: .solid, solidFill: Color(.sRGB, white: dark ? 0.17 : 0.965, opacity: 1),
+                        stroke: stroke, strokeWidth: width, strongText: contrast)
+        }
+        if glassAvailable {
+            // Glass draws its own edge; a stroke is added only for Increase Contrast.
+            return Self(kind: .glass, solidFill: nil, stroke: contrast ? stroke : .clear,
+                        strokeWidth: contrast ? width : 0, strongText: contrast)
+        }
+        return Self(kind: .material, solidFill: nil, stroke: stroke, strokeWidth: width, strongText: contrast)
+    }
+}
+
+/// The state one sidebar entry is drawn in.
+enum StockbarSidebarEntryState: Equatable, CaseIterable {
+    case plain, hovered, pressed, selected
+}
+
+/// The fill and stroke behind one sidebar entry. Neutral, as in the
+/// mock-ups: white on light, a light tint on dark. Selected, hovered and
+/// pressed each look different.
+struct StockbarSidebarEntryStyle: Equatable {
+    var fill: Color
+    var stroke: Color
+    var strokeWidth: CGFloat
+    var shadow: Color
+
+    static func resolve(_ state: StockbarSidebarEntryState, scheme: ColorScheme,
+                        accessibility: StockbarSurfaceAccessibility) -> Self {
+        let dark = scheme == .dark
+        let solid = accessibility.reduceTransparency
+        let contrast = accessibility.increasedContrast
+        func white(_ value: Double, _ opacity: Double) -> Color { Color(.sRGB, white: value, opacity: opacity) }
+        let ink = dark ? 1.0 : 0.0
+        let fill: Color
+        switch state {
+        case .plain:
+            fill = .clear
+        case .hovered:
+            fill = solid ? white(dark ? 0.22 : 0.92, 1) : white(ink, dark ? 0.06 : 0.045)
+        case .pressed:
+            fill = solid ? white(dark ? 0.27 : 0.87, 1) : white(ink, dark ? 0.15 : 0.09)
+        case .selected:
+            fill = solid ? white(dark ? 0.30 : 1.0, 1) : (dark ? white(1, 0.11) : white(1, 0.85))
+        }
+        let stroked = contrast && state != .plain
+        return Self(
+            fill: fill,
+            stroke: stroked ? white(ink, 0.5) : .clear,
+            strokeWidth: stroked ? 1.5 : 0,
+            shadow: state == .selected && !dark && !solid ? .black.opacity(0.08) : .clear
+        )
+    }
+}
+
+private struct StockbarGlassAvailableOverrideKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+extension EnvironmentValues {
+    /// Replaces "this system has real glass" for the shell below. Tests set it
+    /// to draw the macOS 15–25 fallback on a newer system.
+    var stockbarGlassAvailableOverride: Bool? {
+        get { self[StockbarGlassAvailableOverrideKey.self] }
+        set { self[StockbarGlassAvailableOverrideKey.self] = newValue }
+    }
+}
+
+/// The accessibility settings in force for the shell, honouring the test override.
+private struct StockbarShellAccessibilityReader<Content: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.stockbarSurfaceAccessibilityOverride) private var override
+    @Environment(\.stockbarGlassAvailableOverride) private var glassOverride
+    @ViewBuilder let content: (ColorScheme, StockbarSurfaceAccessibility, Bool) -> Content
+
+    var body: some View {
+        let accessibility = override ?? StockbarSurfaceAccessibility(
+            increasedContrast: contrast == .increased,
+            reduceTransparency: reduceTransparency
+        )
+        content(scheme, accessibility, glassOverride ?? StockbarShell.systemHasGlass)
+    }
+}
+
+/// Behind-window blending, so the desktop shows through the window.
+struct StockbarWindowBacking: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.material = .underWindowBackground
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
+/// The main window's background: the desktop blurred, under a wash that keeps
+/// text readable over any wallpaper. Opaque under Reduce Transparency.
+struct StockbarWindowBackground: View {
+    var body: some View {
+        StockbarShellAccessibilityReader { scheme, accessibility, _ in
+            if accessibility.reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                ZStack {
+                    StockbarWindowBacking()
+                    scheme == .dark ? Color.black.opacity(0.38) : Color.white.opacity(0.40)
+                }
+            }
+        }
+    }
+}
+
+private struct StockbarSidebarPanelModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: StockbarShell.panelRadius, style: .continuous)
+        StockbarShellAccessibilityReader { scheme, accessibility, glassAvailable in
+            let style = StockbarShellPanelStyle.resolve(scheme: scheme, accessibility: accessibility,
+                                                        glassAvailable: glassAvailable)
+            panel(content, style: style, shape: shape, scheme: scheme)
+                .environment(\.stockbarShellPanelStyle, style)
+        }
+    }
+
+    @ViewBuilder
+    private func panel(_ content: Content, style: StockbarShellPanelStyle,
+                       shape: RoundedRectangle, scheme: ColorScheme) -> some View {
+        let stroked = content.overlay {
+            if style.strokeWidth > 0 {
+                shape.strokeBorder(style.stroke, lineWidth: style.strokeWidth)
+            }
+        }
+        switch style.kind {
+        case .solid:
+            stroked.background(style.solidFill ?? .clear, in: shape)
+        case .material:
+            stroked
+                .background(.regularMaterial, in: shape)
+                .shadow(color: .black.opacity(scheme == .dark ? 0.25 : 0.08), radius: 10, y: 3)
+        case .glass:
+            if #available(macOS 26, *) {
+                stroked.glassEffect(.regular, in: shape)
+            } else {
+                stroked.background(.regularMaterial, in: shape)
+            }
+        }
+    }
+}
+
+private struct StockbarShellPanelStyleKey: EnvironmentKey {
+    static let defaultValue: StockbarShellPanelStyle? = nil
+}
+
+extension EnvironmentValues {
+    /// The sidebar panel the content sits on, as drawn. Nil outside the panel.
+    var stockbarShellPanelStyle: StockbarShellPanelStyle? {
+        get { self[StockbarShellPanelStyleKey.self] }
+        set { self[StockbarShellPanelStyleKey.self] = newValue }
+    }
+}
+
+private struct StockbarSidebarEntryBackground: View {
+    let state: StockbarSidebarEntryState
+    let showsFocus: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: StockbarShell.entryRadius, style: .continuous)
+        StockbarShellAccessibilityReader { scheme, accessibility, _ in
+            let style = StockbarSidebarEntryStyle.resolve(state, scheme: scheme, accessibility: accessibility)
+            shape.fill(style.fill)
+                .shadow(color: style.shadow, radius: 2, y: 1)
+                .overlay {
+                    if style.strokeWidth > 0 {
+                        shape.strokeBorder(style.stroke, lineWidth: style.strokeWidth)
+                    }
+                }
+                .overlay {
+                    // The keyboard focus ring, on the selected entry while the sidebar has focus.
+                    if showsFocus {
+                        shape.strokeBorder(Color.accentColor, lineWidth: 2)
+                    }
+                }
+        }
+    }
+}
+
+extension View {
+    /// The floating sidebar panel: glass on macOS 26 and later, a material
+    /// with a hairline before, opaque under Reduce Transparency.
+    func stockbarSidebarPanel() -> some View {
+        modifier(StockbarSidebarPanelModifier())
+    }
+
+    /// The fill behind one sidebar entry, and the focus ring when `showsFocus`.
+    func stockbarSidebarEntry(_ state: StockbarSidebarEntryState, showsFocus: Bool = false) -> some View {
+        background(StockbarSidebarEntryBackground(state: state, showsFocus: showsFocus))
+    }
+}
+
 /// Title, subtitle and trailing actions at the top of each main-window section.
 struct StockbarPageHeader<Accessory: View>: View {
     let title: String
