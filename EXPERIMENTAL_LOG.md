@@ -5225,8 +5225,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   with no credentials in the address, the same rule the bootstrap
   applies to its manifest, now in one function used by both. A seed that
   is not a regular file is refused. The harness scripts are unchanged.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `3aff316`. The merge published
+  experimental build 382.3.17 as the prerelease `experimental-382.3.17`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. What a normal
   launch gains is one check of the acceptance environment before the
   application object is made; the benchmark's launches do run that.
@@ -5291,6 +5293,87 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     seen and not captured.
   - The Holdings editing table at the minimum size, above. A fix that
     can now be looked at is the next piece.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 149: Charts: the controls in one row and the chart on a card; a full Data Health grid
+
+- What: a tidy of two screens that had no mock-up. Nothing is added and
+  nothing is taken away.
+
+  On Charts the controls sat in three rows that lined up with nothing:
+  "Chart" and its picker a third of the way across, "Time Range" further
+  right, "Comparison Mode" at the left. Now the chart picker is at the
+  left, flush with the page, and the range switch at the right, on one
+  row, where the other pages have theirs; the visible labels are gone and
+  both controls keep their accessibility labels. The custom dates appear
+  under the range switch, right-aligned. One strip holds everything that
+  changes how the chart is drawn: the Line and Candlestick switch, "Chart
+  options", "Comparison Mode" and the source and coverage note. The
+  strip, the comparison picks, the chart with its loading and empty
+  states, and the caption under it are on one card. Everything under the
+  card keeps its order and its code. The page no longer has side padding
+  of its own, so it lines up with its header.
+
+  One fault of the old layout showed up and is fixed: a short card was
+  centred in the page's minimum height, which moved the controls down
+  whenever a chart was loading or empty.
+
+  On Data Health the six tiles made four columns at the default window
+  size, leaving two alone on a second row. The grid is now three columns
+  when three tiles of the same minimum width fit, otherwise two, so six
+  tiles always make full rows.
+
+  No saved setting changes its key, and nothing about how or when a
+  chart's data is loaded is touched.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and opens neither page. Covered
+  by the comparison set for the night of 2026-11-20, if this is merged
+  by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 148 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 995 XCTest tests with 0 failures.
+  Three are new, in `PortfolioCalculationTests.swift`, for the Data
+  Health grid's column count: three once three tiles fit, two below
+  that, and six tiles always in full rows. Two breakages of that rule
+  were each caught and removed. The Charts change moves views and has no
+  logic of its own to test. `checks`, `docs-check` and `build-release`
+  pass on the combined code. 103 Python helper tests and 95 script tests
+  passed on the worker's last commit.
+
+  **On screen, which is what checks this piece.** The worker ran the
+  acceptance copy before and after and used the controls after the
+  change: three chart types; the range switch, with the point count
+  changing; the custom dates, stepped and reloading; comparison on, a
+  second stock added, normalised off, cleared, off; Line and Candlestick,
+  with the candlestick's hover read-out; grid lines, gradient fill and
+  line width from "Chart options"; the line chart's hover read-out; the
+  metrics collapsing; the filters' select all, clear, zoom in and reset.
+  The captures are before-and-after pairs in dark and light, at the
+  default and the minimum size, where the picker and the range switch
+  still share a row.
+
+  The worker could not settle one thing: "All Time" showed "Unavailable"
+  in its last run, made with the stand-in slowed and the disk full.
+  After the merge with pull request 148 the session lead ran the
+  acceptance copy of the combined code: "All Time" drew the portfolio
+  chart from 230 points and a single stock from 519, and Data Health
+  showed two full rows of three.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) looked at the before and
+  after captures of a single stock, of comparison with custom dates at
+  the minimum size, and of Data Health, and did not read the moved
+  views. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - "Export CSV" and "Export PDF" were not pressed: they open a system
+    save panel. The value threshold filter, the filter's own date range,
+    zoom out, and the candlestick's indicator and option menus were not
+    used. The progress and error views did not appear.
+  - The fallback that puts the range switch on a row of its own was
+    never seen: the two fit on one row at the minimum size.
+  - Not tried against a real Folync or live prices.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
