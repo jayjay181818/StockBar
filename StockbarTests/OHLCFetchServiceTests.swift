@@ -713,6 +713,33 @@ final class InstrumentEventsServiceTests: XCTestCase {
         XCTAssertNil(resumed[0].failure)
     }
 
+    func testSymbolYahooDoesNotKnowIsNotAskedForAgainThatDay() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA"), Self.failure("NOSUCH", code: "NO_DATA")),
+            Self.answer(Self.failure("NOSUCH", code: "NO_DATA")),
+            Self.answer(Self.success("NOSUCH")),
+        ])
+        let service = makeService(runner: runner)
+
+        let first = await service.events(for: ["ALPHA", "NOSUCH"])
+        advance(hour)
+        let again = await service.events(for: ["ALPHA", "NOSUCH"])
+        let callsInsideTheDay = await runner.callCount()
+        let forced = await service.events(for: ["NOSUCH"], forceRefresh: true)
+        let callsAfterForce = await runner.callCount()
+        advance(day)
+        let nextDay = await service.events(for: ["NOSUCH"])
+        let callsNextDay = await runner.callCount()
+
+        XCTAssertEqual(first[1].outcome, .failed(.noData))
+        XCTAssertEqual(again[1].outcome, .failed(.noData))
+        XCTAssertEqual(callsInsideTheDay, 1, "Yahoo is not asked again that day for a symbol it does not know")
+        XCTAssertEqual(forced[0].outcome, .failed(.noData))
+        XCTAssertEqual(callsAfterForce, 2, "A forced refresh still asks")
+        XCTAssertNil(nextDay[0].failure)
+        XCTAssertEqual(callsNextDay, 3)
+    }
+
     func testRateLimitForTheWholeRunAlsoPauses() async {
         let runner = InstrumentEventsRunnerStub(responses: [
             .output(#"{"error": true, "error_code": "RATE_LIMIT", "message": "invented", "timestamp": 1}"#),

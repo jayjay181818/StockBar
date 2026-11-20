@@ -27,6 +27,7 @@ Diagnostics go to stderr only.
 """
 
 import argparse
+import contextlib
 import datetime
 import json
 import logging
@@ -360,12 +361,43 @@ def fetch_with_deadline(symbol, today, now_seconds, deadline_seconds):
     return {"symbol": symbol, "success": True, "events": events}
 
 
+@contextlib.contextmanager
+def utc_process_clock():
+    """Reads the process's clock in UTC for as long as the block runs.
+
+    yfinance turns Yahoo's calendar timestamps into dates with the process's
+    local time zone (`datetime.fromtimestamp`). Yahoo stamps an ex-dividend or
+    pay date at midnight UTC, so on a Mac west of UTC it would come out a day
+    early. The zone is put back afterwards, for the other scripts a long-lived
+    worker runs.
+    """
+    if not hasattr(time, "tzset"):
+        yield
+        return
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
 def fetch_all(symbols, now=None, time_budget_seconds=None, sleep=time.sleep, clock=time.monotonic):
     """Envelopes for every symbol, in order, each symbol fetched once.
 
     After a rate-limit answer the remaining symbols are not asked for: they are
     reported as rate limited too, so the app backs off.
     """
+    with utc_process_clock():
+        return _fetch_all(symbols, now, time_budget_seconds, sleep, clock)
+
+
+def _fetch_all(symbols, now, time_budget_seconds, sleep, clock):
     now = now or datetime.datetime.now(datetime.timezone.utc)
     today = now.date()
     now_seconds = now.timestamp()

@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -101,7 +102,9 @@ class _FakeTicker:
         self._log.append((self.symbol, "calendar", None))
         if "calendar_error" in self._spec:
             raise self._spec["calendar_error"]
-        return self._spec.get("calendar", {})
+        calendar = self._spec.get("calendar", {})
+        # A callable builds the calendar when it is read, as yfinance does.
+        return calendar() if callable(calendar) else calendar
 
 
 class _FakeYF:
@@ -335,6 +338,35 @@ class EarningsTests(InstrumentEventsTestCase):
             expected = cases[envelope["symbol"]][1]
             events = envelope["events"]
             self.assertEqual((events["earningsDate"], events["earningsDateEnd"]), expected, envelope["symbol"])
+
+
+class TimeZoneTests(InstrumentEventsTestCase):
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_calendar_dates_are_read_in_utc_and_the_zone_is_put_back(self):
+        # yfinance makes its calendar dates with datetime.fromtimestamp, in
+        # the process's own zone. Midnight UTC on 28 November is still the
+        # 27th in Los Angeles.
+        midnight_utc = datetime.datetime(2026, 11, 28, tzinfo=UTC).timestamp()
+
+        def calendar():
+            return {"Ex-Dividend Date": datetime.datetime.fromtimestamp(midnight_utc).date()}
+
+        spec = dict(US_SHARE, calendar=calendar)
+        previous = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+        try:
+            self.assertEqual(calendar()["Ex-Dividend Date"], datetime.date(2026, 11, 27))
+            envelopes, _ = self.run_symbols({"ALPHA": spec}, ["ALPHA"])
+            self.assertEqual(envelopes[0]["events"]["exDividendDate"], "2026-11-28")
+            self.assertEqual(os.environ.get("TZ"), "America/Los_Angeles")
+            self.assertEqual(calendar()["Ex-Dividend Date"], datetime.date(2026, 11, 27))
+        finally:
+            if previous is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = previous
+            time.tzset()
 
 
 class _NaTLike:

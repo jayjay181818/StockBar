@@ -221,7 +221,8 @@ struct InstrumentEventsResult: Sendable, Equatable {
 /// Symbols that are missing or older than a day are fetched together in one
 /// script run, and callers asking at the same time share it. When Yahoo does
 /// not answer, a saved copy of any age is returned marked stale. After a
-/// rate-limit answer no run is made for an hour, forced or not. The script
+/// rate-limit answer no run is made for an hour, forced or not. A symbol
+/// Yahoo has nothing for is not asked for again that day unless forced. The script
 /// runs only when `StockbarProviderAccessPolicy` allows the Python bridge.
 actor InstrumentEventsService {
     static let shared = InstrumentEventsService()
@@ -259,6 +260,9 @@ actor InstrumentEventsService {
     private var lookedOnDisk: Set<String> = []
     private var hasRemovedOldEntries = false
     private var pausedUntil: Date?
+    /// Symbols Yahoo had nothing for, and until when they are not asked for
+    /// again. In memory only: after a relaunch each is asked for once more.
+    private var unanswered: [String: Date] = [:]
     private var inFlight: InFlightRun?
     /// How many callers waited on a run another caller started (for tests).
     private(set) var sharedRunWaits = 0
@@ -303,7 +307,9 @@ actor InstrumentEventsService {
         var settled = Set<String>()
         var failures: [String: InstrumentEventsFailure] = [:]
         while true {
-            let needed = valid.filter { !settled.contains($0) && (forceRefresh || !isFresh($0)) }
+            let needed = valid.filter {
+                !settled.contains($0) && (forceRefresh || (!isFresh($0) && !isKnownUnanswered($0)))
+            }
             guard !needed.isEmpty else { break }
 
             if let current = inFlight {
@@ -449,10 +455,15 @@ actor InstrumentEventsService {
                     continue
                 }
                 save(events, symbol: symbol, receivedAt: receivedAt)
+                unanswered[symbol] = nil
                 continue
             }
             let message = (envelope["error"] as? [String: Any])?["message"] as? String ?? "No data"
-            failures[symbol] = failure(code: Self.errorCode(of: envelope), message: message)
+            let code = Self.errorCode(of: envelope)
+            // A symbol Yahoo does not know stays unknown for the day; asking
+            // on every call would only spend requests.
+            if code == "NO_DATA" { unanswered[symbol] = receivedAt.addingTimeInterval(Self.freshnessInterval) }
+            failures[symbol] = failure(code: code, message: message)
         }
         return RunOutcome(failures: failures)
     }
@@ -494,6 +505,13 @@ actor InstrumentEventsService {
         guard let entry = savedEntry(symbol) else { return false }
         let age = now().timeIntervalSince(entry.receivedAt)
         return age >= 0 && age < Self.freshnessInterval
+    }
+
+    private func isKnownUnanswered(_ symbol: String) -> Bool {
+        guard let until = unanswered[symbol] else { return false }
+        if now() < until { return true }
+        unanswered[symbol] = nil
+        return false
     }
 
     private func savedEntry(_ symbol: String) -> SavedEntry? {
