@@ -3457,14 +3457,14 @@ final class HoldingsWeightAndTextTests: XCTestCase {
 
     // MARK: Layout
 
-    func testTheEditingTableFitsTheCardAtTheMinimumWindowSize() {
-        XCTAssertEqual(HoldingsTableLayout.minimumCardWidth, 784)
-        XCTAssertLessThanOrEqual(HoldingsTableLayout.contentWidth, HoldingsTableLayout.minimumCardWidth,
-                                 "every editing column is visible inside the card")
-        // The fields stay wide enough to type in.
-        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.symbolWidth, 100)
-        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.unitsWidth, 80)
-        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.averageCostWidth, 80)
-        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.currencyWidth, 80)
+    func testTheEditingTableKeepsItsColumnWidths() {
+        // The editing layout is not changed by the Weight column: its fields
+        // keep their widths, and the table scrolls sideways where it is wider
+        // than its card.
+        XCTAssertEqual(HoldingsTableLayout.symbolWidth, 130)
+        XCTAssertEqual(HoldingsTableLayout.unitsWidth, 110)
+        XCTAssertEqual(HoldingsTableLayout.averageCostWidth, 110)
+        XCTAssertEqual(HoldingsTableLayout.currencyWidth, 100)
+        XCTAssertEqual(HoldingsTableLayout.contentWidth, 969)
     }
 }

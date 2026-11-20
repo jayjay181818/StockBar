@@ -2,33 +2,22 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-/// The editing table's columns. Together they fit the Holdings card at the
-/// window's minimum size, so no column is ever cut off or scrolled out of
-/// view; the fields keep room for a typical symbol, amount or currency.
+/// The editing table's columns. Wider than the Holdings card at the window's
+/// minimum size, where the table scrolls sideways, as it always has.
 enum HoldingsTableLayout {
-    static let spacing: CGFloat = 8
-    static let horizontalPadding: CGFloat = 12
+    static let spacing: CGFloat = 10
+    static let horizontalPadding: CGFloat = 14
 
     static let visibleWidth: CGFloat = 66
-    static let symbolWidth: CGFloat = 100
-    static let unitsWidth: CGFloat = 86
-    static let averageCostWidth: CGFloat = 90
-    static let currencyWidth: CGFloat = 84
-    static let currentWidth: CGFloat = 84
-    static let valueWidth: CGFloat = 96
-    static let actionsWidth: CGFloat = 88
+    static let symbolWidth: CGFloat = 130
+    static let unitsWidth: CGFloat = 110
+    static let averageCostWidth: CGFloat = 110
+    static let currencyWidth: CGFloat = 100
+    static let currentWidth: CGFloat = 115
+    static let valueWidth: CGFloat = 130
+    static let actionsWidth: CGFloat = 110
     /// Space between the row's action buttons.
-    static let actionSpacing: CGFloat = 6
-
-    /// The main window's minimum width, as `StockbarMainWindowController` sets it.
-    static let minimumWindowWidth: CGFloat = 1060
-
-    /// How wide the Holdings card is at the window's minimum width: the window
-    /// less the sidebar panel, its inset and the page's side insets.
-    static var minimumCardWidth: CGFloat {
-        minimumWindowWidth - StockbarShell.sidebarWidth - StockbarShell.panelInset
-            - StockbarLayout.pageInsets.leading - StockbarLayout.pageInsets.trailing
-    }
+    static let actionSpacing: CGFloat = 8
 
     static let contentWidth: CGFloat = {
         let columnWidths = [
