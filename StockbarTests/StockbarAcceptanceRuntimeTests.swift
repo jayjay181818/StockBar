@@ -651,7 +651,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
     func testTheSidebarHasThreeGroupsInTheirOrder() {
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.title), ["Portfolio", "Analysis", "System"])
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
-            [.overview, .holdings, .alerts],
+            [.overview, .holdings, .activity, .alerts],
             [.charts, .risk, .allocation],
             [.dataHealth, .backups, .diagnostics, .settings]
         ])
@@ -668,10 +668,12 @@ final class StockbarMainWindowShellTests: XCTestCase {
 
     func testCommandNumbersFollowTheSidebarTopToBottom() {
         let numbered = StockbarMainSection.sidebarOrder.map(\.shortcutNumber)
-        XCTAssertEqual(numbered, [1, 2, 3, 4, 5, 6, 7, 8, 9, nil])
-        XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 3)
-        XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 4)
-        XCTAssertEqual(StockbarMainSection.dataHealth.shortcutNumber, 7)
+        XCTAssertEqual(numbered, [1, 2, 3, 4, 5, 6, 7, 8, 9, nil, nil])
+        XCTAssertEqual(StockbarMainSection.activity.shortcutNumber, 3)
+        XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 4)
+        XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 5)
+        XCTAssertEqual(StockbarMainSection.dataHealth.shortcutNumber, 8)
+        XCTAssertNil(StockbarMainSection.diagnostics.shortcutNumber, "only the first nine entries take a number")
         XCTAssertNil(StockbarMainSection.settings.shortcutNumber, "Settings keeps ⌘, and takes no number")
     }
 
@@ -682,12 +684,12 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(sectionItems.compactMap { $0.representedObject as? String },
                        StockbarMainSection.sidebarOrder.map(\.rawValue))
         XCTAssertEqual(sectionItems.map(\.title), StockbarMainSection.sidebarOrder.map(\.title))
-        XCTAssertEqual(sectionItems.map(\.keyEquivalent), ["1", "2", "3", "4", "5", "6", "7", "8", "9", ""])
+        XCTAssertEqual(sectionItems.map(\.keyEquivalent), ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", ""])
         XCTAssertTrue(sectionItems.allSatisfy { $0.keyEquivalentModifierMask == .command })
 
         // A separator between groups, and one before the sidebar item.
         let separators = menu.items.enumerated().filter { $0.element.isSeparatorItem }.map(\.offset)
-        XCTAssertEqual(separators, [3, 7, 12])
+        XCTAssertEqual(separators, [4, 8, 13])
 
         let sidebar = try XCTUnwrap(menu.items.last)
         XCTAssertEqual(sidebar.title, "Hide Sidebar")
@@ -730,17 +732,17 @@ final class StockbarMainWindowShellTests: XCTestCase {
         let plain = StockbarSidebarModel.groups()
         let entries = plain.flatMap(\.entries)
         XCTAssertEqual(entries.map(\.section), StockbarMainSection.sidebarOrder)
-        XCTAssertEqual(entries.map(\.position), Array(1...10))
+        XCTAssertEqual(entries.map(\.position), Array(1...11))
         XCTAssertTrue(entries.allSatisfy { !$0.isDimmed && !$0.isNew }, "no section uses either state yet")
-        XCTAssertEqual(entries[1].accessibilityValue, "2 of 10")
+        XCTAssertEqual(entries[1].accessibilityValue, "2 of 11")
 
         let marked = StockbarSidebarModel.groups(dimmed: [.risk: "Needs more history."], new: [.charts]).flatMap(\.entries)
         let risk = try XCTUnwrap(marked.first { $0.section == .risk })
         let charts = try XCTUnwrap(marked.first { $0.section == .charts })
         XCTAssertTrue(risk.isDimmed)
-        XCTAssertEqual(risk.accessibilityValue, "Dimmed. Needs more history., 5 of 10")
+        XCTAssertEqual(risk.accessibilityValue, "Dimmed. Needs more history., 6 of 11")
         XCTAssertTrue(charts.isNew)
-        XCTAssertEqual(charts.accessibilityValue, "New, 4 of 10")
+        XCTAssertEqual(charts.accessibilityValue, "New, 5 of 11")
     }
 
     // Keyboard

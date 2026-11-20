@@ -3225,6 +3225,18 @@ extension FolyncPortfolioSourceTests {
         XCTAssertEqual(Set(results.map { "\($0)" }).count, 1)
     }
 
+    /// Waits, for at most five seconds, until `condition` holds.
+    private static func waitForLedgerPolicy(
+        file: StaticString = #filePath, line: UInt = #line,
+        _ condition: @Sendable () async -> Bool
+    ) async {
+        for _ in 0..<5_000 {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("The fetch policy did not reach the expected state in time", file: file, line: line)
+    }
+
     func testLedgerFetchPolicyRefreshDoesNotJoinARequestThatMayReuse() async throws {
         let policy = FolyncLedgerFetchPolicy()
         let key = FolyncLedgerFetchPolicy.Key(
@@ -3239,20 +3251,24 @@ extension FolyncPortfolioSourceTests {
                 return .init(result: "held", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Each step waits for the policy to have registered the caller before
+        // the next begins. Fixed sleeps let the two later callers arrive in
+        // either order on a busy Mac, and the joiner then joined the refresh.
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 1 && ran.value == ["held"] }
         let joining = Task {
             await policy.perform(key) {
                 ran.value.append("joining")
                 return .init(result: "joining", firstPageToKeep: nil)
             }
         }
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 2 }
         let refreshing = Task {
             await policy.perform(key, forceRefresh: true) {
                 ran.value.append("refreshing")
                 return .init(result: "refreshing", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         releaser.yield()
         releaser.finish()
 
@@ -3320,18 +3336,21 @@ extension FolyncPortfolioSourceTests {
                 return .init(result: "held", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 1 && ran.value == ["held"] }
         // Behind it: a request nobody will want, one two callers share, and
-        // one that is wanted.
+        // one that is wanted. Each is registered before the next is started.
         let superseded = ask("superseded")
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 2 }
         let leaving = ask("shared")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         let staying = ask("shared", answering: "asked twice")
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 4 }
         let wanted = ask("wanted")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 5 }
         superseded.cancel()
         leaving.cancel()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        // Both cancellations have been counted out before the turn passes on.
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         releaser.yield()
         releaser.finish()
 
@@ -3482,4 +3501,619 @@ private final class FolyncURLProtocolStub: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+// MARK: - Activity page
+
+/// Stands in for the coordinator's transactions route. Answers in order, or
+/// holds each answer until the test releases it.
+private actor ActivityRouterStub: StockbarActivityTransactionsRouting {
+    enum Call: Equatable {
+        case first(FolyncTransactionsQuery, forceRefresh: Bool)
+        case more(FolyncTransactionsQuery, cursor: String)
+    }
+
+    private(set) var calls: [Call] = []
+    private var answers: [FolyncRoutedTransactionsResult] = []
+    private var holdsAnswers = false
+    private var held: [CheckedContinuation<FolyncRoutedTransactionsResult, Never>] = []
+
+    var heldCount: Int { held.count }
+
+    func queue(_ answers: FolyncRoutedTransactionsResult...) { self.answers += answers }
+    func hold(_ holds: Bool) { holdsAnswers = holds }
+    func release(with result: FolyncRoutedTransactionsResult) { held.removeFirst().resume(returning: result) }
+
+    func routeTransactions(_ query: FolyncTransactionsQuery, forceRefresh: Bool) async -> FolyncRoutedTransactionsResult {
+        calls.append(.first(query, forceRefresh: forceRefresh))
+        return await answer()
+    }
+
+    func loadMoreTransactions(_ query: FolyncTransactionsQuery, after continuation: FolyncLedgerContinuation) async
+        -> FolyncRoutedTransactionsResult {
+        calls.append(.more(query, cursor: continuation.cursor))
+        return await answer()
+    }
+
+    private func answer() async -> FolyncRoutedTransactionsResult {
+        if holdsAnswers { return await withCheckedContinuation { held.append($0) } }
+        return answers.isEmpty ? .unavailable : answers.removeFirst()
+    }
+}
+
+/// A debounce the test ends by hand.
+private actor ActivityDebounceGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private(set) var waits = 0
+
+    func wait() async {
+        waits += 1
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+}
+
+@MainActor
+final class StockbarActivityPageTests: XCTestCase {
+    private let britishEnglish = Locale(identifier: "en_GB")
+
+    // MARK: Fixtures (invented figures)
+
+    private func transaction(
+        _ id: String = "tx-1", date: String = "2026-11-12", action: String = "buy", ticker: String? = "MSFT",
+        quantity: Double = 4, price: Double = 412.30, priceCurrency: String? = "USD", gross: Double = 1_649.20,
+        commission: Double = 0, tax: Double = 0, currency: String = "USD", amount: Double? = 1_318.60,
+        quality: FolyncFinancialQuality = .complete, reasons: [String] = [],
+        adjusted: Bool? = nil, adjustedReason: String? = nil
+    ) -> FolyncTransaction {
+        FolyncTransaction(
+            id: id, portfolioId: "pf_one", portfolioName: "Example", assetId: ticker.map { "asset_\($0.lowercased())" },
+            identity: ticker.map {
+                FolyncInstrumentIdentity(assetId: "asset_\($0.lowercased())", canonicalTicker: $0, displayTicker: $0,
+                                         quoteSymbol: $0, aliases: [$0], isin: nil)
+            },
+            date: date, action: FolyncOpenEnum(rawValue: action), quantity: quantity, price: price,
+            priceCurrency: priceCurrency, grossAmount: gross, commission: commission, tax: tax, currency: currency,
+            portfolioCurrency: "GBP", fxRateToPortfolioCurrency: amount == nil ? nil : 0.8,
+            fxRateSource: FolyncOpenEnum(rawValue: amount == nil ? "unresolved" : "provider"),
+            portfolioAmount: FolyncFinancialMetric(value: amount, currency: "GBP", quality: quality,
+                                                   reasonCodes: reasons, asOfDate: date),
+            source: "manual", importOwned: false, adjusted: adjusted, adjustedReason: adjustedReason
+        )
+    }
+
+    private func cash(_ id: String, date: String = "2026-11-02", action: String, amount: Double? = 500,
+                      currency: String = "GBP", gross: Double = 500) -> FolyncTransaction {
+        transaction(id, date: date, action: action, ticker: nil, quantity: 0, price: 0, priceCurrency: nil,
+                    gross: gross, currency: currency, amount: amount)
+    }
+
+    private func response(_ rows: [FolyncTransaction], cursor: String? = nil, revision: String = "rev-a",
+                          quality: FolyncFinancialQuality = .complete, reasons: [String] = [],
+                          generatedAt: String = "2026-11-20T14:05:00.000Z") throws -> FolyncTransactionsResponse {
+        let base = try JSONDecoder().decode(FolyncTransactionsResponse.self,
+                                            from: Data(FolyncPortfolioSourceTests.ledgerJSON(.transactions).utf8))
+        return FolyncTransactionsResponse(
+            schemaVersion: base.schemaVersion, sourceRevision: base.sourceRevision, generatedAt: generatedAt,
+            scope: base.scope, currency: "GBP", quality: quality, reasonCodes: reasons, freshness: base.freshness,
+            mode: base.mode, transactions: rows,
+            page: FolyncReadPage(limit: 100, hasMore: cursor != nil, nextCursor: cursor, collectionRevision: revision)
+        )
+    }
+
+    private func page(_ ids: [String], cursor: String? = nil, status: FolyncSupplementalSourceStatus = .current,
+                      paging: FolyncLedgerPaging = .firstPage) throws -> FolyncRoutedTransactionsResult {
+        .folync(try response(ids.map { transaction($0) }, cursor: cursor), status: status, paging: paging)
+    }
+
+    private func model(_ router: ActivityRouterStub, gate: ActivityDebounceGate? = nil) -> StockbarActivityViewModel {
+        StockbarActivityViewModel(router: router, debounce: { await gate?.wait() })
+    }
+
+    /// Waits for the model's task, and any task that replaces it, to finish.
+    private func settle(_ viewModel: StockbarActivityViewModel) async {
+        for _ in 0..<100 {
+            guard let task = viewModel.task else { return }
+            await task.value
+            if viewModel.task == task { return }
+        }
+    }
+
+    private func waitUntil(_ condition: () async -> Bool) async {
+        for _ in 0..<10_000 {
+            if await condition() { return }
+            await Task.yield()
+        }
+        XCTFail("condition not met")
+    }
+
+    // MARK: Kinds and queries
+
+    func testEveryKnownActionIsInExactlyOneKind() {
+        let kinds: [StockbarActivityKind] = [.trades, .dividends, .cash]
+        for action in FolyncTransactionAction.allCases {
+            XCTAssertEqual(kinds.filter { $0.actions.contains(action) }.count, 1, action.rawValue)
+        }
+        XCTAssertEqual(StockbarActivityKind.trades.actions, [.buy, .sell, .split, .corporateAction])
+        XCTAssertEqual(StockbarActivityKind.dividends.actions, [.dividend, .stockDividend])
+        XCTAssertEqual(StockbarActivityKind.cash.actions, [.deposit, .withdraw, .interest, .fee, .tax, .transfer, .note])
+        XCTAssertEqual(StockbarActivityKind.all.actions, [], "All sends no action filter")
+        XCTAssertEqual(StockbarActivityKind.allCases.map(\.title), ["All", "Trades", "Dividends", "Cash"])
+        XCTAssertEqual(StockbarActivityMode.allCases.map(\.title), ["As entered", "Adjusted"])
+    }
+
+    func testTheQueryForEachKindModeAndHolding() {
+        let actions: [StockbarActivityKind: String?] = [
+            .all: nil, .trades: "buy,sell,split,corporate_action", .dividends: "dividend,stock_dividend",
+            .cash: "deposit,withdraw,fee,tax,interest,transfer,note"
+        ]
+        let modes: [StockbarActivityMode: String] = [.asEntered: "input", .adjusted: "adjusted"]
+        let holdings: [String: String?] = ["": nil, "   ": nil, " msft ": "MSFT", "Vusa": "VUSA"]
+        for kind in StockbarActivityKind.allCases {
+            for (mode, modeValue) in modes {
+                for (holding, ticker) in holdings {
+                    let items = StockbarActivityQuery.make(kind: kind, mode: mode, holding: holding).queryItems
+                    var expected = [URLQueryItem(name: "mode", value: modeValue)]
+                    if let ticker { expected.append(URLQueryItem(name: "ticker", value: ticker)) }
+                    if let list = actions[kind] ?? nil { expected.append(URLQueryItem(name: "actions", value: list)) }
+                    XCTAssertEqual(items, expected, "\(kind) \(mode) '\(holding)'")
+                }
+            }
+        }
+        let long = StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: String(repeating: "a", count: 60))
+        XCTAssertEqual(long.instrument, .ticker(String(repeating: "A", count: 40)), "the route takes at most 40 characters")
+    }
+
+    // MARK: Months
+
+    func testRowsAreGroupedByTheirOwnCalendarMonthNewestFirst() {
+        // A later page continues October, and one row's day does not parse.
+        let rows = [
+            transaction("a", date: "2026-11-12"), transaction("b", date: "2026-11-01"),
+            transaction("c", date: "2026-10-31"), transaction("d", date: "2026-12-01"),
+            transaction("e", date: "not-a-day"), transaction("f", date: "2026-10-02")
+        ]
+        let months = StockbarActivityFormat.months(rows, locale: britishEnglish)
+        XCTAssertEqual(months.map(\.title), ["December 2026", "November 2026", "October 2026", "Date not given"])
+        XCTAssertEqual(months.map { $0.rows.map(\.id) }, [["d"], ["a", "b"], ["c", "f"], ["e"]],
+                       "rows keep Folync's order inside a month, and none is dropped")
+        XCTAssertEqual(months[1].rows[1].day, "1 Nov", "the first of the month stays in its month in any time zone")
+        XCTAssertEqual(months[3].rows[0].day, "–")
+        XCTAssertEqual(StockbarActivityFormat.day("2026-03-01"), FolyncLedgerDay(year: 2026, month: 3, day: 1))
+        XCTAssertNil(StockbarActivityFormat.day("2026-13-01"))
+    }
+
+    // MARK: Amounts
+
+    func testEachActionsAmountHasItsSignAndColour() {
+        let expectations: [(String, String, Double?)] = [
+            ("buy", "−£100.00", -1), ("sell", "+£100.00", 1), ("deposit", "+£100.00", 1),
+            ("withdraw", "−£100.00", -1), ("fee", "−£100.00", -1), ("dividend", "+£100.00", 1),
+            ("stock_dividend", "£100.00", nil), ("tax", "−£100.00", -1), ("interest", "+£100.00", 1),
+            ("split", "£100.00", nil), ("transfer", "£100.00", nil), ("corporate_action", "£100.00", nil),
+            ("note", "£100.00", nil), ("gift_received", "£100.00", nil)
+        ]
+        XCTAssertEqual(Set(expectations.map(\.0)).count, FolyncTransactionAction.allCases.count + 1)
+        for (action, text, sign) in expectations {
+            let row = transaction(action: action, amount: 100)
+            XCTAssertEqual(StockbarActivityFormat.amount(row), text, action)
+            XCTAssertEqual(StockbarActivityFormat.colourSign(row), sign, action)
+        }
+    }
+
+    func testAnUnknownAmountIsADashNeverZero() {
+        let unknown = transaction(action: "interest", amount: nil, quality: .unavailable, reasons: ["fx_unresolved"])
+        let row = StockbarActivityFormat.row(unknown, locale: britishEnglish)
+        XCTAssertEqual(row.amount, "–")
+        XCTAssertNil(row.colourSign)
+        XCTAssertEqual(row.qualityNote, "unavailable")
+        XCTAssertEqual(row.reasons, "fx unresolved")
+
+        let zero = transaction(action: "buy", amount: 0)
+        XCTAssertEqual(StockbarActivityFormat.amount(zero), "£0.00", "a zero Folync gives is shown, without a sign")
+        XCTAssertNil(StockbarActivityFormat.colourSign(zero))
+
+        let negative = transaction(action: "dividend", amount: -3.2)
+        XCTAssertEqual(StockbarActivityFormat.amount(negative), "−£3.20", "a sign Folync gives is kept")
+        XCTAssertEqual(StockbarActivityFormat.colourSign(negative), -1)
+        XCTAssertEqual(StockbarActivityFormat.spokenAmount(negative), "minus £3.20")
+        XCTAssertEqual(StockbarActivityFormat.amount(transaction(action: "split", amount: -3.2)), "−£3.20")
+        XCTAssertNil(StockbarActivityFormat.colourSign(transaction(action: "split", amount: -3.2)))
+
+        let partial = StockbarActivityFormat.row(transaction(action: "dividend", amount: 14.6, quality: .partial))
+        XCTAssertEqual(partial.amount, "+£14.60")
+        XCTAssertEqual(partial.qualityNote, "partial")
+    }
+
+    // MARK: Detail
+
+    func testTheDetailLineWithAndWithoutEachFigure() {
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction()), "4 shares at $412.30")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 1, price: 84.1234, priceCurrency: "GBP")),
+                       "1 share at £84.1234", "the price as Folync gives it, to four decimals")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 140, price: 29.3, priceCurrency: "GBX")),
+                       "140 shares at 29.3p")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 300, price: 0)), "300 shares")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 0, price: 412.3)), "at $412.30")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(commission: 1.5, tax: 0.25)),
+                       "4 shares at $412.30 · commission $1.50 · tax $0.25")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(commission: 0, tax: 0.25)), "4 shares at $412.30 · tax $0.25")
+        XCTAssertEqual(StockbarActivityFormat.detail(cash("d", action: "deposit")), "–", "a deposit has no quantity or price")
+        XCTAssertEqual(StockbarActivityFormat.detail(cash("i", action: "interest", amount: nil, currency: "USD", gross: 1.84)),
+                       "$1.84", "cash in another currency shows its own amount")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 40, price: 30, priceCurrency: "USD",
+                                                                 adjusted: true, adjustedReason: "4-for-1 split")),
+                       "40 shares at $30.00 · adjusted: 4-for-1 split")
+        XCTAssertEqual(StockbarActivityFormat.detail(transaction(quantity: 2.5)), "2.5 shares at $412.30")
+    }
+
+    func testAnActionThisBuildDoesNotKnowIsShownByItsRawName() {
+        let gift = transaction("g", action: "gift_received", ticker: nil, quantity: 0, price: 0, amount: 25)
+        let months = StockbarActivityFormat.months([gift], locale: britishEnglish)
+        let row = try? XCTUnwrap(months.first?.rows.first)
+        XCTAssertEqual(row?.actionTitle, "gift_received")
+        XCTAssertEqual(row?.glyph, .unknown)
+        XCTAssertEqual(row?.ticker, "–")
+        XCTAssertEqual(row?.amount, "£25.00")
+        XCTAssertNil(row?.colourSign)
+    }
+
+    // MARK: VoiceOver
+
+    func testEachRowReadsAsOneSentence() {
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(transaction(), name: "Microsoft", locale: britishEnglish),
+                       "12 November, bought 4 Microsoft shares at $412.30, £1,318.60 out")
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(transaction(commission: 1), locale: britishEnglish),
+                       "12 November, bought 4 MSFT shares at $412.30, commission $1.00, £1,318.60 out")
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(
+            transaction(date: "2026-11-04", action: "dividend", ticker: "SHEL", quantity: 140, price: 29.3,
+                        priceCurrency: "GBX", currency: "GBP", amount: 41.02, quality: .partial), locale: britishEnglish),
+                       "4 November, dividend, SHEL, 140 shares at 29.3p, £41.02 in, partial")
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(cash("d", action: "deposit"), locale: britishEnglish),
+                       "2 November, deposit, £500.00 in")
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(
+            cash("i", date: "2026-09-08", action: "interest", amount: nil, currency: "USD", gross: 1.84), locale: britishEnglish),
+                       "8 September, interest, $1.84, amount not given")
+        XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(
+            cash("g", action: "gift_received", amount: 25), locale: britishEnglish),
+                       "2 November, gift_received, an action Stockbar does not know, £25.00")
+        XCTAssertEqual(StockbarActivityFormat.spokenName("Microsoft · Demo portfolio"), "Microsoft")
+        XCTAssertNil(StockbarActivityFormat.spokenName(""), "no name: the ticker is read")
+        XCTAssertEqual(StockbarActivityFormat.row(transaction(), name: "Microsoft", locale: britishEnglish).accessibilityLabel,
+                       "12 November, bought 4 Microsoft shares at $412.30, £1,318.60 out")
+    }
+
+    // MARK: Load rule
+
+    func testANonFolyncPortfolioMakesNoRequest() async {
+        let router = ActivityRouterStub()
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: false)
+        viewModel.kind = .trades
+        viewModel.refresh()
+        viewModel.loadMore()
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.phase, .needsFolync)
+        let calls = await router.calls
+        XCTAssertEqual(calls, [])
+    }
+
+    func testNoRequestWhileThePageIsNotSelected() async throws {
+        let router = ActivityRouterStub()
+        let viewModel = model(router)
+        viewModel.kind = .cash
+        viewModel.mode = .adjusted
+        viewModel.holding = "MSFT"
+        viewModel.refresh()
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.phase, .idle)
+        let calls = await router.calls
+        XCTAssertEqual(calls, [])
+
+        await router.queue(try page(["a"]))
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        viewModel.deactivate()
+        viewModel.kind = .all
+        await settle(viewModel)
+        let afterDeactivate = await router.calls
+        XCTAssertEqual(afterDeactivate.count, 1, "a change on a page that is not selected asks nothing")
+    }
+
+    func testActivateAsksOnceAndASecondActivateAsksNothing() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a", "b"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        XCTAssertEqual(viewModel.phase, .idle, "nothing is shown before the answer")
+        await settle(viewModel)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        let calls = await router.calls
+        XCTAssertEqual(calls, [.first(StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: ""), forceRefresh: false)],
+                       "opening the page leaves the five-minute reuse to the fetch policy")
+        XCTAssertEqual(viewModel.phase, .loaded)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a", "b"])
+    }
+
+    func testReopeningThePageAsksThePolicyWithoutForcing() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]), try page(["a"]))
+        let first = model(router)
+        first.activate(isFolyncPortfolio: true)
+        await settle(first)
+        first.deactivate()
+        // The page is rebuilt each time it is selected.
+        let second = model(router)
+        second.activate(isFolyncPortfolio: true)
+        await settle(second)
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertTrue(calls.allSatisfy { if case .first(_, forceRefresh: false) = $0 { true } else { false } })
+    }
+
+    func testTheRefreshControlForcesARefresh() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]), try page(["a", "b"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        viewModel.refresh()
+        XCTAssertTrue(viewModel.isRefreshing)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"], "the rows stay while the same query is refreshed")
+        await settle(viewModel)
+        let calls = await router.calls
+        XCTAssertEqual(calls.last, .first(viewModel.query, forceRefresh: true))
+        XCTAssertFalse(viewModel.isRefreshing)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a", "b"])
+    }
+
+    func testLoadMoreAppendsAndARestartDropsTheRowsGathered() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(
+            try page(["a", "b"], cursor: "c1"),
+            try page(["c"], cursor: "c2", paging: .nextPage),
+            try page(["x"], cursor: "c9", paging: .restarted)
+        )
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        XCTAssertTrue(viewModel.canLoadMore)
+        viewModel.loadMore()
+        XCTAssertTrue(viewModel.isLoadingMore)
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a", "b", "c"])
+        viewModel.loadMore()
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["x"], "a restart starts again from the page returned")
+        XCTAssertEqual(viewModel.continuation?.cursor, "c9")
+        let calls = await router.calls
+        XCTAssertEqual(calls.dropFirst().map { if case .more(_, let cursor) = $0 { cursor } else { "" } }, ["c1", "c2"])
+    }
+
+    func testAFailedLoadMoreKeepsTheRows() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"], cursor: "c1"), .unreachable)
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        viewModel.loadMore()
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+        XCTAssertEqual(viewModel.phase, .loaded)
+        XCTAssertTrue(viewModel.loadMoreFailed)
+        XCTAssertTrue(viewModel.canLoadMore, "the user can try again")
+    }
+
+    func testNoLoadMoreWithoutACursor() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        XCTAssertFalse(viewModel.canLoadMore)
+        viewModel.loadMore()
+        await settle(viewModel)
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 1)
+    }
+
+    func testAChangeIsDebouncedAndASupersededChangeIsCancelled() async throws {
+        let router = ActivityRouterStub()
+        let gate = ActivityDebounceGate()
+        await router.queue(try page(["a"]), try page(["cash"]))
+        let viewModel = model(router, gate: gate)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+
+        viewModel.kind = .trades
+        await waitUntil { await gate.waits == 1 }
+        XCTAssertTrue(viewModel.isQueryPending)
+        viewModel.kind = .cash
+        await waitUntil { await gate.waits == 2 }
+        let duringDebounce = await router.calls
+        XCTAssertEqual(duringDebounce.count, 1, "nothing is asked until the debounce ends")
+
+        await gate.open()
+        await settle(viewModel)
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 2, "the superseded Trades query is never asked")
+        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kind: .cash, mode: .asEntered, holding: ""),
+                                          forceRefresh: false))
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["cash"])
+        XCTAssertFalse(viewModel.isQueryPending)
+    }
+
+    func testReturningToTheQueryOnScreenAsksNothing() async throws {
+        let router = ActivityRouterStub()
+        let gate = ActivityDebounceGate()
+        await router.queue(try page(["a"]))
+        let viewModel = model(router, gate: gate)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        viewModel.holding = "MSFT"
+        await waitUntil { await gate.waits == 1 }
+        viewModel.holding = " "
+        XCTAssertNil(viewModel.task, "the pending query is dropped")
+        await gate.open()
+        await settle(viewModel)
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+    }
+
+    func testRevertingAChangeWhileItLoadsShowsRowsAgain() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+
+        await router.hold(true)
+        viewModel.mode = .adjusted
+        await waitUntil { await router.heldCount == 1 }
+        XCTAssertEqual(viewModel.phase, .loading)
+        viewModel.mode = .asEntered
+        await waitUntil { await router.heldCount == 2 }
+        await router.release(with: try page(["late-adjusted"]))
+        await router.release(with: try page(["a"]))
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.phase, .loaded, "never left on a spinner with nothing in flight")
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+        let calls = await router.calls
+        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: ""),
+                                          forceRefresh: false), "asked without forcing, so the five-minute reuse answers")
+    }
+
+    func testACancelledResultIsNeverApplied() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+
+        await router.hold(true)
+        viewModel.mode = .adjusted
+        await waitUntil { await router.heldCount == 1 }
+        viewModel.mode = .asEntered
+        viewModel.kind = .dividends
+        await waitUntil { await router.heldCount == 2 }
+        // The superseded query's answer arrives first, then the current one's.
+        await router.release(with: try page(["stale-answer"]))
+        await router.release(with: try page(["div"]))
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["div"])
+        XCTAssertEqual(viewModel.appliedQuery, StockbarActivityQuery.make(kind: .dividends, mode: .asEntered, holding: ""))
+
+        // A cancelled caller is answered `.unavailable`: it never reaches the screen.
+        viewModel.refresh()
+        await waitUntil { await router.heldCount == 1 }
+        viewModel.deactivate()
+        await router.release(with: .unavailable)
+        await Task.yield()
+        XCTAssertEqual(viewModel.phase, .loaded)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["div"])
+    }
+
+    func testLeavingThePageMidLoadAsksAgainOnReturn() async throws {
+        let router = ActivityRouterStub()
+        await router.hold(true)
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await waitUntil { await router.heldCount == 1 }
+        viewModel.deactivate()
+        await router.release(with: try page(["late"]))
+        await Task.yield()
+        XCTAssertTrue(viewModel.transactions.isEmpty)
+        await router.hold(false)
+        await router.queue(try page(["a"]))
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+    }
+
+    // MARK: States
+
+    func testEachStateComesFromTheRoutesAnswer() async throws {
+        let saved = try response([transaction("s")], generatedAt: "2026-11-20T14:05:00.000Z")
+        let cases: [(FolyncRoutedTransactionsResult, StockbarActivityViewModel.Phase, Int)] = [
+            (try page(["a"]), .loaded, 1),
+            (try page(["a"], status: .partial), .loaded, 1),
+            (.folync(saved, status: .stale, paging: .firstPage),
+             .stale(savedAt: Date(timeIntervalSince1970: 1_795_183_500)), 1),
+            (.unreachable, .unreachable, 0),
+            (.unavailable, .unavailable, 0),
+            (.disabled, .disabled, 0)
+        ]
+        for (answer, phase, rows) in cases {
+            let router = ActivityRouterStub()
+            await router.queue(answer)
+            let viewModel = model(router)
+            viewModel.activate(isFolyncPortfolio: true)
+            await settle(viewModel)
+            XCTAssertEqual(viewModel.phase, phase)
+            XCTAssertEqual(viewModel.transactions.count, rows)
+        }
+    }
+
+    func testTheLoadingStateAndTheSwitchToAFolyncPortfolio() async throws {
+        let router = ActivityRouterStub()
+        await router.hold(true)
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: false)
+        XCTAssertEqual(viewModel.phase, .needsFolync)
+        viewModel.activate(isFolyncPortfolio: true)
+        await waitUntil { await router.heldCount == 1 }
+        XCTAssertEqual(viewModel.phase, .loading)
+        await router.release(with: try page(["a"]))
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.phase, .loaded)
+        viewModel.activate(isFolyncPortfolio: false)
+        XCTAssertEqual(viewModel.phase, .needsFolync)
+        XCTAssertTrue(viewModel.transactions.isEmpty)
+    }
+
+    func testPartialAnswersAndSavedCopiesSaySo() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(.folync(try response([transaction()], quality: .partial, reasons: ["fx_stale"]),
+                                   status: .partial, paging: .firstPage))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.quality, .partial)
+        XCTAssertEqual(StockbarActivityText.qualityNotice(viewModel.quality, reasons: viewModel.reasonCodes),
+                       "Folync marks these transactions partial: fx stale.")
+
+        let utc = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let saved = Date(timeIntervalSince1970: 1_795_183_500)
+        XCTAssertEqual(StockbarActivityText.staleNotice(savedAt: saved, now: saved.addingTimeInterval(600),
+                                                        locale: britishEnglish, timeZone: utc),
+                       "Couldn't get current transactions from Folync. Showing the copy saved at 14:05.")
+        XCTAssertEqual(StockbarActivityText.staleNotice(savedAt: nil),
+                       "Couldn't get current transactions from Folync. Showing the copy saved earlier.")
+        XCTAssertEqual(StockbarActivityText.shownCount(1), "Showing 1 transaction")
+        XCTAssertEqual(StockbarActivityText.shownCount(12), "Showing 12 transactions")
+        XCTAssertEqual(StockbarActivityText.noRows(kind: .trades, holding: .ticker("MSFT")),
+                       "Folync has no trades for MSFT.")
+        XCTAssertEqual(StockbarActivityText.noRows(kind: .all, holding: nil), "Folync has no transactions for this portfolio.")
+    }
+
+    // MARK: Sidebar
+
+    func testTheSidebarEntryIsNewAndDimmedWithoutAFolyncPortfolio() throws {
+        XCTAssertEqual(StockbarMainSection.activity.title, "Activity")
+        let order = StockbarMainSection.sidebarOrder
+        XCTAssertEqual(order.firstIndex(of: .activity), try XCTUnwrap(order.firstIndex(of: .holdings)) + 1,
+                       "Activity follows Holdings in the Portfolio group")
+        XCTAssertTrue(StockbarMainSection.newSections.contains(.activity))
+        XCTAssertTrue(StockbarMainSection.folyncOnlySections.contains(.activity))
+        let dimmed = StockbarSidebarModel.groups(dimmed: [.activity: StockbarMainSection.needsFolyncReason],
+                                                 new: StockbarMainSection.newSections).flatMap(\.entries)
+        let entry = try XCTUnwrap(dimmed.first { $0.section == .activity })
+        XCTAssertEqual(entry.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, 3 of 11")
+    }
 }
