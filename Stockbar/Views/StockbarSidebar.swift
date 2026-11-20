@@ -9,7 +9,7 @@ import SwiftUI
 //   entry. The selected entry shows a focus ring while the sidebar has focus.
 // - VoiceOver: the group headings are headings, and each entry is a button
 //   that reads its title, any "New" badge or dimmed reason, its position
-//   ("2 of 10") and whether it is selected. The entries are wrapped in a
+//   ("2 of 11") and whether it is selected. The entries are wrapped in a
 //   container labelled "Sidebar"; SwiftUI draws no list role.
 // - Hiding and showing, through View → Hide Sidebar (⌃⌘S) or the button by the
 //   traffic lights (a toolbar item, so AppKit delivers its clicks).

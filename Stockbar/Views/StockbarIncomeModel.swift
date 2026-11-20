@@ -241,7 +241,7 @@ final class StockbarIncomeModel {
 
     // MARK: What the page shows
 
-    var currency: String { response.map(IncomeFigures.portfolioCurrency) ?? "GBP" }
+    var currency: String { response.map(IncomeFigures.portfolioCurrency) ?? "" }
 
     var chart: IncomeChart? {
         guard response != nil else { return nil }

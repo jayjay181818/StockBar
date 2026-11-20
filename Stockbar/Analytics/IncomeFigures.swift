@@ -246,9 +246,12 @@ enum IncomeFigures {
 
     // MARK: Events
 
-    /// The currency the page sums in: the answer's, else the scope's.
+    /// The currency the page sums in: the answer's, else the scope's, else
+    /// the valuation's. Empty when Folync names none, as the contract allows:
+    /// figures are then shown without a symbol, never under a guessed one,
+    /// and an amount that names a currency is not summed.
     static func portfolioCurrency(_ response: FolyncDividendsResponse) -> String {
-        response.currency ?? response.scope.currency ?? response.valuation.currency ?? "GBP"
+        response.currency ?? response.scope.currency ?? response.valuation.currency ?? ""
     }
 
     static func isReceived(_ event: FolyncDividendEvent) -> Bool {

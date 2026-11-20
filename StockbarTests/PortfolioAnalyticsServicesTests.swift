@@ -1218,6 +1218,35 @@ final class StockbarIncomePageTests: XCTestCase {
         XCTAssertNil(rows[1].ownAmount, "same currency as the portfolio")
     }
 
+    func testWithNoCurrencyNamedNoSymbolIsGuessed() {
+        let base = F.base
+        let unnamed = FolyncDividendsResponse(
+            schemaVersion: base.schemaVersion, sourceRevision: base.sourceRevision, generatedAt: base.generatedAt,
+            scope: FolyncPortfolio(id: base.scope.id, name: base.scope.name, kind: base.scope.kind, currency: nil),
+            currency: nil, quality: base.quality, reasonCodes: [], freshness: base.freshness,
+            valuation: FolyncFinancialMetric(value: 5000, currency: nil, quality: .complete, reasonCodes: [], asOfDate: nil),
+            holdingCoverage: base.holdingCoverage, summary: base.summary, discovery: nil, events: [], page: base.page
+        )
+        XCTAssertEqual(IncomeFigures.portfolioCurrency(base), "GBP")
+        XCTAssertEqual(IncomeFigures.portfolioCurrency(unnamed), "", "no currency is made up")
+        XCTAssertEqual(IncomeText.projected(unnamed), "456.78", "a plain figure, not one under a guessed symbol")
+
+        // An amount that names a currency is not summed into an unnamed one,
+        // and a received payment still shows its own.
+        let paid = F.event("p", "SHEL", pay: "2026-10-20", status: "received", gbp: 30, own: 38, ownCurrency: "USD")
+        XCTAssertNil(IncomeFigures.portfolioAmount(of: paid, currency: ""))
+        let row = IncomeFigures.history(events: [paid], currency: "")[0]
+        XCTAssertNil(row.amount)
+        XCTAssertEqual(row.ownAmount?.currency, "USD")
+
+        let chart = IncomeFigures.chart(events: [], currency: "", today: F.today, isIncomplete: false)
+        XCTAssertEqual(IncomeText.chartCaption(chart), "Monthly sums from the payments listed, by pay date.")
+        XCTAssertEqual(IncomeText.byHoldingCaption(span: "May to April", currency: ""),
+                       "Sums of the payments listed for May to April. Holdings with no payment listed are not shown.")
+        XCTAssertEqual(IncomeText.byHoldingCaption(span: "May to April", currency: "GBP"),
+                       "Sums of the payments listed for May to April, in GBP. Holdings with no payment listed are not shown.")
+    }
+
     func testByHoldingSumsThePaymentsListedInTheChartsMonths() throws {
         let events = [
             F.event("u1", "ULVR", pay: "2026-09-11", status: "received", gbp: 50),
@@ -1315,6 +1344,12 @@ final class StockbarIncomePageTests: XCTestCase {
         let income = try XCTUnwrap(entries.first { $0.section == .income })
         XCTAssertTrue(income.isNew)
         XCTAssertEqual(income.dimmedReason, "Needs a Folync portfolio")
-        XCTAssertEqual(income.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, 5 of 11")
+        let order = StockbarMainSection.sidebarOrder
+        let place = try XCTUnwrap(order.firstIndex(of: .income)) + 1
+        XCTAssertEqual(income.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, \(place) of \(order.count)")
+        // The main window marks and dims its entries from these two sets.
+        XCTAssertTrue(StockbarMainSection.newSections.contains(.income))
+        XCTAssertTrue(StockbarMainSection.folyncOnlySections.contains(.income))
+        XCTAssertEqual(StockbarMainSection.needsFolyncReason, StockbarIncomeModel.needsFolyncReason)
     }
 }

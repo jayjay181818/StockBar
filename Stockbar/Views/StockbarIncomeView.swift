@@ -229,8 +229,7 @@ struct StockbarIncomeView: View {
         let rows = model.byHolding
         return VStack(alignment: .leading, spacing: 0) {
             StockbarSectionTitle(title: "By holding")
-            Text("Sums of the payments listed for \(IncomeText.monthsSpan(around: model.today)), in \(model.currency). "
-                 + "Holdings with no payment listed are not shown.")
+            Text(IncomeText.byHoldingCaption(span: IncomeText.monthsSpan(around: model.today), currency: model.currency))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -68,9 +68,18 @@ enum IncomeText {
         return reasons.isEmpty ? "\(lead)." : "\(lead): \(reasons)."
     }
 
+    /// The line under "By holding": what the sums are of, and in which currency
+    /// when Folync names one.
+    static func byHoldingCaption(span: String, currency: String) -> String {
+        let inCurrency = currency.isEmpty ? "" : ", in \(currency)"
+        return "Sums of the payments listed for \(span)\(inCurrency). Holdings with no payment listed are not shown."
+    }
+
     /// "Monthly sums in GBP from the payments listed. 1 payment with no amount yet."
+    /// The currency is left out when Folync names none.
     static func chartCaption(_ chart: IncomeChart) -> String {
-        var parts = ["Monthly sums in \(chart.currency) from the payments listed, by pay date."]
+        let inCurrency = chart.currency.isEmpty ? "" : " in \(chart.currency)"
+        var parts = ["Monthly sums\(inCurrency) from the payments listed, by pay date."]
         if let note = missingAmountsNote(chart.missingAmounts) { parts.append(note.prefix(1).uppercased() + note.dropFirst() + ".") }
         if chart.partialAmounts > 0 {
             parts.append(chart.partialAmounts == 1

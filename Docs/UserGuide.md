@@ -7,6 +7,7 @@ Stockbar tracks a stock portfolio from the macOS menu bar, with a main window fo
 - [Installing](#installing)
 - [Getting started](#getting-started)
 - [The main window](#the-main-window)
+- [Activity](#activity)
 - [Holdings](#holdings)
 - [The menu bar](#the-menu-bar)
 - [Analysis](#analysis)
@@ -64,8 +65,8 @@ The sidebar floats in its own panel on the left of the window and groups every s
 
 | Group | Screens |
 |---|---|
-| Portfolio | **Overview** (value, today's and selected-period movement, chart, position inspector), **Holdings**, **Alerts** |
-| Analysis | **Charts**, **Income**, **Risk**, **Allocation** (including Attribution) |
+| Portfolio | **Overview** (value, today's and selected-period movement, chart, position inspector), **Holdings**, **Activity** (Folync portfolios only), **Alerts** |
+| Analysis | **Charts**, **Income** and **Trades** (Folync portfolios only), **Risk**, **Allocation** (including Attribution) |
 | System | **Data Health**, **Backups**, **Diagnostics**, **Settings** |
 
 The page that used to be called Performance is now called **Charts**. Click the sidebar, or press Tab until it has focus, then use the Up and Down arrows to move through it, and Home and End to jump to the first and last screen. The bottom of the sidebar shows where your portfolio comes from (local, Trading 212 or Folync) and when prices last updated; its refresh button (⌘R) requests an immediate update and spins while it runs. If Folync stops answering while Stockbar shows the figures it saved, the bottom of the sidebar turns amber and says when those figures are from, for example "Couldn't reach Folync · figures from 14:05". Hide the sidebar with **View → Hide Sidebar** (⌃⌘S) or the sidebar button next to the window's close, minimise and zoom buttons; the page then takes the whole width, and Stockbar remembers your choice. The window remembers its size, position and last screen. Through the window you see a blurred, tinted view of what is behind it; System Settings → Accessibility → Display → Reduce Transparency makes it solid, and Increase Contrast outlines the sidebar. Motion follows Reduce Motion in the same place.
@@ -75,6 +76,10 @@ The page that used to be called Performance is now called **Charts**. Click the 
 With Folync, a card under the chart shows what the total is made of: **Net deposits** (the figure **Measure P&L Against** uses), **Unrealised gains** and **Realised gains** as Folync reports them, and **Income, interest and fees**, which is everything else in the total: dividends, interest, fees and anything Folync does not split out. Stockbar cannot split that part further. The four figures always add up to the total shown. A part that is zero or negative has no length in the bar; its figure still shows, in red when negative, and a line under the bar says the bar shows the positive parts only. A figure Folync marks partial is labelled **Partial**. The card is shown only when Folync gives all four figures in the portfolio's currency; otherwise, and with a local or Trading 212 portfolio, the page shows a summary table instead.
 
 When Folync stops answering and Stockbar is showing the figures it saved, an amber bar at the top of the Overview says **Couldn't reach Folync** and when the figures were saved, and the total says "as of" that time. If Folync answered but its figures could not be used, the bar says **Folync didn't send new figures** instead. It goes away when Folync answers again. It makes no request of its own.
+
+## Activity
+
+With a Folync portfolio, **Activity** lists every transaction Folync holds, newest first, under a heading for each month. Each row shows the day, the kind of transaction, the holding's ticker, the quantity and price as Folync gives them (in the transaction's own currency, with any commission and tax), and the amount in the portfolio's currency. Money in is green with "+", money out red with "−"; a transfer, split, note or corporate action has no sign. A figure Folync does not give shows as "–", and one Folync marks partial says so beside it. The switches choose **All**, **Trades**, **Dividends** or **Cash**, and **As entered** or **Adjusted** (quantities and prices restated for splits and similar events). Search shows one holding, by its ticker. **Load more** at the bottom fetches the next rows; the refresh button asks Folync again. The page asks Folync only when you open it, refresh it or load more, and reuses an answer from the last five minutes. If Folync is not answering, a saved copy is shown under an amber bar that says when it was saved. Activity is read-only: transactions are added and changed in Folync. With any other portfolio source the sidebar entry is dimmed with the reason **Needs a Folync portfolio**.
 
 ## Holdings
 
@@ -119,6 +124,7 @@ Gains are green and losses red when **Color Coding** is on (Settings → General
 
 - **Charts** — portfolio value, gains or an individual stock over preset or custom ranges, as a line or candlestick chart with optional indicators and comparisons. On the 1 Day and 1 Week ranges the line chart draws nights and weekends narrow, so the hours with prices fill the chart; longer ranges are drawn to scale.
 - **Income** — new, for a Folync portfolio only: the dividends Folync expects in the next 12 months, with the declared and estimated parts, the yield and the income received as Folync gives them; a chart of the six months up to this one and the six after it; and the payments still to come, soonest first, with ex-dividend dates. **History** lists payments received, newest first; **By holding** sums each paying holding's payments over the chart's months. The chart's bars and the By holding sums are Stockbar's own sums of the payments Folync lists, and say so; a payment with no amount yet adds nothing and is counted under the chart. **Declared** or **Estimated** beside a payment appears only when Folync says which. The page asks Folync when you open it and when you click its refresh button, never on its own; switching between Outlook, History and By holding asks nothing, and opening it again within five minutes reuses the last answer. **Load more** fetches older payments when Folync has more. If Folync doesn't answer, the page shows its saved copy under an amber bar saying when it is from. With a local or Trading 212 portfolio the sidebar entry is dimmed with the reason "Needs a Folync portfolio".
+- **Trades** (new, Folync portfolios only) — every position you've opened and how it did, as Folync works it out: the win rate ("9 of 14 trades made money"), how often a trade beat the S&P 500 over the same days, Folync's total gain on trades, open and closed, and this year's fees. The table lists each lot with its status (Open, Partial, Closed), the day it was opened, how many days it was held, its cost, gain and return, and the points it finished ahead of or behind its index over the same days; "–" means Folync gave no figure. **All**, **Open**, **Partial** and **Closed** choose the lots; **Load more** asks for more rows; the refresh button asks Folync again. A card below shows a year's fees (one figure, as Folync gives it), what was bought and sold, and turnover, with a switch for earlier years. Stockbar asks Folync only when you open the page, refresh it or load more. If Folync doesn't answer, the copy saved last time is shown under an amber notice with its time. For a local or Trading 212 portfolio the entry is dimmed, because only Folync knows when you bought and sold. Nothing on the page changes anything in Folync.
 - **Risk** — value at risk, Sharpe and Sortino ratios, volatility and drawdowns from stored portfolio history. Missing observations are ignored rather than treated as zero.
 - **Allocation** — sector allocation and diversification, a correlation matrix built from at least 20 shared trading days of stored prices, and performance attribution. Benchmarks and watchlist symbols are excluded.
 
@@ -194,7 +200,7 @@ For recovery from outside the app, see [Scripts/README.md](../Scripts/README.md)
 | ⌘O | Open Stockbar |
 | ⌘, | Settings |
 | ⌘R | Refresh prices (main window) |
-| ⌘1 – ⌘9 | Show a page of the main window, top to bottom in the sidebar: Overview, Holdings, Alerts, Charts, Income, Risk, Allocation, Data Health, Backups. Diagnostics has no number; open it from the sidebar or **Help → Diagnostics**. With the Income page, Risk moved from ⌘5 to ⌘6, Allocation to ⌘7, Data Health to ⌘8 and Backups to ⌘9 |
+| ⌘1 – ⌘9 | Show a page of the main window, top to bottom in the sidebar: Overview, Holdings, Activity, Alerts, Charts, Income, Trades, Risk, Allocation. Data Health, Backups and Diagnostics have no number since Activity, Income and Trades were added; choose them in the sidebar or the View menu |
 | ⌃⌘S | Hide or show the sidebar |
 | ⌘W / ⌘M | Close / minimise window |
 | ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z | Standard editing in text fields |
