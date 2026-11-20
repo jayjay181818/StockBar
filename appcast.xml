@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.14)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.14</link>
+      <pubDate>Fri, 20 Nov 2026 18:58:02 +0000</pubDate>
+      <sparkle:version>382.3.14</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.14 of Stockbar 3.8.2. Changes since experimental-382.3.13:
+
+- Switches in Settings for the Income, Trades and Activity pages (#145)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.14/Stockbar-382.3.14.zip" length="8115956" type="application/octet-stream" sparkle:edSignature="7l1ky4hPxiqFHCIuxzRO2vO6/OwMJQTbYBlb6su1R5Y73IOIpt096QiN6bEDeWEqA72V21skBuE1pbYX6dSNBw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.13)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.13</link>
       <pubDate>Fri, 20 Nov 2026 18:53:19 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Ask Yahoo for instrument type, dividend dates and earnings dates (#136)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.5/Stockbar-382.3.5.zip" length="7264692" type="application/octet-stream" sparkle:edSignature="tArZlSOJeqosnhCqElZvQe4uDWDZKxSab828RD3AU3Ji32qAttLhlgaMfK0NRVYGkr88eUaK8wVZD+b2XtZbAw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.4)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.4</link>
-      <pubDate>Fri, 20 Nov 2026 13:22:01 +0000</pubDate>
-      <sparkle:version>382.3.4</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.4 of Stockbar 3.8.2. Changes since experimental-382.3.3:
-
-- Read Folync's dividends, trade analysis and transactions (#135)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.4/Stockbar-382.3.4.zip" length="7236000" type="application/octet-stream" sparkle:edSignature="7uDSvV9Uca/lnZ5tKf0pYkhdkIr7onrKFvbzuMhn9xMxJawn8CWb6fp0HtkTDsSTictn4Cu+wpPw05LNMblCAg=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: LkCFwKy8IggQegTd7vWVnxmxAvlmBIuj2lbjVzbrUYkGTp+amZc5vshufxUhm+bqGWXQGdo3hS2VkCn6WZjECw==
-length: 10285
+edSignature: gOWCP23GeRmoN1/8zGLMWamjY/jGR/jIBk7q8L6ArpYI191HzQ1yemSMXK4NhRxuIPq7wZ7RR6nlB9Cb6ZMHDw==
+length: 10298
 -->
