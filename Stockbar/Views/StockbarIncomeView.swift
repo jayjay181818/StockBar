@@ -279,26 +279,35 @@ private struct StockbarIncomeUpcomingRowView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(StockbarPalette.incomeFill)
                 .frame(width: 14)
-            Text(IncomeText.dayLabel(row.date, today: today))
+            Text(IncomeText.upcomingDayLabel(row.date, today: today))
                 .foregroundStyle(.secondary)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: 130, alignment: .leading)
             Text(row.holding)
                 .fontWeight(.semibold)
-                .frame(width: 80, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
             description
             Spacer(minLength: 8)
-            if row.kind == .payment {
-                Text(IncomeText.amount(row.amount, currency: currency))
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                if row.amountIsPartial { partialTag }
+            // Fixed columns, so amounts line up whatever the pill says.
+            VStack(alignment: .trailing, spacing: 0) {
+                if row.kind == .payment {
+                    Text(IncomeText.amount(row.amount, currency: currency))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                    if row.amountIsPartial { partialTag }
+                }
             }
-            if let pill = row.pill {
-                Text(pill)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .stockbarPill()
+            .frame(width: 90, alignment: .trailing)
+            Group {
+                if let pill = row.pill {
+                    Text(pill)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .stockbarPill()
+                } else {
+                    Color.clear.frame(height: 1)
+                }
             }
+            .frame(width: 200, alignment: .trailing)
         }
         .lineLimit(1)
         .padding(.vertical, 9)

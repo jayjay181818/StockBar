@@ -1181,6 +1181,10 @@ final class StockbarIncomePageTests: XCTestCase {
         XCTAssertEqual(IncomeText.dayLabel(rows[0].date, today: F.today, locale: F.britishEnglish), "Tomorrow")
         XCTAssertEqual(IncomeText.dayLabel(rows[1].date, today: F.today, locale: F.britishEnglish), "Tue 24 Nov")
         XCTAssertEqual(IncomeText.dayLabel(F.today, today: F.today, locale: F.britishEnglish), "Today")
+        XCTAssertEqual(IncomeText.upcomingDayLabel(FolyncLedgerDay(year: 2027, month: 5, day: 20), today: F.today,
+                                                   locale: F.britishEnglish), "Thu 20 May", "within six months")
+        XCTAssertEqual(IncomeText.upcomingDayLabel(FolyncLedgerDay(year: 2027, month: 6, day: 8), today: F.today,
+                                                   locale: F.britishEnglish), "Tue 8 Jun 2027", "past the chart")
     }
 
     func testThePillComesOnlyFromFolyncsDiscoveryDetail() {

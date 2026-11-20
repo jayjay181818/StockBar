@@ -114,6 +114,12 @@ enum IncomeText {
         return shortDay(day, locale: locale, withYear: withYear)
     }
 
+    /// A date in "what is coming": with its year once it is more than six
+    /// months ahead, past the chart, so next year's month is not read as this year's.
+    static func upcomingDayLabel(_ day: FolyncLedgerDay, today: FolyncLedgerDay, locale: Locale = .current) -> String {
+        dayLabel(day, today: today, locale: locale, withYear: day > today.adding(months: 6))
+    }
+
     /// "Tue 24 Nov", "Tue 24 Nov 2026".
     static func shortDay(_ day: FolyncLedgerDay, locale: Locale = .current, withYear: Bool = false) -> String {
         var style = Date.FormatStyle(locale: locale, calendar: IncomeFigures.utcCalendar, timeZone: IncomeFigures.utcCalendar.timeZone)
@@ -177,7 +183,7 @@ enum IncomeText {
     /// "Tomorrow, ULVR, ex-dividend, pays 11 Dec, £58.40, declared."
     static func accessibilitySentence(_ row: IncomeUpcomingRow, currency: String, today: FolyncLedgerDay,
                                       locale: Locale = .current) -> String {
-        var parts = [dayLabel(row.date, today: today, locale: locale), row.holding]
+        var parts = [upcomingDayLabel(row.date, today: today, locale: locale), row.holding]
         switch row.kind {
         case .exDividend(let payDay):
             parts.append("ex-dividend, pays \(dayMonth(payDay, locale: locale))")
