@@ -3225,6 +3225,18 @@ extension FolyncPortfolioSourceTests {
         XCTAssertEqual(Set(results.map { "\($0)" }).count, 1)
     }
 
+    /// Waits, for at most five seconds, until `condition` holds.
+    private static func waitForLedgerPolicy(
+        file: StaticString = #filePath, line: UInt = #line,
+        _ condition: @Sendable () async -> Bool
+    ) async {
+        for _ in 0..<5_000 {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("The fetch policy did not reach the expected state in time", file: file, line: line)
+    }
+
     func testLedgerFetchPolicyRefreshDoesNotJoinARequestThatMayReuse() async throws {
         let policy = FolyncLedgerFetchPolicy()
         let key = FolyncLedgerFetchPolicy.Key(
@@ -3239,20 +3251,24 @@ extension FolyncPortfolioSourceTests {
                 return .init(result: "held", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Each step waits for the policy to have registered the caller before
+        // the next begins. Fixed sleeps let the two later callers arrive in
+        // either order on a busy Mac, and the joiner then joined the refresh.
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 1 && ran.value == ["held"] }
         let joining = Task {
             await policy.perform(key) {
                 ran.value.append("joining")
                 return .init(result: "joining", firstPageToKeep: nil)
             }
         }
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 2 }
         let refreshing = Task {
             await policy.perform(key, forceRefresh: true) {
                 ran.value.append("refreshing")
                 return .init(result: "refreshing", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         releaser.yield()
         releaser.finish()
 
@@ -3320,18 +3336,21 @@ extension FolyncPortfolioSourceTests {
                 return .init(result: "held", firstPageToKeep: nil)
             }
         }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 1 && ran.value == ["held"] }
         // Behind it: a request nobody will want, one two callers share, and
-        // one that is wanted.
+        // one that is wanted. Each is registered before the next is started.
         let superseded = ask("superseded")
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 2 }
         let leaving = ask("shared")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         let staying = ask("shared", answering: "asked twice")
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 4 }
         let wanted = ask("wanted")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 5 }
         superseded.cancel()
         leaving.cancel()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        // Both cancellations have been counted out before the turn passes on.
+        await Self.waitForLedgerPolicy { await policy.waitingCallerCount == 3 }
         releaser.yield()
         releaser.finish()
 
