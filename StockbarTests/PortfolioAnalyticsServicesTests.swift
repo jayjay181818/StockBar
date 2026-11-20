@@ -744,6 +744,9 @@ private actor IncomeRouterStandIn: StockbarIncomeRouting {
         waiting = []
     }
     var waitingCount: Int { waiting.count }
+    func releaseLast() {
+        if !waiting.isEmpty { waiting.removeLast().resume() }
+    }
 
     func routeDividends(_ query: FolyncDividendsQuery, forceRefresh: Bool) async -> FolyncRoutedDividendsResult {
         await record(Call(query: query, forceRefresh: forceRefresh, cursor: nil))
@@ -1049,8 +1052,9 @@ final class StockbarIncomePageTests: XCTestCase {
         await settle { await router.waitingCount == 1 }
         model.refresh()
         await settle { await router.waitingCount == 2 }
-        await router.release()
+        await router.releaseLast() // the refresh answers first
         await settle { model.phase == .loaded }
+        await router.release() // then the superseded call's .unavailable arrives
         await drain()
         XCTAssertEqual(model.phase, .loaded)
         XCTAssertEqual(model.events.map(\.eventId), ["e1"])
@@ -1222,14 +1226,29 @@ final class StockbarIncomePageTests: XCTestCase {
         let rows = IncomeFigures.byHolding(events: events, currency: "GBP", today: F.today)
         XCTAssertEqual(rows.map(\.holding), ["ULVR", "HSBA"])
         let ulvr = try XCTUnwrap(rows.first)
-        XCTAssertEqual(ulvr.received, 50, accuracy: 1e-9)
-        XCTAssertEqual(ulvr.toCome, 58.4, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(ulvr.received), 50, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(ulvr.toCome), 58.4, accuracy: 1e-9)
         XCTAssertEqual(ulvr.missingAmounts, 1)
         XCTAssertEqual(ulvr.nextPayment?.date, FolyncLedgerDay(year: 2026, month: 12, day: 11))
         let hsba = try XCTUnwrap(rows.last)
-        XCTAssertEqual(hsba.received, 40, accuracy: 1e-9)
-        XCTAssertEqual(hsba.toCome, 38.2, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(hsba.received), 40, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(hsba.toCome), 38.2, accuracy: 1e-9)
         XCTAssertEqual(hsba.nextPayment?.amount, 38.2)
+    }
+
+    func testAHoldingWhosePaymentsHaveNoAmountShowsADashNotZero() throws {
+        let events = [
+            F.event("a1", "AZN", pay: "2026-09-23", status: "received", gbp: 47.21),
+            F.event("a2", "AZN", pay: "2027-03-23", gbp: nil, quality: .unavailable)
+        ]
+        let row = try XCTUnwrap(IncomeFigures.byHolding(events: events, currency: "GBP", today: F.today).first)
+        XCTAssertEqual(row.received, 47.21)
+        XCTAssertNil(row.toCome, "a payment to come with no amount is unknown, not zero")
+        XCTAssertEqual(IncomeText.amount(row.toCome, currency: "GBP"), "–")
+        XCTAssertEqual(IncomeText.accessibilitySentence(row, currency: "GBP", locale: F.britishEnglish),
+                       "AZN: £47.21 received and – to come, 1 payment with no amount yet; next payment Tue 23 Mar, –.")
+        let nothingToCome = try XCTUnwrap(IncomeFigures.byHolding(events: [events[0]], currency: "GBP", today: F.today).first)
+        XCTAssertEqual(nothingToCome.toCome, 0, "nothing listed to come sums to zero")
     }
 
     func testFolyncsFiguresAreShownAsGivenAndUnknownIsADash() {

@@ -202,10 +202,11 @@ struct IncomeHistoryRow: Identifiable, Equatable, Sendable {
 struct IncomeHoldingRow: Identifiable, Equatable, Sendable {
     let assetID: String
     let holding: String
-    /// Received in the chart's months, from the payments listed.
-    let received: Double
-    /// Still to come in the chart's months, from the payments listed.
-    let toCome: Double
+    /// Received in the chart's months, from the payments listed. Nil when
+    /// payments are listed there but none has a known amount: unknown, not zero.
+    let received: Double?
+    /// Still to come in the chart's months, from the payments listed; nil as above.
+    let toCome: Double?
     /// Payments in the chart's months with no amount; they add nothing.
     let missingAmounts: Int
     /// The soonest payment still to come, if one is listed.
@@ -403,7 +404,11 @@ enum IncomeFigures {
             var holding: String
             var received = 0.0
             var toCome = 0.0
-            var missing = 0
+            var receivedKnown = 0
+            var receivedMissing = 0
+            var toComeKnown = 0
+            var toComeMissing = 0
+            var missing: Int { receivedMissing + toComeMissing }
             var next: (date: FolyncLedgerDay, amount: Double?)?
         }
         var byAsset: [String: Totals] = [:]
@@ -412,10 +417,11 @@ enum IncomeFigures {
             var totals = byAsset[event.assetId] ?? Totals(holding: holding(of: event))
             let amount = portfolioAmount(of: event, currency: currency)
             if months.contains(day.incomeMonth) {
-                if let amount {
-                    if isReceived(event) { totals.received += amount } else { totals.toCome += amount }
-                } else {
-                    totals.missing += 1
+                switch (isReceived(event), amount) {
+                case (true, let amount?): totals.received += amount; totals.receivedKnown += 1
+                case (true, nil): totals.receivedMissing += 1
+                case (false, let amount?): totals.toCome += amount; totals.toComeKnown += 1
+                case (false, nil): totals.toComeMissing += 1
                 }
             }
             if !isReceived(event), day >= today, totals.next.map({ day < $0.date }) ?? true {
@@ -424,11 +430,13 @@ enum IncomeFigures {
             byAsset[event.assetId] = totals
         }
         return byAsset.map { asset, totals in
-            IncomeHoldingRow(assetID: asset, holding: totals.holding, received: totals.received, toCome: totals.toCome,
+            IncomeHoldingRow(assetID: asset, holding: totals.holding,
+                             received: totals.receivedKnown == 0 && totals.receivedMissing > 0 ? nil : totals.received,
+                             toCome: totals.toComeKnown == 0 && totals.toComeMissing > 0 ? nil : totals.toCome,
                              missingAmounts: totals.missing, nextPayment: totals.next)
         }
         .sorted { lhs, rhs in
-            let lhsTotal = lhs.received + lhs.toCome, rhsTotal = rhs.received + rhs.toCome
+            let lhsTotal = (lhs.received ?? 0) + (lhs.toCome ?? 0), rhsTotal = (rhs.received ?? 0) + (rhs.toCome ?? 0)
             if lhsTotal != rhsTotal { return lhsTotal > rhsTotal }
             return lhs.holding < rhs.holding
         }
