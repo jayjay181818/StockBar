@@ -67,9 +67,12 @@ enum StockbarPalette {
     /// The "Other" slice, and holdings with no known sector.
     static let allocationOther = Color.gray
     /// Replaces the red and green two sectors had, which read as loss and gain.
-    static let allocationLavender = adaptive(light: NSColor(srgbRed: 0.55, green: 0.45, blue: 0.85, alpha: 1),
+    static let allocationLavender = adaptive(light: NSColor(srgbRed: 0.66, green: 0.58, blue: 0.92, alpha: 1),
                                              dark: NSColor(srgbRed: 0.70, green: 0.62, blue: 0.98, alpha: 1))
     static let allocationSectorTeal = Color.teal
+    /// Basic Materials: its mint read as green and sat beside Financials' teal.
+    static let allocationSlate = adaptive(light: NSColor(srgbRed: 0.40, green: 0.50, blue: 0.64, alpha: 1),
+                                          dark: NSColor(srgbRed: 0.58, green: 0.67, blue: 0.80, alpha: 1))
     static let allocationSand = adaptive(light: NSColor(srgbRed: 0.72, green: 0.58, blue: 0.32, alpha: 1),
                                          dark: NSColor(srgbRed: 0.86, green: 0.74, blue: 0.52, alpha: 1))
     /// Correlation cells: one hue for figures above zero, another below.

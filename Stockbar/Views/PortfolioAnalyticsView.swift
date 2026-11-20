@@ -389,14 +389,14 @@ struct PortfolioAnalyticsView: View {
                 let symbols = AllocationPresentation.gridSymbols(matrix.symbols, values: holdingValues)
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
-                        correlationGrid(matrix, symbols: symbols)
+                        CorrelationGridView(matrix: matrix, symbols: symbols)
                         if let metrics = diversificationMetrics {
                             VStack(spacing: 10) { correlationMetrics(metrics) }
                                 .frame(width: 190)
                         }
                     }
                     VStack(alignment: .leading, spacing: 14) {
-                        correlationGrid(matrix, symbols: symbols)
+                        CorrelationGridView(matrix: matrix, symbols: symbols)
                         if let metrics = diversificationMetrics {
                             HStack(spacing: 12) { correlationMetrics(metrics) }
                         }
@@ -445,62 +445,6 @@ struct PortfolioAnalyticsView: View {
     private var holdingValues: [String: Double] {
         Dictionary(sectorAllocations.flatMap(\.positions).map { ($0.symbol, $0.value) },
                    uniquingKeysWith: +)
-    }
-
-    private func correlationGrid(_ matrix: CorrelationMatrixService.CorrelationMatrix, symbols: [String]) -> some View {
-        Grid(horizontalSpacing: 3, verticalSpacing: 3) {
-            GridRow {
-                Color.clear.frame(width: 1, height: 1)
-                ForEach(symbols, id: \.self) { symbol in
-                    Text(symbol)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .frame(width: 42)
-                        .accessibilityHidden(true)
-                }
-            }
-            ForEach(symbols, id: \.self) { row in
-                GridRow {
-                    Text(row)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(width: 64, alignment: .leading)
-                        .help(row)
-                        .accessibilityHidden(true)
-                    ForEach(symbols, id: \.self) { column in
-                        correlationCell(matrix, row: row, column: column)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func correlationCell(_ matrix: CorrelationMatrixService.CorrelationMatrix, row: String, column: String) -> some View {
-        if row == column {
-            Text("–")
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-                .frame(width: 42, height: 26)
-                .accessibilityHidden(true)
-        } else {
-            let value = matrix.correlation(between: row, between: column)
-            let label = AllocationPresentation.cellLabel(row, column, value: value)
-            Text(AllocationPresentation.cellText(value))
-                .font(.caption.monospacedDigit().weight(.medium))
-                .frame(width: 42, height: 26)
-                .background {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(StockbarPalette.correlationFill(AllocationPresentation.shade(value)))
-                }
-                .help(label)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(label)
-        }
     }
 
     @ViewBuilder
@@ -606,8 +550,8 @@ struct PortfolioAnalyticsView: View {
 
     // MARK: - Color Helpers
 
-    /// Each sector keeps the colour it had, except Healthcare, Financials and Real Estate, which
-    /// were red, green and pink: those read as loss and gain here.
+    /// Each sector keeps the colour it had, except Healthcare, Financials, Real Estate and Basic
+    /// Materials, which were red, green, pink and mint: those read as loss and gain here.
     nonisolated static func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
         switch sector {
         case .technology: return .blue
@@ -619,7 +563,7 @@ struct PortfolioAnalyticsView: View {
         case .energy: return .yellow
         case .utilities: return .cyan
         case .realEstate: return StockbarPalette.allocationSand
-        case .basicMaterials: return .mint
+        case .basicMaterials: return StockbarPalette.allocationSlate
         case .communicationServices: return .indigo
         case .unknown: return StockbarPalette.allocationOther
         }
@@ -844,6 +788,69 @@ struct PortfolioAnalyticsView: View {
             Text("Includes top contributors, sector attribution, and time-weighted against money-weighted return.")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+/// The correlation matrix as a grid: one row and one column per holding, each cell its
+/// figure to two decimals, shaded by it. Takes plain inputs and holds no state.
+struct CorrelationGridView: View {
+    let matrix: CorrelationMatrixService.CorrelationMatrix
+    let symbols: [String]
+
+    var body: some View {
+        Grid(horizontalSpacing: 3, verticalSpacing: 3) {
+            GridRow {
+                Color.clear.frame(width: 1, height: 1)
+                ForEach(symbols, id: \.self) { symbol in
+                    Text(symbol)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(width: 42)
+                        .accessibilityHidden(true)
+                }
+            }
+            ForEach(symbols, id: \.self) { row in
+                GridRow {
+                    Text(row)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: 64, alignment: .leading)
+                        .help(row)
+                        .accessibilityHidden(true)
+                    ForEach(symbols, id: \.self) { column in
+                        cell(row: row, column: column)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(row: String, column: String) -> some View {
+        if row == column {
+            Text("–")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+                .frame(width: 42, height: 26)
+                .accessibilityHidden(true)
+        } else {
+            let value = matrix.correlation(between: row, between: column)
+            let label = AllocationPresentation.cellLabel(row, column, value: value)
+            Text(AllocationPresentation.cellText(value))
+                .font(.caption.monospacedDigit().weight(.medium))
+                .frame(width: 42, height: 26)
+                .background {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(StockbarPalette.correlationFill(AllocationPresentation.shade(value)))
+                }
+                .help(label)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
         }
     }
 }
