@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.19)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.19</link>
+      <pubDate>Fri, 20 Nov 2026 19:55:23 +0000</pubDate>
+      <sparkle:version>382.3.19</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.19 of Stockbar 3.8.2. Changes since experimental-382.3.18:
+
+- Holdings: the editing table fits at the minimum window size (#150)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.19/Stockbar-382.3.19.zip" length="8169878" type="application/octet-stream" sparkle:edSignature="3qwYwOFJGTpVRrgH8Q8WonlXYdRloNY4cviaozxxLi5McxWWHrNe3kn3MVK9IT7dcXShlKXbHzHHX3razPxeCQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.18)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.18</link>
       <pubDate>Fri, 20 Nov 2026 19:49:56 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Add the Activity page: every Folync transaction, by month (#141)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.10/Stockbar-382.3.10.zip" length="7662839" type="application/octet-stream" sparkle:edSignature="vAwhAlapnKn+KFeB6cUpeZ/MVxaDyoh8n6R12qIkOARPi6+z1bS9H0XzPjRl3hZvAIYwsn7vhE1+FRgqH+iZCw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.9)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.9</link>
-      <pubDate>Fri, 20 Nov 2026 15:41:38 +0000</pubDate>
-      <sparkle:version>382.3.9</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.9 of Stockbar 3.8.2. Changes since experimental-382.3.8:
-
-- Give the main window the Glass shell with a floating sidebar (#140)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.9/Stockbar-382.3.9.zip" length="7477429" type="application/octet-stream" sparkle:edSignature="f8pQ5cLj9WMPPGhT9xCJYDVcN3q+V9PegspX0sGKfJkkZr9c5wfkTjmYowo52oAvcv0cIDl1yORb+9TDsKvUCg=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: RZ/phYqpaYH7oxIUOv90oS1NGyGvBefZGXhKUh/TyaFiLyuq8NONnC3B016hIvDibb1ZeMgybC5mSOsjGQwHBg==
-length: 10339
+edSignature: /GTGLBIDy61fA8bA2ywFsBukY540ZLXkmEBH8gbBBUUHEUVJD+qvR9wdBwT94V2sG16Ap2GrDxvM8u18KIPADg==
+length: 10345
 -->
