@@ -15,7 +15,7 @@ Output (stdout, one JSON array, one entry per symbol in the order asked):
         "symbol": "ALPHA", "instrumentType": "EQUITY",
         "exDividendDate": "YYYY-MM-DD" | null, "dividendPayDate": ... | null,
         "earningsDate": ... | null, "earningsDateEnd": ... | null,
-        "dividends": [{"date": "YYYY-MM-DD", "amount": 0.25}, ...] | null,
+        "dividends": [{"date": "YYYY-MM-DD", "amount": 0.25}, ...] | null (mixed currencies),
         "dividendCurrency": "USD" | null, "fetchedAt": <epoch seconds>}}
     {"symbol": "BETA.L", "success": false,
      "error": {"error_code": "RATE_LIMIT", "message": "..."}}
@@ -296,12 +296,19 @@ def fetch_events(symbol, today, now_seconds):
     for message in capture.messages:
         print(f"{symbol}: {message}", file=sys.stderr)
     for message in capture.messages:
-        if classify_failure(message) is not None:
+        # The symbol itself is left out, so a ticker such as one containing
+        # "SSL" is not mistaken for a connection failure.
+        if classify_failure(message.replace(symbol, "")) is not None:
             raise RuntimeError(message)
 
     instrument_type = metadata_value(metadata, "instrumentType")
     reported_currency = metadata_value(metadata, "currency")
     calendar = calendar if isinstance(calendar, dict) else {}
+    # yfinance swallows a failed chart request and leaves its metadata empty.
+    # Without the chart there is no instrument type and no trustworthy
+    # dividend list, so the symbol is not answered rather than saved as nulls.
+    if instrument_type is None or dividends is None:
+        return None
 
     dividend_list, dividend_currency = recent_dividends(symbol, dividends, reported_currency, today)
     earnings_start, earnings_end = earnings_range(calendar.get("Earnings Date"))
@@ -316,10 +323,7 @@ def fetch_events(symbol, today, now_seconds):
         "dividendCurrency": dividend_currency,
         "fetchedAt": now_seconds,
     }
-    answered = instrument_type is not None or bool(dividend_list) or any(
-        events[key] is not None for key in ("exDividendDate", "dividendPayDate", "earningsDate")
-    )
-    return events if answered else None
+    return events
 
 
 def failure_envelope(symbol, code, detail=None):

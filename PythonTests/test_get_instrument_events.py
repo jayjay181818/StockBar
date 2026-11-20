@@ -235,12 +235,38 @@ class ShapeTests(InstrumentEventsTestCase):
         self.assertEqual(envelope["events"]["dividends"], [])
         self.assertIsNone(envelope["events"]["dividendCurrency"])
 
-    def test_no_dividend_answer_is_null_not_empty(self):
-        spec = dict(US_SHARE, dividends=None)
-        (envelope,), _ = self.run_symbols({"ALPHA": spec}, ["ALPHA"])
+    def test_failed_chart_is_an_error_not_a_saved_null(self):
+        # yfinance swallows a failed chart request: empty metadata, logged
+        # only as "possibly delisted". The calendar may still answer.
+        no_chart = dict(US_SHARE, metadata={}, dividends=_FakeSeries([]),
+                        logged_errors=["$ALPHA: possibly delisted; no price data found"])
+        no_dividends = dict(US_SHARE, dividends=None)
+        envelopes, _ = self.run_symbols({"ALPHA": no_chart, "BETA": no_dividends}, ["ALPHA", "BETA"])
 
-        self.assertIsNone(envelope["events"]["dividends"])
-        self.assertIsNone(envelope["events"]["dividendCurrency"])
+        self.assertEqual([envelope["success"] for envelope in envelopes], [False, False])
+        self.assertTrue(all(envelope["error"]["error_code"] == "NO_DATA" for envelope in envelopes))
+
+    def test_symbol_text_is_not_read_as_a_failure(self):
+        spec = dict(US_SHARE, logged_errors=["$SSLX: possibly delisted; no price data found"])
+        (envelope,), _ = self.run_symbols({"SSLX": spec}, ["SSLX"])
+
+        self.assertTrue(envelope["success"])
+
+    def test_real_pandas_dividend_shapes_when_pandas_is_installed(self):
+        try:
+            import pandas
+        except ImportError:
+            self.skipTest("pandas is not installed here")
+        index = pandas.DatetimeIndex(["2026-03-12", "2026-09-18"], tz="Europe/London", name="Date")
+        series = pandas.Series([12.5, 6.4], index=index, name="Dividends")
+        frame = pandas.DataFrame({"Dividends": [12.5, 6.4], "currency": ["GBp", "GBp"]}, index=index)
+        for shape in (series, frame):
+            dividends, currency = self.module.recent_dividends("BETA.L", shape, "GBp", NOW.date())
+            self.assertEqual(currency, "GBP")
+            self.assertEqual([dividend["date"] for dividend in dividends], ["2026-03-12", "2026-09-18"])
+            self.assertAlmostEqual(dividends[0]["amount"], 0.125)
+        empty, none_currency = self.module.recent_dividends("BETA.L", pandas.Series(dtype=float), "GBp", NOW.date())
+        self.assertEqual((empty, none_currency), ([], None))
 
     def test_dividends_with_their_own_currency(self):
         pence = dict(US_SHARE, metadata={"instrumentType": "EQUITY", "currency": "USD"},
