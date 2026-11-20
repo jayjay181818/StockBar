@@ -9,7 +9,6 @@ struct StockbarSettingsView: View {
     @AppStorage("settings.selectedTab", store: StockbarRuntimeStorage.userDefaults) private var selectedTab: SettingsTab = .general
     @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = PythonWorkerPool.quitWhenIdleDefault
     @AppStorage(StockbarRollingDigits.key, store: StockbarRuntimeStorage.userDefaults) private var rollsDigits = StockbarRollingDigits.defaultValue
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var refreshInterval: TimeInterval
     @State private var snapshotInterval: TimeInterval
     @State private var showingRestoreSheet = false
@@ -37,20 +36,11 @@ struct StockbarSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
                 StockbarPageHeader("Settings", subtitle: selectedTab.subtitle)
-                Picker("Settings section", selection: Binding(
-                    get: { selectedTab },
-                    set: { tab in
-                        withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
-                            selectedTab = tab
-                        }
-                    }
-                )) {
-                    ForEach(SettingsTab.allCases) { tab in
-                        Text(tab.title).tag(tab)
-                    }
+                // The tab bar is the page's own navigation, not a setting, so
+                // it takes the range switch; pickers inside the forms stay native.
+                StockbarSegmentedControl("Settings section", selection: $selectedTab, options: SettingsTab.allCases) {
+                    $0.title
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 .fixedSize()
             }
             .padding(.horizontal, StockbarLayout.pagePadding)
@@ -653,6 +643,6 @@ private struct MenuBarPreview: View {
             .monospacedDigit()
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(StockbarPalette.hoverFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .stockbarSurface(.inset, cornerRadius: 6)
     }
 }

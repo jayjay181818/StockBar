@@ -32,7 +32,7 @@ extension PerformanceChartView {
                             .foregroundColor(.secondary)
                         Text(metrics.formattedTotalReturn)
                             .font(.headline)
-                            .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
+                            .foregroundColor(metrics.totalReturn >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
@@ -44,7 +44,7 @@ extension PerformanceChartView {
                             .multilineTextAlignment(.center)
                         Text(metrics.formattedTotalReturnPercent)
                             .font(.headline)
-                            .foregroundColor(metrics.totalReturnPercent >= 0 ? .green : .red)
+                            .foregroundColor(metrics.totalReturnPercent >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                             .frame(maxWidth: .infinity)
                             .multilineTextAlignment(.center)
                     }
@@ -134,8 +134,7 @@ extension PerformanceChartView {
                 }
             }
             .padding()
-            .background(StockbarPalette.panelFill)
-            .cornerRadius(8)
+            .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
         }
     }
 
@@ -157,7 +156,7 @@ extension PerformanceChartView {
                         Text("\(formatCurrency(totalReturn.amount, currency: totalReturn.currency))")
                             .font(.title2)
                             .fontWeight(.semibold)
-                            .foregroundColor(totalReturn.amount >= 0 ? .green : .red)
+                            .foregroundColor(totalReturn.amount >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                         
                         let totalPurchaseValue = calculateTotalPurchaseValue()
                         if totalPurchaseValue.amount > 0 {
@@ -181,7 +180,7 @@ extension PerformanceChartView {
                         Text(metrics.formattedTotalReturn)
                             .font(.title2)
                             .fontWeight(.semibold)
-                            .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
+                            .foregroundColor(metrics.totalReturn >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                         
                         Text(metrics.formattedTotalReturnPercent)
                             .font(.caption)
@@ -228,7 +227,7 @@ extension PerformanceChartView {
                             Text("ROI: \(String(format: "%.2f%%", roiPercentage))")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
-                                .foregroundColor(roiPercentage >= 0 ? .green : .red)
+                                .foregroundColor(roiPercentage >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                         }
                         
                         Spacer()
@@ -246,8 +245,7 @@ extension PerformanceChartView {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     @ViewBuilder
@@ -280,7 +278,7 @@ extension PerformanceChartView {
                         if !dayChange.isNaN && !dayChangePercent.isNaN {
                             Text("\(String(format: "%+.2f", dayChange)) (\(String(format: "%+.2f%%", dayChangePercent)))")
                                 .font(.caption)
-                                .foregroundColor(dayChange >= 0 ? .green : .red)
+                                .foregroundColor(dayChange >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                         }
                     }
                     
@@ -296,7 +294,7 @@ extension PerformanceChartView {
                             Text(formatCurrency(metrics.totalReturn, currency: metrics.currency))
                                 .font(.title2)
                                 .fontWeight(.semibold)
-                                .foregroundColor(metrics.totalReturn >= 0 ? .green : .red)
+                                .foregroundColor(metrics.totalReturn >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                             
                             Text(metrics.formattedTotalReturnPercent)
                                 .font(.caption)
@@ -331,7 +329,7 @@ extension PerformanceChartView {
                         if !positionGain.isNaN {
                             Text("\(String(format: "%+.2f", positionGain)) \(currency)")
                                 .font(.caption)
-                                .foregroundColor(positionGain >= 0 ? .green : .red)
+                                .foregroundColor(positionGain >= 0 ? StockbarPalette.gain : StockbarPalette.loss)
                         }
                     }
                 }
@@ -387,8 +385,7 @@ extension PerformanceChartView {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     func calculateTotalPurchaseValue() -> (amount: Double, currency: String) {

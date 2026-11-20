@@ -514,7 +514,7 @@ struct MenuPriceChartView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 18, height: 18)
-                            .background(StockbarPalette.hoverFill, in: Circle())
+                            .background(StockbarPalette.popoverHoverFill, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .help("Edit units")
@@ -604,7 +604,7 @@ struct MenuPriceChartView: View {
             }
         }
         .padding(10)
-        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous)) // stockbar-surface-allow: the popover keeps its notice until the popover redesign
         .accessibilityElement(children: .combine)
     }
 

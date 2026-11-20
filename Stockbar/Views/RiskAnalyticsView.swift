@@ -65,7 +65,7 @@ struct RiskAnalyticsView: View {
                         systemImage: "chart.line.uptrend.xyaxis",
                         description: Text(insufficientDataMessage)
                     )
-                    .frame(maxWidth: .infinity, minHeight: 300)
+                    .stockbarEmptyState(minHeight: 300)
                 } else if let error = errorMessage {
                     errorView(message: error)
                 } else if let metrics = riskMetrics {
@@ -125,13 +125,9 @@ struct RiskAnalyticsView: View {
             }
 
             // Time range picker
-            Picker("Time Range", selection: $selectedTimeRange) {
-                ForEach(TimeRange.allCases, id: \.self) { range in
-                    Text(range.description).tag(range)
-                }
+            StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases) {
+                $0.description
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .fixedSize()
             .onChange(of: selectedTimeRange) {
                 calculateRiskMetrics()
@@ -156,7 +152,7 @@ struct RiskAnalyticsView: View {
                 title: "Value at Risk (99%)",
                 value: formatCurrency(metrics.valueAtRisk99),
                 subtitle: "1% worst case",
-                color: .red,
+                color: StockbarPalette.loss,
                 icon: "exclamationmark.octagon.fill"
             )
 
@@ -183,7 +179,7 @@ struct RiskAnalyticsView: View {
                 title: "Maximum Drawdown",
                 value: formatPercent(metrics.maxDrawdown),
                 subtitle: "\(metrics.maxDrawdownDuration) trading days, peak to trough",
-                color: .red,
+                color: StockbarPalette.loss,
                 icon: "arrow.down.circle.fill"
             )
 
@@ -232,8 +228,7 @@ struct RiskAnalyticsView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     // MARK: - VaR Visualization
@@ -262,8 +257,7 @@ struct RiskAnalyticsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
+                .stockbarSurface(.inset, tint: .orange)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("99% Confidence")
@@ -272,20 +266,18 @@ struct RiskAnalyticsView: View {
                     Text(formatCurrency(metrics.valueAtRisk99))
                         .font(.title3)
                         .fontWeight(.semibold)
-                        .foregroundColor(.red)
+                        .foregroundColor(StockbarPalette.loss)
                     Text("1 in 100 days")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
-                .background(Color.red.opacity(0.1))
-                .cornerRadius(8)
+                .stockbarSurface(.inset, tint: StockbarPalette.loss)
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     // MARK: - Risk-Adjusted Returns
@@ -317,8 +309,7 @@ struct RiskAnalyticsView: View {
                         .foregroundColor(sharpeColor(metrics.sharpeRatio))
                 }
                 .padding()
-                .background(sharpeColor(metrics.sharpeRatio).opacity(0.1))
-                .cornerRadius(8)
+                .stockbarSurface(.inset, tint: sharpeColor(metrics.sharpeRatio))
 
                 // Sortino Ratio breakdown
                 HStack {
@@ -337,13 +328,11 @@ struct RiskAnalyticsView: View {
                         .foregroundColor(sortinoColor(metrics.sortinoRatio))
                 }
                 .padding()
-                .background(sortinoColor(metrics.sortinoRatio).opacity(0.1))
-                .cornerRadius(8)
+                .stockbarSurface(.inset, tint: sortinoColor(metrics.sortinoRatio))
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     // MARK: - Drawdown Section
@@ -366,7 +355,7 @@ struct RiskAnalyticsView: View {
                             .foregroundColor(.secondary)
                         Text(formatPercent(metrics.maxDrawdown))
                             .font(.system(size: 36, weight: .bold))
-                            .foregroundColor(.red)
+                            .foregroundColor(StockbarPalette.loss)
                     }
 
                     Spacer()
@@ -381,8 +370,7 @@ struct RiskAnalyticsView: View {
                     }
                 }
                 .padding()
-                .background(Color.red.opacity(0.1))
-                .cornerRadius(8)
+                .stockbarSurface(.inset, tint: StockbarPalette.loss)
 
                 // From the peak to the lowest point; the time to recover is not measured.
                 if metrics.maxDrawdownDuration > 0 {
@@ -399,8 +387,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     // MARK: - Drawdown History
@@ -423,8 +410,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(12)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     private func drawdownRow(period: RiskMetricsService.DrawdownPeriod) -> some View {
@@ -432,7 +418,7 @@ struct RiskAnalyticsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(String(format: "%.2f%%", period.drawdownPercent * 100))
                     .font(.headline)
-                    .foregroundColor(.red)
+                    .foregroundColor(StockbarPalette.loss)
                 Text(formatDateRange(period.startDate, period.endDate))
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -450,8 +436,7 @@ struct RiskAnalyticsView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.windowBackgroundColor))
-        .cornerRadius(6)
+        .stockbarSurface(.inset, cornerRadius: 6)
     }
 
     // MARK: - Calculation Details
@@ -475,8 +460,7 @@ struct RiskAnalyticsView: View {
             .foregroundColor(.secondary)
         }
         .padding()
-        .background(StockbarPalette.sheetHeaderFill)
-        .cornerRadius(8)
+        .stockbarSurface(.inset, cornerRadius: 8)
     }
 
     private func detailRow(label: String, value: String) -> some View {
@@ -511,8 +495,7 @@ struct RiskAnalyticsView: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .frame(maxWidth: .infinity, minHeight: 300)
-        .padding()
+        .stockbarEmptyState(minHeight: 300)
     }
 
     // MARK: - Error View
@@ -538,8 +521,7 @@ struct RiskAnalyticsView: View {
             }
             .buttonStyle(.bordered)
         }
-        .frame(maxWidth: .infinity, minHeight: 300)
-        .padding()
+        .stockbarEmptyState(minHeight: 300)
     }
 
     // MARK: - Calculation Logic

@@ -668,7 +668,7 @@ private struct PortfolioMenuDayReferenceView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(StockbarPalette.hoverFill, in: Capsule())
+                    .background(StockbarPalette.popoverHoverFill, in: Capsule())
                     .padding(.leading, 4)
                     .padding(.top, 4)
 

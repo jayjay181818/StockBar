@@ -92,7 +92,9 @@ struct StockbarOverviewView: View {
                     }
                     .frame(width: 270)
                     .background {
-                        StockbarPalette.cardFill.ignoresSafeArea(edges: .top)
+                        Color.clear
+                            .stockbarSurface(.inset, in: Rectangle())
+                            .ignoresSafeArea(edges: .top)
                     }
                 }
             }
@@ -111,18 +113,16 @@ struct StockbarOverviewView: View {
             "Overview",
             subtitle: dataModel.isFolyncPortfolioActive ? "Read-only portfolio summary from \(source)." : "Your portfolio at a glance."
         ) {
-            Picker("Time range", selection: Binding(
-                get: { chartModel.selectedTimeRange },
-                set: { range in
-                    withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
-                        chartModel.setTimeRange(range)
-                    }
-                }
-            )) {
-                ForEach(MenuChartTimeRange.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            // The switch animates the change itself, and not under Reduce Motion.
+            StockbarSegmentedControl(
+                "Time range",
+                selection: Binding(
+                    get: { chartModel.selectedTimeRange },
+                    set: { chartModel.setTimeRange($0) }
+                ),
+                options: MenuChartTimeRange.allCases,
+                expands: true
+            ) { $0.rawValue }
             .frame(width: 180)
             .help("Chart period")
         }
@@ -181,9 +181,9 @@ struct StockbarOverviewView: View {
                     Text(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency))
                         .font(.system(.title3, design: .rounded).weight(.semibold))
                         .monospacedDigit()
-                        .foregroundStyle(StockbarPalette.signed(amount, neutral: .primary))
+                        .foregroundStyle(StockbarPalette.signedOnSurface(amount, neutral: .primary))
                         .stockbarRollingDigits()
-                    StockbarChangeBadge(percent: percent)
+                    StockbarChangeBadge(percent: percent, onSurface: true)
                 }
             } else {
                 Text("—")
@@ -334,8 +334,7 @@ struct StockbarOverviewView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(StockbarPalette.cardStroke))
+        .stockbarCallout()
     }
 
     /// "+£1,234.00 (5.20%)", or the amount alone when there is no percentage.
@@ -357,7 +356,7 @@ struct StockbarOverviewView: View {
                     value: totalReturn.gain.isFinite
                         ? Self.amountWithPercent(totalReturn.gain, percent: totalReturn.percent, currency: summary.currency)
                         : "—",
-                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
+                    valueColor: StockbarPalette.signedOnSurface(totalReturn.gain, neutral: .primary)
                 )
                 .help("Portfolio value, cash included, less net deposits. Sales, dividends, interest and fees all count.")
                 StockbarDetailRow(label: "Net deposits", value: HoldingsCurrencyFormatter.amount(totalReturn.basisAmount, currency: summary.currency))
@@ -368,7 +367,7 @@ struct StockbarOverviewView: View {
                 value: summary.totalGain.isFinite
                     ? "\(HoldingsCurrencyFormatter.signedAmount(summary.totalGain, currency: summary.currency)) (\(MenuPopoverFormatter.percent(summary.totalGainPct)))"
                     : "—",
-                valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
+                valueColor: StockbarPalette.signedOnSurface(summary.totalGain, neutral: .primary)
             )
             StockbarDetailRow(label: "Cost basis", value: HoldingsCurrencyFormatter.amount(summary.totalCost, currency: summary.currency))
             let cash = dataModel.isFolyncPortfolioActive ? dataModel.folyncPortfolioSnapshot?.cash : nil
@@ -427,12 +426,12 @@ struct StockbarOverviewView: View {
                     StockbarDetailRow(
                         label: "Today",
                         value: HoldingsCurrencyFormatter.signedAmount(profit.dayAmount, currency: profit.currency),
-                        valueColor: StockbarPalette.signed(profit.dayAmount, neutral: .primary)
+                        valueColor: StockbarPalette.signedOnSurface(profit.dayAmount, neutral: .primary)
                     )
                     StockbarDetailRow(
                         label: "Total P&L",
                         value: HoldingsCurrencyFormatter.signedAmount(profit.totalAmount, currency: profit.currency),
-                        valueColor: StockbarPalette.signed(profit.totalAmount, neutral: .primary),
+                        valueColor: StockbarPalette.signedOnSurface(profit.totalAmount, neutral: .primary),
                         showsDivider: false
                     )
                     .help("Unrealised gain or loss against the average cost. Sales and dividends are not included.")

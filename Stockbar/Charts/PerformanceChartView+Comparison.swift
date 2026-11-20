@@ -70,8 +70,7 @@ extension PerformanceChartView {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(StockbarPalette.panelFill)
-                .cornerRadius(8)
+                .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
             }
         }
     }
@@ -100,11 +99,10 @@ extension PerformanceChartView {
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : StockbarPalette.panelFill)
+            .stockbarSurface(.pill, tint: isSelected ? Color.accentColor : nil, in: Capsule())
             .foregroundColor(isSelected ? Color.accentColor : (canSelect ? Color.primary : Color.secondary))
-            .cornerRadius(12)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                Capsule()
                     .stroke(isSelected ? Color.accentColor : Color.primary.opacity(0.2), lineWidth: 1)
             )
         }
@@ -232,8 +230,7 @@ extension PerformanceChartView {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(StockbarPalette.sheetHeaderFill)
-        .cornerRadius(6)
+        .stockbarSurface(.sheetHeader, cornerRadius: 6)
     }
 
     func comparisonSourceStatus(for symbol: String, lineRouteActive: Bool) -> FolyncSupplementalSourceStatus? {

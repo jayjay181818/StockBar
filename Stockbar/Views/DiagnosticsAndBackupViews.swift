@@ -99,16 +99,13 @@ struct DebugLogView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(index % 2 == 0 ? Color.clear : Color(NSColor.controlBackgroundColor).opacity(0.3))
+                                .stockbarRow(isAlternate: index % 2 != 0)
                                 .id(index)
                         }
                     }
                 }
-                .background(Color(NSColor.textBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
-                )
+                // The log reads like a text area: the field surface.
+                .stockbarSurface(.field, cornerRadius: 8)
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.contentOffset.y <= geometry.contentInsets.top + 8
                 } action: { _, atTop in
@@ -291,7 +288,7 @@ struct RestoreBackupView: View {
                 .disabled(isRestoring)
             }
             .padding()
-            .background(StockbarPalette.sheetHeaderFill)
+            .stockbarSurface(.sheetHeader, in: Rectangle())
 
             Divider()
 
@@ -456,7 +453,7 @@ struct BackupPreviewView: View {
                 .keyboardShortcut(.cancelAction)
             }
             .padding()
-            .background(StockbarPalette.sheetHeaderFill)
+            .stockbarSurface(.sheetHeader, in: Rectangle())
 
             Divider()
 

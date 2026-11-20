@@ -156,8 +156,7 @@ extension PerformanceChartView {
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     @ViewBuilder
@@ -178,8 +177,7 @@ extension PerformanceChartView {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(6)
+                .stockbarSurface(.inset, tint: .blue, cornerRadius: 6)
                 .foregroundColor(.blue)
                 
                 // PDF Export Button
@@ -192,8 +190,7 @@ extension PerformanceChartView {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.green.opacity(0.1))
-                .cornerRadius(6)
+                .stockbarSurface(.inset, tint: .green, cornerRadius: 6)
                 .foregroundColor(.green)
                 
                 Spacer()
@@ -211,8 +208,7 @@ extension PerformanceChartView {
                     .buttonStyle(PlainButtonStyle())
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Color.orange.opacity(0.1))
-                    .cornerRadius(6)
+                    .stockbarSurface(.inset, tint: .orange, cornerRadius: 6)
                     .foregroundColor(.orange)
                     
                     Spacer()
@@ -230,8 +226,7 @@ extension PerformanceChartView {
             }
         }
         .padding()
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     /// Full-resolution, filtered series (never the downsampled display copy), narrowed to the selection.
@@ -306,7 +301,7 @@ extension PerformanceChartView {
         .chartYScale(domain: domain)
         .frame(width: 720, height: 320)
         .padding(12)
-        .background(Color.white)
+        .background(Color.white) // stockbar-surface-allow: the exported image's own white page, drawn in light mode
         .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: snapshot)
         renderer.scale = 2

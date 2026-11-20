@@ -375,12 +375,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-        )
+        .stockbarSurface(.notice, tint: .blue, cornerRadius: 8)
     }
     
     private func errorView(_ error: String) -> some View {
@@ -404,21 +399,18 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.1))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-        )
+        .stockbarSurface(.notice, tint: .orange, cornerRadius: 8)
     }
     
     private var timeRangePicker: some View {
-        Picker("Time Range", selection: $selectedTimeRange) {
-            ForEach(ChartTimeRange.allCases, id: \.self) { range in
-                Text(range.description).tag(range)
+        HStack(spacing: 8) {
+            Text("Time Range")
+                .accessibilityHidden(true)
+            StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: ChartTimeRange.allCases) {
+                $0.description
             }
+            .fixedSize()
         }
-        .pickerStyle(SegmentedPickerStyle())
     }
 
     // MARK: - Custom Date Range Picker
@@ -473,8 +465,7 @@ struct PerformanceChartView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(StockbarPalette.panelFill)
-            .cornerRadius(8)
+            .stockbarSurface(.inset, cornerRadius: 8)
         }
     }
 
@@ -490,14 +481,8 @@ struct PerformanceChartView: View {
         HStack(spacing: 16) {
             // Chart Style Picker (only for individual stocks)
             if case .individualStock = selectedChartType {
-                Picker("Style", selection: $chartVisualizationStyle) {
-                    ForEach(ChartVisualizationStyle.allCases, id: \.self) { style in
-                        Label(style.rawValue, systemImage: style.icon)
-                            .tag(style)
-                    }
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .labelsHidden()
+                StockbarSegmentedControl("Style", selection: $chartVisualizationStyle,
+                                         options: ChartVisualizationStyle.allCases, expands: true) { $0.rawValue }
                 .frame(width: 180)
             }
 
@@ -526,8 +511,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(StockbarPalette.sheetHeaderFill)
-        .cornerRadius(6)
+        .stockbarSurface(.sheetHeader, cornerRadius: 6)
     }
 
     // MARK: - Data Loading
@@ -1150,9 +1134,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-        .shadow(radius: 2)
+        .stockbarCallout()
     }
 }
 
