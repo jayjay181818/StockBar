@@ -37,6 +37,8 @@ final class StockbarAcceptancePreflightTests: XCTestCase {
         XCTAssertEqual(report.runID, runID)
         XCTAssertEqual(report.root, root.standardizedFileURL.path)
         XCTAssertFalse(report.liveProviderRequestsAllowed)
+        XCTAssertTrue(report.loopbackFolyncAllowed)
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).contains(#""loopbackFolyncAllowed" : true"#))
         XCTAssertTrue(report.keychainService.contains(runID))
         XCTAssertFalse(String(decoding: output, as: UTF8.self).localizedCaseInsensitiveContains("bearer"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".stockbar-acceptance-run").path))

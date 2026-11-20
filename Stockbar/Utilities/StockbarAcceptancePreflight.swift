@@ -7,6 +7,8 @@ struct StockbarAcceptancePreflightReport: Codable, Equatable, Sendable {
     let bundleIdentifier: String
     let keychainService: String
     let liveProviderRequestsAllowed: Bool
+    /// The one exception to the line above: Folync requests to this Mac.
+    let loopbackFolyncAllowed: Bool
     let resolvedWritablePaths: [String]
 }
 
@@ -99,6 +101,7 @@ enum StockbarAcceptancePreflight {
             bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.stockbar",
             keychainService: runtime.folyncKeychainService,
             liveProviderRequestsAllowed: runtime.liveProviderRequestsAllowed,
+            loopbackFolyncAllowed: runtime.loopbackFolyncAllowed,
             resolvedWritablePaths: (directories + [coreDataStore]).map(\.path).sorted()
         )
         let encoder = JSONEncoder()

@@ -318,6 +318,18 @@ it to be promoted again. What could still be done, and what
 each would cost, is listed at the end of
 [Milestone 1](#milestone-1-2026-11-12).
 
+From 2026-11-19, at the owner's word, `experimental` is in use again for a
+major change: the Glass redesign and the new Folync pages. Pull request 133
+brought it up to `testing` first, with merge commit `01d4768`. The owner
+said the benchmark for this work can wait until after 02:30 on 2026-11-20
+or later. Pull request 134's comparison was run that morning, twice, with
+another project's `xcodebuild` present on the same Mac during every
+measured launch. After the repeat no row shows a measurable change, and
+both tables are in its record. No launch was measured on a quiet Mac, and
+the rule written before the first launch left the merge to the owner in
+that case. The owner then said "go on", which is the word the rule asked
+for.
+
 ## Review of the refresh path, 2026-11-13
 
 A read-only review of the code the benchmark never runs: the price refresh
@@ -3507,6 +3519,197 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   published build and the pull requests it names.
 - Known issues: none known.
 - Verdict: retained.
+
+### 134: Let the acceptance copy reach a Folync on this Mac
+
+- What: in an acceptance run, a Folync request is let through when its
+  endpoint is on this Mac (`127.0.0.1`, `localhost` or `::1`). Everything
+  else stays refused. The owner approved it on 2026-11-19. Until now
+  `StockbarProviderAccessPolicy` refused every provider in an acceptance
+  run, so the acceptance copy could never read the Folync stand-in on
+  loopback that `script/run_folync_acceptance.sh` and the bootstrap
+  require. The redesign's Folync pages could not be tried on made-up data.
+
+  `StockbarAcceptanceRuntime` gains `loopbackFolyncAllowed`. It is true
+  only for an explicit acceptance run, and false for the automatic XCTest
+  isolation and for a normal run. The policy gains
+  `authorize(_:endpoint:)`. It allows everything when live requests are
+  allowed. Otherwise it allows only `.folync`, with the exception on, to
+  an `http` or `https` URL whose host is exactly one of the three; the
+  host is compared whole, with no name lookup. `authorize(_:)` without an
+  endpoint behaves as before. `FolyncPortfolioSource` and
+  `FolyncSupplementalCoordinator` pass their base URL on every request,
+  before the endpoint check and before any network use. Changing the
+  address inside the acceptance copy to another machine is therefore still
+  refused. These are the only two Folync calls to the policy, and no other
+  provider's gate changes. The preflight report gains
+  `loopbackFolyncAllowed`, so the evidence shows the exception, and
+  `Docs/Development.md` describes it.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: before `01d4768`, after `7aba2f7`, the standard comparison,
+  six launches a side in turns, run twice on 2026-11-20, on macOS 27.2.1
+  and mains power, with the screen unlocked and the display awake. After
+  the repeat no row shows a measurable change. This pull request names no
+  row: the benchmark's launches are acceptance runs with no Folync set
+  up, so they never reach the exception.
+
+  Neither run was measured on a quiet Mac. The comparison was scheduled
+  for 02:30 UTC and did not run then. The Mac restarted at 08:35 UTC and
+  the owner said "Try now" at about 08:55. Another session on the Mac was
+  running a different project's simulator tests: one was running at
+  08:55, and a wait for a quiet Mac passed at 09:06 only for the next to
+  begin within the minute. No start time was going to avoid them, so the
+  first run started at once under rules written into its script before
+  it began. Two are the
+  rules of 2026-11-16, which say when a run is set aside and repeated
+  (see
+  [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed)).
+  The third is new and decides the merge. A sample every ten seconds
+  notes whether another project's `xcodebuild` is present, and a measured
+  launch with one or more such samples counts as overlapped. With any
+  launch overlapped, the pull request is not merged on that run without
+  the owner's word or a repeat with the other session paused. The samples
+  show that such a process was present, not how hard it was working; the
+  load average and the four busiest processes below are the measure of
+  that.
+
+  First run, turns from 09:14 to 09:47 UTC. No reading inside the turns
+  showed input. The four busiest processes together averaged 260% of a
+  core over the before side's 17 readings and 313% over the after side's
+  16, a ratio of 1.20, so the run stands. All twelve measured launches
+  were overlapped. The load average at the once-a-minute readings inside
+  the turns ran from 5.8 to 48.8. `StorageManagementService` and
+  `ApplicationsStorageExtension`, two system processes, were among the
+  four busiest in 31 of the run's 37 readings, beside the other project's
+  compiler, simulator app and test runner in others. The report flagged
+  no launch. One row is marked: idle CPU
+  wake-ups, possibly lower.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 88.9 (87.1 to 94.8) MB | 90.8 (84.8 to 93.4) MB | +1.9 MB, +2.1% | no measurable change (p = 1.000) |
+  | Idle memory the app holds allocated | 49.1 (40.0 to 51.8) MB | 49.5 (40.0 to 51.7) MB | +0.4 MB, +0.8% | no measurable change (p = 0.859) |
+  | Peak memory, launch and history load | 238.6 (234.9 to 256.9) MB | 247.7 (237.2 to 252.3) MB | +9.1 MB, +3.8% | no measurable change (p = 0.180) |
+  | Idle memory growth across the window | -0.1 (-2.2 to 0.0) MB | 0.0 (-6.5 to 0.1) MB | +0.1 MB, -100.0% | no measurable change (p = 0.364) |
+  | Idle CPU | 0.091 (0.075 to 0.104) s/min | 0.088 (0.079 to 0.097) s/min | -0.003 s/min, -2.7% | no measurable change (p = 0.788) |
+  | Idle CPU wake-ups | 28 (26 to 29) /min | 24 (22 to 28) /min | -4 /min, -12.5% | possibly lower (p = 0.019) |
+  | Idle CPU power | 4.64 (4.25 to 5.22) mW | 5.02 (4.44 to 5.28) mW | +0.38 mW, +8.2% | no measurable change (p = 0.331) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.06 (0.99 to 1.35) s | 1.04 (0.96 to 1.88) s | -0.02 s, -1.9% | no measurable change (p = 0.669) |
+  | Launch to history loaded | 1.11 (1.01 to 1.34) s | 1.03 (0.93 to 1.86) s | -0.08 s, -7.2% | no measurable change (p = 0.457) |
+  | CPU from launch to the idle window | 2.25 (2.11 to 2.75) s | 2.18 (2.03 to 3.46) s | -0.07 s, -2.9% | no measurable change (p = 0.485) |
+  | CPU energy from launch to the idle window | 6.31 (5.26 to 6.69) J | 6.39 (4.47 to 6.64) J | +0.08 J, +1.2% | no measurable change (p = 0.937) |
+  | Python helper start to ready, no network | 0.34 (0.30 to 1.03) s | 0.31 (0.29 to 1.02) s | -0.03 s, -8.8% | no measurable change (p = 0.247) |
+  | Python helper start, CPU | 0.33 (0.30 to 0.45) s | 0.31 (0.28 to 0.45) s | -0.02 s, -7.5% | no measurable change (p = 0.411) |
+  | Python helper memory once started | 71.2 (70.4 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.961) |
+
+  Repeat, for that row, turns from 10:08 to 10:41 UTC. A wait of twenty
+  minutes for a quiet Mac found another project's `xcodebuild` at 39 of
+  its 40 checks, so the repeat started without one, under the same
+  rules. No reading inside the turns showed input. The four busiest
+  together averaged 228% of a core over the before side's 16 readings
+  and 276% over the after side's 16, a ratio of 1.21, so it stands.
+  Again all twelve measured launches were overlapped. The load ran from
+  5.1 to 41.1, and the same two system processes were among the four
+  busiest in 32 of 33 readings. The report flagged no launch and marks
+  no row. Idle CPU wake-ups are 26 a minute on both sides.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 93.3 (90.4 to 95.6) MB | 92.7 (85.3 to 95.8) MB | -0.7 MB, -0.7% | no measurable change (p = 0.699) |
+  | Idle memory the app holds allocated | 50.4 (48.1 to 51.9) MB | 49.6 (46.1 to 50.6) MB | -0.8 MB, -1.6% | no measurable change (p = 0.197) |
+  | Peak memory, launch and history load | 248.2 (241.7 to 257.8) MB | 245.4 (238.0 to 261.1) MB | -2.8 MB, -1.1% | no measurable change (p = 0.818) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-3.9 to 0.0) MB | +0.0 MB | no measurable change (p = 0.273) |
+  | Idle CPU | 0.084 (0.074 to 0.097) s/min | 0.079 (0.070 to 0.091) s/min | -0.005 s/min, -6.0% | no measurable change (p = 0.457) |
+  | Idle CPU wake-ups | 26 (24 to 31) /min | 26 (22 to 28) /min | -0 /min, -1.9% | no measurable change (p = 0.662) |
+  | Idle CPU power | 4.25 (3.79 to 4.61) mW | 4.51 (3.89 to 4.84) mW | +0.26 mW, +6.1% | no measurable change (p = 0.394) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.83 (0.62 to 1.05) s | 0.91 (0.56 to 1.04) s | +0.08 s, +9.6% | no measurable change (p = 0.937) |
+  | Launch to history loaded | 0.89 (0.61 to 1.01) s | 0.90 (0.66 to 1.02) s | +0.01 s, +1.7% | no measurable change (p = 0.734) |
+  | CPU from launch to the idle window | 2.06 (1.74 to 2.19) s | 2.12 (1.87 to 2.17) s | +0.06 s, +2.9% | no measurable change (p = 0.677) |
+  | CPU energy from launch to the idle window | 5.80 (4.52 to 6.58) J | 5.91 (5.50 to 6.49) J | +0.11 J, +1.8% | no measurable change (p = 0.818) |
+  | Python helper start to ready, no network | 0.60 (0.33 to 1.09) s | 0.36 (0.29 to 1.00) s | -0.24 s, -40.0% | no measurable change (p = 0.329) |
+  | Python helper start, CPU | 0.43 (0.32 to 0.58) s | 0.34 (0.29 to 0.45) s | -0.09 s, -20.7% | no measurable change (p = 0.102) |
+  | Python helper memory once started | 71.3 (70.3 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.920) |
+
+  The "possibly lower" row did not repeat, so it does not count. The
+  conditions limit what the two tables show. Their ranges are wide: in
+  the first run one launch on the after side took 1.88 s to its first
+  window where the side's median was 1.04 s. A change smaller than that
+  spread would not show, and these figures are not set beside those of
+  other days. What they show is that the app builds and runs the standard
+  launches with the change in it, and that nothing moved by more than a
+  busy Mac's noise. The readings, the samples, the rules and the scripts
+  are kept beside the results, in
+  `build/bench/results/compare-pr134-20261120-091103/conditions` and
+  `build/bench/results/compare-pr134-repeat-20261120-100818/conditions`.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 754 XCTest tests with 0
+  failures. Twelve are new. Eight in `StockbarProviderAccessPolicyTests`
+  cover the policy: the three loopback forms allowed; ten other forms
+  refused, among them `127.0.0.1.example.com`, `localhost.example.com`,
+  `http://127.0.0.1@example.com/`, an address on the local network, a URL
+  with no host and schemes other than HTTP; the other three providers
+  refused even on loopback; Folync without an endpoint still refused; the
+  automatic XCTest runtime refused; a normal run allowed everything. Four
+  in `FolyncPortfolioSourceTests` go through a stubbed `URLSession`. With
+  the policy of an explicit acceptance run, both the source and the
+  supplemental coordinator reach a stub at `http://127.0.0.1:49152`. For
+  addresses elsewhere neither sends a request, and both fail with
+  `disabledForAcceptance(.folync)`. The source's own endpoint check refuses
+  plain HTTP on the local network before the policy is asked, so its test
+  uses HTTPS addresses to reach the policy. The runtime and preflight tests
+  assert the new field.
+
+  The tests were shown to fail on broken code. With `isLoopback` returning
+  true for every URL, four tests failed. With the exception granted without
+  the runtime's flag, the two tests of a policy without it failed. Both
+  mutations were then removed. The policy's initialiser was tidied after
+  them, in lines neither mutation touched, and everything below was run
+  again on the result.
+
+  `checks`, `docs-check` and `build-release` pass, and so do 92 script
+  tests. 70 Python helper tests pass, none skipped. They ran with Homebrew
+  Python 3.15.2, which has no yfinance, rather than the app's own
+  environment, which this work did not touch; CI uses Python 3.13 with the
+  lock file. No Python changed.
+
+  An acceptance copy was built from this branch and run against
+  `build/design/acceptance/stub_folync.py`, a stand-in kept in the
+  untracked `build/` folder, for nearly three minutes, with
+  debug logging, and counted after it had stopped. The stub answered 32
+  requests, all with 200: the snapshot seven times, the portfolio history
+  ten, capabilities six, FX five and benchmarks four. The app logged seven
+  Folync polls with success and none without, and no
+  `provider_access_denied` line, warning or error. A poll reports success
+  only after a 304, or a 200 whose snapshot was decoded and applied, and
+  every answer was a 200; there is no log line of its own for applying. The app also wrote the snapshot cache and five route
+  caches, which it does only after a response passes its checks. The
+  preflight evidence held `liveProviderRequestsAllowed` false and
+  `loopbackFolyncAllowed` true. The session lead then ran the copy again
+  and looked at its window: the Overview and Holdings showed the stand-in's
+  made-up portfolio, labelled as a Folync portfolio.
+- Review: the session lead (Fable 5.2) read the policy, both call sites
+  and the tests against the specification. Written by an Opus subagent from
+  that specification. No independent second review.
+- Known issues:
+  - No launch of either comparison was measured on a quiet Mac, as set out
+    above.
+  - The stand-in answers 200 with a new body every time, so the app's 304
+    path was not exercised in the run.
+  - A manifest with `http://[::1]:<port>` passes the launcher, the
+    bootstrap and the new policy, but not `FolyncEndpointPolicy`, which
+    allows plain HTTP only to `localhost` and `127.0.0.1`. Such a run would
+    still fail, now with the HTTPS message. Not changed here.
+  - `URLSession` follows redirects, and nothing asks the policy about a
+    redirect's target. A Folync on this Mac that redirected elsewhere would
+    be followed. The stand-in never redirects, and a normal run behaves the
+    same way. Not changed here.
+- Verdict: retained. No row shows a measurable change after the repeat,
+  and none was expected to move. Another project's `xcodebuild` was
+  present during every measured launch, and the rule written before the
+  first launch left the merge to the owner in that case. Told so, with
+  the tables and the conditions, the owner said "go on" on 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
 

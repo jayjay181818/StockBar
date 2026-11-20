@@ -467,7 +467,7 @@ actor FolyncPortfolioSource: PortfolioSource {
     }
 
     private func request(path: [String], etag: String? = nil) async throws -> (Data, HTTPURLResponse) {
-        try providerPolicy.authorize(.folync)
+        try providerPolicy.authorize(.folync, endpoint: baseURL)
         // `appendingPathComponent` percent-encodes each component, so callers
         // pass raw components — pre-encoding here would double-encode.
         let url = path.reduce(baseURL) { $0.appendingPathComponent($1) }

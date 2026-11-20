@@ -905,6 +905,150 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(stub.requests.count, 1, "A 429 must not trigger the v1 fallback")
     }
 
+    // MARK: - Acceptance run: Folync on this Mac only
+
+    /// The policy an explicit acceptance run gets, built the way the app builds it.
+    private static func explicitAcceptancePolicy() throws -> StockbarProviderAccessPolicy {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FolyncAcceptancePolicyTests-\(UUID().uuidString)", isDirectory: true)
+        let runtime = try StockbarAcceptanceRuntime.resolve(environment: [
+            "STOCKBAR_ACCEPTANCE_ROOT": root.path,
+            "STOCKBAR_ACCEPTANCE_RUN_ID": "acceptance-12345678",
+            "STOCKBAR_DISABLE_LIVE_PROVIDERS": "1"
+        ])
+        return StockbarProviderAccessPolicy(runtime: runtime)
+    }
+
+    func testAcceptanceRunReachesFolyncSourceOnThisMac() async throws {
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            guard request.url?.path == "/api/client/v2/portfolios" else {
+                return Self.httpResponse(request, status: 500, body: "{}")
+            }
+            return Self.httpResponse(
+                request,
+                status: 200,
+                body: """
+                {"schemaVersion":2,"portfolios":[{"id":"all","name":"All portfolios","kind":"aggregate","currency":"GBP"}]}
+                """
+            )
+        }
+        let source = try FolyncPortfolioSource(
+            baseURL: XCTUnwrap(URL(string: "http://127.0.0.1:49152")),
+            token: "test-token",
+            session: Self.stubSession(),
+            providerPolicy: Self.explicitAcceptancePolicy()
+        )
+
+        let portfolios = try await source.listPortfolios()
+
+        XCTAssertEqual(portfolios.map(\.id), ["all"])
+        XCTAssertEqual(stub.requests.count, 1)
+        XCTAssertEqual(stub.requests.first?.url?.host, "127.0.0.1")
+        XCTAssertEqual(stub.requests.first?.url?.port, 49152)
+    }
+
+    func testAcceptanceRunRefusesFolyncSourceElsewhereBeforeSending() async throws {
+        // `http://192.168.1.10:4100` is refused earlier, by the endpoint policy
+        // when the source is made, so HTTPS forms isolate the provider policy.
+        XCTAssertThrowsError(try FolyncPortfolioSource(
+            baseURL: XCTUnwrap(URL(string: "http://192.168.1.10:4100")),
+            token: "test-token",
+            session: Self.stubSession(),
+            providerPolicy: Self.explicitAcceptancePolicy()
+        )) { error in
+            XCTAssertEqual(error as? FolyncPortfolioSourceError, .insecureTransport)
+        }
+
+        for endpoint in ["https://folync.invalid", "https://192.168.1.10:4100", "https://127.0.0.1.example.com"] {
+            let stub = FolyncHTTPStub()
+            FolyncURLProtocolStub.stub = stub
+            stub.handler = { request in Self.httpResponse(request, status: 200, body: "{}") }
+            let source = try FolyncPortfolioSource(
+                baseURL: XCTUnwrap(URL(string: endpoint)),
+                token: "test-token",
+                session: Self.stubSession(),
+                providerPolicy: Self.explicitAcceptancePolicy()
+            )
+
+            do {
+                _ = try await source.listPortfolios()
+                XCTFail("Expected provider denial for \(endpoint)")
+            } catch {
+                XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync), endpoint)
+            }
+            XCTAssertTrue(stub.requests.isEmpty, "No request may be sent to \(endpoint)")
+        }
+    }
+
+    func testAcceptanceRunReachesSupplementalFolyncOnThisMac() async throws {
+        let suiteName = TestDefaultsSuite.makeName("FolyncAcceptanceLoopbackTests-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-acceptance-loopback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            guard request.url?.path == "/api/client/v2/capabilities" else {
+                return Self.httpResponse(request, status: 500, body: "{}")
+            }
+            return Self.httpResponse(request, status: 200, body: Self.capabilitiesJSON)
+        }
+        let coordinator = try FolyncSupplementalCoordinator(
+            settingsStore: FolyncSettingsStore(defaults: defaults),
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.explicitAcceptancePolicy(),
+            tokenProvider: { "test-token" }
+        )
+
+        let capabilities = try await coordinator.fetchCapabilities(
+            baseURL: XCTUnwrap(URL(string: "http://127.0.0.1:49152")),
+            token: "test-token"
+        )
+
+        XCTAssertEqual(capabilities?.sourceRevision, "caps-1")
+        XCTAssertEqual(stub.requests.map(\.url?.path), ["/api/client/v2/capabilities"])
+        XCTAssertEqual(stub.requests.first?.url?.host, "127.0.0.1")
+    }
+
+    func testAcceptanceRunRefusesSupplementalFolyncElsewhereBeforeSending() async throws {
+        let suiteName = TestDefaultsSuite.makeName("FolyncAcceptanceLoopbackTests-")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-acceptance-loopback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in Self.httpResponse(request, status: 200, body: Self.capabilitiesJSON) }
+        let coordinator = try FolyncSupplementalCoordinator(
+            settingsStore: FolyncSettingsStore(defaults: defaults),
+            cache: FolyncSupplementalCache(directory: cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.explicitAcceptancePolicy(),
+            tokenProvider: { "test-token" }
+        )
+
+        // The provider policy runs before the endpoint policy here, so the
+        // plain-HTTP address on the network is refused by it too.
+        for endpoint in ["https://folync.invalid", "http://192.168.1.10:4100", "https://192.168.1.10:4100"] {
+            do {
+                _ = try await coordinator.fetchCapabilities(
+                    baseURL: XCTUnwrap(URL(string: endpoint)),
+                    token: "test-token"
+                )
+                XCTFail("Expected provider denial for \(endpoint)")
+            } catch {
+                XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync), endpoint)
+            }
+        }
+        XCTAssertTrue(stub.requests.isEmpty, "No request may leave this Mac")
+    }
+
     func testDecodesVersionOneSnapshotIntoReadOnlyDisplayTrades() throws {
         let data = Data(snapshotJSON.utf8)
         let snapshot = try FolyncPortfolioDecoder().decodeSnapshot(data)
