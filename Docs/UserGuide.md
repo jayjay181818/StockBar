@@ -83,7 +83,11 @@ With a Folync portfolio, **Activity** lists every transaction Folync holds, newe
 
 ## Holdings
 
-The read-only table shows your positions in your saved order; click the Instrument or Price header to sort, and click a Today or Total P&L value to switch between amount and percentage. Search filters the table without changing portfolio totals.
+The read-only table shows your positions in your saved order; click the Instrument, Price or Weight header to sort. The **Amounts / Percent** switch beside the search field shows both **Today** and **Total gain** as amounts or as percentages, and Stockbar remembers the choice. Search filters the table without changing portfolio totals.
+
+**Weight** is a holding's share of the portfolio. With Folync it is Folync's own figure, shown as Folync gives it; otherwise it is the holding's value as a share of the net value above the table. A watchlist symbol, or a holding whose value is not known, shows "–". The line under the table counts holdings and watchlist symbols and says which weight you are seeing.
+
+The strip above the table shows the **Net value** (with the US-dollar figure on a second line when you display another currency), **Total gains** with a line saying what they are (unrealised gains as Folync or Trading 212 report them, or Stockbar's own sum against average cost for a local portfolio), and the number of **Tracked symbols**.
 
 Choose **Edit** to change local holdings, and **Done** when finished (changes save as you type):
 

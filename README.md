@@ -91,7 +91,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 ### 💼 Portfolio and holdings
 - Grouped sidebar in a floating panel: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Charts, Risk, Allocation) and **System** (Data Health, Backups, Diagnostics, Settings). The footer shows the portfolio source, the last update and a Refresh button.
-- The Holdings table has search, summary tiles and an Edit mode. Click a **Today** or **Total P&L** value to switch between amount and percentage.
+- The Holdings table has search, summary tiles, a Weight column and an Edit mode. The **Amounts / Percent** switch beside the search field shows **Today** and **Total gain** as amounts or percentages.
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
 ### 📊 Menu bar
@@ -117,9 +117,9 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 #### Portfolio And Holdings
 - Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Charts, Risk, Allocation) and System (Data Health, Backups, Diagnostics, Settings). The sidebar footer shows the active portfolio source, the last update and a Refresh button.
-- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Today and Total P&L columns.
-- Clicking a Today or Total P&L value toggles that column between amount and percentage.
-- Net Value, Total Net Gains and Tracked Symbols summary cards show currency symbols and thousands separators, with USD equivalents in brackets when USD is not the primary display currency.
+- Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Weight, Today and Total gain columns.
+- One Amounts / Percent switch sets both the Today and the Total gain columns, and is remembered.
+- Net value, Total gains and Tracked symbols summary cards show currency symbols and thousands separators, with the USD equivalent on a second line when USD is not the primary display currency.
 - Manual holdings, watchlist-only symbols, and broker-linked holdings can coexist.
 - UK `.L` holdings and GBX/GBP cost bases are normalized consistently for display and gain calculations.
 
@@ -283,10 +283,11 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - **Price** shows the latest display price for the position source.
 - **Value** is current price multiplied by units.
 - **Today** compares current price with previous close.
-- **Total P&L** compares current price with normalized average cost.
-- Click a Today or Total P&L value to toggle that column between amount and percentage. Clicking the Instrument or Price header sorts the table.
+- **Weight** is the holding's share of the portfolio: Folync's own figure with a Folync portfolio, otherwise the holding's value as a share of the net value.
+- **Total gain** compares current price with normalized average cost.
+- The Amounts / Percent switch sets both Today and Total gain. Clicking the Instrument, Price or Weight header sorts the table.
 - Amount mode shows signed currency values with symbols and thousands separators, for example `+$12,345.67`.
-- Summary cards show the primary currency first and add the USD equivalent in brackets when USD is not the selected display currency, for example `£10,000.00 ($12,700.00)`.
+- Summary cards show the primary currency first and add the USD equivalent on a second line when USD is not the selected display currency, for example `£10,000.00` over `$12,700.00 in US dollars`.
 - Linked Trading 212 holdings use broker-provided live position data by default.
 - Manual and watchlist-only rows continue through the configured market-data provider chain.
 
