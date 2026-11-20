@@ -471,13 +471,13 @@ private struct StockbarHoldingsView: View {
         return watchlist == 0 ? "\(owned) held" : "\(owned) held · \(watchlist) watchlist"
     }
 
-    /// The line under a table. `showsWeight` is true under the table that has the Weight column.
-    private func footer(showsWeight: Bool) -> some View {
+    /// The line under the read-only table.
+    private var footer: some View {
         let watchlist = trackedTrades.filter(\.trade.isWatchlistOnly).count
         let text = HoldingsText.footer(
             held: trackedTrades.count - watchlist,
             watchlist: watchlist,
-            weightIsFolyncs: showsWeight ? dataModel.isFolyncPortfolioActive : nil
+            weightIsFolyncs: dataModel.isFolyncPortfolioActive
         )
         return Group {
             if let text {
@@ -514,8 +514,11 @@ private struct StockbarHoldingsView: View {
             weight: row.weight,
             today: HoldingsText.gain(amount: summary.dayAmount, percent: summary.dayPercent,
                                      currency: summary.currency, mode: gainDisplayMode),
+            // The same sign the cell is coloured by.
+            todaySign: HoldingsCurrencyFormatter.displayedSign(of: summary.dayAmount, currency: summary.currency),
             totalGain: HoldingsText.gain(amount: summary.totalAmount, percent: summary.totalPercent,
-                                         currency: summary.currency, mode: gainDisplayMode)
+                                         currency: summary.currency, mode: gainDisplayMode),
+            totalSign: HoldingsCurrencyFormatter.displayedSign(of: summary.totalAmount, currency: summary.currency)
         )
     }
 
@@ -542,7 +545,7 @@ private struct StockbarHoldingsView: View {
     private var compactTable: some View {
         VStack(spacing: 0) {
             readOnlyTable
-            footer(showsWeight: true)
+            footer
         }
         .clipShape(RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
         .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
@@ -586,7 +589,7 @@ private struct StockbarHoldingsView: View {
                 Group {
                     if trade.trade.isWatchlistOnly {
                         // No position: a $0.00 value would read as a real holding.
-                        Text("—").foregroundStyle(.secondary).help("Watchlist only")
+                        Text(HoldingsWeight.unknownText).foregroundStyle(.secondary).help("Watchlist only")
                     } else {
                         let value = dataModel.calculatePositionValue(for: trade)
                         Text(HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
@@ -688,7 +691,6 @@ private struct StockbarHoldingsView: View {
                     }
                     }
                     .frame(maxHeight: .infinity)
-                    footer(showsWeight: false)
                 }
                 .frame(
                     width: max(HoldingsTableLayout.contentWidth, geometry.size.width),

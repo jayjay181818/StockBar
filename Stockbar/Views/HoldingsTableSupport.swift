@@ -286,7 +286,8 @@ enum HoldingsGainDisplayMode: String, CaseIterable {
 
 /// A holding's weight: its share of the portfolio, in percent.
 enum HoldingsWeight {
-    /// What a cell shows for a weight that is not known.
+    /// What a cell shows for a figure that is not known. Every unknown figure
+    /// in a Holdings row uses it, as the app's other pages do.
     static let unknownText = "–"
 
     /// A figure given by the portfolio source, used as it is.
@@ -333,14 +334,14 @@ struct HoldingsTableRow: Identifiable {
 
 /// The words on the Holdings page that depend on its figures.
 enum HoldingsText {
-    /// The Today or Total gain cell, in the chosen mode. "—" when not known.
+    /// The Today or Total gain cell, in the chosen mode. "–" when not known.
     static func gain(amount: Double, percent: Double, currency: String, mode: HoldingsGainDisplayMode) -> String {
         switch mode {
         case .amounts:
-            guard amount.isFinite else { return "—" }
+            guard amount.isFinite else { return HoldingsWeight.unknownText }
             return HoldingsCurrencyFormatter.signedAmount(amount, currency: currency)
         case .percent:
-            guard percent.isFinite else { return "—" }
+            guard percent.isFinite else { return HoldingsWeight.unknownText }
             return String(format: "%+.2f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
         }
     }
@@ -390,8 +391,11 @@ enum HoldingsText {
 
     /// What VoiceOver reads for one row of the read-only table: one sentence
     /// with every figure the row shows, in the chosen mode.
+    /// `todaySign` and `totalSign` are the figures' displayed signs (see
+    /// `HoldingsCurrencyFormatter.displayedSign`), read as gain, loss or unchanged.
     static func rowSentence(symbol: String, name: String?, isWatchlist: Bool, price: String, value: String,
-                            weight: Double?, today: String, totalGain: String) -> String {
+                            weight: Double?, today: String, todaySign: Double,
+                            totalGain: String, totalSign: Double) -> String {
         var parts = [symbol]
         if let name, !name.isEmpty, name != symbol { parts.append(name) }
         if isWatchlist {
@@ -401,10 +405,19 @@ enum HoldingsText {
             parts.append("price \(spoken(price))")
             parts.append("value \(spoken(value))")
             parts.append("weight \(weight == nil ? "not known" : HoldingsWeight.text(weight))")
-            parts.append("today \(spoken(today))")
-            parts.append("total gain \(spoken(totalGain))")
+            parts.append("today \(movement(today, sign: todaySign))")
+            parts.append("total gain \(movement(totalGain, sign: totalSign))")
         }
         return parts.joined(separator: ", ") + "."
+    }
+
+    /// "a gain of +£89.84", "a loss of -1.23%", "unchanged at £0.00" or "not known".
+    private static func movement(_ text: String, sign: Double) -> String {
+        let figure = spoken(text)
+        guard figure != "not known" else { return figure }
+        if sign > 0 { return "a gain of \(figure)" }
+        if sign < 0 { return "a loss of \(figure)" }
+        return "unchanged at \(figure)"
     }
 
     /// A dash read aloud is "dash", not "not known".

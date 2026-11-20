@@ -3371,8 +3371,10 @@ final class HoldingsWeightAndTextTests: XCTestCase {
         XCTAssertEqual(HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: .percent), "+0.42%")
         XCTAssertEqual(HoldingsText.gain(amount: -64.1, percent: -1.234, currency: "GBP", mode: .amounts), "-£64.10")
         XCTAssertEqual(HoldingsText.gain(amount: -64.1, percent: -1.234, currency: "GBP", mode: .percent), "-1.23%")
-        XCTAssertEqual(HoldingsText.gain(amount: .nan, percent: 1, currency: "GBP", mode: .amounts), "—")
-        XCTAssertEqual(HoldingsText.gain(amount: 1, percent: .nan, currency: "GBP", mode: .percent), "—")
+        XCTAssertEqual(HoldingsText.gain(amount: .nan, percent: 1, currency: "GBP", mode: .amounts), "–")
+        XCTAssertEqual(HoldingsText.gain(amount: 1, percent: .nan, currency: "GBP", mode: .percent), "–")
+        XCTAssertNil(SettingsTransferKeys.settingsKeys[HoldingsGainDisplayMode.storageKey],
+                     "a view choice, like the selected section, is not exported")
     }
 
     func testTheSwitchIsReadAsOneLabelledGroupOfTwoButtons() {
@@ -3432,22 +3434,25 @@ final class HoldingsWeightAndTextTests: XCTestCase {
             HoldingsText.rowSentence(
                 symbol: "VUSA", name: "Vanguard fund", isWatchlist: false, price: "£84.12", value: "£21,480.60",
                 weight: weight,
-                today: HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: mode),
-                totalGain: HoldingsText.gain(amount: 2_912.4, percent: 15.7, currency: "GBP", mode: mode)
+                today: HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: mode), todaySign: 89.84,
+                totalGain: HoldingsText.gain(amount: -64.1, percent: -2.5, currency: "GBP", mode: mode), totalSign: -64.1
             )
         }
         XCTAssertEqual(sentence(.amounts),
-                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today +£89.84, total gain +£2,912.40.")
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today a gain of +£89.84, total gain a loss of -£64.10.")
         XCTAssertEqual(sentence(.percent),
-                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today +0.42%, total gain +15.70%.")
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today a gain of +0.42%, total gain a loss of -2.50%.")
         XCTAssertEqual(sentence(.amounts, weight: nil),
-                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight not known, today +£89.84, total gain +£2,912.40.")
-        XCTAssertEqual(HoldingsText.rowSentence(symbol: "TSLA", name: "TSLA", isWatchlist: true, price: "$338.20", value: "—",
-                                                weight: nil, today: "—", totalGain: "—"),
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight not known, today a gain of +£89.84, total gain a loss of -£64.10.")
+        XCTAssertEqual(HoldingsText.rowSentence(symbol: "TSLA", name: "TSLA", isWatchlist: true, price: "$338.20", value: "–",
+                                                weight: nil, today: "–", todaySign: 0, totalGain: "–", totalSign: 0),
                        "TSLA, watchlist only, price $338.20.")
         XCTAssertEqual(HoldingsText.rowSentence(symbol: "NEW", name: "", isWatchlist: false, price: "-", value: "-",
-                                                weight: nil, today: "—", totalGain: "—"),
+                                                weight: nil, today: "–", todaySign: 0, totalGain: "–", totalSign: 0),
                        "NEW, price not known, value not known, weight not known, today not known, total gain not known.")
+        XCTAssertEqual(HoldingsText.rowSentence(symbol: "FLAT", name: nil, isWatchlist: false, price: "£1.00", value: "£10.00",
+                                                weight: 1, today: "£0.00", todaySign: 0, totalGain: "+0.00%", totalSign: 0),
+                       "FLAT, price £1.00, value £10.00, weight 1.0%, today unchanged at £0.00, total gain unchanged at +0.00%.")
     }
 
     // MARK: Layout
