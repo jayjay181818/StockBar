@@ -1210,13 +1210,18 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             query: query.cacheKey,
             cursor: continuation?.cursor
         )
-        return await ledgerPolicy.perform(key, forceRefresh: forceRefresh) { [self] in
+        let result: FolyncRoutedLedgerResult<Response>? = await ledgerPolicy.perform(
+            key, forceRefresh: forceRefresh
+        ) { [self] in
             if let continuation {
                 return await self.fetchLedgerLaterPage(query, after: continuation, configuration: configuration)
             }
             let first: LedgerFirstPage<Response> = await self.fetchLedgerFirstPage(query, configuration: configuration)
             return .init(result: first.result, firstPageToKeep: first.isFresh ? first.result : nil)
         }
+        // Nil only for a cancelled caller, which has stopped listening: no
+        // request was made for it.
+        return result ?? .unavailable
     }
 
     private struct LedgerFirstPage<Response: FolyncLedgerResponse>: Sendable {

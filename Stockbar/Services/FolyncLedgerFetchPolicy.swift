@@ -10,7 +10,11 @@ import Foundation
 ///   the same endpoint, scope, route and query, with no request. An explicit
 ///   refresh skips the reuse but still takes its turn.
 /// - Only first pages are kept. A later page ("load more", which is always
-///   explicit) is handed to its caller and kept nowhere.
+///   explicit) is handed to its caller and kept nowhere. A kept page is
+///   dropped once it is past the reuse window.
+/// - A request still waiting its turn is not made if every caller waiting for
+///   it has been cancelled by then, so a run of superseded requests (a filter
+///   changed several times) does not reach Folync one after another.
 ///
 /// It makes no request of its own and runs no timer. The clock is injected so
 /// tests do not wait.
@@ -44,11 +48,24 @@ actor FolyncLedgerFetchPolicy {
         let storedAt: Date
     }
 
+    /// A request started and not yet finished, queued ones included.
+    private struct Pending {
+        let task: Task<any Sendable, Never>
+        let forceRefresh: Bool
+        /// Callers still waiting for the answer.
+        var callers: Int
+    }
+
+    /// What a request returns when it was never made.
+    private struct Abandoned: Sendable {}
+
     let reuseInterval: TimeInterval
     private let now: @Sendable () -> Date
     private var kept: [Key: Kept] = [:]
-    /// Requests started and not yet finished, queued ones included.
-    private var inFlight: [Key: (task: Task<any Sendable, Never>, forceRefresh: Bool)] = [:]
+    private var pending: [UInt64: Pending] = [:]
+    /// The newest pending request for each key: the one a new caller may join.
+    private var newest: [Key: UInt64] = [:]
+    private var lastID: UInt64 = 0
     private var isTurnTaken = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
@@ -63,35 +80,75 @@ actor FolyncLedgerFetchPolicy {
     ///   - key: what is asked for. A first page (no cursor) may be answered
     ///     from what was kept; a later page never is.
     ///   - forceRefresh: skip the reuse window. The request still waits its turn.
+    /// - Returns: the result, or nil when no request was made because the
+    ///   caller was cancelled: either before it asked, or while the request
+    ///   waited its turn with nobody else waiting for it.
     func perform<Value: Sendable>(
         _ key: Key,
         forceRefresh: Bool = false,
         operation: @escaping @Sendable () async -> Outcome<Value>
-    ) async -> Value {
+    ) async -> Value? {
         if !forceRefresh, let reused: Value = reusable(key) { return reused }
+        if Task.isCancelled { return nil }
         // A refresh does not join a request that may still answer from the
         // reuse window; anything else joins the request already under way.
-        if let shared = inFlight[key], shared.forceRefresh || !forceRefresh,
-           let value = await shared.task.value as? Value {
-            return value
+        if let id = newest[key], let shared = pending[id], shared.forceRefresh || !forceRefresh {
+            pending[id]?.callers += 1
+            return await answer(of: shared.task, id: id)
         }
+        lastID += 1
+        let id = lastID
         let task = Task<any Sendable, Never> {
             await self.takeTurn()
-            defer { self.endTurn() }
+            defer { self.finish(id, key: key) }
+            // Every caller gave up while this waited its turn: make no request.
+            if self.pending[id]?.callers == 0 { return Abandoned() }
             if !forceRefresh, let reused: Value = self.reusable(key) { return reused }
             let outcome = await operation()
-            if let firstPage = outcome.firstPageToKeep {
-                self.kept[key.firstPage] = Kept(value: firstPage, storedAt: self.now())
-            }
+            if let firstPage = outcome.firstPageToKeep { self.keep(firstPage, for: key.firstPage) }
             return outcome.result
         }
-        inFlight[key] = (task, forceRefresh)
-        let value = await task.value
-        if inFlight[key]?.task == task { inFlight[key] = nil }
+        pending[id] = Pending(task: task, forceRefresh: forceRefresh, callers: 1)
+        newest[key] = id
+        return await answer(of: task, id: id)
+    }
+
+    /// Waits for a pending request. A caller cancelled meanwhile is counted
+    /// out, but still gets the answer if the request is made for someone else
+    /// or was already under way.
+    private func answer<Value: Sendable>(of task: Task<any Sendable, Never>, id: UInt64) async -> Value? {
+        let value = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { await self.callerGaveUp(id) }
+        }
+        if value is Abandoned { return nil }
         // The task only ever returns `Value` for this key's route.
         guard let typed = value as? Value else { preconditionFailure("Ledger result of an unexpected type") }
         return typed
     }
+
+    private func callerGaveUp(_ id: UInt64) {
+        guard let callers = pending[id]?.callers, callers > 0 else { return }
+        pending[id]?.callers = callers - 1
+    }
+
+    private func finish(_ id: UInt64, key: Key) {
+        pending[id] = nil
+        if newest[key] == id { newest[key] = nil }
+        endTurn()
+    }
+
+    private func keep(_ value: any Sendable, for key: Key) {
+        let time = now()
+        // A page past the reuse window can never be returned again. Dropping
+        // them here keeps a long session from holding every page it loaded.
+        kept = kept.filter { isReusable($0.value, at: time) }
+        kept[key] = Kept(value: value, storedAt: time)
+    }
+
+    /// How many first pages are held for reuse. For tests.
+    var keptPageCount: Int { kept.count }
 
     /// Forgets every kept first page, for example when the connection changes.
     func removeAll() {
@@ -99,10 +156,13 @@ actor FolyncLedgerFetchPolicy {
     }
 
     private func reusable<Value>(_ key: Key) -> Value? {
-        guard key.cursor == nil, let entry = kept[key] else { return nil }
-        let age = now().timeIntervalSince(entry.storedAt)
-        guard age >= 0, age < reuseInterval else { return nil }
+        guard key.cursor == nil, let entry = kept[key], isReusable(entry, at: now()) else { return nil }
         return entry.value as? Value
+    }
+
+    private func isReusable(_ entry: Kept, at time: Date) -> Bool {
+        let age = time.timeIntervalSince(entry.storedAt)
+        return age >= 0 && age < reuseInterval
     }
 
     private func takeTurn() async {

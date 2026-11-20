@@ -417,25 +417,38 @@ extension FolyncLedgerQuery {
         limit.map { URLQueryItem(name: "limit", value: String(min(max($0, 1), maximum))) }
     }
 
-    static func day(_ name: String, _ date: Date?) -> URLQueryItem? {
-        date.map { URLQueryItem(name: name, value: FolyncLedgerDay.string(from: $0)) }
+    static func day(_ name: String, _ day: FolyncLedgerDay?) -> URLQueryItem? {
+        day.map { URLQueryItem(name: name, value: $0.string) }
     }
 }
 
-enum FolyncLedgerDay {
-    /// `yyyy-MM-dd` in UTC, as Folync's date parameters expect.
-    static func string(from date: Date) -> String {
-        formatter.string(from: date)
+/// A calendar day, as Folync's date parameters take one. A query holds the
+/// day itself, not a `Date`, so a day chosen in the user's time zone cannot
+/// shift when it is written out: midnight in London in summer is still the
+/// day before in UTC.
+struct FolyncLedgerDay: Hashable, Sendable {
+    let year: Int
+    let month: Int
+    let day: Int
+
+    init(year: Int, month: Int, day: Int) {
+        self.year = year
+        self.month = month
+        self.day = day
     }
 
-    private static let formatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
+    /// The day `date` falls on in `timeZone`, in the Gregorian calendar.
+    init(_ date: Date, in timeZone: TimeZone) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        self.init(year: parts.year ?? 1970, month: parts.month ?? 1, day: parts.day ?? 1)
+    }
+
+    /// `yyyy-MM-dd`.
+    var string: String {
+        String(format: "%04d-%02d-%02d", year, month, day)
+    }
 }
 
 struct FolyncDividendsQuery: FolyncLedgerQuery {
@@ -450,12 +463,12 @@ struct FolyncDividendsQuery: FolyncLedgerQuery {
 
     var status: Status?
     /// On the pay date.
-    var from: Date?
-    var to: Date?
+    var from: FolyncLedgerDay?
+    var to: FolyncLedgerDay?
     /// Clamped to 1...200.
     var limit: Int?
 
-    init(status: Status? = nil, from: Date? = nil, to: Date? = nil, limit: Int? = nil) {
+    init(status: Status? = nil, from: FolyncLedgerDay? = nil, to: FolyncLedgerDay? = nil, limit: Int? = nil) {
         self.status = status
         self.from = from
         self.to = to
@@ -514,8 +527,8 @@ struct FolyncTransactionsQuery: FolyncLedgerQuery {
     static let maximumLimit = 500
 
     var mode: FolyncTransactionsMode?
-    var from: Date?
-    var to: Date?
+    var from: FolyncLedgerDay?
+    var to: FolyncLedgerDay?
     var instrument: Instrument?
     /// Sent once each, in declaration order, so the same set is always the same query.
     var actions: Set<FolyncTransactionAction>
@@ -524,8 +537,8 @@ struct FolyncTransactionsQuery: FolyncLedgerQuery {
 
     init(
         mode: FolyncTransactionsMode? = nil,
-        from: Date? = nil,
-        to: Date? = nil,
+        from: FolyncLedgerDay? = nil,
+        to: FolyncLedgerDay? = nil,
         instrument: Instrument? = nil,
         actions: Set<FolyncTransactionAction> = [],
         limit: Int? = nil

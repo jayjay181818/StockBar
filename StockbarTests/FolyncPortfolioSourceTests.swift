@@ -2721,8 +2721,14 @@ extension FolyncPortfolioSourceTests {
     }
 
     func testLedgerQueriesUseTheContractParameterNamesAndLimits() throws {
-        let day = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-01-31T12:00:00Z"))
-        let later = day.addingTimeInterval(86_400 * 30)
+        let day = FolyncLedgerDay(year: 2026, month: 1, day: 31)
+        let later = FolyncLedgerDay(year: 2026, month: 3, day: 2)
+        // Midnight on 1 July in London is still 30 June in UTC; the day asked
+        // for is the one the user chose.
+        let londonMidnight = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-06-30T23:00:00Z"))
+        let london = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        XCTAssertEqual(FolyncLedgerDay(londonMidnight, in: london).string, "2026-07-01")
+        XCTAssertEqual(FolyncLedgerDay(londonMidnight, in: try XCTUnwrap(TimeZone(secondsFromGMT: 0))).string, "2026-06-30")
         XCTAssertEqual(
             FolyncDividendsQuery(status: .upcoming, from: day, to: later, limit: 900).queryItems,
             [URLQueryItem(name: "status", value: "upcoming"), URLQueryItem(name: "from", value: "2026-01-31"),
@@ -3266,7 +3272,7 @@ extension FolyncPortfolioSourceTests {
         func key(_ query: String) -> FolyncLedgerFetchPolicy.Key {
             .init(route: .dividends, endpoint: "https://folync.test", scopeID: "all", query: query, cursor: nil)
         }
-        func run(_ name: String) async -> String {
+        func run(_ name: String) async -> String? {
             await policy.perform(key(name)) {
                 log.value.append("start \(name)")
                 try? await Task.sleep(nanoseconds: 50_000_000)
@@ -3285,11 +3291,98 @@ extension FolyncPortfolioSourceTests {
         XCTAssertTrue(entries == ["start a", "end a", "start b", "end b"] || entries == ["start b", "end b", "start a", "end a"],
                       "Operations never interleave: \(entries)")
 
-        let reused: String = await policy.perform(key("a")) { .init(result: "not reused", firstPageToKeep: nil) }
+        let reused: String? = await policy.perform(key("a")) { .init(result: "not reused", firstPageToKeep: nil) }
         XCTAssertEqual(reused, "a")
         clock.value = clock.value.addingTimeInterval(FolyncLedgerFetchPolicy.defaultReuseInterval)
-        let expired: String = await policy.perform(key("a")) { .init(result: "fresh", firstPageToKeep: nil) }
+        let expired: String? = await policy.perform(key("a")) { .init(result: "fresh", firstPageToKeep: nil) }
         XCTAssertEqual(expired, "fresh")
+    }
+
+    func testLedgerFetchPolicyDropsAQueuedRequestOnceItsCallersAreCancelled() async throws {
+        let policy = FolyncLedgerFetchPolicy()
+        func key(_ query: String) -> FolyncLedgerFetchPolicy.Key {
+            .init(route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: query, cursor: nil)
+        }
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        let ran = LockedBox<[String]>([])
+        func ask(_ name: String, answering answer: String? = nil) -> Task<String?, Never> {
+            Task {
+                await policy.perform(key(name)) {
+                    ran.value.append(answer ?? name)
+                    return .init(result: answer ?? name, firstPageToKeep: nil)
+                }
+            }
+        }
+        let held = Task {
+            await policy.perform(key("held")) {
+                ran.value.append("held")
+                for await _ in release { break }
+                return .init(result: "held", firstPageToKeep: nil)
+            }
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        // Behind it: a request nobody will want, one two callers share, and
+        // one that is wanted.
+        let superseded = ask("superseded")
+        let leaving = ask("shared")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let staying = ask("shared", answering: "asked twice")
+        let wanted = ask("wanted")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        superseded.cancel()
+        leaving.cancel()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        releaser.yield()
+        releaser.finish()
+
+        let heldResult = await held.value
+        let supersededResult = await superseded.value
+        let leavingResult = await leaving.value
+        let stayingResult = await staying.value
+        let wantedResult = await wanted.value
+        XCTAssertEqual(heldResult, "held")
+        XCTAssertNil(supersededResult, "Nobody waits for it any more, so it is never asked for")
+        XCTAssertEqual(leavingResult, "shared", "A cancelled caller still gets an answer made for someone else")
+        XCTAssertEqual(stayingResult, "shared", "A request one caller still waits for is made")
+        XCTAssertEqual(wantedResult, "wanted")
+        XCTAssertEqual(ran.value, ["held", "shared", "wanted"])
+    }
+
+    func testLedgerFetchPolicyMakesNoRequestForACallerAlreadyCancelled() async {
+        let policy = FolyncLedgerFetchPolicy()
+        let key = FolyncLedgerFetchPolicy.Key(
+            route: .dividends, endpoint: "https://folync.test", scopeID: "all", query: "", cursor: nil
+        )
+        let ran = LockedBox(false)
+        let cancelled = Task { () -> String? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await policy.perform(key) {
+                ran.value = true
+                return .init(result: "asked", firstPageToKeep: nil)
+            }
+        }
+        let result = await cancelled.value
+        XCTAssertNil(result)
+        XCTAssertFalse(ran.value)
+    }
+
+    func testLedgerFetchPolicyForgetsPagesPastTheReuseWindow() async {
+        let clock = LockedBox(Date(timeIntervalSince1970: 1_780_000_000))
+        let policy = FolyncLedgerFetchPolicy(now: { clock.value })
+        func keep(_ name: String) async {
+            let key = FolyncLedgerFetchPolicy.Key(
+                route: .transactions, endpoint: "https://folync.test", scopeID: "all", query: name, cursor: nil
+            )
+            let _: String? = await policy.perform(key) { .init(result: name, firstPageToKeep: name) }
+        }
+        for name in ["a", "b", "c"] { await keep(name) }
+        let held = await policy.keptPageCount
+        XCTAssertEqual(held, 3)
+
+        clock.value = clock.value.addingTimeInterval(FolyncLedgerFetchPolicy.defaultReuseInterval)
+        await keep("d")
+        let heldLater = await policy.keptPageCount
+        XCTAssertEqual(heldLater, 1, "Pages that can no longer be reused are dropped when a new one is kept")
     }
 }
 
