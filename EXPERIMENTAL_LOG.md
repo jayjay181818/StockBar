@@ -4935,8 +4935,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   minimum width; the label is "Income", not "Income and calendar", since
   there is no Calendar page yet; and there is no "Returns breakdown" row,
   since Folync has no such route yet.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `80dfcbc`. The merge published
+  experimental build 382.3.14 as the prerelease `experimental-382.3.14`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches set up no Folync and never open Settings. Covered by the
   comparison set for the night of 2026-11-20, if this is merged by then,
@@ -4998,6 +5000,101 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     means having the app seed its own settings in an acceptance run; not
     done here.
   - Not tried against a real Folync.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 146: Holdings: a Weight column and one switch for amounts or percentages
+
+- What: the Holdings screen gains a Weight column, between Value and
+  Today: the holding's share of the portfolio to one decimal. It sorts,
+  with an unknown weight below every known one.
+
+  For a Folync portfolio the weight is Folync's own figure for the
+  holding, shown as given and never worked out here; "–" where Folync
+  gives none. Folync's contract does not say what that figure is a share
+  of, so the line under the table says "Weight is Folync's figure" and
+  no more. For a local or Trading 212 portfolio it is the holding's
+  value as a share of the net value the strip shows, both in the same
+  currency, and "–" when the value, the currency, the exchange rate or a
+  positive total is missing. A watchlist row has no weight.
+
+  One visible switch, Amounts and Percent, beside the search field, sets
+  both the Today and the Total gain columns, and is remembered. Before,
+  each column switched when one of its cells was clicked, which nothing
+  on the screen said; clicking a cell now does nothing. The heading
+  "Total P&L" is "Total gain".
+
+  The strip keeps its three figures and where they come from. The US
+  dollar equivalent moves from brackets to a second line, and the total
+  gains say what they are for the source: "Unrealised, as Folync reports
+  it", "Unrealised, as Trading 212 reports it", or "Unrealised, against
+  average cost" for Stockbar's own sum.
+
+  Under the read-only table one line counts what is shown, "9 holdings
+  and 2 watchlist symbols.", with the right singular and plural forms.
+
+  **The fault at the minimum window size is fixed for the read-only
+  table:** every column, Weight included, is inside the card; before, the
+  last heading was cut off. Numbers are right-aligned. VoiceOver reads a
+  row as one sentence, with the weight and whichever of amount or
+  percentage is showing.
+
+  The editing table for a local portfolio is unchanged. The worker had
+  narrowed every one of its columns so that it fitted the card at the
+  minimum size; that layout cannot be seen in the acceptance copy, which
+  is always a Folync portfolio, so the session lead put the widths back.
+  It is wider than the card at the minimum size and scrolls sideways
+  there, as it always has. Weight is not shown in it.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 145 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 964 XCTest tests with 0 failures.
+  Eleven are in a new class in `PortfolioCalculationTests.swift`: a
+  Folync holding's weight as given and "–" when Folync gives none; a
+  local holding's weight, with a value, a currency or a total missing; a
+  watchlist row; the weight's text and its sort order; the one switch and
+  its stored key; the strip's second lines for each source; the line
+  under the table for one, two and no watchlist symbols; a row's sentence
+  for VoiceOver in both modes; and that the editing table's widths are
+  what they were. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: unknown weights sorted first; "holdings" used for one
+  holding; the Folync gains called "against average cost"; and a Folync
+  weight worked out from values. A fifth, a wider column in the editing
+  table, was caught by a test of the narrowed layout that went with it.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page before and after, in dark and light, at the minimum
+  size and at 1286 by 850, in Amounts and in Percent, sorted by Weight
+  and with a search. Its first version left the cells showing the old
+  choice when the switch changed; it saw that on screen and fixed it.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the layout change and
+  what else changed in the editing rows, looked at the worker's captures
+  at the minimum size, and put the editing table's widths back. It did
+  not read the rest of the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The editing table was not seen on screen**, before or after: the
+    acceptance copy cannot be a local portfolio (see record 145).
+  - Watchlist rows were not seen on screen; the stand-in has none.
+  - The weight and the gains caption for a Trading 212 portfolio are not
+    tested: no test helper builds a broker snapshot.
+  - The choice of Amounts or Percent surviving a relaunch was not seen;
+    each acceptance run starts with fresh storage.
+  - With a fresh Trading 212 snapshot the net value is the broker's whole
+    account, cash included, so a holding entered by hand beside it is
+    weighed against a total that leaves it out.
+  - An unknown figure in a row is now "–" in every column; Value, Today
+    and Total gain used "—".
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
