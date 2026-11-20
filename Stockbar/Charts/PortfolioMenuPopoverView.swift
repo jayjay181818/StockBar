@@ -124,6 +124,8 @@ enum PortfolioMenuChartDataBuilder {
 
     static func coversRange(_ points: [MenuChartDataPoint], range: MenuChartTimeRange, now: Date = Date()) -> Bool {
         guard let first = points.first, let last = points.last, points.count > 1 else { return false }
+        // "All" starts wherever the stored history starts; it only has to be recent.
+        if range == .all { return last.date >= now.addingTimeInterval(-MenuChartTimeRange.week.timeInterval) }
         let duration = now.timeIntervalSince(range.startDate(from: now))
         return first.date <= range.startDate(from: now).addingTimeInterval(duration * 0.2)
             && last.date >= now.addingTimeInterval(-duration * 0.2)

@@ -37,7 +37,8 @@ final class MenuChartTimeRangeSelectionStore {
 
     func selectedTimeRange(for symbol: String) -> MenuChartTimeRange {
         guard let rawValue = defaults.string(forKey: key(for: symbol)),
-              let range = MenuChartTimeRange(rawValue: rawValue) else {
+              let range = MenuChartTimeRange(rawValue: rawValue),
+              MenuChartTimeRange.menuRanges.contains(range) else {
             return .day
         }
         return range

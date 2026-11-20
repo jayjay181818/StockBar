@@ -587,6 +587,92 @@ struct StockbarChangeBadge: View {
     }
 }
 
+// MARK: - Overview: hero figure and composition bar
+
+/// One large figure with the decimals smaller and quieter: "£84,310" and ".47".
+struct StockbarHeroFigure: View {
+    let text: String
+    var size: CGFloat = 50
+
+    /// Splits a formatted figure into its whole part and the rest, from the
+    /// decimal separator on: "£84,310" and ".47"; "1,234" and ".50 CHF". Figures
+    /// from `HoldingsCurrencyFormatter` always use a point, whatever the user's
+    /// locale, so that is the default. Not split unless the separator is
+    /// followed by digits and then nothing but a currency suffix.
+    static func split(_ text: String, decimalSeparator: String = ".") -> (whole: String, fraction: String) {
+        guard !decimalSeparator.isEmpty,
+              let range = text.range(of: decimalSeparator, options: .backwards) else { return (text, "") }
+        let rest = text[range.upperBound...]
+        let digits = rest.prefix { $0.isNumber }
+        let suffix = rest.dropFirst(digits.count)
+        guard !digits.isEmpty, suffix.allSatisfy({ !$0.isNumber && $0 != "," && $0 != "." }) else { return (text, "") }
+        return (String(text[..<range.lowerBound]), String(text[range.lowerBound...]))
+    }
+
+    var body: some View {
+        let parts = Self.split(text)
+        let whole = Text(verbatim: parts.whole).font(.system(size: size, weight: .bold))
+        let fraction = Text(verbatim: parts.fraction)
+            .font(.system(size: size * 0.56, weight: .semibold))
+            .foregroundStyle(.secondary)
+        Text("\(whole)\(fraction)")
+            .monospacedDigit()
+            .tracking(-0.6)
+            .lineLimit(1)
+    }
+}
+
+extension StockbarPalette {
+    /// The composition bar's segments: net deposits grey, unrealised gains the
+    /// gain green, realised gains a quieter green, the remainder amber.
+    static func compositionFill(_ kind: PortfolioTotalComposition.Kind) -> Color {
+        switch kind {
+        case .netDeposits: depositsFill
+        case .unrealisedGains: gain
+        case .realisedGains: realisedFill
+        case .incomeInterestAndFees: incomeFill
+        }
+    }
+
+    static let depositsFill = adaptive(light: NSColor(white: 0.62, alpha: 1), dark: NSColor(white: 0.45, alpha: 1))
+    static let realisedFill = adaptive(
+        light: NSColor(srgbRed: 0.36, green: 0.62, blue: 0.45, alpha: 1),
+        dark: NSColor(srgbRed: 0.25, green: 0.56, blue: 0.36, alpha: 1)
+    )
+    static let incomeFill = adaptive(
+        light: NSColor(srgbRed: 0.80, green: 0.55, blue: 0.05, alpha: 1),
+        dark: NSColor(srgbRed: 0.99, green: 0.78, blue: 0.20, alpha: 1)
+    )
+}
+
+/// The single bar of a `PortfolioTotalComposition`: one segment per positive part,
+/// in proportion. Decorative: the legend beside it carries the figures.
+struct StockbarCompositionBar: View {
+    let composition: PortfolioTotalComposition
+    var height: CGFloat = 14
+
+    var body: some View {
+        let fractions = composition.barFractions
+        GeometryReader { proxy in
+            let shown = fractions.indices.filter { fractions[$0] > 0 }
+            let spacing: CGFloat = 3
+            let usable = max(proxy.size.width - spacing * CGFloat(max(shown.count - 1, 0)), 0)
+            HStack(spacing: spacing) {
+                ForEach(shown, id: \.self) { index in
+                    Rectangle()
+                        .fill(StockbarPalette.compositionFill(composition.parts[index].kind))
+                        .frame(width: usable * fractions[index])
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: height)
+        .stockbarSurface(.track, in: Capsule())
+        .clipShape(Capsule())
+        .accessibilityHidden(true)
+    }
+}
+
 /// A label/value row with a hairline divider, used in summary cards.
 struct StockbarDetailRow: View {
     let label: String
