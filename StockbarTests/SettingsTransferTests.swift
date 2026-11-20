@@ -1039,11 +1039,12 @@ final class StockbarSurfaceTests: XCTestCase {
         }
     }
 
-    func testTheCardIsTranslucentWithAHighlightAndDiffersByScheme() {
+    func testTheCardIsTranslucentAndDiffersByScheme() {
         let light = StockbarSurfaceStyle.resolve(.card, scheme: .light)
         let dark = StockbarSurfaceStyle.resolve(.card, scheme: .dark)
-        XCTAssertNotNil(light.highlight)
-        XCTAssertNotNil(dark.highlight)
+        XCTAssertNotNil(dark.highlight, "the dark card has its faint top highlight")
+        XCTAssertNil(light.highlight, "on the white detail column a white highlight would erase the top hairline")
+        XCTAssertNotEqual(light.shadow, .clear, "a light card lifts off the white page with a soft shadow")
         XCTAssertLessThan(light.drawnOpacity, 1)
         XCTAssertLessThan(dark.drawnOpacity, 0.2, "a dark card is a faint tint, not a slab")
         XCTAssertNotEqual(light, dark)

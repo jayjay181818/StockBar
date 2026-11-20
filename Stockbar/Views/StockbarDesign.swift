@@ -121,8 +121,9 @@ struct StockbarSurfaceStyle: Equatable {
     var strokeWidth: CGFloat
     /// The brighter hairline along the top of a card; nil for every other surface.
     var highlight: Color?
-    /// Drop shadow under a raised element (a callout, the selected segment).
+    /// Drop shadow under a raised element (a light card, a callout, the selected segment).
     var shadow: Color
+    var shadowRadius: CGFloat = 3
 
     /// The fill's opacity once drawn over `base`: 1 when the surface is solid.
     var drawnOpacity: Double {
@@ -170,9 +171,13 @@ struct StockbarSurfaceStyle: Equatable {
         static func of(_ surface: StockbarSurface, isDark dark: Bool) -> Self {
             switch surface {
             case .card:
+                // Until the window shell turns tinted, the light detail column
+                // is plain white: a white highlight there would erase the top
+                // hairline, so a light card has a firmer stroke and a soft
+                // shadow instead.
                 Recipe(fill: dark ? 0.055 : 0.72, raised: true, solid: dark ? 0.165 : 0.98,
-                       stroke: dark ? 0.10 : 0.07, highlight: dark ? 0.20 : 0.95,
-                       tintFill: dark ? 0.14 : 0.10, tintStroke: 0.22)
+                       stroke: 0.10, highlight: dark ? 0.20 : nil,
+                       shadow: dark ? nil : 0.06, tintFill: dark ? 0.14 : 0.10, tintStroke: 0.22)
             case .field:
                 Recipe(fill: dark ? 0.055 : 0.72, raised: true, solid: dark ? 0.165 : 0.98,
                        stroke: dark ? 0.12 : 0.10)
@@ -228,7 +233,7 @@ struct StockbarSurfaceStyle: Equatable {
             fill = white(dark || recipe.raised ? 1 : 0, opacity)
         }
         let plain = !contrast && !accessibility.reduceTransparency
-        return Self(
+        var style = Self(
             base: nil,
             fill: fill,
             stroke: stroke,
@@ -236,6 +241,8 @@ struct StockbarSurfaceStyle: Equatable {
             highlight: plain ? recipe.highlight.map { white(1, $0) } : nil,
             shadow: recipe.shadow.map { accessibility.reduceTransparency ? .clear : Color.black.opacity($0) } ?? .clear
         )
+        if recipe.raised && recipe.fill < 0.9 { style.shadowRadius = 6 }
+        return style
     }
 
     private static func tinted(_ tint: Color, recipe: Recipe, accessibility: StockbarSurfaceAccessibility) -> Self {
@@ -300,7 +307,8 @@ private struct StockbarSurfaceModifier<S: InsettableShape>: ViewModifier {
                     }
                     shape.fill(style.fill)
                 }
-                .shadow(color: style.shadow, radius: style.shadow == .clear ? 0 : 3, y: style.shadow == .clear ? 0 : 1)
+                .shadow(color: style.shadow, radius: style.shadow == .clear ? 0 : style.shadowRadius,
+                        y: style.shadow == .clear ? 0 : style.shadowRadius / 3)
             }
             .overlay {
                 if style.strokeWidth > 0 {
@@ -682,6 +690,9 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
                 self.segment(segment)
             }
         }
+        // One group around exactly the segment buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(exposure.label)
         .padding(2)
         .stockbarSurface(.track, in: Capsule())
         .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
@@ -690,8 +701,6 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
             select(next)
             return .handled
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(exposure.label)
     }
 
     private func segment(_ segment: Segment) -> some View {
