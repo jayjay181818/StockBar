@@ -328,7 +328,18 @@ measured launch. After the repeat no row shows a measurable change, and
 both tables are in its record. No launch was measured on a quiet Mac, and
 the rule written before the first launch left the merge to the owner in
 that case. The owner then said "go on", which is the word the rule asked
-for.
+for, and it was merged on 2026-11-20 as `5fa923b`.
+
+The same day the owner parked the benchmarks: no comparison is run until
+the other project's work on this Mac has been idle for more than 20
+minutes. Pull request 135, the first of the redesign's data work,
+therefore has no table yet. Asked the same day, the owner chose to merge
+the redesign's pull requests on their local checks and review with the
+benchmark owed. One comparison for each phase is run in the first quiet
+window, and until then each record says that its benchmark is owed. The
+rule is set out under [How this branch works](#how-this-branch-works).
+Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
+Pull request 136, the Yahoo lookup the Calendar needs, follows it.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3545,8 +3556,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   provider's gate changes. The preflight report gains
   `loopbackFolyncAllowed`, so the evidence shows the exception, and
   `Docs/Development.md` describes it.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `5fa923b`. The merge published
+  experimental build 382.3.3 as the prerelease `experimental-382.3.3`.
+  Checked after it: both jobs of the release workflow succeeded and the
+  prerelease is listed. The published archive was not downloaded or
+  opened.
 - Benchmark: before `01d4768`, after `7aba2f7`, the standard comparison,
   six launches a side in turns, run twice on 2026-11-20, on macOS 27.2.1
   and mains power, with the screen unlocked and the display awake. After
@@ -3711,6 +3725,140 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   first launch left the merge to the owner in that case. Told so, with
   the tables and the conditions, the owner said "go on" on 2026-11-20.
 
+### 135: Read Folync's dividends, trade analysis and transactions
+
+- What: the groundwork for the redesign's Income, Activity and Trades
+  pages. Stockbar can now read three Folync routes it did not call:
+  dividends, trade analysis and transactions. Nothing on screen changes,
+  and nothing calls the routes yet; the pages come in later pull
+  requests.
+
+  Stored settings first. `FolyncSupplementalSettings` decoded with the
+  synthesized decoder, so adding a field would have made settings stored
+  by an older build fail to decode, and the Folync configuration would
+  have fallen back to everything off. It now decodes field by field. A
+  missing existing field is off. Three new fields, `dividends`,
+  `tradeAnalysis` and `transactions`, are on when missing, because these
+  routes are fetched only when their page is opened; a new connection
+  takes each from Folync's capabilities. No Settings switch shows them
+  yet. The three routes have their own enum, `FolyncLedgerRoute`, because
+  the Settings screen and the acceptance preflight list every case of
+  `FolyncSupplementalRoute`.
+
+  Folync's capabilities gain three optional resources. A capabilities
+  document saved by an older build has none of them, and confirming it
+  with a 304 would have hidden the routes for good, so documents are now
+  saved under a new cache key. The old document is used only while Folync
+  does not answer, and its ETag is never sent.
+
+  Models for the three responses are in `Services/FolyncLedgerData.swift`.
+  Unknown keys are ignored, a figure Folync sends as null stays unknown
+  and is never read as zero, and an enum value this build does not know
+  is kept. Each route follows the portfolio-history route: the settings,
+  scope and capability gates, the saved copy with its ETag, 304, schema
+  version 2, a stale copy when Folync does not answer, and "could not
+  reach" told apart from "not available".
+
+  Folync rebuilds its whole report for each of these routes, does not
+  queue them, and a later page costs as much as the first. So one object,
+  `FolyncLedgerFetchPolicy`, sits in front of all three. Requests take
+  turns, one at a time across the three routes, and callers asking for
+  the same thing share one request. A first page is reused for five
+  minutes with no request, unless the caller asks for a refresh. Later
+  pages come only from an explicit "load more" and are kept nowhere. A
+  409, a refused cursor or a changed collection revision restarts from
+  page one. A request still waiting its turn is not made once every
+  caller waiting for it has been cancelled. Date parameters are calendar
+  days, not instants, so a day chosen in the user's time zone is the day
+  asked for.
+- Merged: 2026-11-20, squash commit `e04e21b`. The merge published
+  experimental build 382.3.4 as the prerelease `experimental-382.3.4`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run. The owner parked the benchmarks on
+  2026-11-20, see [Where things stand](#where-things-stand), and the
+  other project's work was running while this was built. All fifteen rows
+  of the standard set are therefore not measured for this pull request,
+  and none is carried over from another run. Expected, not measured: no
+  row moves, because nothing calls the new routes and the benchmark's
+  launches set up no Folync. It is covered by the phase's comparison in
+  the first quiet window.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 789 XCTest tests with 0
+  failures. 35 are new: 29 in `FolyncPortfolioSourceTests` and 6 in
+  `Trading212BrokerSyncTests`. They go through a stubbed `URLSession` and
+  cover, for the three routes: page one from each route's own path; the
+  query parameter names and limits; 304; a body that does not decode and
+  a schema other than 2; offline with and without a saved copy; 502 and
+  503 against 500 and 404; the route or Folync switched off; the
+  capability absent, unsupported and not ready; the shared backoff after
+  401 and 429; no request when the provider policy refuses; an invalid
+  scope; saved copies kept apart by route, scope and query; load more;
+  the three restarts; a 400 that is not about the cursor; reuse inside
+  five minutes and a request after it; a failed or stale answer not
+  reused; requests never overlapping across routes; identical concurrent
+  calls sharing one request; a refresh not joining a request that may
+  reuse; a queued request dropped when its callers are cancelled, and
+  made when one still waits; no request for a caller already cancelled;
+  kept pages forgotten after the window; a London summer midnight asking
+  for the right day. The settings tests decode the exact JSON an older
+  build stored, a blob with keys missing and a round trip. The
+  capabilities tests decode with and without the new resources.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed. By the worker, ten: the reuse window ignored (seven
+  tests failed); a null figure read as zero (one); the one-at-a-time gate
+  removed (two); the 409 restart removed (one); the revision restart
+  removed (one); sharing removed (two); a 404 returning the saved copy
+  (one); the old capabilities ETag sent (one); a missing new setting
+  decoded as off (two); the provider check skipped (one). The first try
+  at removing the gate was caught only by the policy's own test, because
+  the stub answered on one thread, so the stub was changed to hold
+  requests open together. By the session lead, four, on the lead's own
+  changes: the dropped-request check removed, the forgetting removed, the
+  check for a caller already cancelled removed, and the time zone
+  ignored. One test failed for each.
+
+  `checks`, `docs-check` and `build-release` pass on the final commit.
+  70 Python helper tests and 92 script tests passed on the worker's last
+  commit; the lead's commit after it changed Swift and one document, no
+  Python.
+
+  Not run: the app. Nothing calls the routes, so there is nothing to see,
+  and neither a real Folync nor the stand-in used for the acceptance copy
+  serves them to this code yet.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the fetch policy, the
+  routes, the settings and capabilities changes and the query types in
+  full, the models in outline, and checked the page, the dividend event
+  and the dividend summary against Folync's client contract. It did not
+  read every test, only their names and the policy's. It changed three
+  things: the dropped request and the caller already cancelled, the
+  forgetting of kept pages, and the calendar-day type. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - None of this has been tried against a real Folync. Two behaviours
+    follow the written contract alone: which 400 counts as a refused
+    cursor, and each response's scope matching the scope asked for.
+  - A stored configuration with no supplemental settings at all still
+    reads as everything off, the three new routes included, until a
+    Settings switch exists for them.
+  - The shapes shared with the existing routes are strict. A quality or
+    scope kind this build does not know still fails the whole answer, as
+    it does for the snapshot and the history.
+  - Parts of the dividends answer that no planned page uses are not
+    decoded: liability coverage, corporate cash flows, undated
+    announcements, per-source coverage and forecast detail. From a
+    transaction, the exchange-rate basis and the provenance.
+  - A cancelled caller is not released at once. It waits until its
+    request's turn comes, and only then learns that no request was made.
+  - A server whose capabilities list none of the three routes is asked
+    for its capabilities in full once after the update, then confirmed
+    with 304 as before.
+- Verdict: retained, with its benchmark owed. The owner chose on
+  2026-11-20 to merge on the local checks and the review, and to measure
+  each phase in the first quiet window.
+
 ### 136: Ask Yahoo for instrument type, dividend dates and earnings dates
 
 - What: the groundwork for the redesign's Calendar, its reminders, the
@@ -3756,7 +3904,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   therefore not measured for this pull request, and none is carried over
   from another run. Expected, not measured: no row moves, because nothing
   calls the service. The three Python rows start the worker, whose list
-  of scripts gains one name; what it loads at start is unchanged.
+  of scripts gains one name; what it loads at start is unchanged. It is
+  covered by the next comparison run under the rule of 2026-11-20.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 766 XCTest tests with 0
   failures. Twelve are new, in `OHLCFetchServiceTests.swift`, with the
   process runner stubbed and the clock injected: every field decoded and
@@ -3795,6 +3944,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `checks`, `docs-check` and `build-release` pass on the final commit,
   and so do 92 script tests.
 
+  After pull request 135 was merged this branch was brought up to date
+  with it, and everything was run again on the two together: 801 XCTest
+  tests with 0 failures, 103 Python helper tests and 92 script tests,
+  with `checks`, `docs-check` and `build-release`.
+
   No request was made to Yahoo in building or testing this. What is
   known of Yahoo's real answers is the one-off check of 2026-11-19: a US
   share gave every date and twelve months of dividends; a London share
@@ -3823,11 +3977,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     symbols are held in memory and do not survive a relaunch.
   - Symbols go to Yahoo exactly as given. The aliases and the `.LON`
     handling of `get_stock_data.py` are not applied.
-  - This record and pull request 135's are added at the same place in
-    this file, so whichever is merged second has to be brought up to
-    date first.
-- Verdict: pending. The benchmark is owed, and merging before it is the
-  owner's decision.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20
+  under [How this branch works](#how-this-branch-works).
 
 ## Rust evaluation, 2026-11-12
 
@@ -3987,6 +4138,19 @@ supervised trial against Yahoo.
   behaviour still works, the benchmark record is complete, no known
   regression. A change that trades one metric for another stays open for a
   decision. A performance change with no measurable benefit is not merged.
+- From 2026-11-20, at the owner's word, the benchmarks are parked while
+  another project's builds and tests run on the same Mac: no comparison is
+  started until that work has been idle for more than 20 minutes. Until
+  then the redesign's pull requests are merged on their local checks and
+  review, each record saying that its benchmark is owed. One comparison is
+  run for each phase of the redesign, in the first quiet window after the
+  phase's last pull request is merged. It runs from the last commit
+  measured to the newest, so it also covers pull requests of other phases
+  merged in between, and its table goes into this log through the next
+  pull request. A
+  row that moves is repeated, and if it holds, the phase's pull requests
+  are measured one by one to find the cause. This replaces, for the
+  redesign, the rule that every pull request carries its own table.
 - The CI workflow does not run for `experimental` or for pull requests into
   it, so every check is run locally: `bash script/develop.sh test`, `checks`,
   `python-tests`, `build-release`, and

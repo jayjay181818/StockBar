@@ -147,7 +147,10 @@ enum StockbarAcceptancePreflight {
             candlestickCharts: true,
             benchmarkMarketData: true,
             exchangeRates: true,
-            allowLegacyFallback: false
+            allowLegacyFallback: false,
+            dividends: true,
+            tradeAnalysis: true,
+            transactions: true
         )
         FolyncSettingsStore(defaults: defaults).save(FolyncStoredSettings(
             isEnabled: true,
