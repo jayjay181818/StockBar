@@ -2630,6 +2630,23 @@ final class PortfolioMenuPopoverTests: XCTestCase {
         XCTAssertTrue(PortfolioMenuMovers.movers(from: []) { _ in 0 }.isEmpty, "an empty portfolio has no rows")
     }
 
+    func testMoversShowTheTickerAloneUnlessTwoHoldingsWouldReadTheSame() {
+        let service = PortfolioCalculationService(currencyConverter: converter)
+        let trades = [
+            holding("NVDA", price: 103, previousClose: 100, identity: "folync-nvda", label: "NVDA · Demo portfolio"),
+            holding("AAPL", price: 102, previousClose: 100, identity: "folync-aapl", label: "AAPL · Demo portfolio"),
+            holding("VUSA", price: 101, previousClose: 100, identity: "folync-vusa-1", label: "VUSA · First portfolio"),
+            holding("VUSA", price: 101, previousClose: 100, identity: "folync-vusa-2", label: "VUSA · Second portfolio"),
+            holding("MSFT", price: 99, previousClose: 100, label: "Microsoft")
+        ]
+        let movers = PortfolioMenuMovers.movers(from: trades) { service.calculatePositionProfitLoss(for: $0).dayPercent }
+
+        XCTAssertEqual(movers.map(\.symbol),
+                       ["NVDA", "AAPL", "VUSA · First portfolio", "VUSA · Second portfolio", "Microsoft"],
+                       "a row shows the ticker, and the portfolio only where two rows would otherwise read the same")
+        XCTAssertEqual(PortfolioMenuMovers.ticker(of: " · Demo portfolio"), " · Demo portfolio", "never an empty name")
+    }
+
     func testTheBarScaleIsTheLargestMoveRoundedUpToAWholePercentWithAFloorOfOne() {
         XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", 2.69), mover("B", -0.64)]), 3)
         XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", 0.5), mover("B", -3.0)]), 3, "a loss sets the scale too")

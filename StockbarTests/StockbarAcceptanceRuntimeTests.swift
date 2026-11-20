@@ -540,7 +540,8 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         "STOCKBAR_ACCEPTANCE_APPEARANCE": "light",
         "STOCKBAR_ACCEPTANCE_SECTION": "risk",
         "STOCKBAR_ACCEPTANCE_CURRENCY": "gbp",
-        "STOCKBAR_ACCEPTANCE_WINDOW": "min"
+        "STOCKBAR_ACCEPTANCE_WINDOW": "min",
+        "STOCKBAR_ACCEPTANCE_POPOVER": "portfolio"
     ]
 
     private let explicitRun = StockbarAcceptanceRuntime(
@@ -556,6 +557,7 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         XCTAssertEqual(options.section, StockbarMainSection.risk.rawValue)
         XCTAssertEqual(options.currency, "GBP")
         XCTAssertTrue(options.opensAtMinimumSize)
+        XCTAssertTrue(options.opensPortfolioPopover)
     }
 
     func testANormalRunIgnoresTheOptions() throws {
@@ -584,7 +586,8 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             ("STOCKBAR_ACCEPTANCE_APPEARANCE", "sepia"),
             ("STOCKBAR_ACCEPTANCE_SECTION", "performance"),
             ("STOCKBAR_ACCEPTANCE_CURRENCY", "XYZ"),
-            ("STOCKBAR_ACCEPTANCE_WINDOW", "max")
+            ("STOCKBAR_ACCEPTANCE_WINDOW", "max"),
+            ("STOCKBAR_ACCEPTANCE_POPOVER", "symbol")
         ]
         let expected = StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: explicitRun)
         for (key, value) in unknown {
@@ -595,6 +598,7 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             case StockbarAcceptanceLaunchOptions.appearanceKey: withoutIt.appearance = nil
             case StockbarAcceptanceLaunchOptions.sectionKey: withoutIt.section = nil
             case StockbarAcceptanceLaunchOptions.currencyKey: withoutIt.currency = nil
+            case StockbarAcceptanceLaunchOptions.popoverKey: withoutIt.opensPortfolioPopover = false
             default: withoutIt.opensAtMinimumSize = false
             }
             XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicitRun),

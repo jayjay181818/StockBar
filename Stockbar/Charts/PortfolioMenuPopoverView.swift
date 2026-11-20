@@ -121,15 +121,31 @@ enum PortfolioMenuMovers {
     /// app's own figure for a position's day.
     static func movers(from trades: [RealTimeTrade], dayPercent: (RealTimeTrade) -> Double) -> [PortfolioMenuMover] {
         var seen = Set<String>()
-        let movers = trades.compactMap { trade -> PortfolioMenuMover? in
+        let held = trades.compactMap { trade -> (id: String, label: String, percent: Double)? in
             guard !trade.trade.isWatchlistOnly,
                   !SymbolMetadata.isBenchmarkSymbol(trade.trade.name),
                   trade.trade.position.unitSize > 0 else { return nil }
             let id = trade.sourceIdentity ?? trade.trade.name
             guard seen.insert(id).inserted else { return nil }
-            return PortfolioMenuMover(id: id, symbol: trade.displayLabel ?? trade.trade.name, percent: dayPercent(trade))
+            return (id, trade.displayLabel ?? trade.trade.name, dayPercent(trade))
+        }
+        // A row has room for a ticker, not for "NVDA · Demo portfolio", which
+        // is how a Folync aggregate labels a holding. Show the ticker alone,
+        // unless two holdings would then read the same.
+        let sharing = Dictionary(grouping: held, by: { ticker(of: $0.label) }).mapValues(\.count)
+        let movers = held.map { item -> PortfolioMenuMover in
+            let short = ticker(of: item.label)
+            return PortfolioMenuMover(id: item.id, symbol: sharing[short] == 1 ? short : item.label, percent: item.percent)
         }
         return ordered(movers)
+    }
+
+    /// The part of a holding's label before the portfolio name a Folync
+    /// aggregate adds ("NVDA · Demo portfolio" gives "NVDA").
+    static func ticker(of label: String) -> String {
+        guard let separator = label.range(of: " · ") else { return label }
+        let ticker = String(label[..<separator.lowerBound])
+        return ticker.isEmpty ? label : ticker
     }
 
     /// Biggest gain first, down to the biggest loss; unknown changes last.
