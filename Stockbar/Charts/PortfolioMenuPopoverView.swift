@@ -971,18 +971,22 @@ struct PortfolioMenuSummaryStrip: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(StockbarPalette.signedOnPopover(Double(figures.totalReturnSign), neutral: .primary))
                         .stockbarRollingDigits()
+                        .minimumScaleFactor(0.75)
+                        .layoutPriority(1)
+                    // The amount keeps its room; the percentage gives way first.
                     Text(figures.totalReturnPercent)
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundStyle(textStyle.secondary)
+                        .minimumScaleFactor(0.7)
                 }
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
             .accessibilityElement(children: .combine)
 
-            Divider().frame(height: 34).padding(.horizontal, 12)
+            Divider().frame(height: 34).padding(.horizontal, 10)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(figures.basisLabel)
@@ -995,7 +999,7 @@ struct PortfolioMenuSummaryStrip: View {
                     .minimumScaleFactor(0.8)
                     .stockbarRollingDigits()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
             .accessibilityElement(children: .combine)
         }
         .padding(.top, 10)
