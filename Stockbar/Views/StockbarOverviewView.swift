@@ -631,8 +631,24 @@ struct StockbarOverviewCompositionCard: View {
     /// "Cash £2,940.18 · 9 positions".
     let footnote: String
 
+    /// What VoiceOver reads, in order: the heading (with the total return),
+    /// then one label per part. The bar itself is decorative and hidden.
+    struct Exposure: Equatable {
+        let heading: String
+        let parts: [String]
+    }
+
+    static func accessibility(_ composition: PortfolioTotalComposition, returnText: String) -> Exposure {
+        let heading = StockbarOverviewView.compositionHeading(composition)
+        return Exposure(
+            heading: returnText.isEmpty ? heading : "\(heading), \(returnText)",
+            parts: composition.parts.map { StockbarOverviewView.accessibilityLabel($0, currency: composition.currency) }
+        )
+    }
+
     var body: some View {
         let heading = StockbarOverviewView.compositionHeading(composition)
+        let exposure = Self.accessibility(composition, returnText: returnText)
         VStack(alignment: .leading, spacing: 14) {
             Group {
                 if returnText.isEmpty {
@@ -644,7 +660,7 @@ struct StockbarOverviewCompositionCard: View {
             .font(.system(size: 16))
             .monospacedDigit()
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(returnText.isEmpty ? heading : "\(heading), \(returnText)")
+            .accessibilityLabel(exposure.heading)
             .accessibilityAddTraits(.isHeader)
             StockbarCompositionBar(composition: composition)
             if composition.barShowsPositivePartsOnly {
@@ -653,10 +669,10 @@ struct StockbarOverviewCompositionCard: View {
                     .foregroundStyle(.secondary)
             }
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 12) { legend(PortfolioTotalComposition.Kind.allCases) }
+                HStack(alignment: .top, spacing: 12) { legend(0..<4, exposure) }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                    GridRow { legend([.netDeposits, .unrealisedGains]) }
-                    GridRow { legend([.realisedGains, .incomeInterestAndFees]) }
+                    GridRow { legend(0..<2, exposure) }
+                    GridRow { legend(2..<4, exposure) }
                 }
             }
             Text(footnote)
@@ -666,8 +682,9 @@ struct StockbarOverviewCompositionCard: View {
         .stockbarCard()
     }
 
-    private func legend(_ kinds: [PortfolioTotalComposition.Kind]) -> some View {
-        ForEach(composition.parts.filter { kinds.contains($0.kind) }, id: \.kind) { part in
+    private func legend(_ indices: Range<Int>, _ exposure: Exposure) -> some View {
+        ForEach(indices, id: \.self) { index in
+            let part = composition.parts[index]
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     RoundedRectangle(cornerRadius: 2)
@@ -691,7 +708,30 @@ struct StockbarOverviewCompositionCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(StockbarOverviewView.accessibilityLabel(part, currency: composition.currency))
+            .accessibilityLabel(exposure.parts[index])
         }
     }
+}
+
+// The states the acceptance copy cannot show while its stand-in answers.
+// Invented figures.
+#Preview("Notice and a negative part") {
+    VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
+        StockbarNotice(message: "Couldn't reach Folync. Showing the figures saved at 14:10.")
+        if let composition = PortfolioTotalComposition(
+            currency: "GBP",
+            total: .init(value: 84_310.47, currency: "GBP"),
+            netDeposits: .init(value: 68_408.36, currency: "GBP"),
+            unrealised: .init(value: 16_122.11, currency: "GBP"),
+            realised: .init(value: -1_611.86, currency: "GBP", isPartial: true)
+        ) {
+            StockbarOverviewCompositionCard(
+                composition: composition,
+                returnText: "total return +£15,902.11 (+23.25%)",
+                footnote: "Cash £2,940.18 · 9 positions"
+            )
+        }
+    }
+    .padding(28)
+    .frame(width: 900)
 }

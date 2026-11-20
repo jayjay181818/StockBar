@@ -204,7 +204,7 @@ struct PortfolioTotalComposition: Equatable {
             Part(kind: .netDeposits, minorUnits: units[1], isPartial: netDeposits.isPartial),
             Part(kind: .unrealisedGains, minorUnits: units[2], isPartial: unrealised.isPartial),
             Part(kind: .realisedGains, minorUnits: units[3], isPartial: realised.isPartial),
-            Part(kind: .incomeInterestAndFees, minorUnits: remainder, isPartial: anyPartial),
+            Part(kind: .incomeInterestAndFees, minorUnits: remainder, isPartial: anyPartial)
         ]
     }
 
