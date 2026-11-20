@@ -8,19 +8,39 @@ enum FolyncSupplementalRoute: String, CaseIterable, Codable, Hashable, Sendable 
     case exchangeRates
 }
 
+/// Folync's ledger routes. Kept apart from `FolyncSupplementalRoute`, which
+/// the Settings screen and the acceptance preflight iterate: these have no
+/// legacy fallback, are fetched only when their page opens, and go through
+/// `FolyncLedgerFetchPolicy`.
+enum FolyncLedgerRoute: String, CaseIterable, Codable, Hashable, Sendable {
+    case dividends
+    case tradeAnalysis
+    case transactions
+}
+
 struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
     var historicalLineCharts: Bool
     var candlestickCharts: Bool
     var benchmarkMarketData: Bool
     var exchangeRates: Bool
     var allowLegacyFallback: Bool
+    /// The ledger routes (`FolyncLedgerRoute`). They are fetched only when
+    /// their page is opened, so they default to on: settings stored before
+    /// they existed decode with them on, and an existing connection does not
+    /// have to switch on each new page by hand.
+    var dividends: Bool = true
+    var tradeAnalysis: Bool = true
+    var transactions: Bool = true
 
     static let disabled = FolyncSupplementalSettings(
         historicalLineCharts: false,
         candlestickCharts: false,
         benchmarkMarketData: false,
         exchangeRates: false,
-        allowLegacyFallback: false
+        allowLegacyFallback: false,
+        dividends: false,
+        tradeAnalysis: false,
+        transactions: false
     )
 
     static func newConnectionDefaults(capabilities: FolyncCapabilities?) -> FolyncSupplementalSettings {
@@ -30,7 +50,10 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
             candlestickCharts: capabilities.resources.candlesticks.isUsable,
             benchmarkMarketData: capabilities.resources.benchmarks.isUsable,
             exchangeRates: capabilities.resources.exchangeRates.isUsable,
-            allowLegacyFallback: false
+            allowLegacyFallback: false,
+            dividends: capabilities.resources.dividends?.isUsable ?? false,
+            tradeAnalysis: capabilities.resources.tradeAnalysis?.isUsable ?? false,
+            transactions: capabilities.resources.transactions?.isUsable ?? false
         )
     }
 
@@ -42,17 +65,28 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
         case .exchangeRates: exchangeRates
         }
     }
+
+    func isEnabled(_ route: FolyncLedgerRoute) -> Bool {
+        switch route {
+        case .dividends: dividends
+        case .tradeAnalysis: tradeAnalysis
+        case .transactions: transactions
+        }
+    }
 }
 
 extension FolyncSupplementalSettings {
     private enum CodingKeys: String, CodingKey {
         case historicalLineCharts, candlestickCharts, benchmarkMarketData, exchangeRates, allowLegacyFallback
+        case dividends, tradeAnalysis, transactions
     }
 
     /// Every field is optional in stored data, so settings saved by a build
     /// with fewer fields still decode. With the synthesized decoder a missing
     /// field failed the whole stored configuration, and Folync fell back to
-    /// `.disabled`. In an extension so the memberwise initializer stays.
+    /// `.disabled`. A missing chart or fallback field is off; a missing ledger
+    /// field is on (see `dividends`). In an extension so the memberwise
+    /// initializer stays.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
@@ -60,7 +94,10 @@ extension FolyncSupplementalSettings {
             candlestickCharts: try container.decodeIfPresent(Bool.self, forKey: .candlestickCharts) ?? false,
             benchmarkMarketData: try container.decodeIfPresent(Bool.self, forKey: .benchmarkMarketData) ?? false,
             exchangeRates: try container.decodeIfPresent(Bool.self, forKey: .exchangeRates) ?? false,
-            allowLegacyFallback: try container.decodeIfPresent(Bool.self, forKey: .allowLegacyFallback) ?? false
+            allowLegacyFallback: try container.decodeIfPresent(Bool.self, forKey: .allowLegacyFallback) ?? false,
+            dividends: try container.decodeIfPresent(Bool.self, forKey: .dividends) ?? true,
+            tradeAnalysis: try container.decodeIfPresent(Bool.self, forKey: .tradeAnalysis) ?? true,
+            transactions: try container.decodeIfPresent(Bool.self, forKey: .transactions) ?? true
         )
     }
 }
@@ -108,6 +145,38 @@ struct FolyncCapabilities: Codable, Equatable, Sendable {
         let candlesticks: FolyncCapability
         let benchmarks: FolyncCapability
         let exchangeRates: FolyncCapability
+        /// The ledger resources. Optional: older servers, and capabilities
+        /// documents saved by older builds, do not have them.
+        let transactions: FolyncCapability?
+        let dividends: FolyncCapability?
+        let tradeAnalysis: FolyncCapability?
+
+        init(
+            lineHistory: FolyncCapability,
+            candlesticks: FolyncCapability,
+            benchmarks: FolyncCapability,
+            exchangeRates: FolyncCapability,
+            transactions: FolyncCapability? = nil,
+            dividends: FolyncCapability? = nil,
+            tradeAnalysis: FolyncCapability? = nil
+        ) {
+            self.lineHistory = lineHistory
+            self.candlesticks = candlesticks
+            self.benchmarks = benchmarks
+            self.exchangeRates = exchangeRates
+            self.transactions = transactions
+            self.dividends = dividends
+            self.tradeAnalysis = tradeAnalysis
+        }
+
+        /// Nil when the server does not list the resource.
+        func capability(for route: FolyncLedgerRoute) -> FolyncCapability? {
+            switch route {
+            case .dividends: dividends
+            case .tradeAnalysis: tradeAnalysis
+            case .transactions: transactions
+            }
+        }
     }
 
     struct FX: Codable, Equatable, Sendable {
@@ -630,17 +699,34 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         self.backoff = backoff
     }
 
+    /// Where capabilities documents are saved. Documents saved before the
+    /// ledger resources existed are under `legacyCapabilitiesRange`: their
+    /// ETag is never sent, because a 304 would confirm a document that drops
+    /// those resources and hide them for good. They are still shown while
+    /// Folync does not answer.
+    private static let capabilitiesRange = "ledger-v1"
+    private static let legacyCapabilitiesRange = "-"
+
+    private func savedCapabilities(
+        endpoint: String,
+        includingLegacy: Bool
+    ) async -> (payload: FolyncCapabilities, etag: String?, receiptTime: Date)? {
+        let ranges = includingLegacy ? [Self.capabilitiesRange, Self.legacyCapabilitiesRange] : [Self.capabilitiesRange]
+        for range in ranges {
+            if let saved = try? await cache.load(
+                endpoint: endpoint, scopeID: "-", resource: "capabilities", identity: "-", range: range,
+                as: FolyncCapabilities.self
+            ) {
+                return saved
+            }
+        }
+        return nil
+    }
+
     func fetchCapabilities(baseURL: URL, token: String) async throws -> FolyncCapabilities? {
         let endpoint = baseURL.absoluteString
         let resource = "capabilities"
-        let cached: (payload: FolyncCapabilities, etag: String?, receiptTime: Date)? = try? await cache.load(
-            endpoint: endpoint,
-            scopeID: "-",
-            resource: resource,
-            identity: "-",
-            range: "-",
-            as: FolyncCapabilities.self
-        )
+        let cached = await savedCapabilities(endpoint: endpoint, includingLegacy: false)
         let response = try await request(
             baseURL: baseURL,
             token: token,
@@ -666,7 +752,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             scopeID: "-",
             resource: resource,
             identity: "-",
-            range: "-",
+            range: Self.capabilitiesRange,
             etag: response.etag
         )
         return capabilities
@@ -678,15 +764,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         do {
             return try await fetchCapabilities(baseURL: configuration.baseURL, token: configuration.token)
         } catch {
-            let cached: (payload: FolyncCapabilities, etag: String?, receiptTime: Date)? = try? await cache.load(
-                endpoint: configuration.endpoint,
-                scopeID: "-",
-                resource: "capabilities",
-                identity: "-",
-                range: "-",
-                as: FolyncCapabilities.self
-            )
-            if let cached {
+            if let cached = await savedCapabilities(endpoint: configuration.endpoint, includingLegacy: true) {
                 memoryCapabilities[configuration.endpoint] = cached.payload
                 return cached.payload
             }

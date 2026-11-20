@@ -106,6 +106,69 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertTrue(settings.supplemental.benchmarkMarketData)
         XCTAssertFalse(settings.supplemental.exchangeRates)
         XCTAssertTrue(settings.supplemental.allowLegacyFallback)
+        XCTAssertTrue(settings.supplemental.dividends, "Ledger routes added later start on for an existing connection")
+        XCTAssertTrue(settings.supplemental.tradeAnalysis)
+        XCTAssertTrue(settings.supplemental.transactions)
+        XCTAssertTrue(settings.isLedgerRouteActive(.dividends))
+    }
+
+    func testDisabledSupplementalSettingsSwitchOffTheLedgerRoutes() {
+        for route in FolyncLedgerRoute.allCases {
+            XCTAssertFalse(FolyncSupplementalSettings.disabled.isEnabled(route))
+        }
+        var settings = FolyncSupplementalSettings.disabled
+        settings.transactions = true
+        let connection = FolyncStoredSettings(
+            isEnabled: false, baseURL: "https://folync.example.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: settings
+        )
+        XCTAssertTrue(settings.isEnabled(.transactions))
+        XCTAssertFalse(connection.isLedgerRouteActive(.transactions), "A disconnected Folync never enables a ledger route")
+    }
+
+    func testNewFolyncConnectionEnablesOnlyUsableLedgerRoutes() throws {
+        let without = FolyncSupplementalSettings.newConnectionDefaults(capabilities: .fixture(
+            lineHistory: true, candlesticks: true, benchmarks: true, exchangeRates: true
+        ))
+        XCTAssertFalse(without.dividends, "An absent capability leaves its route off")
+        XCTAssertFalse(without.tradeAnalysis)
+        XCTAssertFalse(without.transactions)
+
+        let fixture = FolyncCapabilities.fixture(lineHistory: true, candlesticks: true, benchmarks: true, exchangeRates: true)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(fixture)) as? [String: Any])
+        var resources = try XCTUnwrap(json["resources"] as? [String: Any])
+        resources["dividends"] = ["supported": true, "ready": true, "reasonCodes": []]
+        resources["tradeAnalysis"] = ["supported": true, "ready": false, "reasonCodes": ["not_ready"]]
+        resources["transactions"] = ["supported": false, "ready": true, "reasonCodes": []]
+        json["resources"] = resources
+        let with = try JSONDecoder().decode(FolyncCapabilities.self, from: JSONSerialization.data(withJSONObject: json))
+        let settings = FolyncSupplementalSettings.newConnectionDefaults(capabilities: with)
+        XCTAssertTrue(settings.dividends)
+        XCTAssertFalse(settings.tradeAnalysis, "Not ready")
+        XCTAssertFalse(settings.transactions, "Unsupported")
+        XCTAssertFalse(FolyncSupplementalSettings.newConnectionDefaults(capabilities: nil).dividends)
+    }
+
+    func testFolyncCapabilitiesDecodeWithAndWithoutLedgerResources() throws {
+        let fixture = FolyncCapabilities.fixture(lineHistory: true, candlesticks: false, benchmarks: true, exchangeRates: true)
+        let withoutKeys = try JSONEncoder().encode(fixture)
+        XCTAssertFalse(String(decoding: withoutKeys, as: UTF8.self).contains("tradeAnalysis"))
+        let decoded = try JSONDecoder().decode(FolyncCapabilities.self, from: withoutKeys)
+        XCTAssertEqual(decoded, fixture)
+        XCTAssertNil(decoded.resources.dividends)
+        XCTAssertNil(decoded.resources.capability(for: .transactions))
+
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: withoutKeys) as? [String: Any])
+        var resources = try XCTUnwrap(json["resources"] as? [String: Any])
+        for key in ["dividends", "tradeAnalysis", "transactions"] {
+            resources[key] = ["supported": true, "ready": key != "transactions", "reasonCodes": []]
+        }
+        json["resources"] = resources
+        let withKeys = try JSONDecoder().decode(FolyncCapabilities.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(withKeys.resources.dividends, FolyncCapability(supported: true, ready: true, reasonCodes: []))
+        XCTAssertEqual(withKeys.resources.capability(for: .transactions)?.isUsable, false)
+        XCTAssertNotEqual(withKeys, fixture)
+        XCTAssertEqual(try JSONDecoder().decode(FolyncCapabilities.self, from: JSONEncoder().encode(withKeys)), withKeys)
     }
 
     func testFolyncSupplementalSettingsWithMissingKeysDecodeMissingOnesAsOff() throws {
@@ -118,6 +181,9 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertFalse(partial.benchmarkMarketData)
         XCTAssertFalse(partial.exchangeRates)
         XCTAssertFalse(partial.allowLegacyFallback)
+        XCTAssertTrue(partial.dividends)
+        XCTAssertTrue(partial.tradeAnalysis)
+        XCTAssertTrue(partial.transactions)
 
         let stored = try JSONDecoder().decode(
             FolyncStoredSettings.self,
@@ -138,6 +204,13 @@ final class Trading212BrokerSyncTests: XCTestCase {
         )
         let decoded = try JSONDecoder().decode(FolyncSupplementalSettings.self, from: JSONEncoder().encode(original))
         XCTAssertEqual(decoded, original)
+        var ledgerOff = original
+        ledgerOff.dividends = false
+        ledgerOff.transactions = false
+        XCTAssertEqual(
+            try JSONDecoder().decode(FolyncSupplementalSettings.self, from: JSONEncoder().encode(ledgerOff)), ledgerOff,
+            "A ledger route switched off stays off"
+        )
 
         let stored = FolyncStoredSettings(
             isEnabled: true, baseURL: "https://folync.example.test", scopeID: "all",

@@ -2389,6 +2389,63 @@ final class FolyncPortfolioSourceTests: XCTestCase {
     """
 }
 
+// MARK: - Ledger routes
+
+extension FolyncPortfolioSourceTests {
+    /// The capabilities fixture with the three ledger resources, each usable
+    /// unless named in `notReady` or `unsupported`, or left out in `absent`.
+    fileprivate static func ledgerCapabilitiesJSON(
+        notReady: Set<String> = [],
+        unsupported: Set<String> = [],
+        absent: Set<String> = []
+    ) -> String {
+        let entries = ["dividends", "tradeAnalysis", "transactions"].filter { !absent.contains($0) }.map { key in
+            "\"\(key)\": {\"supported\":\(!unsupported.contains(key)),\"ready\":\(!notReady.contains(key)),\"reasonCodes\":[]},"
+        }
+        // Only the top-level resources; the market identities have their own.
+        var json = capabilitiesJSON
+        guard let range = json.range(of: "\"resources\": {\n") else { return json }
+        json.replaceSubrange(range, with: "\"resources\": {\n" + entries.joined(separator: "\n") + "\n")
+        return json
+    }
+
+    func testCapabilitiesSavedWithoutLedgerResourcesAreAskedForInFull() async throws {
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("folync-ledger-caps-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = FolyncSupplementalCache(directory: cacheDirectory)
+        // Saved by a build that did not know the ledger resources.
+        try await cache.save(
+            FolyncCapabilities.fixture(lineHistory: true, candlesticks: true, benchmarks: true, exchangeRates: true),
+            endpoint: "https://folync.test", scopeID: "-", resource: "capabilities", identity: "-", range: "-",
+            etag: "W/\"saved-before\""
+        )
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        let body = Self.ledgerCapabilitiesJSON()
+        stub.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/client/v2/capabilities")
+            if request.value(forHTTPHeaderField: "If-None-Match") != nil {
+                return Self.httpResponse(request, status: 304, body: "")
+            }
+            return Self.httpResponse(request, status: 200, body: body, etag: "W/\"with-ledger\"")
+        }
+        let coordinator = FolyncSupplementalCoordinator(
+            cache: cache, session: Self.stubSession(), providerPolicy: Self.testProviderPolicy, tokenProvider: { "test-token" }
+        )
+        let baseURL = try XCTUnwrap(URL(string: "https://folync.test"))
+
+        let first = try await coordinator.fetchCapabilities(baseURL: baseURL, token: "test-token")
+        XCTAssertNil(stub.requests.first?.value(forHTTPHeaderField: "If-None-Match"),
+                     "A document saved without the ledger resources must not be confirmed by a 304")
+        XCTAssertEqual(first?.resources.dividends?.isUsable, true)
+
+        let second = try await coordinator.fetchCapabilities(baseURL: baseURL, token: "test-token")
+        XCTAssertEqual(stub.requests.last?.value(forHTTPHeaderField: "If-None-Match"), "W/\"with-ledger\"")
+        XCTAssertEqual(second?.resources.transactions?.isUsable, true, "The 304 returns the saved document with its ledger resources")
+    }
+}
+
 private final class LockedBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Value
