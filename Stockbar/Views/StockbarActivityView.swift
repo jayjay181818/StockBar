@@ -277,11 +277,13 @@ enum StockbarActivityText {
     }
 
     static func noRows(kind: StockbarActivityKind, holding: FolyncTransactionsQuery.Instrument?) -> String {
-        if case .ticker(let ticker) = holding {
-            return kind == .all ? "Folync has no transactions for \(ticker)."
-                : "Folync has no \(kind.title.lowercased()) transactions for \(ticker)."
+        let subject = switch kind {
+        case .all: "transactions"
+        case .trades: "trades"
+        case .dividends: "dividends"
+        case .cash: "cash transactions"
         }
-        return kind == .all ? "Folync has no transactions for this portfolio."
-            : "Folync has no \(kind.title.lowercased()) transactions for this portfolio."
+        if case .ticker(let ticker) = holding { return "Folync has no \(subject) for \(ticker)." }
+        return "Folync has no \(subject) for this portfolio."
     }
 }

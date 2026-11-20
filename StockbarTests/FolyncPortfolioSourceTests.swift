@@ -4079,7 +4079,8 @@ final class StockbarActivityPageTests: XCTestCase {
         XCTAssertEqual(StockbarActivityText.shownCount(1), "Showing 1 transaction")
         XCTAssertEqual(StockbarActivityText.shownCount(12), "Showing 12 transactions")
         XCTAssertEqual(StockbarActivityText.noRows(kind: .trades, holding: .ticker("MSFT")),
-                       "Folync has no trades transactions for MSFT.")
+                       "Folync has no trades for MSFT.")
+        XCTAssertEqual(StockbarActivityText.noRows(kind: .all, holding: nil), "Folync has no transactions for this portfolio.")
     }
 
     // MARK: Sidebar
