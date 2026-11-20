@@ -3,27 +3,36 @@ import Charts
 import SwiftUI
 
 extension PerformanceChartView {
-    var comparisonModeControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Toggle("Comparison Mode", isOn: $comparisonMode)
-                    .toggleStyle(SwitchToggleStyle())
-                    .onChange(of: comparisonMode) { _, newValue in
-                        if !newValue {
-                            // Clear selection when disabling comparison
-                            selectedComparisonSymbols.removeAll()
-                            comparisonChartData.removeAll()
-                        } else if case .individualStock(let symbol) = selectedChartType,
-                                  availableSymbols.contains(symbol) {
-                            // The stock on screen is the one being compared against.
-                            selectedComparisonSymbols.insert(symbol)
-                            Task { await loadComparisonData(for: symbol) }
-                        }
-                    }
+    /// The Comparison Mode switch, in the chart's toolbar strip.
+    var comparisonModeToggle: some View {
+        Toggle("Comparison Mode", isOn: $comparisonMode)
+            .toggleStyle(SwitchToggleStyle())
+            .onChange(of: comparisonMode) { _, newValue in
+                if !newValue {
+                    // Clear selection when disabling comparison
+                    selectedComparisonSymbols.removeAll()
+                    comparisonChartData.removeAll()
+                } else if case .individualStock(let symbol) = selectedChartType,
+                          availableSymbols.contains(symbol) {
+                    // The stock on screen is the one being compared against.
+                    selectedComparisonSymbols.insert(symbol)
+                    Task { await loadComparisonData(for: symbol) }
+                }
+            }
+    }
 
-                Spacer()
+    /// The stocks to compare and the normalised switch, under the strip while comparison is on.
+    @ViewBuilder
+    var comparisonSelectionPanel: some View {
+        if comparisonMode {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Select stocks to compare (max 5)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
-                if comparisonMode {
+                    Spacer()
+
                     Toggle("Normalized (%)", isOn: Binding(
                         get: { usesNormalizedComparison },
                         set: { normalizedComparison = $0 }
@@ -34,44 +43,37 @@ extension PerformanceChartView {
                             ? "These stocks trade in different currencies, so only percentage change can be compared"
                             : "Show as percentage change from the first date all selected stocks have")
                 }
-            }
 
-            if comparisonMode {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Select stocks to compare (max 5)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(availableSymbols, id: \.self) { symbol in
-                                comparisonSymbolChip(for: symbol)
-                            }
-                        }
-                    }
-
-                    if !selectedComparisonSymbols.isEmpty {
-                        HStack {
-                            Text("\(selectedComparisonSymbols.count) stock(s) selected")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-
-                            Spacer()
-
-                            Button("Clear All") {
-                                selectedComparisonSymbols.removeAll()
-                                comparisonChartData.removeAll()
-                            }
-                            .font(.caption)
-                            .buttonStyle(PlainButtonStyle())
-                            .foregroundColor(.blue)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(availableSymbols, id: \.self) { symbol in
+                            comparisonSymbolChip(for: symbol)
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+
+                if !selectedComparisonSymbols.isEmpty {
+                    HStack {
+                        Text("\(selectedComparisonSymbols.count) stock(s) selected")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        Button("Clear All") {
+                            selectedComparisonSymbols.removeAll()
+                            comparisonChartData.removeAll()
+                        }
+                        .font(.caption)
+                        .buttonStyle(PlainButtonStyle())
+                        .foregroundColor(.blue)
+                    }
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            // Inside the chart's card, so an inset rather than a card of its own.
+            .stockbarSurface(.inset, cornerRadius: StockbarLayout.insetRadius)
         }
     }
 
