@@ -55,7 +55,7 @@ struct StockbarMainView: View {
                 .accessibilityHidden(true)
         }
         .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: sidebarHidden)
-        .frame(minWidth: 1060, minHeight: 680)
+        // The window's minimum, 1060 by 680, is set by its controller.
         .preferredColorScheme(appearanceMode == "light" ? .light : appearanceMode == "dark" ? .dark : nil)
         .stockbarRollingDigitsSetting()
     }

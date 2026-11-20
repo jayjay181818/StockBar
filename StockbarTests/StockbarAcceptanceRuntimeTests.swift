@@ -866,6 +866,46 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(drawnPanel(accessibility: .init(increasedContrast: true), glass: true)?.strongText, true)
     }
 
+    // The window
+
+    func testTheWindowIsSeeThroughKeepsItsMinimumAndHoldsTheSidebarButton() throws {
+        let store = StockbarRuntimeStorage.userDefaults
+        let key = StockbarMainNavigationState.sidebarHiddenKey
+        let original = store.object(forKey: key)
+        defer { if let original { store.set(original, forKey: key) } else { store.removeObject(forKey: key) } }
+        store.removeObject(forKey: key)
+
+        let model = DataModel(currencyConverter: CurrencyConverter(refreshOnInit: false, loadHistoryOnInit: false),
+                              startRuntimeServices: false)
+        let controller = StockbarMainWindowController(dataModel: model)
+        let window = try XCTUnwrap(controller.window)
+        XCTAssertFalse(window.isOpaque, "the desktop shows through")
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+
+        window.setFrame(NSRect(x: 0, y: 0, width: 600, height: 400), display: false)
+        window.layoutIfNeeded()
+        XCTAssertEqual(window.frame.size, NSSize(width: 1060, height: 680), "no smaller than 1060 by 680")
+        window.setFrame(NSRect(x: 0, y: 0, width: 1200, height: 720), display: false)
+        XCTAssertEqual(window.frame.size, NSSize(width: 1200, height: 720), "and no larger than asked")
+
+        let item = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier == .stockbarToggleSidebar })
+        XCTAssertEqual(item.label, "Hide Sidebar")
+        XCTAssertEqual(item.action, #selector(StockbarMainWindowController.toggleStockbarSidebar(_:)))
+        controller.toggleStockbarSidebar(item)
+        XCTAssertEqual(item.label, "Show Sidebar")
+        XCTAssertTrue(store.bool(forKey: key), "remembered")
+
+        let menuItem = NSMenuItem(title: "", action: #selector(StockbarMainWindowController.toggleStockbarSidebar(_:)),
+                                  keyEquivalent: "s")
+        XCTAssertTrue(controller.validateMenuItem(menuItem))
+        XCTAssertEqual(menuItem.title, "Show Sidebar")
+        controller.toggleStockbarSidebar(menuItem)
+        XCTAssertTrue(controller.validateMenuItem(menuItem))
+        XCTAssertEqual(menuItem.title, "Hide Sidebar")
+        window.close()
+    }
+
     private func drawnPanel(accessibility: StockbarSurfaceAccessibility, glass: Bool) -> StockbarShellPanelStyle? {
         let seen = PanelSeen()
         let host = NSHostingView(

@@ -54,10 +54,12 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate, 
         let hostingController = NSHostingController(
             rootView: StockbarMainView(dataModel: dataModel, navigationState: navigationState)
         )
-        // Enforce the minimum size only. Letting SwiftUI's ideal size drive the
-        // window would resize it when switching to a section with a tall ideal
-        // height, such as the Holdings table.
-        hostingController.sizingOptions = [.minSize]
+        // SwiftUI's sizes do not drive the window. Letting its ideal size do so
+        // would resize the window when switching to a section with a tall
+        // ideal height, such as the Holdings table; letting its minimum do so
+        // adds the toolbar strip's height on top. The minimum is set below
+        // with constraints instead, which hold exactly at 1060 by 680.
+        hostingController.sizingOptions = []
         let window = NSWindow(contentViewController: hostingController)
         // The Glass shell: content runs under a transparent title bar, and the
         // window is see-through so the root view's behind-window backing shows
@@ -83,6 +85,10 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate, 
         window.title = "Stockbar"
         window.isReleasedWhenClosed = false
         window.minSize = WindowMetrics.minimumSize
+        // The content view fills the whole window (full-size content), so these
+        // hold the window's frame at its minimum, however it is resized.
+        hostingController.view.widthAnchor.constraint(greaterThanOrEqualToConstant: WindowMetrics.minimumSize.width).isActive = true
+        hostingController.view.heightAnchor.constraint(greaterThanOrEqualToConstant: WindowMetrics.minimumSize.height).isActive = true
         window.setContentSize(initialContentSize())
         // Restore the user's last size/position and keep saving it.
         // Acceptance runs skip this: frames are stored in the standard defaults, which

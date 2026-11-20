@@ -420,7 +420,9 @@ private struct StockbarRowModifier: ViewModifier {
 /// panel and strengthens its text.
 enum StockbarShell {
     /// Width of the sidebar panel. Fixed: the panel cannot be dragged wider.
-    static let sidebarWidth: CGFloat = 228
+    /// With its inset it takes the 220 points the standard sidebar took at
+    /// its ideal width, so a page keeps the width it had.
+    static let sidebarWidth: CGFloat = 213
     /// Gap between the panel and the window's edges.
     static let panelInset: CGFloat = 7
     static let panelRadius: CGFloat = 16
