@@ -4856,8 +4856,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Cash row, which would change every share the screen shows today; the
   words "Fair" and "Good" beside figures the screen gives no word to;
   and the line about a Returns page, which does not exist yet.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `c34be9e`. The merge published
+  experimental build 382.3.13 as the prerelease `experimental-382.3.13`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches never open this page. Covered by the comparison set for the
   night of 2026-11-20, if this is merged by then, or by the next one.
@@ -4899,6 +4901,103 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - VoiceOver was not run; the labels were read as text.
   - "Least alike" names the lowest figure, which for a strongly negative
     one means the pair that moves most against each other.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 145: Switches in Settings for the Income, Trades and Activity pages
+
+- What: Settings → Connections → Folync gains three checkboxes, "Income",
+  "Trades" and "Activity", each with the "New" badge, after the four
+  older ones. They turn the three pages' Folync routes off and on. The
+  settings themselves have existed since pull request 135, on by default;
+  until now nothing could turn them off.
+
+  Beside each is its status, worded like the older rows' and taken from
+  the capabilities answer the app already has: "Not supported by this
+  Folync server" when the answer leaves the route out, "Unsupported",
+  "Not ready" with Folync's reasons, or "Ready". No request is made to
+  find a status out. A checkbox that is off cannot be turned on while its
+  route is not usable; one that is on can always be turned off. The
+  wording and that rule now live in one place, `FolyncRouteSettingsStatus`,
+  which the older rows use too; what they say is unchanged.
+
+  The block is headed "What Stockbar reads from Folync", with the line
+  "Portfolio pages are fetched when you open them, not on a timer."
+
+  **Turning one of the three off or on makes no request.** Saving a
+  change to the older rows restarts the market-data schedule, which asks
+  Folync for capabilities, benchmarks and rates. A change to the three
+  new ones alone now saves and stops there, and clears nothing saved.
+  The page concerned says it is switched off the next time it is opened,
+  and asks again once it is switched on and opened.
+
+  Against the mock-up: the rows are in one column, because the older
+  rows' coverage lines and the longest status do not fit two at the
+  minimum width; the label is "Income", not "Income and calendar", since
+  there is no Calendar page yet; and there is no "Returns breakdown" row,
+  since Folync has no such route yet.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open Settings. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 144 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 953 XCTest tests with 0 failures. Eight
+  are new, in `FolyncPortfolioSourceTests.swift`: the status for each
+  route and each case, no capabilities answer included; one route left
+  out changing only its own row; the older rows keeping their wording;
+  the rule for turning on and off; saved settings decoding unchanged;
+  each switch saving only its own setting, leaving the others, the
+  address and the portfolio as they were, and making no request, while
+  an older row's switch still does; and which changes count as needing no
+  request. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: the schedule restarted for one of the new switches;
+  a route that is not ready allowed to be turned on; dividends read as
+  trade analysis; the reasons dropped from "Not ready"; "New" dropped
+  from the name VoiceOver reads; and a change to the fallback treated as
+  one of the new switches.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Connections tab before and after, in dark and light, at
+  the default and the minimum size, and with one route left out and one
+  not ready, which showed the right statuses. The stand-in's log showed
+  no request for any change of a switch.
+
+  **A switched-off page was not seen on screen, and the reason is a fault
+  in the acceptance copy, not in the app.** The worker found that a
+  switch it turned off was on again when Settings was next opened, and
+  that the older "Exchange rates" switch does the same on `experimental`
+  without this change. The session lead traced it: the acceptance copy
+  keeps its defaults in a suite named by a path, and on macOS 27.2.1 a
+  process never reads back its own change to a key that was already in
+  such a file when it started. The harness seeds the Folync settings
+  before it starts the app, so those are the keys the copy cannot change.
+  Two small programs outside the repository showed the same with no
+  Stockbar code in them, and showed that a suite named in the ordinary
+  way reads back correctly. The released app uses the standard defaults,
+  not a suite named by a path.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the status type and
+  the change to how a settings change is saved, looked at one capture,
+  and traced the fault above with a temporary log line that was never
+  committed. It did not read the view or every test. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - No page's "switched off" state, and no page asking again after being
+    switched back on, was seen in a running copy, for the reason above.
+    Both are tested with the store stood in for.
+  - The acceptance copy cannot change any setting seeded before it
+    starts: the Folync address, portfolio and seven route settings. So a
+    portfolio that is not Folync's cannot be seen there either. Fixing it
+    means having the app seed its own settings in an acceptance run; not
+    done here.
+  - Not tried against a real Folync.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
