@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.11)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.11</link>
+      <pubDate>Fri, 20 Nov 2026 17:58:27 +0000</pubDate>
+      <sparkle:version>382.3.11</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.11 of Stockbar 3.8.2. Changes since experimental-382.3.10:
+
+- Add the Trades page: every position opened, and how it did (#142)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.11/Stockbar-382.3.11.zip" length="7821914" type="application/octet-stream" sparkle:edSignature="oEKrVcp8OGtP1x5z5jlC/eLpvk6s4VPEyiZAOgCAKINvSDCw3SKGToVx9qkC2Qjh8CM4jdzNr3XARvW4M272Dw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.10)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.10</link>
       <pubDate>Fri, 20 Nov 2026 17:46:34 +0000</pubDate>
@@ -137,21 +150,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - chore(python): update locked packages</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.2/Stockbar-382.3.2.zip" length="7225945" type="application/octet-stream" sparkle:edSignature="hW9XLSYOP7eeMktyJsdDVigFHgrjGaVIawKy4f7AgRf32h3RXAOp7w45qDkvrjTvYdPLblhJ/8V60/xRBxaNCg=="></enclosure>
     </item>
-    <item>
-      <title>3.8.0 (380.0.1)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-380.0.1</link>
-      <pubDate>Tue, 17 Nov 2026 10:22:55 +0000</pubDate>
-      <sparkle:version>380.0.1</sparkle:version>
-      <sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 380.0.1 of Stockbar 3.8.0. Changes since experimental-370.29.2:
-
-- Release 3.8.0</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-380.0.1/Stockbar-380.0.1.zip" length="7196397" type="application/octet-stream" sparkle:edSignature="JBaEuJlzJ/DWfra34edG5Gb6FxIzeEslguW/p1MhUM+TpeMR239/jPi3/+jwfBLNDxi3wp/6VpHW9WRiGQIpCQ=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: nTy6gUC+dvcwMavCwnIUMLpMuyms1c0vo6Y8pulgeT+++MjIzBf3W/rIWFepu5fTY+nlDqq9mdO9wIVVhubSBg==
-length: 10844
+edSignature: Ow3DipGSJxPYORW9+s0iP3uFPAFkqPbdQ1P4sOdpJBRXSE56W5SKQRNxSy44wt9sFo1scJ0/7LerGofxu52NDQ==
+length: 10902
 -->
