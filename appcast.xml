@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.10)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.10</link>
+      <pubDate>Fri, 20 Nov 2026 17:46:34 +0000</pubDate>
+      <sparkle:version>382.3.10</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.10 of Stockbar 3.8.2. Changes since experimental-382.3.9:
+
+- Add the Activity page: every Folync transaction, by month (#141)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.10/Stockbar-382.3.10.zip" length="7662839" type="application/octet-stream" sparkle:edSignature="vAwhAlapnKn+KFeB6cUpeZ/MVxaDyoh8n6R12qIkOARPi6+z1bS9H0XzPjRl3hZvAIYwsn7vhE1+FRgqH+iZCw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.9)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.9</link>
       <pubDate>Fri, 20 Nov 2026 15:41:38 +0000</pubDate>
@@ -137,21 +150,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Release 3.8.0</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-380.0.1/Stockbar-380.0.1.zip" length="7196397" type="application/octet-stream" sparkle:edSignature="JBaEuJlzJ/DWfra34edG5Gb6FxIzeEslguW/p1MhUM+TpeMR239/jPi3/+jwfBLNDxi3wp/6VpHW9WRiGQIpCQ=="></enclosure>
     </item>
-    <item>
-      <title>3.7.0 (370.29.2)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-370.29.2</link>
-      <pubDate>Tue, 17 Nov 2026 09:46:56 +0000</pubDate>
-      <sparkle:version>370.29.2</sparkle:version>
-      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 370.29.2 of Stockbar 3.7.0. Changes since experimental-370.16.12:
-
-- Record the second promotion to testing</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-370.29.2/Stockbar-370.29.2.zip" length="7196398" type="application/octet-stream" sparkle:edSignature="lIqs5y5mr56V1z9BMyqOoZ5KtjLf21oweKIb2YhqQiHc2uVmr/Va88dNPAxx2xVREOjFTRWLC7QbonSLkZmEAQ=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PzYk9Z37dpO8ze2CQ/L4N+vgGPv9tHG41A1/gbNpvg8XqaC4HiDiyq9aVsXPekBKQHiijOej3C4F9bplfllZDQ==
-length: 10820
+edSignature: nTy6gUC+dvcwMavCwnIUMLpMuyms1c0vo6Y8pulgeT+++MjIzBf3W/rIWFepu5fTY+nlDqq9mdO9wIVVhubSBg==
+length: 10844
 -->
