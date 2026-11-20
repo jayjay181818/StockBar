@@ -323,11 +323,12 @@ major change: the Glass redesign and the new Folync pages. Pull request 133
 brought it up to `testing` first, with merge commit `01d4768`. The owner
 said the benchmark for this work can wait until after 02:30 on 2026-11-20
 or later. Pull request 134's comparison was run that morning, twice, with
-another project's tests running on the same Mac throughout. After the
-repeat no row shows a measurable change, and both tables are in its
-record. It is not merged yet: no launch was measured on a quiet Mac, and
-the rule written before the first launch leaves the merge to the owner in
-that case.
+another project's `xcodebuild` present on the same Mac during every
+measured launch. After the repeat no row shows a measurable change, and
+both tables are in its record. No launch was measured on a quiet Mac, and
+the rule written before the first launch left the merge to the owner in
+that case. The owner then said "go on", which is the word the rule asked
+for.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3556,10 +3557,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Neither run was measured on a quiet Mac. The comparison was scheduled
   for 02:30 UTC and did not run then. The Mac restarted at 08:35 UTC and
   the owner said "Try now" at about 08:55. Another session on the Mac was
-  running a different project's simulator tests, one after another. A
-  wait for a quiet Mac passed at 09:06 and the next test began within the
-  minute, so no start time avoided them, and the first run started at
-  once under rules written into its script before it began. Two are the
+  running a different project's simulator tests: one was running at
+  08:55, and a wait for a quiet Mac passed at 09:06 only for the next to
+  begin within the minute. No start time was going to avoid them, so the
+  first run started at once under rules written into its script before
+  it began. Two are the
   rules of 2026-11-16, which say when a run is set aside and repeated
   (see
   [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed)).
@@ -3567,17 +3569,21 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   notes whether another project's `xcodebuild` is present, and a measured
   launch with one or more such samples counts as overlapped. With any
   launch overlapped, the pull request is not merged on that run without
-  the owner's word or a repeat with the other session paused.
+  the owner's word or a repeat with the other session paused. The samples
+  show that such a process was present, not how hard it was working; the
+  load average and the four busiest processes below are the measure of
+  that.
 
   First run, turns from 09:14 to 09:47 UTC. No reading inside the turns
   showed input. The four busiest processes together averaged 260% of a
   core over the before side's 17 readings and 313% over the after side's
   16, a ratio of 1.20, so the run stands. All twelve measured launches
   were overlapped. The load average at the once-a-minute readings inside
-  the turns ran from 5.8 to 48.8. Besides the other project's tests,
-  `StorageManagementService` and `ApplicationsStorageExtension`, two
-  system processes, were among the four busiest in 31 of the run's 37
-  readings. The report flagged no launch. One row is marked: idle CPU
+  the turns ran from 5.8 to 48.8. `StorageManagementService` and
+  `ApplicationsStorageExtension`, two system processes, were among the
+  four busiest in 31 of the run's 37 readings, beside the other project's
+  compiler, simulator app and test runner in others. The report flagged
+  no launch. One row is marked: idle CPU
   wake-ups, possibly lower.
 
   | Metric | Before: median (range) | After: median (range) | Change | Verdict |
@@ -3699,11 +3705,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     redirect's target. A Folync on this Mac that redirected elsewhere would
     be followed. The stand-in never redirects, and a normal run behaves the
     same way. Not changed here.
-- Verdict: pending the owner's word on the merge. The benchmark record
-  is complete, and no row shows a measurable change after the repeat. But
-  every measured launch ran beside another project's tests, and the rule
-  written before the first launch leaves the merge to the owner in that
-  case.
+- Verdict: retained. No row shows a measurable change after the repeat,
+  and none was expected to move. Another project's `xcodebuild` was
+  present during every measured launch, and the rule written before the
+  first launch left the merge to the owner in that case. Told so, with
+  the tables and the conditions, the owner said "go on" on 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
 
