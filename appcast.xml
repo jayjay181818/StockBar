@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.13)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.13</link>
+      <pubDate>Fri, 20 Nov 2026 18:53:19 +0000</pubDate>
+      <sparkle:version>382.3.13</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.13 of Stockbar 3.8.2. Changes since experimental-382.3.12:
+
+- Allocation: a donut beside its list, three views and the correlations as a grid (#144)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.13/Stockbar-382.3.13.zip" length="8106729" type="application/octet-stream" sparkle:edSignature="L8p+ar5h2YcmMjjd/JmmYm745DunOE4zCa5KvbumNZEOZfSxo/3cilhfGUrDAASv4wXNa5Hj8EJo+FUEgpJYDw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.12)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.12</link>
       <pubDate>Fri, 20 Nov 2026 18:06:08 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Read Folync's dividends, trade analysis and transactions (#135)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.4/Stockbar-382.3.4.zip" length="7236000" type="application/octet-stream" sparkle:edSignature="7uDSvV9Uca/lnZ5tKf0pYkhdkIr7onrKFvbzuMhn9xMxJawn8CWb6fp0HtkTDsSTictn4Cu+wpPw05LNMblCAg=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.3)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.3</link>
-      <pubDate>Fri, 20 Nov 2026 11:06:55 +0000</pubDate>
-      <sparkle:version>382.3.3</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.3 of Stockbar 3.8.2. Changes since experimental-382.3.2:
-
-- Let the acceptance copy reach a Folync on this Mac (#134)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.3/Stockbar-382.3.3.zip" length="7227126" type="application/octet-stream" sparkle:edSignature="xGKwZiQCH3ngEj1+Ou1FDa70ntzw+ne1+Ily3TVc9Ve5qWUC1ovrD6jor34w08J7jmnnMLTYIKsGA98J6GCuBw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: AakvHf9zPNAWGYQjKlB0Wyr+tW4zEY93TMnFWaRhw+ws0cfaEY9bd12i5kj17mQIyZ1HERw1m94qKazrit7VDw==
-length: 10249
+edSignature: LkCFwKy8IggQegTd7vWVnxmxAvlmBIuj2lbjVzbrUYkGTp+amZc5vshufxUhm+bqGWXQGdo3hS2VkCn6WZjECw==
+length: 10285
 -->
