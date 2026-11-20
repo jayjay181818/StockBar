@@ -1,15 +1,26 @@
 import SwiftUI
 
-enum MenuChartTimeRange: String, CaseIterable {
+enum MenuChartTimeRange: String {
     case day = "1D"
     case week = "1W"
     case month = "1M"
+    /// The longer ranges are offered by the Overview only. Folync's history
+    /// route and Stockbar's stored portfolio values both serve them.
+    case threeMonths = "3M"
+    case year = "1Y"
+    case all = "All"
+
+    /// The ranges the menu-bar popovers and per-symbol charts offer.
+    static let menuRanges: [MenuChartTimeRange] = [.day, .week, .month]
 
     var description: String {
         switch self {
         case .day: return "1 Day"
         case .week: return "1 Week"
         case .month: return "1 Month"
+        case .threeMonths: return "3 Months"
+        case .year: return "1 Year"
+        case .all: return "All Time"
         }
     }
 
@@ -18,6 +29,10 @@ enum MenuChartTimeRange: String, CaseIterable {
         case .day: return 24 * 60 * 60
         case .week: return 7 * 24 * 60 * 60
         case .month: return 30 * 24 * 60 * 60
+        case .threeMonths: return 90 * 24 * 60 * 60
+        case .year: return 365 * 24 * 60 * 60
+        // Ten years, as `ChartTimeRange.all` reads stored history.
+        case .all: return 3650 * 24 * 60 * 60
         }
     }
 
@@ -26,6 +41,9 @@ enum MenuChartTimeRange: String, CaseIterable {
         case .day: return .day
         case .week: return .week
         case .month: return .month
+        case .threeMonths: return .threeMonths
+        case .year: return .year
+        case .all: return .all
         }
     }
 
@@ -310,9 +328,11 @@ enum MenuPopoverFormatter {
 
     /// Hover label for a chart point, in the user's locale.
     static func date(_ date: Date, range: MenuChartTimeRange) -> String {
-        range == .day
-            ? date.formatted(date: .omitted, time: .shortened)
-            : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        switch range {
+        case .day: date.formatted(date: .omitted, time: .shortened)
+        case .week, .month: date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        case .threeMonths, .year, .all: date.formatted(.dateTime.day().month(.abbreviated).year())
+        }
     }
 
     /// "Updated 14:05" for today, otherwise with the date, in the user's locale.
@@ -363,11 +383,7 @@ extension View {
     func menuPopoverTile() -> some View {
         frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
             .padding(10)
-            .background(StockbarPalette.popoverCardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(StockbarPalette.popoverCardStroke, lineWidth: 1)
-            )
+            .stockbarSurface(.inset, cornerRadius: 10)
     }
 }
 
@@ -378,6 +394,7 @@ struct MenuPopoverFooter: View {
     let onPreferences: () -> Void
     let onQuit: () -> Void
     @State private var refreshCount = 0
+    @Environment(\.stockbarPopoverText) private var textStyle
 
     var body: some View {
         HStack(spacing: 2) {
@@ -406,7 +423,7 @@ struct MenuPopoverFooter: View {
             iconButton("power", help: "Quit Stockbar", action: onQuit)
         }
         .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(textStyle.secondary)
     }
 
     private func iconButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -430,16 +447,14 @@ private struct MenuPopoverFooterButtonStyle: ButtonStyle {
     private struct HoverBody: View {
         let configuration: Configuration
         @State private var isHovered = false
+        @Environment(\.stockbarPopoverText) private var textStyle
 
         var body: some View {
             configuration.label
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
-                .foregroundStyle(isHovered ? Color.primary : Color.secondary)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isHovered || configuration.isPressed ? StockbarPalette.popoverHoverFill : Color.clear)
-                )
+                .foregroundStyle(isHovered ? .primary : textStyle.secondary)
+                .stockbarRow(isHovered: isHovered || configuration.isPressed, cornerRadius: 6)
                 .contentShape(Rectangle())
                 .onHover { hovering in
                     withAnimation(StockbarMotion.quick) { isHovered = hovering }
@@ -463,7 +478,7 @@ struct MenuPopoverTimeRangePicker: View {
                 onSelect(range)
             }
         )) {
-            ForEach(MenuChartTimeRange.allCases, id: \.self) { range in
+            ForEach(MenuChartTimeRange.menuRanges, id: \.self) { range in
                 Text(range == .day ? dayLabel : range.description).tag(range)
             }
         }
@@ -515,6 +530,11 @@ struct MenuPopoverLineChart: View {
     var revealTrigger: String = ""
     var emptyTitle = "No history yet"
     var emptyMessage = "Stockbar stores prices while it runs."
+    /// A dotted level drawn across the chart, such as yesterday's close; nil for none.
+    var referencePrice: Double?
+    var referenceLabel = ""
+    /// The line's colour; nil for `color(for:)`.
+    var lineColor: Color?
 
     @Binding var hoveredPoint: MenuChartDataPoint?
 
@@ -587,7 +607,13 @@ struct MenuPopoverLineChart: View {
             let window = (points.first?.date ?? .distantPast)...(points.last?.date ?? .distantFuture)
             let primarySeries = MenuChartSeriesAlignment.percentSeries(points, window: window)
             let comparisonSeries = MenuChartSeriesAlignment.percentSeries(comparisonPoints, window: window)
-            let combinedValues = (primarySeries.map { $0.value } + comparisonSeries.map { $0.value }).filter(\.isFinite)
+            // The reference level in the same rebased units, so it shares the scale.
+            let referenceValue = referencePrice.flatMap { reference -> Double? in
+                guard let base = points.first?.price, base > 0, reference.isFinite, reference > 0 else { return nil }
+                return reference / base - 1.0
+            }
+            let combinedValues = (primarySeries.map { $0.value } + comparisonSeries.map { $0.value }
+                                  + (referenceValue.map { [$0] } ?? [])).filter(\.isFinite)
             let lowestValue = combinedValues.min() ?? 0
             let highestValue = combinedValues.max() ?? 0
             // A day that barely moved is drawn nearly flat: the scale never
@@ -623,6 +649,24 @@ struct MenuPopoverLineChart: View {
                 )
             }
 
+            if let referenceValue {
+                let y = size.height - bottomInset - ((referenceValue - minValue) / range) * usableHeight
+                var referencePath = Path()
+                referencePath.move(to: CGPoint(x: 0, y: y))
+                referencePath.addLine(to: CGPoint(x: size.width, y: y))
+                context.stroke(referencePath, with: .color(Color.primary.opacity(0.35)),
+                               style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                if !referenceLabel.isEmpty {
+                    // Above the line when it sits low in the chart, below it when high.
+                    let above = y > size.height * 0.3
+                    context.draw(
+                        Text(referenceLabel).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary),
+                        at: CGPoint(x: size.width - 2, y: above ? y - 3 : y + 3),
+                        anchor: above ? .bottomTrailing : .topTrailing
+                    )
+                }
+            }
+
             guard let linePath = smoothedPath(primaryPoints) else { return }
             var fillPath = linePath
             fillPath.addLine(to: CGPoint(x: size.width, y: size.height))
@@ -649,7 +693,7 @@ struct MenuPopoverLineChart: View {
     }
 
     var chartColor: Color {
-        Self.color(for: points)
+        lineColor ?? Self.color(for: points)
     }
 
     /// Green when the series ended higher than it started, red when lower.

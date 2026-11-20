@@ -342,7 +342,11 @@ Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
 Pull request 136, the Yahoo lookup the Calendar needs, followed it the
 same day as `16f1a3d`. Pull request 137 is the first that changes what the
 app looks like: on 2026-11-20 the owner chose the floating sidebar and said
-to build the Glass look and judge it on experimental builds.
+to build the Glass look and judge it on experimental builds. It was merged
+the same day as `fe59b8d`. The shell, the popover and the Overview were then
+built at the same time, each as its own pull request; the popover's, 138,
+was ready first and was merged as `564056b`. The Overview's, 139, was
+brought up to date with it and followed.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -4035,8 +4039,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   automatic XCTest isolation ignore them. The preflight evidence records
   the options applied, and `Docs/Development.md` describes them. Every
   later page of the redesign is checked with them.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `fe59b8d`. The merge published
+  experimental build 382.3.6 as the prerelease `experimental-382.3.6`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20 under
   [How this branch works](#how-this-branch-works). Unlike the two before
   it, this pull request changes code the benchmark runs: the main window
@@ -4104,6 +4110,232 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     today's window and sidebar, so the app is part old and part new.
   - Data Health keeps separate tiles, and the grouped sections of native
     Settings forms keep the system look.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 138: Give the portfolio popover the Glass layout with today's movers
+
+- What: the popover that opens from the portfolio's menu-bar item takes
+  the layout the owner chose. From the top: "Portfolio" with the currency
+  and the number of positions; the total, with its decimals smaller; the
+  change, with its percentage in a badge; the graph, with a dotted
+  "Yesterday's close" line on the Today range; the range switch, with the
+  three ranges it had; "Today's movers"; total return beside net deposits;
+  and the footer with the buttons it had. The owner's two conditions hold:
+  the graph is under the total, and every holding is listed.
+
+  The movers are always today's, whatever range is selected, because
+  Folync gives a holding's change only for the day and in total. Each
+  figure is the one the app already works out for a position's day;
+  nothing here makes a request. They run from the biggest gain to the
+  biggest loss, with unknown changes last and ties in order of name. A
+  move that rounds to 0.00% is no change. The bars share one scale, the
+  largest move rounded up to a whole percent and never less than 1%.
+  Watch-list symbols, benchmarks and empty positions are not listed. A
+  row shows the ticker alone, and the portfolio's name only where two
+  holdings would otherwise read the same. VoiceOver reads a row as one
+  sentence, such as "NVDA, up 2.69 percent today".
+
+  The popover cannot grow past the screen. It is given the room under the
+  menu bar, and the movers list takes what is left after the rest is laid
+  out: at most twelve rows at once, fewer on a short screen but not under
+  three, scrolling inside the popover.
+
+  The headline follows the range switch, saying "past week" or "past
+  month" after the amount. The second figure reads "Cost basis" when total
+  return is measured against cost. The line about history coverage under
+  the graph, the refresh button and the day-reference view for a Folync
+  portfolio with no graph are kept. "Next up" and "Income this month" from
+  the mock-up are not built; they need data that later pull requests
+  bring.
+
+  The popover's background is the system's own, as before. The popover's
+  colours moved into the design file: gain and loss colours that are
+  deeper in light mode, and secondary text that becomes primary under
+  Increase Contrast. The per-symbol popovers took the new surfaces and
+  nothing else; the notice that pull request 137 excepted from the surface
+  check was theirs, it now uses the notice surface, and the exception is
+  gone. Opening, closing and the dismissal monitors are unchanged, and so
+  is the release on close of pull request 109.
+
+  The acceptance copy gains one more launch option,
+  `STOCKBAR_ACCEPTANCE_POPOVER=portfolio`. It opens the popover once, six
+  seconds after launch, the way a click does and with the same dismissal.
+  Without it the popover could not be looked at unless something clicked
+  in the owner's menu bar. It has the gate of the other launch options.
+- Merged: 2026-11-20, squash commit `564056b`. The merge published
+  experimental build 382.3.7 as the prerelease `experimental-382.3.7`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark never
+  opens the popover, so its launches do not run this layout; the status
+  item's set-up gains one check of the launch options. Covered by the
+  comparison after Phase A's last pull request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 827 XCTest tests with 0
+  failures. Thirteen are new, in `PortfolioCalculationTests.swift`: the
+  movers' order with unknown changes and ties; the app's own figure used
+  and only holdings listed; the ticker shown alone unless two rows would
+  read the same; the bar scale and its floor; a bar never past its track;
+  twelve rows before the list scrolls, and fewer on a short screen; the
+  heading at every range; a down day; a row's text for VoiceOver; the
+  figures in the portfolio's currency; the whole popover with 40 holdings
+  kept inside a height limit, in a hosted view; and Increase Contrast
+  reaching the popover's text. The launch option is added to the existing
+  launch-option tests. `checks`, `docs-check` and `build-release` pass on
+  the final commit. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit; the session lead's commit after it changed no
+  Python and no script.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed. By the worker: ties ordered backwards (one test failed);
+  the twelve-row limit, the 1% floor and the watch-list filter removed
+  together (four); the list ignoring the room it is given, and Increase
+  Contrast ignored (three). By the session lead: the ticker shown alone
+  even where two rows then read the same (one).
+
+  On screen: the worker could not open the popover by the acceptance
+  copy's process alone, and rendered its parts off screen instead, with 9
+  and 40 holdings and on a down day, in dark and light. The session lead
+  then added the launch option, opened the real popover in the acceptance
+  copy and captured it, one window at a time, in dark and in light. The
+  dark capture matches the mock-up. It also showed each row as "NVDA ·
+  De…", the label a Folync aggregate gives a holding, which is what the
+  ticker rule above fixes; the capture was taken again after the fix.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the movers and the
+  height limit, the change to how the popover is sized, and looked at the
+  worker's renders and the two real captures. It did not read the whole
+  view. It changed two things: the ticker rule and the launch option. No
+  independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The light popover is not confirmed on screen. A capture of the popover
+    alone leaves out what is behind it, and in light mode the system's
+    popover background then comes out dark grey under dark text. The
+    prototype's capture of the system background showed the same on
+    2026-11-19. The background is the one the popover had before this
+    pull request, so on screen it should look as the light popover did
+    before, but nobody has seen it.
+  - A position whose previous close is missing shows 0.00%, not "–": the
+    app's own figure for its day is zero in that case, and the list takes
+    that figure as it is.
+  - "Yesterday's close" is drawn only when the day's change is known and
+    not zero, so a truly flat day has no line.
+  - Pull request 109's release on close still has no test of its own.
+  - Not looked at: the popover on a real short screen, Increase Contrast
+    and Reduce Transparency on screen, and the glass the system gives the
+    popover on macOS 26. Not listened to: VoiceOver.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 139: Give the Overview its total, longer ranges and what the total is made of
+
+- What: the Overview takes the approved layout. At the head, the total
+  as a large figure with its pence smaller, and beside it two lines,
+  today's change and the change over the selected range, each with an
+  amount and a badge. An unknown change shows "–" with the reason under
+  it. Then the graph in a card, and under it a card that shows what the
+  total is made of. The "Selected Position" panel stays, with everything
+  it does, as a card of its own; the mock-up left it out, and removing a
+  working feature is the owner's decision.
+
+  The range switch offers six ranges where it offered three: 1D, 1W, 1M,
+  3M, 1Y and All. For a Folync portfolio they use the history route and
+  the saved copy the page already used; for the other sources, the stored
+  portfolio values. No route, stored series or timer was added. There is
+  no year-to-date range: Folync's history route has none, and asking for a
+  custom span instead would save a new copy every day. The menu-bar
+  popovers keep their three ranges. The range type no longer lists all
+  its cases by itself, so code that offers ranges has to name them.
+
+  The card is headed "What £84,310.47 is made of", with the total return
+  after it, and has one bar in four parts with a legend: net deposits, the
+  figure "Measure P&L Against" already uses; unrealised and realised
+  gains, as Folync's snapshot gives them (realised gains were already
+  decoded and unused); and "Income, interest and fees", which is the rest
+  of the total. The rules, in `PortfolioTotalComposition`:
+  - One currency. The card is built only when the total and the three
+    figures are all known and all in the summary's currency. Nothing is
+    converted. A figure Folync marks unavailable counts as unknown.
+  - It adds up. Every figure is held in whole pennies, rounded as the
+    app's money formatter rounds for display, and the remainder takes the
+    rounding difference, so the four figures shown sum to the total shown.
+  - A part that is zero or negative has no segment. Its figure is still
+    shown, in red when negative, and a line under the bar says that the
+    bar shows the positive parts only.
+  - A figure Folync marks partial is labelled "Partial", and so is the
+    remainder taken from it.
+  - Only a Folync portfolio gets the card. The other sources give neither
+    net deposits nor realised gains, and keep the old Summary card, as
+    does a Folync portfolio whenever the card cannot be built.
+
+  When Folync is not answering and saved figures are shown, an amber
+  notice at the top says so and gives their time, and the total's label
+  gains "as of" that time. It uses the connection state the app already
+  has and makes no request. When the last failure was not a failure to
+  connect, it says that Folync did not send new figures.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. This pull request
+  changes code the benchmark runs: its launches open the main window on
+  the Overview. Covered by the comparison after Phase A's last pull
+  request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 138 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 841 XCTest tests with 0 failures. Fourteen are
+  new, in `PortfolioCalculationTests.swift`: the parts adding up to the
+  total after rounding, over 211 made-up cases, half pennies among them;
+  the card hidden for a mixed or unknown currency and for sources without
+  the figures; negative and zero parts; the ranges offered and the stored
+  history serving the longer ones; the range line's text when history is
+  stale or missing; the notice's states and words; the large figure's
+  split in more than one locale; and the card's text for VoiceOver.
+  `checks`, `docs-check` and `build-release` pass on the combined code.
+  103 Python helper tests and 95 script tests passed on the worker's last
+  commit; nothing they cover changed after it.
+
+  Bringing it up to date took three small changes by the session lead,
+  all where the popover meets the longer ranges: the popover's range
+  switch lists the three menu ranges by name, its wording covers the
+  longer ranges, and its test of the heading names every range itself.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: realised gains converted on their own (one test failed); a
+  negative part given a width (one); the rounding difference dropped
+  (one, in 211 cases); the notice shown while Folync answers (one); an
+  unknown failure called unreachable (one).
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Overview, one window at a time, in dark and light, at the
+  default and the minimum window size, at each of the six ranges. Six of
+  those captures were taken before a last change to the axis labels and
+  are named so. The stand-in always answers, so the notice and a negative
+  part were rendered off screen from a temporary test and are shown by
+  the committed preview. After bringing the branch up to date the session
+  lead ran the combined build in the acceptance copy and captured its
+  Overview and its popover in dark: six ranges on the Overview, three in
+  the popover, both as intended.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read `PortfolioTotalComposition`
+  in full and looked at five of the captures: the Overview in dark at one
+  month, in light at the minimum size, the notice with a negative part,
+  and the combined build's Overview and popover. It did not read the
+  whole view. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The range line counts money paid in or taken out as change. It is the
+    last value less the first, as it was for one week and one month, and
+    over a year that can be far from the return: in the acceptance copy
+    one year shows +12.80% beside a total return of +23.25%. The user
+    guide says so. Whether long ranges should show the gain without
+    deposits is put to the owner.
+  - No year-to-date range, as set out above.
+  - Net deposits are kept for about fifteen minutes after Folync stops
+    answering. In a longer outage the card gives way to the Summary card,
+    where the mock-up of an outage shows the card.
+  - Not seen on screen: a "–" change with its reason; the Overview of a
+    local or Trading 212 portfolio; the Summary card as the fallback;
+    Increase Contrast and Reduce Transparency on the new card.
+  - On the stand-in, 1Y and All look the same, because its history starts
+    about a year back.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

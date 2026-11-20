@@ -37,7 +37,8 @@ final class MenuChartTimeRangeSelectionStore {
 
     func selectedTimeRange(for symbol: String) -> MenuChartTimeRange {
         guard let rawValue = defaults.string(forKey: key(for: symbol)),
-              let range = MenuChartTimeRange(rawValue: rawValue) else {
+              let range = MenuChartTimeRange(rawValue: rawValue),
+              MenuChartTimeRange.menuRanges.contains(range) else {
             return .day
         }
         return range
@@ -514,7 +515,7 @@ struct MenuPriceChartView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 18, height: 18)
-                            .background(StockbarPalette.popoverHoverFill, in: Circle())
+                            .stockbarSurface(.pill, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .help("Edit units")
@@ -604,7 +605,7 @@ struct MenuPriceChartView: View {
             }
         }
         .padding(10)
-        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous)) // stockbar-surface-allow: the popover keeps its notice until the popover redesign
+        .stockbarSurface(.notice, tint: .orange, cornerRadius: 10)
         .accessibilityElement(children: .combine)
     }
 
