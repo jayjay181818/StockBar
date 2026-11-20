@@ -1,4 +1,5 @@
 import Combine
+import SwiftUI
 import XCTest
 @testable import Stockbar
 
@@ -2566,5 +2567,254 @@ final class PortfolioTotalReturnTests: XCTestCase {
         model.portfolioGainBasis = .holdingsCost
         XCTAssertEqual(defaults.string(forKey: key), "holdingsCost")
         XCTAssertNotNil(SettingsTransferKeys.settingsKeys[key], "the choice travels with a settings export")
+    }
+}
+
+// MARK: - Portfolio popover
+
+@MainActor
+final class PortfolioMenuPopoverTests: XCTestCase {
+    private let converter = CurrencyConverter(exchangeRates: ["USD": 1.0, "GBP": 0.79], refreshOnInit: false, loadHistoryOnInit: false)
+
+    private func holding(_ symbol: String, price: Double, previousClose: Double, units: String = "10",
+                         watchlist: Bool = false, identity: String? = nil, label: String? = nil) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = previousClose
+        info.currency = "USD"
+        let trade = Trade(name: symbol, position: Position(unitSize: units, positionAvgCost: "100", currency: "USD"),
+                          isWatchlistOnly: watchlist)
+        return RealTimeTrade(trade: trade, realTimeInfo: info, sourceIdentity: identity, displayLabel: label)
+    }
+
+    private func mover(_ symbol: String, _ percent: Double?) -> PortfolioMenuMover {
+        PortfolioMenuMover(id: symbol, symbol: symbol, percent: percent)
+    }
+
+    private func movers(count: Int) -> [PortfolioMenuMover] {
+        (0..<count).map { mover(String(format: "S%02d", $0), Double($0 % 7) - 3) }
+    }
+
+    func testMoversRunFromTheBiggestGainToTheBiggestLossWithUnknownChangesLast() {
+        let ordered = PortfolioMenuMovers.ordered([
+            mover("SHEL", -0.64), mover("ZZZ", nil), mover("NVDA", 2.69), mover("AAA", nil),
+            mover("MSFT", 0.31), mover("HSBA", 0.31), mover("ULVR", -0.22), mover("AZN", .nan)
+        ])
+        XCTAssertEqual(ordered.map(\.symbol), ["NVDA", "HSBA", "MSFT", "ULVR", "SHEL", "AAA", "AZN", "ZZZ"],
+                       "equal moves and unknown ones keep a stable order by symbol")
+        // Moves that show the same at two decimals are a tie, ordered by symbol.
+        XCTAssertEqual(PortfolioMenuMovers.ordered([mover("B", 0.3101), mover("A", 0.3099)]).map(\.symbol), ["A", "B"])
+    }
+
+    func testMoversTakeTheAppsOwnFigureForAPositionsDayAndListOnlyHoldings() {
+        let service = PortfolioCalculationService(currencyConverter: converter)
+        let benchmark = SymbolMetadata.benchmarkSymbols.sorted().first ?? "^GSPC"
+        let trades = [
+            holding("AAPL", price: 101, previousClose: 100),
+            holding("MSFT", price: 99, previousClose: 100, label: "Microsoft"),
+            holding("WATCH", price: 120, previousClose: 100, watchlist: true),
+            holding(benchmark, price: 120, previousClose: 100),
+            holding("SOLD", price: 120, previousClose: 100, units: "0"),
+            holding("NOQUOTE", price: .nan, previousClose: 100),
+            holding("DUP", price: 102, previousClose: 100, identity: "folync-1"),
+            holding("DUP", price: 102, previousClose: 100, identity: "folync-1")
+        ]
+        let movers = PortfolioMenuMovers.movers(from: trades) { service.calculatePositionProfitLoss(for: $0).dayPercent }
+
+        XCTAssertEqual(movers.map(\.symbol), ["DUP", "AAPL", "Microsoft", "NOQUOTE"],
+                       "watch-list symbols, benchmarks and empty positions are not holdings; a holding is listed once")
+        XCTAssertEqual(movers[1].percent ?? .nan, 1, accuracy: 1e-9)
+        XCTAssertEqual(movers[2].percent ?? .nan, -1, accuracy: 1e-9)
+        XCTAssertNil(movers[3].percent, "a change the app cannot work out is unknown, not zero")
+        XCTAssertEqual(PortfolioMenuMovers.percentText(movers[3]), "–")
+        XCTAssertTrue(PortfolioMenuMovers.movers(from: []) { _ in 0 }.isEmpty, "an empty portfolio has no rows")
+    }
+
+    func testMoversShowTheTickerAloneUnlessTwoHoldingsWouldReadTheSame() {
+        let service = PortfolioCalculationService(currencyConverter: converter)
+        let trades = [
+            holding("NVDA", price: 103, previousClose: 100, identity: "folync-nvda", label: "NVDA · Demo portfolio"),
+            holding("AAPL", price: 102, previousClose: 100, identity: "folync-aapl", label: "AAPL · Demo portfolio"),
+            holding("VUSA", price: 101, previousClose: 100, identity: "folync-vusa-1", label: "VUSA · First portfolio"),
+            holding("VUSA", price: 101, previousClose: 100, identity: "folync-vusa-2", label: "VUSA · Second portfolio"),
+            holding("MSFT", price: 99, previousClose: 100, label: "Microsoft")
+        ]
+        let movers = PortfolioMenuMovers.movers(from: trades) { service.calculatePositionProfitLoss(for: $0).dayPercent }
+
+        XCTAssertEqual(movers.map(\.symbol),
+                       ["NVDA", "AAPL", "VUSA · First portfolio", "VUSA · Second portfolio", "Microsoft"],
+                       "a row shows the ticker, and the portfolio only where two rows would otherwise read the same")
+        XCTAssertEqual(PortfolioMenuMovers.ticker(of: " · Demo portfolio"), " · Demo portfolio", "never an empty name")
+    }
+
+    func testTheBarScaleIsTheLargestMoveRoundedUpToAWholePercentWithAFloorOfOne() {
+        XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", 2.69), mover("B", -0.64)]), 3)
+        XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", 0.5), mover("B", -3.0)]), 3, "a loss sets the scale too")
+        XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", 0.12)]), 1)
+        XCTAssertEqual(PortfolioMenuMovers.scale(for: [mover("A", nil)]), 1)
+        XCTAssertEqual(PortfolioMenuMovers.scale(for: []), 1)
+        XCTAssertEqual(PortfolioMenuMovers.scaleText(3), "± 3%")
+
+        XCTAssertEqual(PortfolioMenuMovers.barFraction(mover("A", 1.5), scale: 3), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(PortfolioMenuMovers.barFraction(mover("A", -9), scale: 3), 1, "a bar never runs past its track")
+        XCTAssertEqual(PortfolioMenuMovers.barFraction(mover("A", nil), scale: 3), 0)
+        XCTAssertEqual(PortfolioMenuMovers.barFraction(mover("A", 0.001), scale: 3), 0, "a move that shows as 0.00% has no bar")
+    }
+
+    func testTheListScrollsPastTwelveRowsAndShowsFewerOnAShortScreen() {
+        XCTAssertEqual([1, 12, 13, 40].map { PortfolioMenuMovers.shownRows(count: $0) }, [1, 12, 12, 12])
+        XCTAssertEqual([1, 12, 13, 40].map { PortfolioMenuMovers.scrolls(count: $0) }, [false, false, true, true])
+        XCTAssertEqual(PortfolioMenuMovers.listHeight(count: 40), 12 * PortfolioMenuMovers.rowHeight)
+
+        // Room for five rows: the list shows five and scrolls.
+        let fiveRows = PortfolioMenuMovers.rowHeight * 5 + 3
+        XCTAssertEqual(PortfolioMenuMovers.shownRows(count: 40, availableHeight: fiveRows), 5)
+        XCTAssertTrue(PortfolioMenuMovers.scrolls(count: 12, availableHeight: fiveRows))
+        XCTAssertFalse(PortfolioMenuMovers.scrolls(count: 4, availableHeight: fiveRows))
+        // Almost no room: never fewer than three rows, or than there are holdings.
+        XCTAssertEqual(PortfolioMenuMovers.shownRows(count: 40, availableHeight: 10), PortfolioMenuMovers.minimumRows)
+        XCTAssertEqual(PortfolioMenuMovers.shownRows(count: 2, availableHeight: 10), 2)
+
+        // The popover's limit comes from the room under the menu bar.
+        XCTAssertEqual(PortfolioMenuPopoverHeight.maximum(visibleHeight: 800), 800 - PortfolioMenuPopoverHeight.arrowAndMargin)
+        XCTAssertNil(PortfolioMenuPopoverHeight.maximum(visibleHeight: nil))
+    }
+
+    func testTheHostedListIsOnlyAsTallAsTheRowsItShows() {
+        func height(_ count: Int, room: CGFloat? = nil) -> CGFloat {
+            let host = NSHostingView(rootView: PortfolioMenuMoversList(movers: movers(count: count), availableHeight: room)
+                .frame(width: 308))
+            return host.fittingSize.height
+        }
+        let one = height(1), twelve = height(12), thirteen = height(13), forty = height(40)
+        XCTAssertEqual(twelve - one, 11 * PortfolioMenuMovers.rowHeight, accuracy: 1)
+        XCTAssertEqual(thirteen, twelve, accuracy: 1, "from the thirteenth holding the list scrolls instead of growing")
+        XCTAssertEqual(forty, twelve, accuracy: 1)
+        XCTAssertEqual(twelve - height(40, room: PortfolioMenuMovers.rowHeight * 4), 8 * PortfolioMenuMovers.rowHeight, accuracy: 1,
+                       "on a short screen the list gives up rows, not the popover's height limit")
+        XCTAssertLessThan(height(0), one, "with no holdings one quiet line replaces the rows")
+    }
+
+    func testTheHeadingSaysTodaysMoversAtEveryRange() {
+        XCTAssertEqual(MenuChartTimeRange.allCases.map(PortfolioMenuMovers.heading(for:)),
+                       Array(repeating: "Today's movers", count: MenuChartTimeRange.allCases.count))
+        XCTAssertEqual(MenuChartTimeRange.allCases.map(PortfolioMenuFigures.rangeTitle), ["Today", "1 week", "1 month"])
+    }
+
+    func testADownDayReadsAsLossesInOrderAndAFallInTheHeadline() {
+        let ordered = PortfolioMenuMovers.ordered([mover("NVDA", -1.84), mover("LGEN", 0.62), mover("AZN", -0.31)])
+        XCTAssertEqual(ordered.map(\.symbol), ["LGEN", "AZN", "NVDA"])
+        XCTAssertEqual(PortfolioMenuMovers.percentText(ordered[2], locale: Locale(identifier: "en_GB")), "▼ 1.84%")
+        XCTAssertEqual(PortfolioMenuMovers.percentText(ordered[0], locale: Locale(identifier: "en_GB")), "▲ 0.62%")
+
+        let summary = DisplayPortfolioSummary(totalValue: 83_824.27, totalGain: 15_415.91, totalGainPct: 22.5,
+                                              dayGain: -486.20, dayGainPct: -0.58, totalCost: 68_408.36,
+                                              ownedPositionCount: 9, currency: "GBP")
+        let figures = PortfolioMenuFigures(summary: summary, change: PortfolioMenuRangeChange(value: -486.20, percent: -0.58),
+                                           range: .day, basis: .holdingsCost)
+        XCTAssertEqual(figures.changeSign, -1)
+        XCTAssertEqual(figures.changeAmount, "▼ £486.20")
+        XCTAssertEqual(figures.changePercent, MenuPopoverFormatter.percent(-0.58))
+        XCTAssertEqual(figures.changeWord, "today")
+        XCTAssertEqual(PortfolioMenuFigures.yesterdaysClose(summary: summary, range: .day) ?? .nan, 84_310.47, accuracy: 0.001)
+        XCTAssertNil(PortfolioMenuFigures.yesterdaysClose(summary: summary, range: .week), "the dotted line is only on Today")
+    }
+
+    func testEachRowReadsAsOneSentence() {
+        XCTAssertEqual(PortfolioMenuMovers.accessibilityText(mover("NVDA", 2.6899)), "NVDA, up 2.69 percent today")
+        XCTAssertEqual(PortfolioMenuMovers.accessibilityText(mover("SHEL", -0.64)), "SHEL, down 0.64 percent today")
+        XCTAssertEqual(PortfolioMenuMovers.accessibilityText(mover("AZN", 0.004)), "AZN, no change today")
+        XCTAssertEqual(PortfolioMenuMovers.accessibilityText(mover("ULVR", nil)), "ULVR, change unknown")
+        XCTAssertEqual(PortfolioMenuMovers.percentText(mover("AZN", -0.004), locale: Locale(identifier: "en_GB")), "0.00%",
+                       "a move that rounds to nothing has no arrow")
+    }
+
+    func testTheFiguresAreInThePortfoliosCurrency() {
+        let summary = DisplayPortfolioSummary(totalValue: 84_310.47, totalGain: 15_902.11, totalGainPct: 23.2,
+                                              dayGain: 512.36, dayGainPct: 0.61, totalCost: 68_408.36,
+                                              ownedPositionCount: 9, currency: "GBP", valuationSource: .folyncProvided,
+                                              netDeposits: 68_408.36)
+        let change = PortfolioMenuRangeChange(value: 512.36, percent: 0.61)
+        let figures = PortfolioMenuFigures(summary: summary, change: change, range: .day, basis: .netDeposits)
+        XCTAssertEqual(figures.header, "GBP, 9 positions")
+        XCTAssertEqual(figures.total, "£84,310.47")
+        XCTAssertEqual(StockbarSplitFigure.split(figures.total).whole, "£84,310")
+        XCTAssertEqual(StockbarSplitFigure.split(figures.total).fraction, ".47")
+        XCTAssertEqual(StockbarSplitFigure.split("-").whole, "-", "a missing figure is not split")
+        XCTAssertEqual(figures.changeAmount, "▲ £512.36")
+        XCTAssertEqual(figures.totalReturn, "+£15,902.11")
+        XCTAssertEqual(figures.totalReturnSign, 1)
+        XCTAssertEqual(figures.basisLabel, "Net deposits")
+        XCTAssertEqual(figures.basis, "£68,408.36")
+
+        let inEuros = DisplayPortfolioSummary(totalValue: 1_200, totalGain: -50, totalGainPct: -4, dayGain: 0, dayGainPct: 0,
+                                              totalCost: 1_250, ownedPositionCount: 1, currency: "EUR")
+        let euroFigures = PortfolioMenuFigures(summary: inEuros, change: nil, range: .week, basis: .netDeposits)
+        XCTAssertEqual(euroFigures.header, "EUR, 1 position")
+        XCTAssertEqual(euroFigures.total, "€1,200.00")
+        XCTAssertEqual(euroFigures.totalReturn, "-€50.00")
+        XCTAssertEqual(euroFigures.basisLabel, "Cost basis", "without net deposits the return is measured against cost")
+        XCTAssertEqual(euroFigures.basis, "€1,250.00")
+        XCTAssertNil(euroFigures.changeSign, "an unknown change is neither a gain nor a loss")
+        XCTAssertEqual(euroFigures.changeAmount, "–")
+        XCTAssertEqual(euroFigures.changeWord, "past week")
+        XCTAssertNil(PortfolioMenuFigures.yesterdaysClose(summary: inEuros, range: .day),
+                     "no dotted line where the day's change is not known")
+    }
+
+    func testIncreaseContrastStrengthensThePopoversText() {
+        XCTAssertFalse(StockbarPopoverText.resolve(accessibility: .init()).secondaryIsPrimary)
+        XCTAssertTrue(StockbarPopoverText.resolve(accessibility: .init(increasedContrast: true)).secondaryIsPrimary)
+        XCTAssertFalse(StockbarPopoverText.resolve(accessibility: .init(reduceTransparency: true)).secondaryIsPrimary)
+    }
+
+    func testIncreaseContrastReachesTheViewsUnderThePopoversRoot() {
+        func seen(_ accessibility: StockbarSurfaceAccessibility?) -> StockbarPopoverText? {
+            let box = PopoverTextSeen()
+            let host = NSHostingView(rootView: PopoverTextProbe(seen: box)
+                .stockbarPopoverText()
+                .environment(\.stockbarSurfaceAccessibilityOverride, accessibility))
+            host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+            host.layoutSubtreeIfNeeded()
+            return box.value
+        }
+        XCTAssertEqual(seen(.init(increasedContrast: true))?.secondaryIsPrimary, true)
+        XCTAssertEqual(seen(.init())?.secondaryIsPrimary, false)
+    }
+
+    func testTheWholePopoverStaysWithinTheRoomTheScreenLeaves() {
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        model.realTimeTrades = (0..<40).map { holding(String(format: "T%02d", $0), price: 100 + Double($0 % 7), previousClose: 101) }
+        func fittingHeight(_ limit: CGFloat?) -> CGFloat {
+            let host = NSHostingView(rootView: PortfolioMenuPopoverView(dataModel: model, actions: .noop, maximumHeight: limit))
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            // The popover measures what is not the list, then gives the list the rest.
+            for _ in 0..<5 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                host.frame.size = host.fittingSize
+            }
+            return host.fittingSize.height
+        }
+        let unbounded = fittingHeight(nil)
+        let limit = unbounded - 6 * PortfolioMenuMovers.rowHeight
+        let bounded = fittingHeight(limit)
+        XCTAssertLessThanOrEqual(bounded, limit + 1, "the popover is never taller than the room it is given")
+        XCTAssertGreaterThan(bounded, limit - 2 * PortfolioMenuMovers.rowHeight, "it gives up only the rows it must")
+    }
+}
+
+@MainActor
+private final class PopoverTextSeen {
+    var value: StockbarPopoverText?
+}
+
+private struct PopoverTextProbe: View {
+    let seen: PopoverTextSeen
+    @Environment(\.stockbarPopoverText) private var style
+
+    var body: some View {
+        let _ = { seen.value = style }()
+        Color.clear
     }
 }
