@@ -7,6 +7,8 @@ extension PerformanceChartView {
     var comparisonModeToggle: some View {
         Toggle("Comparison Mode", isOn: $comparisonMode)
             .toggleStyle(SwitchToggleStyle())
+            // Kept on one line in the strip at the narrowest window.
+            .fixedSize()
             .onChange(of: comparisonMode) { _, newValue in
                 if !newValue {
                     // Clear selection when disabling comparison
