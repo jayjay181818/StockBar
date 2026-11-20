@@ -1,6 +1,6 @@
 # Python backend
 
-- `get_stock_data.py` and `get_ohlc_data.py` supply provider data. App invocations emit valid JSON on stdout, diagnostics on stderr, and structured errors with `error`/`error_code`.
+- `get_stock_data.py`, `get_ohlc_data.py` and `get_instrument_events.py` supply provider data. App invocations emit valid JSON on stdout, diagnostics on stderr, and structured errors with `error`/`error_code`.
 - Preserve reported-currency handling: GBX/GBp needs normalization; GBP does not. Use existing provider-specific fallback rules when currency is absent. Cover both cases in Python tests.
 - Preserve rate limiting, atomic cache writes/locking and configurable provider priority. Inspect code for current delays and paths rather than copying constants into docs.
 - Dependency versions come from `requirements.txt` and launch-time validation; do not upgrade them incidentally.
