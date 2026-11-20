@@ -3204,3 +3204,262 @@ private struct PopoverTextProbe: View {
         Color.clear
     }
 }
+
+// MARK: - Holdings: weight, the Amounts/Percent switch, the strip and the line under the table
+
+@MainActor
+final class HoldingsWeightAndTextTests: XCTestCase {
+    private let converter = CurrencyConverter(exchangeRates: ["USD": 1.0, "GBP": 0.8], refreshOnInit: false, loadHistoryOnInit: false)
+
+    private func trade(_ symbol: String, price: Double, units: String, currency: String?,
+                       watchlist: Bool = false, identity: String? = nil) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = price
+        info.currency = currency
+        let position = Position(unitSize: units, positionAvgCost: "1", currency: currency)
+        return RealTimeTrade(trade: Trade(name: symbol, position: position, isWatchlistOnly: watchlist),
+                             realTimeInfo: info, sourceIdentity: identity)
+    }
+
+    private func localModel(_ trades: [RealTimeTrade], currency: String = "GBP") -> DataModel {
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        let stored = StockbarRuntimeStorage.userDefaults.object(forKey: "preferredCurrency")
+        addTeardownBlock { @MainActor in StockbarRuntimeStorage.userDefaults.set(stored, forKey: "preferredCurrency") }
+        model.preferredCurrency = currency
+        model.realTimeTrades = trades
+        return model
+    }
+
+    /// Two invented Folync holdings: one with a weight, one without. Folync's
+    /// weights are deliberately not the holdings' share of `totalValue`, so a
+    /// weight worked out from values would not match.
+    private func folyncSnapshot() throws -> FolyncPortfolioSnapshot {
+        func metric(_ value: String) -> String {
+            "{ \"value\": \(value), \"currency\": \"GBP\", \"quality\": \"complete\", \"reasonCodes\": [], \"asOfDate\": \"2026-07-11\" }"
+        }
+        func holding(_ asset: String, value: Int, allocation: String) -> String {
+            """
+            { "portfolioId": "pf_demo", "assetId": "\(asset)", "ticker": "\(asset.uppercased())", "name": "Fund \(asset)",
+              "currency": "GBP", "shares": 10, "averageCost": 1, "currentPrice": \(value / 10), "previousClose": 1,
+              "marketValue": \(value), "costValue": 10, "dayGain": 1, "dayGainPct": 1, "totalGain": 1, "totalGainPct": 1,
+              "allocationPct": \(allocation), "valuation": \(metric("\(value)")) }
+            """
+        }
+        let json = """
+        {
+          "schemaVersion": 2, "sourceRevision": "revision-1", "generatedAt": "2026-07-12T12:00:00.000Z",
+          "scope": { "id": "all", "name": "All portfolios", "kind": "aggregate", "currency": "GBP" },
+          "freshness": {
+            "responseGeneratedAt": "2026-07-12T12:00:00.000Z", "asOf": "2026-07-11", "status": "current", "reasonCodes": [],
+            "sources": {
+              "snapshots": { "asOfDate": "2026-07-11", "status": "clean", "generation": 1, "dirtySince": null, "rebuildStartedAt": null, "failedAt": null, "completedAt": "2026-07-12T11:55:00.000Z" },
+              "prices": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "fx": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "provider": { "lastSuccessfulSyncAt": "2026-07-12T11:55:00.000Z", "ageSeconds": 300 }
+            }
+          },
+          "totalValue": \(metric("1000")),
+          "cash": \(metric("100")),
+          "profitLoss": { "unrealized": \(metric("12.5")), "realized": \(metric("0")), "day": \(metric("2")) },
+          "holdings": [\(holding("a", value: 600, allocation: "25.5")), \(holding("b", value: 300, allocation: "null"))]
+        }
+        """
+        return try JSONDecoder().decode(FolyncPortfolioSnapshot.self, from: Data(json.utf8))
+    }
+
+    // MARK: Weight
+
+    func testAFolyncHoldingsWeightIsFolyncsFigureAsGivenAndDashWhenFolyncGivesNone() throws {
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        let given = trade("A", price: 60, units: "10", currency: "GBP", identity: "all|pf_demo|a")
+        let missing = trade("B", price: 30, units: "10", currency: "GBP", identity: "all|pf_demo|b")
+        let unmatched = trade("C", price: 30, units: "10", currency: "GBP", identity: "all|pf_demo|nowhere")
+        let watch = trade("W", price: 5, units: "0", currency: "GBP", watchlist: true, identity: "all|pf_demo|a")
+        model.realTimeTrades = [given, missing, unmatched, watch]
+        model.folyncPortfolioSnapshot = try folyncSnapshot()
+        let total = model.calculateNetValue()
+        XCTAssertEqual(total.amount, 1000)
+
+        let weight = model.calculatePositionWeight(for: given, netValue: total)
+        XCTAssertEqual(weight, 25.5, "Folync's own figure, not 600 of 1,000")
+        XCTAssertEqual(HoldingsWeight.text(weight), "25.5%")
+        XCTAssertNil(model.calculatePositionWeight(for: missing, netValue: total), "never worked out from values")
+        XCTAssertEqual(HoldingsWeight.text(model.calculatePositionWeight(for: missing, netValue: total)), "–")
+        XCTAssertNil(model.calculatePositionWeight(for: unmatched, netValue: total))
+        XCTAssertNil(model.calculatePositionWeight(for: watch, netValue: total), "a watchlist row has no weight")
+        XCTAssertNil(HoldingsWeight.given(.nan))
+        XCTAssertNil(HoldingsWeight.given(.infinity))
+    }
+
+    func testALocalHoldingsWeightIsItsShareOfTheNetValueInTheDisplayCurrency() {
+        // $1,000 is £800 at 0.8; £200 more makes a net value of £1,000.
+        let dollars = trade("USA", price: 100, units: "10", currency: "USD")
+        let pounds = trade("GBR", price: 50, units: "4", currency: "GBP")
+        let unpriced = trade("NOPRICE", price: 0, units: "10", currency: "GBP")
+        let noCurrency = trade("NOCCY", price: 10, units: "1", currency: nil)
+        let watch = trade("WATCH", price: 10, units: "5", currency: "GBP", watchlist: true)
+        let model = localModel([dollars, pounds, unpriced, watch])
+        let total = model.calculateNetValue()
+        XCTAssertEqual(total.currency, "GBP")
+        XCTAssertEqual(total.amount, 1000, accuracy: 0.000_1)
+
+        XCTAssertEqual(model.calculatePositionWeight(for: dollars, netValue: total) ?? .nan, 80, accuracy: 0.000_1)
+        XCTAssertEqual(model.calculatePositionWeight(for: pounds, netValue: total) ?? .nan, 20, accuracy: 0.000_1)
+        XCTAssertEqual(HoldingsWeight.text(model.calculatePositionWeight(for: dollars, netValue: total)), "80.0%")
+        XCTAssertNil(model.calculatePositionWeight(for: unpriced, netValue: total), "a value that is not known")
+        XCTAssertNil(model.calculatePositionWeight(for: noCurrency, netValue: total), "no currency is not taken as dollars")
+        XCTAssertNil(model.calculatePositionWeight(for: watch, netValue: total), "a watchlist row has no weight")
+        XCTAssertNil(model.calculatePositionWeight(for: pounds, netValue: (0, "GBP")), "a total of zero")
+        XCTAssertNil(model.calculatePositionWeight(for: pounds, netValue: (-5, "GBP")), "a total below zero")
+        XCTAssertNil(model.calculatePositionWeight(for: pounds, netValue: (.nan, "GBP")), "a total that is not known")
+    }
+
+    func testAShareNeedsBothValuesBothCurrenciesAndARate() {
+        let halve: (Double, String, String) -> Double = { amount, _, _ in amount / 2 }
+        XCTAssertEqual(HoldingsWeight.share(value: 50, currency: "GBP", of: 200, currency: "GBP", convert: halve), 25,
+                       "the same currency is not converted")
+        XCTAssertEqual(HoldingsWeight.share(value: 50, currency: "USD", of: 200, currency: "GBP", convert: halve), 12.5)
+        XCTAssertEqual(HoldingsWeight.share(value: 0, currency: "GBP", of: 200, currency: "GBP", convert: halve), 0)
+        XCTAssertNil(HoldingsWeight.share(value: 50, currency: "XYZ", of: 200, currency: "GBP", convert: { _, _, _ in .nan }),
+                     "no exchange rate")
+        XCTAssertNil(HoldingsWeight.share(value: 50, currency: " ", of: 200, currency: "GBP", convert: halve))
+        XCTAssertNil(HoldingsWeight.share(value: 50, currency: "GBP", of: 200, currency: "", convert: halve))
+        XCTAssertNil(HoldingsWeight.share(value: .nan, currency: "GBP", of: 200, currency: "GBP", convert: halve))
+        XCTAssertNil(HoldingsWeight.share(value: -1, currency: "GBP", of: 200, currency: "GBP", convert: halve))
+        XCTAssertNil(HoldingsWeight.share(value: 50, currency: "GBP", of: 0, currency: "GBP", convert: halve))
+        // Pence go through the converter, which divides them once.
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        XCTAssertEqual(HoldingsWeight.share(value: 5_000, currency: "GBX", of: 200, currency: "GBP",
+                                            convert: model.currencyConverter.convert(amount:from:to:)) ?? .nan,
+                       25, accuracy: 0.000_1)
+    }
+
+    func testWeightTextAndSortOrder() {
+        XCTAssertEqual(HoldingsWeight.text(25.4567), "25.5%")
+        XCTAssertEqual(HoldingsWeight.text(0), "0.0%")
+        XCTAssertEqual(HoldingsWeight.text(100), "100.0%")
+        XCTAssertEqual(HoldingsWeight.text(nil), "–")
+        XCTAssertEqual(HoldingsWeight.text(.nan), "–")
+
+        let rows = [("MID", 9.6 as Double?), ("NONE", nil), ("BIG", 25.5), ("SMALL", 4.8)].map { symbol, weight in
+            HoldingsTableRow(trade: trade(symbol, price: 1, units: "1", currency: "GBP"), weight: weight)
+        }
+        let descending = rows.sorted(using: [KeyPathComparator(\HoldingsTableRow.weightSortKey, order: .reverse)])
+        XCTAssertEqual(descending.map(\.trade.trade.name), ["BIG", "MID", "SMALL", "NONE"], "unknown weights last")
+        let ascending = rows.sorted(using: [KeyPathComparator(\HoldingsTableRow.weightSortKey)])
+        XCTAssertEqual(ascending.map(\.trade.trade.name), ["NONE", "SMALL", "MID", "BIG"])
+    }
+
+    // MARK: The Amounts/Percent switch
+
+    func testTheSwitchIsOneRememberedChoiceForBothColumns() throws {
+        XCTAssertEqual(HoldingsGainDisplayMode.allCases.map(\.title), ["Amounts", "Percent"])
+        XCTAssertEqual(HoldingsGainDisplayMode.defaultValue, .amounts)
+        let suiteName = "HoldingsWeightAndTextTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        XCTAssertEqual(HoldingsGainDisplayMode.stored(in: defaults), .amounts, "amounts until chosen otherwise")
+        defaults.set(HoldingsGainDisplayMode.percent.rawValue, forKey: HoldingsGainDisplayMode.storageKey)
+        XCTAssertEqual(HoldingsGainDisplayMode.stored(in: defaults), .percent)
+        defaults.set("sideways", forKey: HoldingsGainDisplayMode.storageKey)
+        XCTAssertEqual(HoldingsGainDisplayMode.stored(in: defaults), .amounts, "an unreadable value is not a choice")
+        XCTAssertEqual(HoldingsGainDisplayMode.storageKey, "holdings.gainDisplayMode")
+
+        // Both columns are worded by the same function from the same choice.
+        XCTAssertEqual(HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: .amounts), "+£89.84")
+        XCTAssertEqual(HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: .percent), "+0.42%")
+        XCTAssertEqual(HoldingsText.gain(amount: -64.1, percent: -1.234, currency: "GBP", mode: .amounts), "-£64.10")
+        XCTAssertEqual(HoldingsText.gain(amount: -64.1, percent: -1.234, currency: "GBP", mode: .percent), "-1.23%")
+        XCTAssertEqual(HoldingsText.gain(amount: .nan, percent: 1, currency: "GBP", mode: .amounts), "—")
+        XCTAssertEqual(HoldingsText.gain(amount: 1, percent: .nan, currency: "GBP", mode: .percent), "—")
+    }
+
+    func testTheSwitchIsReadAsOneLabelledGroupOfTwoButtons() {
+        let exposure = StockbarSegmentedControl<HoldingsGainDisplayMode>.accessibility(
+            label: "Show gains as", options: HoldingsGainDisplayMode.allCases, selection: .percent, title: \.title
+        )
+        XCTAssertEqual(exposure.label, "Show gains as")
+        XCTAssertEqual(exposure.segments.map(\.label), ["Amounts", "Percent"])
+        XCTAssertEqual(exposure.segments.map(\.isSelected), [false, true])
+    }
+
+    // MARK: The strip
+
+    func testTheStripsSecondLinesSayWhatEachTotalIs() {
+        XCTAssertEqual(HoldingsText.netValueDetail(currency: "GBP", usdAmount: 111_080.99), "$111,080.99 in US dollars")
+        XCTAssertNil(HoldingsText.netValueDetail(currency: "USD", usdAmount: 100), "no second line in dollars")
+        XCTAssertNil(HoldingsText.netValueDetail(currency: "GBP", usdAmount: nil), "no rate, no second line")
+        XCTAssertNil(HoldingsText.netValueDetail(currency: "GBP", usdAmount: .nan))
+
+        XCTAssertEqual(HoldingsText.gainsDetail(source: .folync, currency: "GBP", usdAmount: 16_450.72),
+                       "Unrealised, as Folync reports it. +$16,450.72 in US dollars")
+        XCTAssertEqual(HoldingsText.gainsDetail(source: .trading212, currency: "EUR", usdAmount: -12),
+                       "Unrealised, as Trading 212 reports it. -$12.00 in US dollars")
+        XCTAssertEqual(HoldingsText.gainsDetail(source: .averageCost, currency: "USD", usdAmount: 5),
+                       "Unrealised, against average cost")
+        XCTAssertEqual(HoldingsText.gainsDetail(source: .averageCost, currency: "GBP", usdAmount: nil),
+                       "Unrealised, against average cost")
+    }
+
+    func testTheGainsSourceFollowsTheFigureTheStripShows() throws {
+        let model = localModel([trade("GBR", price: 50, units: "4", currency: "GBP")])
+        XCTAssertEqual(model.netGainsSource, .averageCost, "a local portfolio: Stockbar's own sum")
+        model.folyncPortfolioSnapshot = try folyncSnapshot()
+        XCTAssertEqual(model.netGainsSource, .folync)
+        XCTAssertEqual(model.calculateNetGains().amount, 12.5, "the figure the caption describes")
+    }
+
+    // MARK: The line under the table
+
+    func testTheLineUnderTheTableCountsHoldingsAndWatchlistSymbols() {
+        XCTAssertEqual(HoldingsText.footer(held: 9, watchlist: 2, weightIsFolyncs: true),
+                       "9 holdings and 2 watchlist symbols. Weight is Folync's figure.")
+        XCTAssertEqual(HoldingsText.footer(held: 1, watchlist: 1, weightIsFolyncs: false),
+                       "1 holding and 1 watchlist symbol. Weight is each holding's value as a share of the net value.")
+        XCTAssertEqual(HoldingsText.footer(held: 9, watchlist: 0, weightIsFolyncs: true),
+                       "9 holdings. Weight is Folync's figure.")
+        XCTAssertEqual(HoldingsText.footer(held: 3, watchlist: 0, weightIsFolyncs: nil), "3 holdings.",
+                       "the editing table has no Weight column")
+        XCTAssertEqual(HoldingsText.footer(held: 0, watchlist: 2, weightIsFolyncs: nil), "No holdings and 2 watchlist symbols.")
+        XCTAssertNil(HoldingsText.footer(held: 0, watchlist: 0, weightIsFolyncs: true))
+    }
+
+    // MARK: VoiceOver
+
+    func testARowReadsAsOneSentenceInEitherMode() {
+        func sentence(_ mode: HoldingsGainDisplayMode, weight: Double? = 25.5) -> String {
+            HoldingsText.rowSentence(
+                symbol: "VUSA", name: "Vanguard fund", isWatchlist: false, price: "£84.12", value: "£21,480.60",
+                weight: weight,
+                today: HoldingsText.gain(amount: 89.84, percent: 0.42, currency: "GBP", mode: mode),
+                totalGain: HoldingsText.gain(amount: 2_912.4, percent: 15.7, currency: "GBP", mode: mode)
+            )
+        }
+        XCTAssertEqual(sentence(.amounts),
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today +£89.84, total gain +£2,912.40.")
+        XCTAssertEqual(sentence(.percent),
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight 25.5%, today +0.42%, total gain +15.70%.")
+        XCTAssertEqual(sentence(.amounts, weight: nil),
+                       "VUSA, Vanguard fund, price £84.12, value £21,480.60, weight not known, today +£89.84, total gain +£2,912.40.")
+        XCTAssertEqual(HoldingsText.rowSentence(symbol: "TSLA", name: "TSLA", isWatchlist: true, price: "$338.20", value: "—",
+                                                weight: nil, today: "—", totalGain: "—"),
+                       "TSLA, watchlist only, price $338.20.")
+        XCTAssertEqual(HoldingsText.rowSentence(symbol: "NEW", name: "", isWatchlist: false, price: "-", value: "-",
+                                                weight: nil, today: "—", totalGain: "—"),
+                       "NEW, price not known, value not known, weight not known, today not known, total gain not known.")
+    }
+
+    // MARK: Layout
+
+    func testTheEditingTableFitsTheCardAtTheMinimumWindowSize() {
+        XCTAssertEqual(HoldingsTableLayout.minimumCardWidth, 784)
+        XCTAssertLessThanOrEqual(HoldingsTableLayout.contentWidth, HoldingsTableLayout.minimumCardWidth,
+                                 "every editing column is visible inside the card")
+        // The fields stay wide enough to type in.
+        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.symbolWidth, 100)
+        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.unitsWidth, 80)
+        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.averageCostWidth, 80)
+        XCTAssertGreaterThanOrEqual(HoldingsTableLayout.currencyWidth, 80)
+    }
+}
