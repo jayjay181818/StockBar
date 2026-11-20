@@ -82,6 +82,70 @@ final class Trading212BrokerSyncTests: XCTestCase {
         XCTAssertNotNil(suite.data(forKey: "folync.portfolio-source.settings.v2"))
     }
 
+    /// The exact shape an earlier build stored: the five supplemental keys only.
+    private static let olderBuildStoredSettings = """
+    {"schemaVersion":2,"isEnabled":true,"baseURL":"https://folync.example.test","scopeID":"pf_isa",\
+    "pollingIntervalSeconds":60,"supplemental":{"historicalLineCharts":true,"candlestickCharts":false,\
+    "benchmarkMarketData":true,"exchangeRates":false,"allowLegacyFallback":true}}
+    """
+
+    func testFolyncSettingsStoredByAnOlderBuildKeepTheirSupplementalChoices() throws {
+        let suiteName = TestDefaultsSuite.makeName("FolyncOlderSettings-")
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { TestDefaultsSuite.remove(suiteName) }
+        suite.set(Data(Self.olderBuildStoredSettings.utf8), forKey: "folync.portfolio-source.settings.v2")
+
+        let settings = FolyncSettingsStore(defaults: suite).load()
+
+        XCTAssertTrue(settings.isEnabled)
+        XCTAssertEqual(settings.baseURL, "https://folync.example.test")
+        XCTAssertEqual(settings.scopeID, "pf_isa")
+        XCTAssertNotEqual(settings.supplemental, .disabled, "An older stored configuration must not reset to disabled")
+        XCTAssertTrue(settings.supplemental.historicalLineCharts)
+        XCTAssertFalse(settings.supplemental.candlestickCharts)
+        XCTAssertTrue(settings.supplemental.benchmarkMarketData)
+        XCTAssertFalse(settings.supplemental.exchangeRates)
+        XCTAssertTrue(settings.supplemental.allowLegacyFallback)
+    }
+
+    func testFolyncSupplementalSettingsWithMissingKeysDecodeMissingOnesAsOff() throws {
+        let partial = try JSONDecoder().decode(
+            FolyncSupplementalSettings.self,
+            from: Data(#"{"historicalLineCharts":true,"unknownFutureKey":1}"#.utf8)
+        )
+        XCTAssertTrue(partial.historicalLineCharts)
+        XCTAssertFalse(partial.candlestickCharts)
+        XCTAssertFalse(partial.benchmarkMarketData)
+        XCTAssertFalse(partial.exchangeRates)
+        XCTAssertFalse(partial.allowLegacyFallback)
+
+        let stored = try JSONDecoder().decode(
+            FolyncStoredSettings.self,
+            from: Data(#"{"isEnabled":true,"baseURL":"https://folync.example.test","scopeID":"all","pollingIntervalSeconds":60,"supplemental":{"exchangeRates":true}}"#.utf8)
+        )
+        XCTAssertTrue(stored.isEnabled)
+        XCTAssertTrue(stored.supplemental.exchangeRates)
+        XCTAssertFalse(stored.supplemental.historicalLineCharts)
+    }
+
+    func testFolyncSupplementalSettingsRoundTripThroughStorage() throws {
+        let original = FolyncSupplementalSettings(
+            historicalLineCharts: false,
+            candlestickCharts: true,
+            benchmarkMarketData: false,
+            exchangeRates: true,
+            allowLegacyFallback: true
+        )
+        let decoded = try JSONDecoder().decode(FolyncSupplementalSettings.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded, original)
+
+        let stored = FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.example.test", scopeID: "all",
+            pollingIntervalSeconds: 60, supplemental: original
+        )
+        XCTAssertEqual(try JSONDecoder().decode(FolyncStoredSettings.self, from: JSONEncoder().encode(stored)), stored)
+    }
+
     func testNewFolyncConnectionEnablesOnlyReadySupplementalRoutes() {
         let capabilities = FolyncCapabilities.fixture(
             lineHistory: true,

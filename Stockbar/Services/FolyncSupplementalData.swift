@@ -44,6 +44,27 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
     }
 }
 
+extension FolyncSupplementalSettings {
+    private enum CodingKeys: String, CodingKey {
+        case historicalLineCharts, candlestickCharts, benchmarkMarketData, exchangeRates, allowLegacyFallback
+    }
+
+    /// Every field is optional in stored data, so settings saved by a build
+    /// with fewer fields still decode. With the synthesized decoder a missing
+    /// field failed the whole stored configuration, and Folync fell back to
+    /// `.disabled`. In an extension so the memberwise initializer stays.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            historicalLineCharts: try container.decodeIfPresent(Bool.self, forKey: .historicalLineCharts) ?? false,
+            candlestickCharts: try container.decodeIfPresent(Bool.self, forKey: .candlestickCharts) ?? false,
+            benchmarkMarketData: try container.decodeIfPresent(Bool.self, forKey: .benchmarkMarketData) ?? false,
+            exchangeRates: try container.decodeIfPresent(Bool.self, forKey: .exchangeRates) ?? false,
+            allowLegacyFallback: try container.decodeIfPresent(Bool.self, forKey: .allowLegacyFallback) ?? false
+        )
+    }
+}
+
 struct FolyncCapability: Codable, Equatable, Sendable {
     let supported: Bool
     let ready: Bool
