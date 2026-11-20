@@ -339,7 +339,10 @@ benchmark owed. One comparison for each phase is run in the first quiet
 window, and until then each record says that its benchmark is owed. The
 rule is set out under [How this branch works](#how-this-branch-works).
 Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
-Pull request 136, the Yahoo lookup the Calendar needs, follows it.
+Pull request 136, the Yahoo lookup the Calendar needs, followed it the
+same day as `16f1a3d`. Pull request 137 is the first that changes what the
+app looks like: on 2026-11-20 the owner chose the floating sidebar and said
+to build the Glass look and judge it on experimental builds.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3896,8 +3899,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   stale. After a rate-limit answer it makes no run for an hour, forced or
   not. A symbol Yahoo has nothing for is not asked for again that day
   unless a refresh is forced. No timer and no polling.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `16f1a3d`. The merge published
+  experimental build 382.3.5 as the prerelease `experimental-382.3.5`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run. The owner parked the benchmarks on
   2026-11-20 until the other project's work on this Mac has been idle for
   more than 20 minutes. All fifteen rows of the standard set are
@@ -3979,6 +3984,127 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     handling of `get_stock_data.py` are not applied.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20
   under [How this branch works](#how-this-branch-works).
+
+### 137: Give every surface in the main window the Glass look
+
+- What: the first visible pull request of the redesign. Every surface in
+  the main window takes the Glass look from one place,
+  `Views/StockbarDesign.swift`: cards, inset panels, the metric strip and
+  tiles, notices, empty states, pills and badges, rows, chart callouts and
+  the range switches inside pages. Pages, content, layout and behaviour
+  are the same. The window, the sidebar, the popover and the Overview's
+  new content are later pull requests.
+
+  Tokens have a light and a dark value: the card's fill, stroke and top
+  highlight, the hover and selected fills, and gain and loss colours that
+  are deeper in light mode so figures stay readable on a light card. Every
+  surface is solid under Reduce Transparency and has a stronger stroke and
+  fill under Increase Contrast. Nothing here uses a glass or blur API, so
+  nothing needs an availability check.
+
+  The colours that already existed were not changed where they are used
+  outside the main window. The popover, the menu-bar price chart and chart
+  series keep the system green and red through the unchanged `signed()`;
+  main-window figures use the new `signedOnSurface`. The popover's own
+  card and hover fills were renamed with their values kept.
+
+  Risk and Allocation no longer draw their own panels. The charts page's
+  panels, the attribution sheet, the Holdings table, the Alerts rows, the
+  Diagnostics log and sheets and the Settings previews all use named
+  surfaces. Holdings and Backups show their three tiles as one strip.
+
+  The range switch is a new capsule control, `StockbarSegmentedControl`.
+  It replaces the native segmented picker for the ranges and modes inside
+  pages: the Overview, the charts page's time range and its line or
+  candlestick style, Risk, Allocation, the attribution sheet and the
+  Settings tab bar. The annotation editor's picker, the Theme picker in
+  the Settings form and the popover's picker stay native. The left and
+  right arrows step the selection and stop at either end, and with Reduce
+  Motion on the selection changes without animating.
+
+  `Scripts/validate_invariants.sh` now fails when a view outside the
+  design file draws a surface from a raw system colour or material. A line
+  that must keep its colour ends with a comment giving the reason. Three
+  lines do: the exported chart image's white page, the popover's notice,
+  which waits for the popover's own pull request, and a grey status dot.
+
+  The acceptance copy gains launch options, read once and only in an
+  explicit acceptance run, by the same gate as the loopback exception of
+  pull request 134: the appearance, the page the window opens on, the
+  preferred currency and the minimum window size. A normal run and the
+  automatic XCTest isolation ignore them. The preflight evidence records
+  the options applied, and `Docs/Development.md` describes them. Every
+  later page of the redesign is checked with them.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20 under
+  [How this branch works](#how-this-branch-works). Unlike the two before
+  it, this pull request changes code the benchmark runs: the main window
+  the launches open draws its surfaces differently. No row is named, and
+  none is expected to move by much, but that is not measured. It is
+  covered by the comparison run after Phase A's last pull request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 814 XCTest tests with 0
+  failures. Thirteen are new: five on the surfaces (solid under Reduce
+  Transparency, stronger under Increase Contrast, the card's values in
+  each scheme, a hosted card honouring the settings it is drawn under, and
+  the gain and loss colours); two on the range switch (the arrow keys, and
+  what it exposes to assistive technology); five on the launch options (an
+  explicit acceptance run reads each one, a normal run and the XCTest
+  isolation ignore them, each unknown value is dropped on its own, and
+  applying writes only the settings named); one on the preflight evidence.
+  95 script tests pass, three new for the invariant check: thirteen
+  made-up direct uses all caught, named surfaces and an allowed line
+  passing, and an allow comment with no reason failing. 103 Python helper
+  tests pass. `checks`, `docs-check` and `build-release` pass on the final
+  commit. The session lead ran the XCTest suite and `checks` again on that
+  commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: the launch options gated on the root alone (the XCTest
+  isolation test failed); Reduce Transparency ignored (two tests failed);
+  the arrow keys allowed to wrap (one); materials dropped from the
+  invariant check (one).
+
+  On screen: the worker ran the acceptance copy against the stand-in with
+  a made-up portfolio and took 37 captures, one window at a time, of every
+  page and every Settings tab in dark and light, the Overview at the
+  minimum window size, the charts page with a holding selected and with
+  its export options open, and the attribution sheet. Two things were
+  fixed after looking. In light mode a white card almost disappeared on
+  the white page and its top highlight erased its edge, so light cards got
+  a firmer outline and a soft shadow and lost the highlight. The chart
+  style switch cut "Candlestick" short and now sizes to its labels. The
+  dark captures were taken before the first of those fixes, which does not
+  change dark mode.
+
+  Not seen on screen: Risk with real figures, Alerts with alerts, Backups
+  with backups and the attribution sheet with data, all empty in a fresh
+  copy and judged on their empty states; the Holdings editing table; the
+  lower part of Settings → Connections. Increase Contrast, Reduce
+  Transparency, Reduce Motion and Full Keyboard Access were not tried on
+  screen, because that would change the settings of the owner's Mac; the
+  first two are covered by tests that override the environment. The
+  popover was not looked at, since its surfaces are deliberately unchanged.
+- Review: written by an Opus worker from the session lead's specification.
+  The session lead (Fable 5.2) read the launch options and their gate, the
+  invariant check and the range switch in full, and looked at eight of the
+  captures: the Overview in dark and light, Holdings and the charts page
+  and Risk in dark, Allocation and Settings → Connections in light. It did
+  not read every view's change. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Whether VoiceOver reads the range switch as one group named by its
+    label is not confirmed. Each segment was confirmed as a button that
+    reports its selected state and can be pressed through accessibility.
+    In-process hosting exposes no accessibility tree, so the test covers
+    the function the control draws its accessibility from.
+  - The charts page's line or candlestick switch lost the icons the native
+    picker had.
+  - Between this pull request and the shell's, the new cards sit in
+    today's window and sidebar, so the app is part old and part new.
+  - Data Health keeps separate tiles, and the grouped sections of native
+    Settings forms keep the system look.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
 
