@@ -4856,8 +4856,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Cash row, which would change every share the screen shows today; the
   words "Fair" and "Good" beside figures the screen gives no word to;
   and the line about a Returns page, which does not exist yet.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `c34be9e`. The merge published
+  experimental build 382.3.13 as the prerelease `experimental-382.3.13`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches never open this page. Covered by the comparison set for the
   night of 2026-11-20, if this is merged by then, or by the next one.
@@ -4899,6 +4901,298 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - VoiceOver was not run; the labels were read as text.
   - "Least alike" names the lowest figure, which for a strongly negative
     one means the pair that moves most against each other.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 145: Switches in Settings for the Income, Trades and Activity pages
+
+- What: Settings → Connections → Folync gains three checkboxes, "Income",
+  "Trades" and "Activity", each with the "New" badge, after the four
+  older ones. They turn the three pages' Folync routes off and on. The
+  settings themselves have existed since pull request 135, on by default;
+  until now nothing could turn them off.
+
+  Beside each is its status, worded like the older rows' and taken from
+  the capabilities answer the app already has: "Not supported by this
+  Folync server" when the answer leaves the route out, "Unsupported",
+  "Not ready" with Folync's reasons, or "Ready". No request is made to
+  find a status out. A checkbox that is off cannot be turned on while its
+  route is not usable; one that is on can always be turned off. The
+  wording and that rule now live in one place, `FolyncRouteSettingsStatus`,
+  which the older rows use too; what they say is unchanged.
+
+  The block is headed "What Stockbar reads from Folync", with the line
+  "Portfolio pages are fetched when you open them, not on a timer."
+
+  **Turning one of the three off or on makes no request.** Saving a
+  change to the older rows restarts the market-data schedule, which asks
+  Folync for capabilities, benchmarks and rates. A change to the three
+  new ones alone now saves and stops there, and clears nothing saved.
+  The page concerned says it is switched off the next time it is opened,
+  and asks again once it is switched on and opened.
+
+  Against the mock-up: the rows are in one column, because the older
+  rows' coverage lines and the longest status do not fit two at the
+  minimum width; the label is "Income", not "Income and calendar", since
+  there is no Calendar page yet; and there is no "Returns breakdown" row,
+  since Folync has no such route yet.
+- Merged: 2026-11-20, squash commit `80dfcbc`. The merge published
+  experimental build 382.3.14 as the prerelease `experimental-382.3.14`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open Settings. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 144 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 953 XCTest tests with 0 failures. Eight
+  are new, in `FolyncPortfolioSourceTests.swift`: the status for each
+  route and each case, no capabilities answer included; one route left
+  out changing only its own row; the older rows keeping their wording;
+  the rule for turning on and off; saved settings decoding unchanged;
+  each switch saving only its own setting, leaving the others, the
+  address and the portfolio as they were, and making no request, while
+  an older row's switch still does; and which changes count as needing no
+  request. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: the schedule restarted for one of the new switches;
+  a route that is not ready allowed to be turned on; dividends read as
+  trade analysis; the reasons dropped from "Not ready"; "New" dropped
+  from the name VoiceOver reads; and a change to the fallback treated as
+  one of the new switches.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Connections tab before and after, in dark and light, at
+  the default and the minimum size, and with one route left out and one
+  not ready, which showed the right statuses. The stand-in's log showed
+  no request for any change of a switch.
+
+  **A switched-off page was not seen on screen, and the reason is a fault
+  in the acceptance copy, not in the app.** The worker found that a
+  switch it turned off was on again when Settings was next opened, and
+  that the older "Exchange rates" switch does the same on `experimental`
+  without this change. The session lead traced it: the acceptance copy
+  keeps its defaults in a suite named by a path, and on macOS 27.2.1 a
+  process never reads back its own change to a key that was already in
+  such a file when it started. The harness seeds the Folync settings
+  before it starts the app, so those are the keys the copy cannot change.
+  Two small programs outside the repository showed the same with no
+  Stockbar code in them, and showed that a suite named in the ordinary
+  way reads back correctly. The released app uses the standard defaults,
+  not a suite named by a path.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the status type and
+  the change to how a settings change is saved, looked at one capture,
+  and traced the fault above with a temporary log line that was never
+  committed. It did not read the view or every test. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - No page's "switched off" state, and no page asking again after being
+    switched back on, was seen in a running copy, for the reason above.
+    Both are tested with the store stood in for.
+  - The acceptance copy cannot change any setting seeded before it
+    starts: the Folync address, portfolio and seven route settings. So a
+    portfolio that is not Folync's cannot be seen there either. Fixing it
+    means having the app seed its own settings in an acceptance run; not
+    done here.
+  - Not tried against a real Folync.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 146: Holdings: a Weight column and one switch for amounts or percentages
+
+- What: the Holdings screen gains a Weight column, between Value and
+  Today: the holding's share of the portfolio to one decimal. It sorts,
+  with an unknown weight below every known one.
+
+  For a Folync portfolio the weight is Folync's own figure for the
+  holding, shown as given and never worked out here; "–" where Folync
+  gives none. Folync's contract does not say what that figure is a share
+  of, so the line under the table says "Weight is Folync's figure" and
+  no more. For a local or Trading 212 portfolio it is the holding's
+  value as a share of the net value the strip shows, both in the same
+  currency, and "–" when the value, the currency, the exchange rate or a
+  positive total is missing. A watchlist row has no weight.
+
+  One visible switch, Amounts and Percent, beside the search field, sets
+  both the Today and the Total gain columns, and is remembered. Before,
+  each column switched when one of its cells was clicked, which nothing
+  on the screen said; clicking a cell now does nothing. The heading
+  "Total P&L" is "Total gain".
+
+  The strip keeps its three figures and where they come from. The US
+  dollar equivalent moves from brackets to a second line, and the total
+  gains say what they are for the source: "Unrealised, as Folync reports
+  it", "Unrealised, as Trading 212 reports it", or "Unrealised, against
+  average cost" for Stockbar's own sum.
+
+  Under the read-only table one line counts what is shown, "9 holdings
+  and 2 watchlist symbols.", with the right singular and plural forms.
+
+  **The fault at the minimum window size is fixed for the read-only
+  table:** every column, Weight included, is inside the card; before, the
+  last heading was cut off. Numbers are right-aligned. VoiceOver reads a
+  row as one sentence, with the weight and whichever of amount or
+  percentage is showing.
+
+  The editing table for a local portfolio is unchanged. The worker had
+  narrowed every one of its columns so that it fitted the card at the
+  minimum size; that layout cannot be seen in the acceptance copy, which
+  is always a Folync portfolio, so the session lead put the widths back.
+  It is wider than the card at the minimum size and scrolls sideways
+  there, as it always has. Weight is not shown in it.
+- Merged: 2026-11-20, squash commit `9d87d22`. The merge published
+  experimental build 382.3.15 as the prerelease `experimental-382.3.15`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 145 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 964 XCTest tests with 0 failures.
+  Eleven are in a new class in `PortfolioCalculationTests.swift`: a
+  Folync holding's weight as given and "–" when Folync gives none; a
+  local holding's weight, with a value, a currency or a total missing; a
+  watchlist row; the weight's text and its sort order; the one switch and
+  its stored key; the strip's second lines for each source; the line
+  under the table for one, two and no watchlist symbols; a row's sentence
+  for VoiceOver in both modes; and that the editing table's widths are
+  what they were. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: unknown weights sorted first; "holdings" used for one
+  holding; the Folync gains called "against average cost"; and a Folync
+  weight worked out from values. A fifth, a wider column in the editing
+  table, was caught by a test of the narrowed layout that went with it.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page before and after, in dark and light, at the minimum
+  size and at 1286 by 850, in Amounts and in Percent, sorted by Weight
+  and with a search. Its first version left the cells showing the old
+  choice when the switch changed; it saw that on screen and fixed it.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the layout change and
+  what else changed in the editing rows, looked at the worker's captures
+  at the minimum size, and put the editing table's widths back. It did
+  not read the rest of the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The editing table was not seen on screen**, before or after: the
+    acceptance copy cannot be a local portfolio (see record 145).
+  - Watchlist rows were not seen on screen; the stand-in has none.
+  - The weight and the gains caption for a Trading 212 portfolio are not
+    tested: no test helper builds a broker snapshot.
+  - The choice of Amounts or Percent surviving a relaunch was not seen;
+    each acceptance run starts with fresh storage.
+  - With a fresh Trading 212 snapshot the net value is the broker's whole
+    account, cash included, so a holding entered by hand beside it is
+    weighed against a total that leaves it out.
+  - An unknown figure in a row is now "–" in every column; Value, Today
+    and Total gain used "—".
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 147: Risk: each figure said once, with a chart of the falls
+
+- What: the Risk screen shows the figures it already worked out, each
+  once, in the order of the approved mock-up. No existing figure's
+  arithmetic changes: the same functions of `RiskMetricsService` give the
+  same numbers, to the same number of decimals.
+
+  The header has the title, the line "How bumpy the ride has been", the
+  recalculate control and all five ranges. Under it is a strip of four:
+  volatility, the Sharpe ratio, the Sortino ratio and the worst fall, as
+  a negative percentage with its length. The words under volatility and
+  the Sharpe ratio are the screen's own, with their thresholds unchanged.
+
+  "How far below its peak" is new: a chart of how far the portfolio stood
+  below its highest value so far, day by day, with the lowest point
+  marked and labelled. Its series is the one piece of new arithmetic, a
+  pure function beside the existing ones, over the same values and dates
+  as the maximum drawdown, so its lowest point is the strip's worst fall
+  exactly; a test holds the two together on five series. The chart has a
+  sentence for VoiceOver and its draw-in is off under Reduce Motion.
+
+  "On a bad day" gives the two value-at-risk figures in plain words, once
+  each. "Falls of more than 5%" lists the falls the screen listed before,
+  with their dates and lengths. A footnote replaces "Calculation Details":
+  how many trading days the figures rest on, from when to when, that the
+  history is Stockbar's own and not Folync's (said for a Folync portfolio
+  only), the method, and the risk-free rate. Downside deviation, which
+  the mock-up leaves out, is kept as a small figure above the footnote.
+
+  Gone: the six cards and the three sections that repeated them, with
+  their colour bands for the two ratios and their explanatory captions;
+  the calculation date and the "Time Range" row, which the footnote and
+  the range switch already say.
+
+  **One label is corrected.** The length of the worst fall was called
+  "trading days" on the old screen and in the worker's version. The
+  service counts calendar days from the peak to the low whenever it has
+  the dates, and the screen always gives it the dates, so the strip now
+  says "90 days, peak to low", as the list of falls does. The number is
+  the same.
+
+  Against the mock-up: percentages keep two decimals and ratios three,
+  because the figures must stay what they were; and the screen keeps the
+  recalculate control, the currency notice, the limit of five falls and
+  the note that recovery time is not counted.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 146 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 978 XCTest tests with 0 failures.
+  Fourteen are new, in `RiskMetricsServiceTests.swift`: the series for a
+  history that only rises, one that falls and recovers, one still falling
+  at the end, one day and none; its lowest point against the maximum
+  drawdown; the label of the lowest point and the chart's sentence; the
+  words under each tile, a figure that is not known included; the two
+  bad-day sentences; a row of the falls and the empty line; and the
+  footnote for a Folync and a local portfolio. `checks`, `docs-check` and
+  `build-release` pass on the combined code. 103 Python helper tests and
+  95 script tests passed on the worker's last commit.
+
+  **The figures were held to the old screen's.** Before changing
+  anything the worker ran the old screen's own formatting on four made-up
+  histories and kept what it printed; a test builds the same figures
+  through the new code and compares every one. The only differences are
+  the minus sign on a fall, "–" for an unknown figure where the old
+  screen had "—", and the corrected label above.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a peak that never moved; the minus sign dropped; a
+  Sharpe threshold changed; "not Folync's" always shown; the last of two
+  equal lows taken; percentages to one decimal; and the two bad-day
+  amounts swapped.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read how the length of a
+  fall is counted and worded, looked at the worker's drawing of the
+  filled page, and corrected the label above. It did not read the view
+  or every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The filled page was never seen in the running app.** The
+    acceptance copy has no stored history, so Risk shows "Not enough
+    history" there, before and after. The filled page was seen only in
+    drawings made off screen from made-up histories, in dark and light,
+    at the default and the minimum width.
+  - VoiceOver, Reduce Motion and Increase Contrast were not tried on a
+    running app.
+  - The Sortino ratio no longer has a colour; the colour was the only
+    judgement the old screen gave it.
+  - The horizontal axis shows the months Swift Charts picks, which need
+    not include the first.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

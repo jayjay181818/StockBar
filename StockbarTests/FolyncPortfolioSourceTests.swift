@@ -4706,3 +4706,193 @@ final class StockbarActivityPageTests: XCTestCase {
         XCTAssertEqual(entry.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, 3 of \(sidebar.count)")
     }
 }
+
+// MARK: - Settings switches for the Income, Trades and Activity pages
+
+extension FolyncPortfolioSourceTests {
+    private static func ledgerCapabilities(
+        dividends: FolyncCapability?,
+        tradeAnalysis: FolyncCapability?,
+        transactions: FolyncCapability?
+    ) -> FolyncCapabilities {
+        let base = FolyncCapabilities.fixture(lineHistory: true, candlesticks: true, benchmarks: true, exchangeRates: true)
+        return FolyncCapabilities(
+            schemaVersion: base.schemaVersion,
+            sourceRevision: base.sourceRevision,
+            generatedAt: base.generatedAt,
+            resources: .init(
+                lineHistory: base.resources.lineHistory,
+                candlesticks: base.resources.candlesticks,
+                benchmarks: base.resources.benchmarks,
+                exchangeRates: base.resources.exchangeRates,
+                transactions: transactions,
+                dividends: dividends,
+                tradeAnalysis: tradeAnalysis
+            ),
+            ranges: base.ranges,
+            intervals: base.intervals,
+            retentionDays: base.retentionDays,
+            benchmarks: base.benchmarks,
+            fx: base.fx,
+            trackedAssets: base.trackedAssets,
+            trackedSymbols: base.trackedSymbols,
+            marketIdentities: base.marketIdentities
+        )
+    }
+
+    private static let usable = FolyncCapability(supported: true, ready: true, reasonCodes: [])
+    private static let unsupported = FolyncCapability(supported: false, ready: false, reasonCodes: ["not_configured"])
+    private static let notReady = FolyncCapability(supported: true, ready: false, reasonCodes: ["snapshots_rebuilding", "fx_stale"])
+
+    func testLedgerSwitchTitlesAndVoiceOverNames() {
+        XCTAssertEqual(FolyncLedgerRoute.allCases.map(\.settingsTitle), ["Income", "Trades", "Activity"])
+        XCTAssertEqual(FolyncLedgerRoute.dividends.settingsAccessibilityLabel, "Income, New")
+        XCTAssertEqual(FolyncLedgerRoute.tradeAnalysis.settingsAccessibilityLabel, "Trades, New")
+        XCTAssertEqual(FolyncLedgerRoute.transactions.settingsAccessibilityLabel, "Activity, New")
+    }
+
+    func testLedgerSwitchStatusForEachCapabilityAnswer() {
+        for route in FolyncLedgerRoute.allCases {
+            // No capabilities answer yet: the older rows' wording.
+            XCTAssertEqual(
+                FolyncRouteSettingsStatus.label(for: FolyncRouteSettingsStatus.capability(for: route, in: nil)),
+                "Not supported by this Folync server", "\(route)"
+            )
+            func status(_ capability: FolyncCapability?) -> String {
+                let others = Self.usable
+                let capabilities = Self.ledgerCapabilities(
+                    dividends: route == .dividends ? capability : others,
+                    tradeAnalysis: route == .tradeAnalysis ? capability : others,
+                    transactions: route == .transactions ? capability : others
+                )
+                return FolyncRouteSettingsStatus.label(
+                    for: FolyncRouteSettingsStatus.capability(for: route, in: capabilities)
+                )
+            }
+            XCTAssertEqual(status(nil), "Not supported by this Folync server", "\(route) left out of the answer")
+            XCTAssertEqual(status(Self.unsupported), "Unsupported", "\(route)")
+            XCTAssertEqual(status(Self.notReady), "Not ready · snapshots rebuilding, fx stale", "\(route)")
+            XCTAssertEqual(status(Self.usable), "Ready", "\(route)")
+        }
+    }
+
+    func testOneLedgerCapabilityLeftOutAffectsOnlyItsRow() {
+        let capabilities = Self.ledgerCapabilities(dividends: Self.usable, tradeAnalysis: nil, transactions: Self.notReady)
+        let labels = FolyncLedgerRoute.allCases.map {
+            FolyncRouteSettingsStatus.label(for: FolyncRouteSettingsStatus.capability(for: $0, in: capabilities))
+        }
+        XCTAssertEqual(labels, ["Ready", "Not supported by this Folync server", "Not ready · snapshots rebuilding, fx stale"])
+    }
+
+    func testOlderRowsKeepTheirStatusWording() {
+        XCTAssertEqual(FolyncRouteSettingsStatus.label(for: Self.usable, readyLabel: "Folync"), "Folync")
+        XCTAssertEqual(FolyncRouteSettingsStatus.label(for: Self.notReady, readyLabel: "Folync"),
+                       "Not ready · snapshots rebuilding, fx stale")
+        XCTAssertEqual(FolyncRouteSettingsStatus.label(for: Self.unsupported, readyLabel: "Folync"), "Unsupported")
+        XCTAssertEqual(FolyncRouteSettingsStatus.label(for: nil, readyLabel: "Folync"), "Not supported by this Folync server")
+    }
+
+    func testASwitchThatIsOffCannotBeTurnedOnWithoutAUsableCapability() {
+        for capability in [nil, Self.unsupported, Self.notReady] {
+            XCTAssertFalse(FolyncRouteSettingsStatus.canChange(isOn: false, capability: capability), "\(String(describing: capability))")
+            XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: true, capability: capability),
+                          "A lost capability must not trap a switch that is on")
+        }
+        XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: false, capability: Self.usable))
+        XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: true, capability: Self.usable))
+    }
+
+    func testSavedSupplementalSettingsKeepTheirKeysAndValues() throws {
+        let settings = FolyncSupplementalSettings(
+            historicalLineCharts: true, candlestickCharts: false, benchmarkMarketData: true, exchangeRates: false,
+            allowLegacyFallback: true, dividends: false, tradeAnalysis: true, transactions: false
+        )
+        let data = try JSONEncoder().encode(settings)
+        let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Bool])
+        XCTAssertEqual(Set(keys.keys), [
+            "historicalLineCharts", "candlestickCharts", "benchmarkMarketData", "exchangeRates",
+            "allowLegacyFallback", "dividends", "tradeAnalysis", "transactions"
+        ])
+        XCTAssertEqual(try JSONDecoder().decode(FolyncSupplementalSettings.self, from: data), settings)
+    }
+
+    @MainActor
+    func testFlippingALedgerSwitchSavesOnlyThatSettingAndMakesNoRequest() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        let initial = FolyncSupplementalSettings(
+            historicalLineCharts: true, candlestickCharts: false, benchmarkMarketData: true, exchangeRates: false,
+            allowLegacyFallback: true, dividends: true, tradeAnalysis: true, transactions: false
+        )
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true,
+            baseURL: "https://folync.example.invalid",
+            scopeID: "pf_demo",
+            pollingIntervalSeconds: 60,
+            supplemental: initial
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            if request.url?.path == "/api/client/v2/capabilities" {
+                return Self.httpResponse(request, status: 200, body: Self.readyMarketCapabilitiesJSON)
+            }
+            return Self.httpResponse(request, status: 404, body: "{}")
+        }
+        let dataModel = makeTestDataModel(dependencies: env.dependencies)
+        defer { dataModel.deactivateFolyncPortfolio() }
+
+        var expected = initial
+        for route in FolyncLedgerRoute.allCases {
+            for _ in 0..<2 {
+                var changed = env.settingsStore.load().supplemental
+                switch route {
+                case .dividends: changed.dividends.toggle()
+                case .tradeAnalysis: changed.tradeAnalysis.toggle()
+                case .transactions: changed.transactions.toggle()
+                }
+                await dataModel.updateFolyncSupplementalSettings(changed)
+                switch route {
+                case .dividends: expected.dividends.toggle()
+                case .tradeAnalysis: expected.tradeAnalysis.toggle()
+                case .transactions: expected.transactions.toggle()
+                }
+                let saved = env.settingsStore.load()
+                XCTAssertEqual(saved.supplemental, expected, "\(route): only that switch changes")
+                XCTAssertTrue(saved.isEnabled)
+                XCTAssertEqual(saved.baseURL, "https://folync.example.invalid")
+                XCTAssertEqual(saved.scopeID, "pf_demo")
+                XCTAssertEqual(saved.pollingIntervalSeconds, 60)
+                for other in FolyncLedgerRoute.allCases {
+                    XCTAssertEqual(saved.isLedgerRouteActive(other), expected.isEnabled(other), "\(other) after \(route)")
+                }
+            }
+        }
+        XCTAssertEqual(stub.requests.count, 0, "A ledger switch asks Folync nothing; its page asks when opened")
+        XCTAssertNil(dataModel.folyncSupplementalRefreshTimer, "A ledger switch does not restart the market-data schedule")
+
+        // The older rows still restart the schedule, which asks for capabilities.
+        var marketData = env.settingsStore.load().supplemental
+        marketData.exchangeRates = true
+        await dataModel.updateFolyncSupplementalSettings(marketData)
+        XCTAssertGreaterThan(stub.requests.count, 0)
+        XCTAssertNotNil(dataModel.folyncSupplementalRefreshTimer)
+    }
+
+    func testOnlyAChangeToTheLedgerSwitchesCountsAsTheSameMarketDataRoutes() {
+        let base = FolyncSupplementalSettings.disabled
+        var ledger = base
+        ledger.dividends = true
+        ledger.tradeAnalysis = true
+        ledger.transactions = true
+        XCTAssertTrue(base.hasSameMarketDataRoutes(as: ledger))
+        let changes: [WritableKeyPath<FolyncSupplementalSettings, Bool>] = [
+            \.historicalLineCharts, \.candlestickCharts, \.benchmarkMarketData, \.exchangeRates, \.allowLegacyFallback
+        ]
+        for keyPath in changes {
+            var changed = base
+            changed[keyPath: keyPath] = true
+            XCTAssertFalse(base.hasSameMarketDataRoutes(as: changed), "\(keyPath)")
+        }
+    }
+}

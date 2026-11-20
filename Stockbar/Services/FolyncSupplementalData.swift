@@ -73,6 +73,17 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
         case .transactions: transactions
         }
     }
+
+    /// Whether these settings match `other` in the four market-data routes
+    /// and the fallback, whatever the ledger routes say. A change confined to
+    /// the ledger routes needs no request: their pages ask when opened.
+    func hasSameMarketDataRoutes(as other: FolyncSupplementalSettings) -> Bool {
+        historicalLineCharts == other.historicalLineCharts
+            && candlestickCharts == other.candlestickCharts
+            && benchmarkMarketData == other.benchmarkMarketData
+            && exchangeRates == other.exchangeRates
+            && allowLegacyFallback == other.allowLegacyFallback
+    }
 }
 
 extension FolyncSupplementalSettings {
@@ -108,6 +119,51 @@ struct FolyncCapability: Codable, Equatable, Sendable {
     let reasonCodes: [String]
 
     var isUsable: Bool { supported && ready }
+}
+
+/// What Settings → Connections → Folync says beside a route's checkbox, and
+/// whether the checkbox can be changed. Worked out from the capabilities
+/// answer Stockbar already has; it never asks Folync anything.
+enum FolyncRouteSettingsStatus {
+    /// `capability` is nil when there is no capabilities answer yet or the
+    /// server does not list the resource. `readyLabel` is what a usable
+    /// route says; a market-data route can name its last route status instead.
+    static func label(for capability: FolyncCapability?, readyLabel: String = "Ready") -> String {
+        guard let capability else { return "Not supported by this Folync server" }
+        if !capability.supported { return "Unsupported" }
+        if !capability.ready {
+            return "Not ready · \(FolyncConnectionState.readable(reasons: capability.reasonCodes))"
+        }
+        return readyLabel
+    }
+
+    /// A route that is off can be switched on only while its capability is
+    /// usable. One that is on can always be switched off: a lost capability
+    /// must not trap an already-enabled route.
+    static func canChange(isOn: Bool, capability: FolyncCapability?) -> Bool {
+        isOn || capability?.isUsable == true
+    }
+
+    /// A ledger route's capability in the answer Stockbar has, nil when there
+    /// is no answer yet or it leaves the route out.
+    static func capability(for route: FolyncLedgerRoute, in capabilities: FolyncCapabilities?) -> FolyncCapability? {
+        capabilities?.resources.capability(for: route)
+    }
+}
+
+extension FolyncLedgerRoute {
+    /// The page each ledger route feeds, as Settings names its checkbox.
+    var settingsTitle: String {
+        switch self {
+        case .dividends: "Income"
+        case .tradeAnalysis: "Trades"
+        case .transactions: "Activity"
+        }
+    }
+
+    /// The checkbox's name for VoiceOver. The "New" badge is hidden from
+    /// VoiceOver and read as part of the name, as the sidebar does.
+    var settingsAccessibilityLabel: String { "\(settingsTitle), New" }
 }
 
 struct FolyncInstrumentIdentity: Codable, Equatable, Sendable {

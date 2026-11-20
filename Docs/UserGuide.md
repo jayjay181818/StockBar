@@ -83,7 +83,11 @@ With a Folync portfolio, **Activity** lists every transaction Folync holds, newe
 
 ## Holdings
 
-The read-only table shows your positions in your saved order; click the Instrument or Price header to sort, and click a Today or Total P&L value to switch between amount and percentage. Search filters the table without changing portfolio totals.
+The read-only table shows your positions in your saved order; click the Instrument, Price or Weight header to sort. The **Amounts / Percent** switch beside the search field shows both **Today** and **Total gain** as amounts or as percentages, and Stockbar remembers the choice. Search filters the table without changing portfolio totals.
+
+**Weight** is a holding's share of the portfolio. With Folync it is Folync's own figure, shown as Folync gives it; otherwise it is the holding's value as a share of the net value above the table. A watchlist symbol, or a holding whose value is not known, shows "–". The line under the table counts holdings and watchlist symbols and says which weight you are seeing.
+
+The strip above the table shows the **Net value** (with the US-dollar figure on a second line when you display another currency), **Total gains** with a line saying what they are (unrealised gains as Folync or Trading 212 report them, or Stockbar's own sum against average cost for a local portfolio), and the number of **Tracked symbols**.
 
 Choose **Edit** to change local holdings, and **Done** when finished (changes save as you type):
 
@@ -145,7 +149,7 @@ London prices are often quoted in pence (**GBX**, 100 GBX = £1). Stockbar conve
 Settings → **Connections** manages optional sources. Credentials are stored in your Keychain.
 
 - **Trading 212** — off until you switch on **Enable Trading 212**. Choose the environment (**Demo / Paper** by default, or **Live / Real Money**) and the account type (Stocks & Shares ISA by default, or Invest; CFD accounts are not supported by Trading 212's API). Link a read-only account, preview matches and differences, then link holdings. Linked positions take quantity, price, average cost and P&L from the broker. **Import Broker-Only Holdings** adds positions you have not entered by hand. Linked holdings sync every five minutes by default; **Sync Linked Holdings** and **Reconcile Holdings Now** act at once. An hourly check that applies holding changes, automatic import of new positions during it, and deleting holdings that disappear from Trading 212 are each off until you switch them on.
-- **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Supplemental routes (history, candles, benchmarks, FX) can be switched on or off individually. With VoiceOver, Stockbar speaks the result of each Folync action and of **Refresh Now**, and announces a connection problem once when it starts.
+- **Folync** — use a self-hosted Folync instance as the authoritative portfolio. While active, local holdings are kept aside and restored when you switch back. Under **What Stockbar reads from Folync**, each kind of data has its own checkbox with Folync's status beside it: **Ready**, **Not ready** with the reason, **Unsupported**, or **Not supported by this Folync server**. The market-data routes (history, candles, benchmarks, FX) are checked every minute. **Income**, **Trades** and **Activity** turn those pages' Folync data off and on; they are on by default and ask Folync nothing when changed. A page switched off says so the next time it is opened, and asks Folync again once switched back on; its sidebar entry stays as it is. A checkbox that is off cannot be turned on while Folync does not offer that data; one that is on can always be turned off. With VoiceOver, Stockbar speaks the result of each Folync action and of **Refresh Now**, and announces a connection problem once when it starts.
 
 Market-data API keys for FMP and Twelve Data, and the provider order, are also configured here.
 
