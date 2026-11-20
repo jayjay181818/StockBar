@@ -342,7 +342,10 @@ Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
 Pull request 136, the Yahoo lookup the Calendar needs, followed it the
 same day as `16f1a3d`. Pull request 137 is the first that changes what the
 app looks like: on 2026-11-20 the owner chose the floating sidebar and said
-to build the Glass look and judge it on experimental builds.
+to build the Glass look and judge it on experimental builds. It was merged
+the same day as `fe59b8d`. The shell, the popover and the Overview were then
+built at the same time, each as its own pull request; the popover's, 138,
+was ready first.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -4035,8 +4038,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   automatic XCTest isolation ignore them. The preflight evidence records
   the options applied, and `Docs/Development.md` describes them. Every
   later page of the redesign is checked with them.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `fe59b8d`. The merge published
+  experimental build 382.3.6 as the prerelease `experimental-382.3.6`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20 under
   [How this branch works](#how-this-branch-works). Unlike the two before
   it, this pull request changes code the benchmark runs: the main window
@@ -4104,6 +4109,118 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     today's window and sidebar, so the app is part old and part new.
   - Data Health keeps separate tiles, and the grouped sections of native
     Settings forms keep the system look.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 138: Give the portfolio popover the Glass layout with today's movers
+
+- What: the popover that opens from the portfolio's menu-bar item takes
+  the layout the owner chose. From the top: "Portfolio" with the currency
+  and the number of positions; the total, with its decimals smaller; the
+  change, with its percentage in a badge; the graph, with a dotted
+  "Yesterday's close" line on the Today range; the range switch, with the
+  three ranges it had; "Today's movers"; total return beside net deposits;
+  and the footer with the buttons it had. The owner's two conditions hold:
+  the graph is under the total, and every holding is listed.
+
+  The movers are always today's, whatever range is selected, because
+  Folync gives a holding's change only for the day and in total. Each
+  figure is the one the app already works out for a position's day;
+  nothing here makes a request. They run from the biggest gain to the
+  biggest loss, with unknown changes last and ties in order of name. A
+  move that rounds to 0.00% is no change. The bars share one scale, the
+  largest move rounded up to a whole percent and never less than 1%.
+  Watch-list symbols, benchmarks and empty positions are not listed. A
+  row shows the ticker alone, and the portfolio's name only where two
+  holdings would otherwise read the same. VoiceOver reads a row as one
+  sentence, such as "NVDA, up 2.69 percent today".
+
+  The popover cannot grow past the screen. It is given the room under the
+  menu bar, and the movers list takes what is left after the rest is laid
+  out: at most twelve rows at once, fewer on a short screen but not under
+  three, scrolling inside the popover.
+
+  The headline follows the range switch, saying "past week" or "past
+  month" after the amount. The second figure reads "Cost basis" when total
+  return is measured against cost. The line about history coverage under
+  the graph, the refresh button and the day-reference view for a Folync
+  portfolio with no graph are kept. "Next up" and "Income this month" from
+  the mock-up are not built; they need data that later pull requests
+  bring.
+
+  The popover's background is the system's own, as before. The popover's
+  colours moved into the design file: gain and loss colours that are
+  deeper in light mode, and secondary text that becomes primary under
+  Increase Contrast. The per-symbol popovers took the new surfaces and
+  nothing else; the notice that pull request 137 excepted from the surface
+  check was theirs, it now uses the notice surface, and the exception is
+  gone. Opening, closing and the dismissal monitors are unchanged, and so
+  is the release on close of pull request 109.
+
+  The acceptance copy gains one more launch option,
+  `STOCKBAR_ACCEPTANCE_POPOVER=portfolio`. It opens the popover once, six
+  seconds after launch, the way a click does and with the same dismissal.
+  Without it the popover could not be looked at unless something clicked
+  in the owner's menu bar. It has the gate of the other launch options.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark never
+  opens the popover, so its launches do not run this layout; the status
+  item's set-up gains one check of the launch options. Covered by the
+  comparison after Phase A's last pull request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 827 XCTest tests with 0
+  failures. Thirteen are new, in `PortfolioCalculationTests.swift`: the
+  movers' order with unknown changes and ties; the app's own figure used
+  and only holdings listed; the ticker shown alone unless two rows would
+  read the same; the bar scale and its floor; a bar never past its track;
+  twelve rows before the list scrolls, and fewer on a short screen; the
+  heading at every range; a down day; a row's text for VoiceOver; the
+  figures in the portfolio's currency; the whole popover with 40 holdings
+  kept inside a height limit, in a hosted view; and Increase Contrast
+  reaching the popover's text. The launch option is added to the existing
+  launch-option tests. `checks`, `docs-check` and `build-release` pass on
+  the final commit. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit; the session lead's commit after it changed no
+  Python and no script.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed. By the worker: ties ordered backwards (one test failed);
+  the twelve-row limit, the 1% floor and the watch-list filter removed
+  together (four); the list ignoring the room it is given, and Increase
+  Contrast ignored (three). By the session lead: the ticker shown alone
+  even where two rows then read the same (one).
+
+  On screen: the worker could not open the popover by the acceptance
+  copy's process alone, and rendered its parts off screen instead, with 9
+  and 40 holdings and on a down day, in dark and light. The session lead
+  then added the launch option, opened the real popover in the acceptance
+  copy and captured it, one window at a time, in dark and in light. The
+  dark capture matches the mock-up. It also showed each row as "NVDA ·
+  De…", the label a Folync aggregate gives a holding, which is what the
+  ticker rule above fixes; the capture was taken again after the fix.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the movers and the
+  height limit, the change to how the popover is sized, and looked at the
+  worker's renders and the two real captures. It did not read the whole
+  view. It changed two things: the ticker rule and the launch option. No
+  independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The light popover is not confirmed on screen. A capture of the popover
+    alone leaves out what is behind it, and in light mode the system's
+    popover background then comes out dark grey under dark text. The
+    prototype's capture of the system background showed the same on
+    2026-11-19. The background is the one the popover had before this
+    pull request, so on screen it should look as the light popover did
+    before, but nobody has seen it.
+  - A position whose previous close is missing shows 0.00%, not "–": the
+    app's own figure for its day is zero in that case, and the list takes
+    that figure as it is.
+  - "Yesterday's close" is drawn only when the day's change is known and
+    not zero, so a truly flat day has no line.
+  - Pull request 109's release on close still has no test of its own.
+  - Not looked at: the popover on a real short screen, Increase Contrast
+    and Reduce Transparency on screen, and the glass the system gives the
+    popover on macOS 26. Not listened to: VoiceOver.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
