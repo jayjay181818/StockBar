@@ -144,7 +144,7 @@ struct PerformanceChartView: View {
                 }
             }
         }
-        .frame(minWidth: 600, minHeight: 450)
+        .frame(minWidth: 600, minHeight: 450, alignment: .top)
         .onChange(of: showingMetrics) { _, newValue in
             adjustChartWindowSize(expanded: newValue)
             // Notify PreferenceView to adjust window size
