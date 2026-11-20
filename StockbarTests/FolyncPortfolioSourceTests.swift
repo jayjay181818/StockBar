@@ -3755,6 +3755,8 @@ final class StockbarActivityPageTests: XCTestCase {
         XCTAssertEqual(StockbarActivityFormat.accessibilityLabel(
             cash("g", action: "gift_received", amount: 25), locale: britishEnglish),
                        "2 November, gift_received, an action Stockbar does not know, £25.00")
+        XCTAssertEqual(StockbarActivityFormat.spokenName("Microsoft · Demo portfolio"), "Microsoft")
+        XCTAssertNil(StockbarActivityFormat.spokenName(""), "no name: the ticker is read")
         XCTAssertEqual(StockbarActivityFormat.row(transaction(), name: "Microsoft", locale: britishEnglish).accessibilityLabel,
                        "12 November, bought 4 Microsoft shares at $412.30, £1,318.60 out")
     }

@@ -191,8 +191,7 @@ struct StockbarActivityView: View {
         guard let identity = transaction.identity else { return nil }
         let aliases = identity.normalizedAliases
         return dataModel.realTimeTrades.first { aliases.contains($0.trade.name.uppercased()) }
-            .map(\.realTimeInfo.shortName)
-            .flatMap { $0.isEmpty ? nil : $0 }
+            .flatMap { StockbarActivityFormat.spokenName($0.realTimeInfo.shortName) }
     }
 }
 

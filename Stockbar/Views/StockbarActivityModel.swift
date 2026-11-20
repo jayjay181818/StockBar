@@ -431,6 +431,13 @@ enum StockbarActivityFormat {
         return "\(spokenDay), \(phrase), \(spokenAmount(transaction))"
     }
 
+    /// A holding's name as VoiceOver reads it in a row: the name without the
+    /// " · portfolio" label an aggregate scope adds. Nil when there is none.
+    static func spokenName(_ shortName: String) -> String? {
+        let name = shortName.components(separatedBy: " · ").first?.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? nil : name
+    }
+
     /// Commission, tax and adjustment, as in the detail line.
     private static func detailExtras(_ transaction: FolyncTransaction) -> [String] {
         let detail = detail(transaction)
