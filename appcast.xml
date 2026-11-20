@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.15)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.15</link>
+      <pubDate>Fri, 20 Nov 2026 19:02:55 +0000</pubDate>
+      <sparkle:version>382.3.15</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.15 of Stockbar 3.8.2. Changes since experimental-382.3.14:
+
+- Holdings: a Weight column and one switch for amounts or percentages (#146)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.15/Stockbar-382.3.15.zip" length="8132287" type="application/octet-stream" sparkle:edSignature="VqeS62vOD1xGKi4xhiLVOAyo4pYhSkpXoFAoKtvK+H6ZVH+myDECOs4F5sw0qrJp1535c7pxyOBq/SVGw7nMAw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.14)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.14</link>
       <pubDate>Fri, 20 Nov 2026 18:58:02 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Give every surface in the main window the Glass look (#137)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.6/Stockbar-382.3.6.zip" length="7318804" type="application/octet-stream" sparkle:edSignature="AM4Jf9Xp9Sig8Lpe1UznmiqzrijcaZHWpOQQPAUVOKUyFJt33TnsXqx4+QkiZ/g4U80soHjg0r5BhMpGw+3DDQ=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.5)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.5</link>
-      <pubDate>Fri, 20 Nov 2026 13:29:58 +0000</pubDate>
-      <sparkle:version>382.3.5</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.5 of Stockbar 3.8.2. Changes since experimental-382.3.4:
-
-- Ask Yahoo for instrument type, dividend dates and earnings dates (#136)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.5/Stockbar-382.3.5.zip" length="7264692" type="application/octet-stream" sparkle:edSignature="tArZlSOJeqosnhCqElZvQe4uDWDZKxSab828RD3AU3Ji32qAttLhlgaMfK0NRVYGkr88eUaK8wVZD+b2XtZbAw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: gOWCP23GeRmoN1/8zGLMWamjY/jGR/jIBk7q8L6ArpYI191HzQ1yemSMXK4NhRxuIPq7wZ7RR6nlB9Cb6ZMHDw==
-length: 10298
+edSignature: 1pis6EtYcy0cfMwnCPTqXWX1IVSe8lJRLOqB8S0FPIpAGmAXIMnvcpEomCkTkdY7aXUjyldfnGdvDwL8864rDw==
+length: 10308
 -->
