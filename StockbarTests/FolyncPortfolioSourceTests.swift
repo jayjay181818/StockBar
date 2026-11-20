@@ -3163,17 +3163,12 @@ extension FolyncPortfolioSourceTests {
 
     func testLedgerRequestsNeverOverlapAcrossRoutes() async throws {
         let harness = try makeLedgerHarness()
-        let inFlight = LockedBox(0)
-        let mostAtOnce = LockedBox(0)
         harness.respond { request in
             let route = FolyncLedgerRoute.allCases.first { request.url?.path.hasSuffix($0.pathComponent) == true }!
-            inFlight.value += 1
-            mostAtOnce.value = max(mostAtOnce.value, inFlight.value)
-            Thread.sleep(forTimeInterval: 0.15)
-            inFlight.value -= 1
             return (200, Self.ledgerJSON(route), nil)
         }
         _ = await harness.coordinator.capabilitiesForCurrentSettings()
+        harness.stub.delay = 0.15
 
         async let dividends = Self.ledger(.dividends, harness)
         async let trades = Self.ledger(.tradeAnalysis, harness)
@@ -3184,7 +3179,7 @@ extension FolyncPortfolioSourceTests {
         let results = await [dividends, trades, transactions, filtered]
 
         XCTAssertEqual(harness.ledgerRequests.count, 4)
-        XCTAssertEqual(mostAtOnce.value, 1, "Ledger requests take turns, never two at once")
+        XCTAssertEqual(harness.stub.mostInFlight, 1, "Ledger requests take turns, never two at once")
         for result in results {
             guard case .folync(.current, .firstPage, _, _) = result else { return XCTFail("\(result)") }
         }
@@ -3192,11 +3187,9 @@ extension FolyncPortfolioSourceTests {
 
     func testLedgerIdenticalConcurrentCallsShareOneRequest() async throws {
         let harness = try makeLedgerHarness()
-        harness.respond { _ in
-            Thread.sleep(forTimeInterval: 0.2)
-            return (200, Self.ledgerJSON(.transactions), nil)
-        }
+        harness.respond { _ in (200, Self.ledgerJSON(.transactions), nil) }
         _ = await harness.coordinator.capabilitiesForCurrentSettings()
+        harness.stub.delay = 0.2
 
         async let first = Self.ledger(.transactions, harness, forceRefresh: true)
         async let second = Self.ledger(.transactions, harness, forceRefresh: true)
@@ -3257,6 +3250,33 @@ private final class FolyncHTTPStub: @unchecked Sendable {
     private var storedRequests: [URLRequest] = []
     private var storedOffline = false
     private var storedHandler: Handler?
+    private var storedDelay: TimeInterval = 0
+    private var storedInFlight = 0
+    private var storedMostInFlight = 0
+
+    /// When above zero, each answer is sent this long after the request
+    /// starts, without blocking the loading thread, so requests sent together
+    /// are in flight together.
+    var delay: TimeInterval {
+        get { lock.withLock { storedDelay } }
+        set { lock.withLock { storedDelay = newValue } }
+    }
+
+    /// The most delayed requests that were in flight at once.
+    var mostInFlight: Int {
+        lock.withLock { storedMostInFlight }
+    }
+
+    func began() {
+        lock.withLock {
+            storedInFlight += 1
+            storedMostInFlight = max(storedMostInFlight, storedInFlight)
+        }
+    }
+
+    func ended() {
+        lock.withLock { storedInFlight -= 1 }
+    }
 
     var handler: Handler? {
         get { lock.withLock { storedHandler } }
@@ -3289,8 +3309,18 @@ private final class FolyncURLProtocolStub: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        let stub = Self.stub
+        guard stub.delay > 0 else { return finishLoading(with: stub) }
+        stub.began()
+        DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay) { [self] in
+            stub.ended()
+            finishLoading(with: stub)
+        }
+    }
+
+    private func finishLoading(with stub: FolyncHTTPStub) {
         do {
-            let (response, data) = try Self.stub.respond(to: request)
+            let (response, data) = try stub.respond(to: request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !data.isEmpty { client?.urlProtocol(self, didLoad: data) }
             client?.urlProtocolDidFinishLoading(self)
