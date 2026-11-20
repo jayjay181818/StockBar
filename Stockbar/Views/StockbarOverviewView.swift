@@ -189,6 +189,7 @@ struct StockbarOverviewView: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .gridColumnAlignment(.leading)
+                .accessibilityHidden(true)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(isAvailable ? HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency) : Self.unknownFigure)
                     .font(.system(size: 20, weight: .semibold))
@@ -202,9 +203,13 @@ struct StockbarOverviewView: View {
                 }
             }
             .help(isAvailable ? "" : unavailableHint)
+            // A grid row is not one element: the amount carries the row's name.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(isAvailable
+                ? "\(title), \(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency))"
+                : "\(title), unknown, \(unavailableHint)")
             StockbarChangeBadge(percent: isAvailable ? percent : nil, onSurface: true)
         }
-        .accessibilityElement(children: .combine)
     }
 
     private var portfolioValue: some View {
@@ -709,6 +714,7 @@ struct StockbarOverviewCompositionCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(exposure.parts[index])
+            .accessibilityAddTraits(.isStaticText)
         }
     }
 }
