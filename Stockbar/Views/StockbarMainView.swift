@@ -1179,16 +1179,33 @@ private struct StockbarBackupsView: View {
 }
 
 @MainActor
+/// The Data Health page's tile grid: three columns where three tiles of the minimum width
+/// fit, otherwise two, so its six tiles make full rows.
+enum StockbarDataHealthGrid {
+    static let minimumTileWidth: CGFloat = 230
+    static let spacing: CGFloat = 14
+
+    static func columnCount(forWidth width: CGFloat) -> Int {
+        let threeTiles = 3 * minimumTileWidth + 2 * spacing
+        return width >= threeTiles ? 3 : 2
+    }
+}
+
 private struct StockbarDataHealthView: View {
     let dataModel: DataModel
     private let currencyConverter: CurrencyConverter
+    /// The grid's width once laid out; three columns until it is known.
+    @State private var gridWidth: CGFloat?
 
     init(dataModel: DataModel) {
         self.dataModel = dataModel
         self.currencyConverter = dataModel.currencyConverter
     }
 
-    private let columns = [GridItem(.adaptive(minimum: 230), spacing: 14)]
+    private var columns: [GridItem] {
+        let count = gridWidth.map(StockbarDataHealthGrid.columnCount(forWidth:)) ?? 3
+        return Array(repeating: GridItem(.flexible(), spacing: StockbarDataHealthGrid.spacing), count: count)
+    }
 
     private var trackedTrades: [RealTimeTrade] {
         dataModel.realTimeTrades.filter { !SymbolMetadata.isBenchmarkSymbol($0.trade.name) }
@@ -1199,7 +1216,7 @@ private struct StockbarDataHealthView: View {
             StockbarPageHeader("Data Health", subtitle: "Where Stockbar's numbers come from and how fresh they are.")
 
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: StockbarDataHealthGrid.spacing) {
                     StockbarMetricTile(
                         title: "Prices",
                         value: pricesValue(now: context.date),
@@ -1241,6 +1258,7 @@ private struct StockbarDataHealthView: View {
                     )
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
         }
         .stockbarPage()
     }

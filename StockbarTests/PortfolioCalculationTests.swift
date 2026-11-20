@@ -3519,3 +3519,26 @@ final class HoldingsWeightAndTextTests: XCTestCase {
         XCTAssertNotEqual(HoldingsTableLayout.regular, HoldingsTableLayout.compact)
     }
 }
+
+@MainActor
+final class StockbarDataHealthGridTests: XCTestCase {
+    func testThreeColumnsOnceThreeMinimumWidthTilesFit() {
+        // Three 230-point tiles and two 14-point gaps need 718 points.
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 718), 3)
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 1_096), 3)
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 4_000), 3)
+    }
+
+    func testTwoColumnsWhenThreeTilesDoNotFit() {
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 717.5), 2)
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 400), 2)
+        XCTAssertEqual(StockbarDataHealthGrid.columnCount(forWidth: 0), 2)
+    }
+
+    func testSixTilesAlwaysMakeFullRows() {
+        for width in stride(from: CGFloat(0), through: 3_000, by: 37) {
+            let columns = StockbarDataHealthGrid.columnCount(forWidth: width)
+            XCTAssertEqual(6 % columns, 0, "width \(width) gives \(columns) columns")
+        }
+    }
+}
