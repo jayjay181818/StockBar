@@ -374,6 +374,7 @@ struct MenuPopoverFooter: View {
     let onPreferences: () -> Void
     let onQuit: () -> Void
     @State private var refreshCount = 0
+    @Environment(\.stockbarPopoverText) private var textStyle
 
     var body: some View {
         HStack(spacing: 2) {
@@ -402,7 +403,7 @@ struct MenuPopoverFooter: View {
             iconButton("power", help: "Quit Stockbar", action: onQuit)
         }
         .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(textStyle.secondary)
     }
 
     private func iconButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -426,12 +427,13 @@ private struct MenuPopoverFooterButtonStyle: ButtonStyle {
     private struct HoverBody: View {
         let configuration: Configuration
         @State private var isHovered = false
+        @Environment(\.stockbarPopoverText) private var textStyle
 
         var body: some View {
             configuration.label
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
-                .foregroundStyle(isHovered ? Color.primary : Color.secondary)
+                .foregroundStyle(isHovered ? .primary : textStyle.secondary)
                 .stockbarRow(isHovered: isHovered || configuration.isPressed, cornerRadius: 6)
                 .contentShape(Rectangle())
                 .onHover { hovering in

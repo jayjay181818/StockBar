@@ -2750,4 +2750,54 @@ final class PortfolioMenuPopoverTests: XCTestCase {
         XCTAssertTrue(StockbarPopoverText.resolve(accessibility: .init(increasedContrast: true)).secondaryIsPrimary)
         XCTAssertFalse(StockbarPopoverText.resolve(accessibility: .init(reduceTransparency: true)).secondaryIsPrimary)
     }
+
+    func testIncreaseContrastReachesTheViewsUnderThePopoversRoot() {
+        func seen(_ accessibility: StockbarSurfaceAccessibility?) -> StockbarPopoverText? {
+            let box = PopoverTextSeen()
+            let host = NSHostingView(rootView: PopoverTextProbe(seen: box)
+                .stockbarPopoverText()
+                .environment(\.stockbarSurfaceAccessibilityOverride, accessibility))
+            host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
+            host.layoutSubtreeIfNeeded()
+            return box.value
+        }
+        XCTAssertEqual(seen(.init(increasedContrast: true))?.secondaryIsPrimary, true)
+        XCTAssertEqual(seen(.init())?.secondaryIsPrimary, false)
+    }
+
+    func testTheWholePopoverStaysWithinTheRoomTheScreenLeaves() {
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        model.realTimeTrades = (0..<40).map { holding(String(format: "T%02d", $0), price: 100 + Double($0 % 7), previousClose: 101) }
+        func fittingHeight(_ limit: CGFloat?) -> CGFloat {
+            let host = NSHostingView(rootView: PortfolioMenuPopoverView(dataModel: model, actions: .noop, maximumHeight: limit))
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            // The popover measures what is not the list, then gives the list the rest.
+            for _ in 0..<5 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                host.frame.size = host.fittingSize
+            }
+            return host.fittingSize.height
+        }
+        let unbounded = fittingHeight(nil)
+        let limit = unbounded - 6 * PortfolioMenuMovers.rowHeight
+        let bounded = fittingHeight(limit)
+        XCTAssertLessThanOrEqual(bounded, limit + 1, "the popover is never taller than the room it is given")
+        XCTAssertGreaterThan(bounded, limit - 2 * PortfolioMenuMovers.rowHeight, "it gives up only the rows it must")
+    }
+}
+
+@MainActor
+private final class PopoverTextSeen {
+    var value: StockbarPopoverText?
+}
+
+private struct PopoverTextProbe: View {
+    let seen: PopoverTextSeen
+    @Environment(\.stockbarPopoverText) private var style
+
+    var body: some View {
+        let _ = { seen.value = style }()
+        Color.clear
+    }
 }

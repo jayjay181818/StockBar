@@ -789,10 +789,10 @@ enum StockbarAppearance {
 
 // MARK: - Portfolio popover
 
-// The popover keeps the system's own popover background: a material on
-// macOS 15, glass from macOS 26, drawn under the arrow as well as the body,
-// solid under Reduce Transparency and edged under Increase Contrast by the
-// system itself. Nothing here paints over it.
+// The popover keeps the system's own popover background, which covers the
+// arrow as well as the body. How it reads under Reduce Transparency and
+// Increase Contrast, and as glass on macOS 26, is left to the system; nothing
+// here paints over it. Increase Contrast also strengthens the popover's text.
 
 extension StockbarPalette {
     /// Gains and losses in the portfolio popover: the deeper green and red in

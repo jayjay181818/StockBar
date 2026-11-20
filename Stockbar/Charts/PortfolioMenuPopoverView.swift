@@ -535,7 +535,6 @@ struct PortfolioMenuPopoverView: View {
     /// the screen leaves of `maximumHeight` after it.
     @State private var chromeHeight: CGFloat = 470
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.stockbarPopoverText) private var textStyle
 
     private let actions: PortfolioMenuActions
     /// The tallest the popover may be: the room below the menu bar on its screen.
@@ -692,10 +691,7 @@ struct PortfolioMenuPopoverView: View {
             .frame(height: chartHeight)
 
             if !viewModel.coverageLabel.isEmpty {
-                Text(viewModel.coverageLabel)
-                    .font(.caption2)
-                    .foregroundStyle(textStyle.secondary)
-                    .lineLimit(2)
+                PortfolioMenuCoverageLine(text: viewModel.coverageLabel)
             }
         }
     }
@@ -788,6 +784,19 @@ struct PortfolioMenuFigures: Equatable {
         guard let first = points.first?.price, let last = points.last?.price,
               first.isFinite, last.isFinite, last != first else { return .accentColor }
         return StockbarPalette.signedOnPopover(last - first, neutral: .accentColor)
+    }
+}
+
+/// Under the graph: where its history came from and how complete it is.
+private struct PortfolioMenuCoverageLine: View {
+    let text: String
+    @Environment(\.stockbarPopoverText) private var textStyle
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(textStyle.secondary)
+            .lineLimit(2)
     }
 }
 
