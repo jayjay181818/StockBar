@@ -28,6 +28,7 @@ enum StockbarAcceptancePreflightError: Error, LocalizedError {
     case coreDataLoadFailed(String)
     case manifestRequired
     case unsafeEndpoint
+    case seedUnreadable(String)
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +44,8 @@ enum StockbarAcceptancePreflightError: Error, LocalizedError {
             return "Acceptance bootstrap requires a Folync manifest."
         case .unsafeEndpoint:
             return "Acceptance bootstrap accepts loopback Folync endpoints only."
+        case .seedUnreadable(let message):
+            return "The acceptance Folync settings seed could not be read: \(message)"
         }
     }
 }
@@ -124,7 +127,7 @@ enum StockbarAcceptancePreflight {
         guard arguments.contains("--acceptance-bootstrap") else { return nil }
         let runtime = try StockbarAcceptanceRuntime.resolve(environment: environment, fileManager: fileManager)
         guard runtime.isEnabled, let runID = runtime.runID,
-              let suiteName = runtime.defaultsSuiteName,
+              let seedURL = runtime.folyncSettingsSeedURL,
               let manifestPath = environment["STOCKBAR_FOLYNC_MANIFEST"],
               !manifestPath.isEmpty else {
             throw StockbarAcceptancePreflightError.manifestRequired
@@ -134,17 +137,10 @@ enum StockbarAcceptancePreflight {
             FolyncManifest.self,
             from: Data(contentsOf: URL(fileURLWithPath: manifestPath))
         )
-        guard let endpoint = URL(string: manifest.baseURL),
-              endpoint.scheme == "http",
-              endpoint.user == nil,
-              endpoint.password == nil,
-              ["127.0.0.1", "localhost", "::1"].contains(endpoint.host?.lowercased() ?? "") else {
+        guard isLoopbackFolyncEndpoint(manifest.baseURL) else {
             throw StockbarAcceptancePreflightError.unsafeEndpoint
         }
         let token = try String(contentsOf: URL(fileURLWithPath: manifest.tokenFile), encoding: .utf8)
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            throw StockbarAcceptancePreflightError.storageProbeFailed
-        }
         let supplemental = FolyncSupplementalSettings(
             historicalLineCharts: true,
             candlestickCharts: true,
@@ -155,13 +151,21 @@ enum StockbarAcceptancePreflight {
             tradeAnalysis: true,
             transactions: true
         )
-        FolyncSettingsStore(defaults: defaults).save(FolyncStoredSettings(
-            isEnabled: true,
-            baseURL: manifest.baseURL,
-            scopeID: "all",
-            pollingIntervalSeconds: 60,
-            supplemental: supplemental
-        ))
+        // The app adopts these at launch (`adoptSeededSettingsIfPresent`)
+        // rather than this process writing them into the defaults suite: a
+        // key already in a path-named suite when the app starts cannot be
+        // changed by the app on macOS 27.
+        try writeSeed(
+            FolyncStoredSettings(
+                isEnabled: true,
+                baseURL: manifest.baseURL,
+                scopeID: "all",
+                pollingIntervalSeconds: 60,
+                supplemental: supplemental
+            ),
+            to: seedURL,
+            fileManager: fileManager
+        )
         try FolyncCredentialStore(service: runtime.folyncKeychainService).save(token: token, for: manifest.baseURL)
 
         let report = StockbarAcceptanceBootstrapReport(
@@ -176,6 +180,82 @@ enum StockbarAcceptancePreflight {
         encoded.append(0x0A)
         output(encoded)
         return 0
+    }
+
+    /// Moves the Folync settings that `--acceptance-bootstrap` left in the
+    /// run's root into the app's own defaults, then deletes the seed. Call
+    /// once at launch, before anything reads the defaults, so that the app
+    /// process is the one that first writes those keys.
+    ///
+    /// Only an explicit acceptance run looks for a seed. A missing seed does
+    /// nothing; one that cannot be read, or names anything but a loopback
+    /// Folync, throws and leaves the defaults and the file as they were.
+    ///
+    /// - Returns: True when a seed was adopted.
+    @discardableResult
+    static func adoptSeededSettingsIfPresent(
+        runtime: StockbarAcceptanceRuntime,
+        defaults: @autoclosure () -> UserDefaults,
+        fileManager: FileManager = .default
+    ) throws -> Bool {
+        guard runtime.isExplicitAcceptanceRun, let seedURL = runtime.folyncSettingsSeedURL else {
+            return false
+        }
+        guard fileManager.fileExists(atPath: seedURL.path) else { return false }
+
+        let settings: FolyncStoredSettings
+        do {
+            let attributes = try fileManager.attributesOfItem(atPath: seedURL.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                throw StockbarAcceptancePreflightError.seedUnreadable("it is not a regular file")
+            }
+            settings = try JSONDecoder().decode(FolyncStoredSettings.self, from: Data(contentsOf: seedURL))
+        } catch let error as StockbarAcceptancePreflightError {
+            throw error
+        } catch {
+            throw StockbarAcceptancePreflightError.seedUnreadable(error.localizedDescription)
+        }
+        guard isLoopbackFolyncEndpoint(settings.baseURL) else {
+            throw StockbarAcceptancePreflightError.unsafeEndpoint
+        }
+
+        FolyncSettingsStore(defaults: defaults()).save(settings)
+        try fileManager.removeItem(at: seedURL)
+        return true
+    }
+
+    /// Plain HTTP to this Mac, with no credentials in the address: the only
+    /// Folync an acceptance run may be pointed at.
+    static func isLoopbackFolyncEndpoint(_ baseURL: String) -> Bool {
+        guard let endpoint = URL(string: baseURL),
+              endpoint.scheme == "http",
+              endpoint.user == nil,
+              endpoint.password == nil else { return false }
+        return ["127.0.0.1", "localhost", "::1"].contains(endpoint.host?.lowercased() ?? "")
+    }
+
+    /// Writes the seed owner-only and atomically: a temporary file created
+    /// with mode 0600 beside it, then renamed over it.
+    private static func writeSeed(
+        _ settings: FolyncStoredSettings,
+        to seedURL: URL,
+        fileManager: FileManager
+    ) throws {
+        let data = try JSONEncoder().encode(settings)
+        let directory = seedURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporaryURL = directory.appendingPathComponent(".\(seedURL.lastPathComponent).\(UUID().uuidString)")
+        guard fileManager.createFile(
+            atPath: temporaryURL.path,
+            contents: data,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw StockbarAcceptancePreflightError.storageProbeFailed
+        }
+        guard rename(temporaryURL.path, seedURL.path) == 0 else {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw StockbarAcceptancePreflightError.storageProbeFailed
+        }
     }
 
     private static func validateCoreData(

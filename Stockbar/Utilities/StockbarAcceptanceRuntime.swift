@@ -95,6 +95,17 @@ struct StockbarAcceptanceRuntime: Sendable {
             .appendingPathComponent(domain).path
     }
 
+    /// Where `--acceptance-bootstrap` leaves the Folync settings for the app
+    /// to adopt at launch. Inside the root, so it goes with the run.
+    ///
+    /// The app, not the earlier bootstrap process, must be the first to write
+    /// those settings into its defaults: on macOS 27 a process never reads
+    /// back its own change to a key that was already in a suite named by a
+    /// path when the process started.
+    var folyncSettingsSeedURL: URL? {
+        root?.appendingPathComponent("folync-settings-seed.json")
+    }
+
     var coreDataStoreURL: URL? {
         applicationSupportRoot?.appendingPathComponent("StockbarDataModel.sqlite")
     }
