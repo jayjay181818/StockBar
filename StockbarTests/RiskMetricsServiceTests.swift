@@ -593,3 +593,297 @@ final class RiskMetricsServiceTests: XCTestCase {
         XCTAssertNil(ReturnStatistics(dailyReturns: [0.01, 0.01, 0.01]).sharpeRatio)
     }
 }
+
+// MARK: - Risk page
+
+/// The Risk page's drawdown series and everything it writes. The figure literals
+/// in `testFiguresMatchThePageBeforeTheRedesign` were printed by the page's own
+/// formatting before the redesign, from the same invented series.
+@MainActor
+final class RiskPageTests: XCTestCase {
+    private let utc = TimeZone(identifier: "UTC")!
+    private let britishEnglish = Locale(identifier: "en_GB")
+    private let start = Date(timeIntervalSince1970: 1_767_571_200) // Monday 5 January 2026, UTC
+
+    private func days(_ count: Int) -> [Date] {
+        (0..<count).map { start.addingTimeInterval(Double($0) * 86_400) }
+    }
+
+    private func utcDate(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = utc
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
+    }
+
+    /// A made-up daily series: weekdays from 5 January 2026, a slow rise with a
+    /// slide between the first third and the half, and noise from a fixed seed.
+    private static func invented(_ count: Int, seed: UInt64) -> RiskMetricsService.DailyRiskSeries {
+        var state = seed
+        func next() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Double(state >> 11) / Double(1 << 53)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        var dates: [Date] = []
+        var values = [50_000.0]
+        var returns: [Double] = []
+        var day = Date(timeIntervalSince1970: 1_767_571_200)
+        while dates.count < count {
+            if !calendar.isDateInWeekend(day) {
+                dates.append(day)
+                if dates.count > 1 {
+                    let slide = dates.count > count / 3 && dates.count < count / 2
+                    let dailyReturn = (next() - 0.5) * 0.03 + (slide ? -0.006 : 0.0008)
+                    returns.append(dailyReturn)
+                    values.append(values[values.count - 1] * (1 + dailyReturn))
+                }
+            }
+            day += 86_400
+        }
+        return .init(dates: dates, values: values, returns: returns, currentValue: values[values.count - 1] * 1.13)
+    }
+
+    private static func lastPart(_ series: RiskMetricsService.DailyRiskSeries, days: Int) -> RiskMetricsService.DailyRiskSeries {
+        .init(dates: Array(series.dates.suffix(days)), values: Array(series.values.suffix(days)),
+              returns: Array(series.returns.suffix(days - 1)), currentValue: series.currentValue)
+    }
+
+    private static var rising: RiskMetricsService.DailyRiskSeries {
+        let dates = (0..<25).map { Date(timeIntervalSince1970: 1_767_571_200 + Double($0) * 86_400) }
+        return .init(dates: dates, values: (0..<25).map { 100 * pow(1.01, Double($0)) },
+                     returns: Array(repeating: 0.01, count: 24), currentValue: 2500)
+    }
+
+    // MARK: Drawdown series
+
+    func testDrawdownSeries_RisingOnlyStaysAtZero() async throws {
+        let values = [100.0, 101, 103, 103, 110]
+        let series = RiskMetricsService.drawdownSeries(values: values, dates: days(5))
+
+        XCTAssertEqual(series.map(\.drawdown), [0, 0, 0, 0, 0])
+        XCTAssertEqual(series.map(\.date), days(5))
+        let maximum = await RiskMetricsService.shared.calculateMaxDrawdown(portfolioValues: values, dates: days(5))
+        XCTAssertEqual(RiskMetricsService.lowestPoint(of: series)?.drawdown, -(try XCTUnwrap(maximum).maxDrawdown))
+        XCTAssertEqual(RiskMetricsService.lowestPoint(of: series)?.date, days(5)[0], "the first day at the lowest")
+    }
+
+    func testDrawdownSeries_FallAndRecovery() async throws {
+        let values = [100.0, 120, 90, 100, 130, 117]
+        let series = RiskMetricsService.drawdownSeries(values: values, dates: days(6))
+
+        XCTAssertEqual(series.map(\.drawdown)[0...2], [0, 0, -0.25])
+        XCTAssertEqual(series[3].drawdown, -20.0 / 120, accuracy: 1e-15)
+        XCTAssertEqual(series[4].drawdown, 0)
+        XCTAssertEqual(series[5].drawdown, -0.1, accuracy: 1e-15)
+        let lowest = try XCTUnwrap(RiskMetricsService.lowestPoint(of: series))
+        let maximum = await RiskMetricsService.shared.calculateMaxDrawdown(portfolioValues: values, dates: days(6))
+        XCTAssertEqual(lowest.drawdown, -(try XCTUnwrap(maximum).maxDrawdown))
+        XCTAssertEqual(lowest.date, days(6)[2])
+    }
+
+    func testDrawdownSeries_FallStillUnderWayAtTheEnd() async throws {
+        let values = [100.0, 110, 99, 88]
+        let series = RiskMetricsService.drawdownSeries(values: values, dates: days(4))
+
+        XCTAssertEqual(series.last?.drawdown ?? 0, -0.2, accuracy: 1e-15)
+        let lowest = try XCTUnwrap(RiskMetricsService.lowestPoint(of: series))
+        XCTAssertEqual(lowest.date, days(4)[3])
+        let maximum = await RiskMetricsService.shared.calculateMaxDrawdown(portfolioValues: values, dates: days(4))
+        XCTAssertEqual(lowest.drawdown, -(try XCTUnwrap(maximum).maxDrawdown))
+    }
+
+    func testDrawdownSeries_OneDayAndEmpty() async {
+        let one = RiskMetricsService.drawdownSeries(values: [100], dates: days(1))
+        XCTAssertEqual(one, [RiskMetricsService.DrawdownPoint(date: days(1)[0], drawdown: 0)])
+        // The service has no maximum drawdown for one day, so the page shows none.
+        let maximum = await RiskMetricsService.shared.calculateMaxDrawdown(portfolioValues: [100], dates: days(1))
+        XCTAssertNil(maximum)
+
+        XCTAssertEqual(RiskMetricsService.drawdownSeries(values: [], dates: []), [])
+        XCTAssertNil(RiskMetricsService.lowestPoint(of: []))
+    }
+
+    func testDrawdownSeries_LeavesOutWhatTheMaximumDrawdownLeavesOut() async throws {
+        let values = [100.0, 0, .nan, 80, -5, 90, 70]
+        let dates = days(6) // the last value has no date
+        let series = RiskMetricsService.drawdownSeries(values: values, dates: dates)
+
+        XCTAssertEqual(series.map(\.date), [dates[0], dates[3], dates[5]])
+        let maximum = await RiskMetricsService.shared.calculateMaxDrawdown(portfolioValues: values, dates: dates)
+        XCTAssertEqual(RiskMetricsService.lowestPoint(of: series)?.drawdown, -(try XCTUnwrap(maximum).maxDrawdown))
+    }
+
+    func testDrawdownSeries_LowestPointIsTheStripsWorstFallOnInventedSeries() async throws {
+        let base = Self.invented(60, seed: 7)
+        for series in [base, Self.lastPart(base, days: 25), Self.invented(120, seed: 99), Self.invented(250, seed: 3), Self.rising] {
+            let computed = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(series: series)
+            let metrics = try XCTUnwrap(computed)
+            let points = RiskMetricsService.drawdownSeries(values: series.values, dates: series.dates)
+            XCTAssertEqual(points.count, series.values.count)
+            XCTAssertEqual(RiskMetricsService.lowestPoint(of: points)?.drawdown, -metrics.maxDrawdown)
+            XCTAssertEqual(RiskText.fall(-(RiskMetricsService.lowestPoint(of: points)?.drawdown ?? .nan)),
+                           RiskText.fall(metrics.maxDrawdown))
+        }
+    }
+
+    // MARK: The same figures as before
+
+    private struct Shown: Equatable {
+        var var95, var99, sharpe, sortino, worstFall, volatility, downside: String
+        var sharpeDetail, volatilityDetail: String?
+        var sortinoDetail: String
+        var worstFallDetail: String?
+        var tradingDays: Int
+        var falls: [String]
+    }
+
+    private func shown(_ series: RiskMetricsService.DailyRiskSeries) async throws -> Shown {
+        let computed = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(
+            series: series, riskFreeRate: RiskMetricsService.annualRiskFreeRate)
+        let metrics = try XCTUnwrap(computed)
+        let periods = await RiskMetricsService.shared.findDrawdownPeriods(
+            portfolioValues: series.values, dates: series.dates, threshold: RiskText.fallThreshold)
+        return Shown(
+            var95: RiskText.amount(metrics.valueAtRisk95, currency: "GBP"),
+            var99: RiskText.amount(metrics.valueAtRisk99, currency: "GBP"),
+            sharpe: RiskText.ratio(metrics.sharpeRatio), sortino: RiskText.ratio(metrics.sortinoRatio),
+            worstFall: RiskText.fall(metrics.maxDrawdown), volatility: RiskText.percent(metrics.volatility),
+            downside: RiskText.percent(metrics.downsideDeviation),
+            sharpeDetail: RiskText.sharpeDetail(metrics.sharpeRatio),
+            volatilityDetail: RiskText.volatilityDetail(metrics.volatility),
+            sortinoDetail: RiskText.sortinoDetail(metrics.sortinoRatio),
+            worstFallDetail: RiskText.worstFallDetail(fall: metrics.maxDrawdown, duration: metrics.maxDrawdownDuration),
+            tradingDays: series.returns.count,
+            falls: periods.map { "\(RiskText.fall($0.drawdownPercent)) \(RiskText.fallLength($0.durationDays))" }
+        )
+    }
+
+    /// Before the redesign the page showed, for these series: A60 £721.47, £990.51,
+    /// -2.553 (Poor), -3.247, 11.31% over 55 days, 13.96% (Low), 10.81%, 59 days, one
+    /// fall of 11.31% over 55 days. Its last 25 days: £652.94, £721.47, -2.944, -3.699,
+    /// 5.09% over 9, 14.04%, 11.01%, 24 days, falls of 5.09% (9 days) and 5.01% (12).
+    /// B120: £804.04, £1,058.39, 0.241 (Below average), 0.343, 16.05% over 42, 14.63%,
+    /// 10.11%, 119 days, one fall of 16.05% over 42 days. Rising: £0.00, £0.00, "—", "—",
+    /// 0.00% over 0, 0.00% (Very low), 0.00%, 24 days, no falls. The redesign writes a
+    /// fall with a minus sign and an unknown figure as "–"; every digit is the same.
+    func testFiguresMatchThePageBeforeTheRedesign() async throws {
+        let base = Self.invented(60, seed: 7)
+
+        let whole = try await shown(base)
+        XCTAssertEqual(whole, Shown(
+            var95: "£721.47", var99: "£990.51", sharpe: "-2.553", sortino: "-3.247", worstFall: "-11.31%",
+            volatility: "13.96%", downside: "10.81%", sharpeDetail: "Poor", volatilityDetail: "Low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "55 trading days, peak to low",
+            tradingDays: 59, falls: ["-11.31% 55 days, peak to low"]))
+
+        let lastPart = try await shown(Self.lastPart(base, days: 25))
+        XCTAssertEqual(lastPart, Shown(
+            var95: "£652.94", var99: "£721.47", sharpe: "-2.944", sortino: "-3.699", worstFall: "-5.09%",
+            volatility: "14.04%", downside: "11.01%", sharpeDetail: "Poor", volatilityDetail: "Low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "9 trading days, peak to low",
+            tradingDays: 24, falls: ["-5.09% 9 days, peak to low", "-5.01% 12 days, peak to low"]))
+
+        let longer = try await shown(Self.invented(120, seed: 99))
+        XCTAssertEqual(longer, Shown(
+            var95: "£804.04", var99: "£1,058.39", sharpe: "0.241", sortino: "0.343", worstFall: "-16.05%",
+            volatility: "14.63%", downside: "10.11%", sharpeDetail: "Below average", volatilityDetail: "Low",
+            sortinoDetail: "Counts only the falls", worstFallDetail: "42 trading days, peak to low",
+            tradingDays: 119, falls: ["-16.05% 42 days, peak to low"]))
+
+        let rising = try await shown(Self.rising)
+        XCTAssertEqual(rising, Shown(
+            var95: "£0.00", var99: "£0.00", sharpe: "–", sortino: "–", worstFall: "0.00%",
+            volatility: "0.00%", downside: "0.00%", sharpeDetail: nil, volatilityDetail: "Very low",
+            sortinoDetail: "No falling days", worstFallDetail: "Never below its peak",
+            tradingDays: 24, falls: []))
+    }
+
+    // MARK: Text
+
+    func testUnknownFiguresAreADash() {
+        XCTAssertEqual(RiskText.percent(.nan), "–")
+        XCTAssertEqual(RiskText.ratio(nil), "–")
+        XCTAssertEqual(RiskText.ratio(.infinity), "–")
+        XCTAssertEqual(RiskText.amount(.nan, currency: "GBP"), "–")
+        XCTAssertEqual(RiskText.fall(.nan), "–")
+        XCTAssertNil(RiskText.volatilityDetail(.nan))
+        XCTAssertNil(RiskText.sharpeDetail(nil))
+        XCTAssertNil(RiskText.worstFallDetail(fall: .nan, duration: 0))
+    }
+
+    func testFallSignAndRounding() {
+        XCTAssertEqual(RiskText.fall(0.07), "-7.00%")
+        XCTAssertEqual(RiskText.fall(0.000_01), "0.00%", "a fall that rounds to nothing has no sign")
+        XCTAssertEqual(RiskText.fall(0), "0.00%")
+        XCTAssertEqual(RiskText.worstFallDetail(fall: 0.07, duration: 1), "1 trading day, peak to low")
+        XCTAssertEqual(RiskText.fallLength(1), "1 day, peak to low")
+    }
+
+    func testThresholdsAreTheOldOnes() {
+        XCTAssertEqual([0.31, 0.30, 0.21, 0.16, 0.11, 0.10].map { RiskText.volatilityDetail($0) },
+                       ["Very high", "High", "High", "Moderate", "Low", "Very low"])
+        XCTAssertEqual([3.01, 3.0, 2.0, 1.0, 0.5, 0.0, -1].map { RiskText.sharpeDetail($0) },
+                       ["Exceptional", "Very good", "Good", "Adequate", "Below average", "Poor", "Poor"])
+    }
+
+    func testBadDaySentences() {
+        XCTAssertEqual(RiskText.badDaySentence(lead: RiskText.oneDayIn20, amount: "£719.96", caption: RiskText.valueAtRisk95),
+                       "On 1 day in 20, expect to lose more than £719.96. 95% value at risk.")
+        XCTAssertEqual(RiskText.badDaySentence(lead: RiskText.oneDayIn100, amount: "£1,028.38", caption: RiskText.valueAtRisk99),
+                       "On 1 day in 100, more than £1,028.38. 99% value at risk.")
+    }
+
+    func testFallRowAndEmptyLine() {
+        let now = utcDate(2026, 11, 20)
+        let period = RiskMetricsService.DrawdownPeriod(
+            startDate: utcDate(2026, 1, 26), endDate: utcDate(2026, 5, 15), peakValue: 100, troughValue: 93,
+            drawdownPercent: 0.07, durationDays: 109)
+        XCTAssertEqual(RiskText.dateRange(period.startDate, period.endDate, now: now, locale: britishEnglish, timeZone: utc),
+                       "26 Jan to 15 May")
+        XCTAssertEqual(RiskText.dateRange(utcDate(2025, 12, 30), utcDate(2026, 1, 15), now: now, locale: britishEnglish, timeZone: utc),
+                       "30 Dec 2025 to 15 Jan 2026")
+        XCTAssertEqual(RiskText.dateRange(utcDate(2025, 3, 3), utcDate(2025, 4, 1), now: now, locale: britishEnglish, timeZone: utc),
+                       "3 Mar 2025 to 1 Apr 2025")
+        XCTAssertEqual(RiskText.fallAccessibility(period, now: now, locale: britishEnglish, timeZone: utc),
+                       "Fell -7.00%, 26 Jan to 15 May, 109 days, peak to low")
+        XCTAssertEqual(RiskText.noFalls, "No falls of more than 5% in this range.")
+        XCTAssertNil(RiskText.fallsShownNote(shown: 5, total: 5))
+        XCTAssertEqual(RiskText.fallsShownNote(shown: 5, total: 7), "Showing the 5 largest of 7.")
+    }
+
+    func testLowestPointLabelAndChartText() {
+        let series = [
+            RiskMetricsService.DrawdownPoint(date: utcDate(2026, 5, 14), drawdown: 0),
+            RiskMetricsService.DrawdownPoint(date: utcDate(2026, 5, 15), drawdown: -0.07),
+            RiskMetricsService.DrawdownPoint(date: utcDate(2026, 5, 18), drawdown: -0.012)
+        ]
+        XCTAssertEqual(RiskText.lowestPointLabel(series[1], locale: britishEnglish, timeZone: utc), "-7.00%, 15 May")
+        XCTAssertEqual(RiskText.chartAccessibility(series, locale: britishEnglish, timeZone: utc),
+                       "Lowest -7.00% below its peak, on 15 May 2026. Now -1.20% below its peak.")
+
+        let recovered = series + [RiskMetricsService.DrawdownPoint(date: utcDate(2026, 5, 19), drawdown: 0)]
+        XCTAssertEqual(RiskText.chartAccessibility(recovered, locale: britishEnglish, timeZone: utc),
+                       "Lowest -7.00% below its peak, on 15 May 2026. Now at its peak.")
+        XCTAssertEqual(RiskText.chartAccessibility([series[0]], locale: britishEnglish, timeZone: utc),
+                       "Never below its peak in this range.")
+        XCTAssertEqual(RiskText.chartAccessibility([], locale: britishEnglish, timeZone: utc), "No values in this range.")
+    }
+
+    func testFootnoteForFolyncAndLocalPortfolios() {
+        let first = utcDate(2026, 1, 2)
+        let last = utcDate(2026, 11, 19)
+        XCTAssertEqual(
+            RiskText.footnote(tradingDays: 229, first: first, last: last, isFolyncPortfolio: true, riskFreeRate: 0.04,
+                              locale: britishEnglish, timeZone: utc),
+            "Based on 229 trading days, 2 Jan to 19 Nov 2026, from Stockbar's own stored history, not Folync's. "
+                + "Historical VaR, annualized from daily returns that leave out buys and sells. "
+                + "Risk-free rate 4.0% a year, used by the Sharpe and Sortino ratios.")
+        XCTAssertEqual(
+            RiskText.footnote(tradingDays: 1, first: utcDate(2025, 12, 31), last: utcDate(2026, 1, 2), isFolyncPortfolio: false,
+                              riskFreeRate: 0.04, locale: britishEnglish, timeZone: utc),
+            "Based on 1 trading day, 31 Dec 2025 to 2 Jan 2026, from Stockbar's own stored history. "
+                + "Historical VaR, annualized from daily returns that leave out buys and sells. "
+                + "Risk-free rate 4.0% a year, used by the Sharpe and Sortino ratios.")
+    }
+}

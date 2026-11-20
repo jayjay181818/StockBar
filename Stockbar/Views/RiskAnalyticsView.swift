@@ -17,8 +17,14 @@ struct RiskAnalyticsView: View {
     @State private var selectedTimeRange: TimeRange = .oneYear
     /// Set when snapshots recorded in another currency were converted or left out.
     @State private var currencyNotice: String?
-    /// "32 trading days, 1 Sep 2026 – 14 Oct 2026": what the figures rest on.
-    @State private var sampleDescription = ""
+    /// What the figures rest on, for the footnote: the number of daily returns,
+    /// the first and last day, and whether the portfolio is Folync's.
+    @State private var sampleTradingDays = 0
+    @State private var sampleFirstDate: Date?
+    @State private var sampleLastDate: Date?
+    @State private var sampleIsFolync = false
+    /// How far below its peak the index stood on each day, for the chart.
+    @State private var drawdownSeries: [RiskMetricsService.DrawdownPoint] = []
 
     enum TimeRange: String, CaseIterable {
         case oneMonth = "1M"
@@ -39,74 +45,56 @@ struct RiskAnalyticsView: View {
 
         var description: String {
             switch self {
-            case .oneMonth: return "1 Month"
-            case .threeMonths: return "3 Months"
-            case .sixMonths: return "6 Months"
-            case .oneYear: return "1 Year"
-            case .all: return "All Time"
+            case .oneMonth: return "1 month"
+            case .threeMonths: return "3 months"
+            case .sixMonths: return "6 months"
+            case .oneYear: return "1 year"
+            case .all: return "All time"
             }
         }
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Header with time range picker
-                headerSection
+        VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
+            headerSection
 
-                // A recalculation keeps the previous figures on screen, dimmed,
-                // so the page does not empty and jump on every range change.
-                if isCalculating, riskMetrics == nil {
-                    ProgressView("Calculating risk metrics...")
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                } else if let insufficientDataMessage {
-                    ContentUnavailableView(
-                        "Not enough history",
-                        systemImage: "chart.line.uptrend.xyaxis",
-                        description: Text(insufficientDataMessage)
-                    )
+            // A recalculation keeps the previous figures on screen, dimmed,
+            // so the page does not empty and jump on every range change.
+            if isCalculating, riskMetrics == nil {
+                ProgressView("Calculating risk metrics...")
                     .stockbarEmptyState(minHeight: 300)
-                } else if let error = errorMessage {
-                    errorView(message: error)
-                } else if let metrics = riskMetrics {
-                    if isCalculating {
-                        ProgressView("Recalculating…")
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Group {
-                        if let currencyNotice {
-                            StockbarNotice(message: currencyNotice)
-                        }
-
-                        // Risk metrics cards
-                        metricsGridView(metrics: metrics)
-
-                        // Value at Risk visualization
-                        varVisualizationSection(metrics: metrics)
-
-                        // Risk-adjusted returns
-                        riskAdjustedReturnsSection(metrics: metrics)
-
-                        // Maximum drawdown timeline
-                        drawdownSection(metrics: metrics)
-
-                        // Drawdown history table
-                        if !drawdownPeriods.isEmpty {
-                            drawdownHistorySection
-                        }
-
-                        // Calculation details
-                        calculationDetailsSection(metrics: metrics)
-                    }
-                    .opacity(isCalculating ? 0.5 : 1)
-                    .accessibilityHidden(isCalculating)
-                } else {
-                    emptyStateView
+            } else if let insufficientDataMessage {
+                ContentUnavailableView(
+                    "Not enough history",
+                    systemImage: "chart.line.uptrend.xyaxis",
+                    description: Text(insufficientDataMessage)
+                )
+                .stockbarEmptyState(minHeight: 300)
+            } else if let error = errorMessage {
+                errorView(message: error)
+            } else if let metrics = riskMetrics {
+                if isCalculating {
+                    ProgressView("Recalculating…")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
+                    if let currencyNotice {
+                        StockbarNotice(message: currencyNotice)
+                    }
+                    metricStrip(metrics: metrics)
+                    drawdownChartSection(metrics: metrics)
+                    badDaySection(metrics: metrics)
+                    fallsSection
+                    footnoteSection(metrics: metrics)
+                }
+                .opacity(isCalculating ? 0.5 : 1)
+                .accessibilityHidden(isCalculating)
+            } else {
+                emptyStateView
             }
-            .padding(StockbarLayout.pageInsets)
         }
+        .stockbarPage()
         .onAppear {
             calculateRiskMetrics()
         }
@@ -115,361 +103,163 @@ struct RiskAnalyticsView: View {
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            StockbarPageHeader("Risk", subtitle: "Value at risk, volatility, risk-adjusted returns and drawdowns from stored portfolio history.") {
+        StockbarPageHeader("Risk", subtitle: "How bumpy the ride has been") {
+            HStack(spacing: 12) {
                 Button(action: calculateRiskMetrics) {
-                    Label("Recalculate", systemImage: "arrow.clockwise")
+                    StockbarRefreshIcon(isRefreshing: isCalculating)
                 }
-                .controlSize(.large)
+                .buttonStyle(.borderless)
                 .disabled(isCalculating)
-            }
-
-            // Time range picker
-            StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases) {
-                $0.description
-            }
-            .fixedSize()
-            .onChange(of: selectedTimeRange) {
-                calculateRiskMetrics()
+                .help("Work the figures out again from stored history")
+                .accessibilityLabel("Recalculate")
+                StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases) {
+                    $0.description
+                }
+                .fixedSize()
+                .onChange(of: selectedTimeRange) {
+                    calculateRiskMetrics()
+                }
             }
         }
     }
 
-    // MARK: - Metrics Grid
+    // MARK: - Strip
 
-    private func metricsGridView(metrics: RiskMetricsService.RiskMetrics) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            // Value at Risk cards
-            metricCard(
-                title: "Value at Risk (95%)",
-                value: formatCurrency(metrics.valueAtRisk95),
-                subtitle: "5% worst case",
-                color: .orange,
-                icon: "exclamationmark.triangle.fill"
-            )
-
-            metricCard(
-                title: "Value at Risk (99%)",
-                value: formatCurrency(metrics.valueAtRisk99),
-                subtitle: "1% worst case",
-                color: StockbarPalette.loss,
-                icon: "exclamationmark.octagon.fill"
-            )
-
-            // Sharpe Ratio
-            metricCard(
-                title: "Sharpe Ratio",
-                value: formatRatio(metrics.sharpeRatio),
-                subtitle: sharpeInterpretation(metrics.sharpeRatio),
-                color: sharpeColor(metrics.sharpeRatio),
-                icon: "chart.line.uptrend.xyaxis"
-            )
-
-            // Sortino Ratio
-            metricCard(
-                title: "Sortino Ratio",
-                value: formatRatio(metrics.sortinoRatio),
-                subtitle: metrics.sortinoRatio == nil ? "No negative periods" : "Downside risk-adjusted",
-                color: sortinoColor(metrics.sortinoRatio),
-                icon: "arrow.down.right.circle.fill"
-            )
-
-            // Maximum Drawdown
-            metricCard(
-                title: "Maximum Drawdown",
-                value: formatPercent(metrics.maxDrawdown),
-                subtitle: "\(metrics.maxDrawdownDuration) trading days, peak to trough",
-                color: StockbarPalette.loss,
-                icon: "arrow.down.circle.fill"
-            )
-
-            // Volatility
-            metricCard(
-                title: "Volatility (Annual)",
-                value: formatPercent(metrics.volatility),
-                subtitle: volatilityInterpretation(metrics.volatility),
-                color: .purple,
-                icon: "waveform"
-            )
-
-            // Downside Deviation
-            metricCard(
-                title: "Downside Deviation (Annual)",
-                value: formatPercent(metrics.downsideDeviation),
-                subtitle: "Negative returns only, annualized",
-                color: .orange,
-                icon: "arrow.down.square.fill"
-            )
+    private func metricStrip(metrics: RiskMetricsService.RiskMetrics) -> some View {
+        StockbarMetricStrip {
+            StockbarMetricTile(title: "Volatility", value: RiskText.percent(metrics.volatility),
+                               detail: RiskText.volatilityDetail(metrics.volatility))
+            StockbarMetricTile(title: "Sharpe ratio", value: RiskText.ratio(metrics.sharpeRatio),
+                               detail: RiskText.sharpeDetail(metrics.sharpeRatio))
+            StockbarMetricTile(title: "Sortino ratio", value: RiskText.ratio(metrics.sortinoRatio),
+                               detail: RiskText.sortinoDetail(metrics.sortinoRatio))
+            StockbarMetricTile(title: "Worst fall", value: RiskText.fall(metrics.maxDrawdown),
+                               detail: RiskText.worstFallDetail(fall: metrics.maxDrawdown,
+                                                                duration: metrics.maxDrawdownDuration),
+                               valueColor: metrics.maxDrawdown.isFinite && metrics.maxDrawdown > 0
+                                   ? StockbarPalette.loss : .primary)
         }
     }
 
-    private func metricCard(title: String, value: String, subtitle: String, color: Color, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .accessibilityHidden(true)
-                    .foregroundColor(color)
-                    .font(.title3)
-                Spacer()
-            }
+    // MARK: - Drawdown chart
 
-            Text(title)
+    private func drawdownChartSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            StockbarSectionTitle(title: "How far below its peak")
+            RiskDrawdownChart(series: drawdownSeries, revealTrigger: selectedTimeRange)
+                .frame(height: 200)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("How far below its peak, \(selectedTimeRange.description)")
+                .accessibilityValue(RiskText.chartAccessibility(drawdownSeries))
+            if metrics.maxDrawdown.isFinite, metrics.maxDrawdown > 0 {
+                Text(RiskText.recoveryNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .stockbarCard()
+    }
+
+    // MARK: - On a bad day
+
+    private func badDaySection(metrics: RiskMetricsService.RiskMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            StockbarSectionTitle(title: "On a bad day")
+            HStack(alignment: .top, spacing: 18) {
+                badDayFigure(lead: RiskText.oneDayIn20,
+                             amount: RiskText.amount(metrics.valueAtRisk95, currency: dataModel.preferredCurrency),
+                             caption: RiskText.valueAtRisk95)
+                Divider()
+                badDayFigure(lead: RiskText.oneDayIn100,
+                             amount: RiskText.amount(metrics.valueAtRisk99, currency: dataModel.preferredCurrency),
+                             caption: RiskText.valueAtRisk99)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .stockbarCard()
+    }
+
+    private func badDayFigure(lead: String, amount: String, caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(lead)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(amount)
+                .font(.system(.title2, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(caption)
                 .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text(value)
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(color)
-
-            Text(subtitle)
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
         }
-        .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(RiskText.badDaySentence(lead: lead, amount: amount, caption: caption))
     }
 
-    // MARK: - VaR Visualization
+    // MARK: - Falls of more than 5%
 
-    private func varVisualizationSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Value at Risk Distribution")
-                .font(.headline)
-
-            Text("Potential portfolio losses at different confidence levels")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("95% Confidence")
+    private var fallsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            StockbarSectionTitle(title: RiskText.fallsTitle)
+            if drawdownPeriods.isEmpty {
+                Text(RiskText.noFalls)
+                    .foregroundStyle(.secondary)
+            } else {
+                if let note = RiskText.fallsShownNote(shown: min(drawdownPeriods.count, 5), total: drawdownPeriods.count) {
+                    Text(note)
                         .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(formatCurrency(metrics.valueAtRisk95))
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.orange)
-                    Text("1 in 20 days")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .stockbarSurface(.inset, tint: .orange)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("99% Confidence")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(formatCurrency(metrics.valueAtRisk99))
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                        .foregroundColor(StockbarPalette.loss)
-                    Text("1 in 100 days")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .stockbarSurface(.inset, tint: StockbarPalette.loss)
-            }
-        }
-        .padding()
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
-    }
-
-    // MARK: - Risk-Adjusted Returns
-
-    private func riskAdjustedReturnsSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Risk-Adjusted Performance")
-                .font(.headline)
-
-            Text("How well the portfolio compensates for risk taken")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            VStack(spacing: 12) {
-                // Sharpe Ratio breakdown
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Sharpe Ratio")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Text("Excess return per unit of total risk")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Text(formatRatio(metrics.sharpeRatio))
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(sharpeColor(metrics.sharpeRatio))
-                }
-                .padding()
-                .stockbarSurface(.inset, tint: sharpeColor(metrics.sharpeRatio))
-
-                // Sortino Ratio breakdown
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Sortino Ratio")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Text("Excess return per unit of downside risk")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Text(formatRatio(metrics.sortinoRatio))
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(sortinoColor(metrics.sortinoRatio))
-                }
-                .padding()
-                .stockbarSurface(.inset, tint: sortinoColor(metrics.sortinoRatio))
-            }
-        }
-        .padding()
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
-    }
-
-    // MARK: - Drawdown Section
-
-    private func drawdownSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Maximum Drawdown Analysis")
-                .font(.headline)
-
-            Text("Largest peak-to-trough decline in portfolio value")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            VStack(spacing: 16) {
-                // Max drawdown summary
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Peak to Trough")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(formatPercent(metrics.maxDrawdown))
-                            .font(.system(size: 36, weight: .bold))
-                            .foregroundColor(StockbarPalette.loss)
-                    }
-
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("Duration")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("\(metrics.maxDrawdownDuration) trading days")
-                            .font(.title)
-                            .fontWeight(.semibold)
+                VStack(spacing: 6) {
+                    ForEach(drawdownPeriods.prefix(5), id: \.startDate) { period in
+                        fallRow(period)
                     }
                 }
-                .padding()
-                .stockbarSurface(.inset, tint: StockbarPalette.loss)
-
-                // From the peak to the lowest point; the time to recover is not measured.
-                if metrics.maxDrawdownDuration > 0 {
-                    HStack {
-                        Image(systemName: "clock.fill")
-                            .accessibilityHidden(true)
-                            .foregroundColor(.orange)
-                        Text("Peak to lowest point: \(metrics.maxDrawdownDuration) trading days. Recovery time is not included.")
-                            .font(.subheadline)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
             }
         }
-        .padding()
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+        .stockbarCard()
     }
 
-    // MARK: - Drawdown History
-
-    private var drawdownHistorySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Significant Drawdown Periods")
-                .font(.headline)
-
-            Text(drawdownPeriods.count > 5
-                 ? "Falls of more than 5% from a peak. Showing 5 of \(drawdownPeriods.count)."
-                 : "Falls of more than 5% from a peak")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            VStack(spacing: 8) {
-                ForEach(drawdownPeriods.prefix(5), id: \.startDate) { period in
-                    drawdownRow(period: period)
-                }
-            }
+    private func fallRow(_ period: RiskMetricsService.DrawdownPeriod) -> some View {
+        HStack(spacing: 16) {
+            Text(RiskText.fall(period.drawdownPercent))
+                .font(.body.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(StockbarPalette.loss)
+                .frame(minWidth: 70, alignment: .leading)
+            Text(RiskText.dateRange(period.startDate, period.endDate))
+            Spacer(minLength: 12)
+            Text(RiskText.fallLength(period.durationDays))
+                .foregroundStyle(.secondary)
         }
-        .padding()
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+        .lineLimit(1)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(RiskText.fallAccessibility(period))
     }
 
-    private func drawdownRow(period: RiskMetricsService.DrawdownPeriod) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(String(format: "%.2f%%", period.drawdownPercent * 100))
-                    .font(.headline)
-                    .foregroundColor(StockbarPalette.loss)
-                Text(formatDateRange(period.startDate, period.endDate))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+    // MARK: - Footnote
+
+    private func footnoteSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(RiskText.downsideDeviationTitle)
+                Text(RiskText.percent(metrics.downsideDeviation))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                Text(RiskText.downsideDeviationNote)
             }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("\(period.durationDays) days")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text("Peak to lowest point")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
+            .accessibilityElement(children: .combine)
+            Text(RiskText.footnote(tradingDays: sampleTradingDays, first: sampleFirstDate, last: sampleLastDate,
+                                   isFolyncPortfolio: sampleIsFolync, riskFreeRate: RiskMetricsService.annualRiskFreeRate))
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding()
-        .stockbarSurface(.inset, cornerRadius: 6)
-    }
-
-    // MARK: - Calculation Details
-
-    private func calculationDetailsSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Calculation Details")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 6) {
-                detailRow(label: "Calculation Date", value: formatDateTime(metrics.calculationDate))
-                detailRow(label: "Time Range", value: selectedTimeRange.description)
-                detailRow(label: "Based On", value: sampleDescription)
-                detailRow(
-                    label: "Risk-Free Rate",
-                    value: String(format: "%.1f%% annually (Sharpe and Sortino)", RiskMetricsService.annualRiskFreeRate * 100)
-                )
-                detailRow(label: "Methodology", value: "Historical VaR, annualized from daily returns that leave out buys and sells")
-            }
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-        .padding()
-        .stockbarSurface(.inset, cornerRadius: 8)
-    }
-
-    private func detailRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value)
-                .fontWeight(.medium)
-        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
     }
 
     // MARK: - Empty State
@@ -610,13 +400,13 @@ struct RiskAnalyticsView: View {
                 }
                 return
             }
-            let dateFormat = Date.FormatStyle(date: .abbreviated, time: .omitted)
-            let sample = "\(series.returns.count) trading days"
-                + ((series.dates.first).flatMap { first in
-                    series.dates.last.map { ", \(first.formatted(dateFormat)) – \($0.formatted(dateFormat))" }
-                } ?? "")
-                // The main chart shows Folync's series; these figures do not.
-                + (dataModel.isFolyncPortfolioActive ? ", from Stockbar's own stored history rather than Folync's" : "")
+            let tradingDays = series.returns.count
+            let firstDate = series.dates.first
+            let lastDate = series.dates.last
+            // The main chart shows Folync's series; these figures do not.
+            let isFolync = dataModel.isFolyncPortfolioActive
+            // The same values and dates the maximum drawdown is worked out from.
+            let drawdowns = RiskMetricsService.drawdownSeries(values: series.values, dates: series.dates)
 
             // Calculate comprehensive risk metrics
             if let metrics = await RiskMetricsService.shared.calculateComprehensiveRiskMetrics(
@@ -635,7 +425,11 @@ struct RiskAnalyticsView: View {
                     self.riskMetrics = metrics
                     self.drawdownPeriods = periods
                     self.currencyNotice = notice
-                    self.sampleDescription = sample
+                    self.sampleTradingDays = tradingDays
+                    self.sampleFirstDate = firstDate
+                    self.sampleLastDate = lastDate
+                    self.sampleIsFolync = isFolync
+                    self.drawdownSeries = drawdowns
                     self.isCalculating = false
                 }
             } else {
@@ -648,60 +442,71 @@ struct RiskAnalyticsView: View {
             }
         }
     }
+}
 
-    // MARK: - Helper Functions
+// MARK: - Drawdown chart
 
-    /// The same money format as the holdings table and the attribution tab.
-    /// A value that is not known shows a dash, never "NaN" or an invented zero.
-    private func formatCurrency(_ value: Double) -> String {
-        guard value.isFinite else { return "—" }
-        return HoldingsCurrencyFormatter.amount(value, currency: dataModel.preferredCurrency)
-    }
+/// The drawdown over the range as an area and a line from 0% downward, with the
+/// lowest point marked and labelled. Its text for VoiceOver is set by the page.
+private struct RiskDrawdownChart: View {
+    let series: [RiskMetricsService.DrawdownPoint]
+    let revealTrigger: RiskAnalyticsView.TimeRange
 
-    private func formatDateTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
-    private func formatDateRange(_ start: Date, _ end: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        return "\(formatter.string(from: start)) - \(formatter.string(from: end))"
-    }
-
-    // MARK: - Interpretation Functions
-
-    /// A share as a percentage; a dash when it could not be worked out.
-    private func formatPercent(_ fraction: Double) -> String {
-        guard fraction.isFinite else { return "—" }
-        return String(format: "%.2f%%", fraction * 100)
-    }
-
-    private func formatRatio(_ ratio: Double?) -> String {
-        guard let ratio else { return "—" }
-        return String(format: "%.3f", ratio)
-    }
-
-    private func sharpeInterpretation(_ sharpe: Double?) -> String {
-        guard let sharpe else { return "" }
-        if sharpe > 3.0 { return "Exceptional" } else if sharpe > 2.0 { return "Very good" } else if sharpe > 1.0 { return "Good" } else if sharpe > 0.5 { return "Adequate" } else if sharpe > 0 { return "Below average" } else { return "Poor" }
-    }
-
-    private func sharpeColor(_ sharpe: Double?) -> Color {
-        guard let sharpe else { return .secondary }
-        if sharpe > 2.0 { return .green } else if sharpe > 1.0 { return .blue } else if sharpe > 0.5 { return .orange } else { return .red }
-    }
-
-    private func sortinoColor(_ sortino: Double?) -> Color {
-        guard let sortino else { return .secondary }
-        if sortino > 2.0 { return .green } else if sortino > 1.0 { return .blue } else if sortino > 0.5 { return .orange } else { return .red }
-    }
-
-    private func volatilityInterpretation(_ volatility: Double) -> String {
-        guard volatility.isFinite else { return "" }
-        if volatility > 0.30 { return "Very high" } else if volatility > 0.20 { return "High" } else if volatility > 0.15 { return "Moderate" } else if volatility > 0.10 { return "Low" } else { return "Very low" }
+    var body: some View {
+        let lowest = RiskMetricsService.lowestPoint(of: series)
+        let floor = min((lowest?.drawdown ?? 0) * 1.25, -0.01)
+        Chart {
+            RuleMark(y: .value("Peak", 0))
+                .foregroundStyle(Color.secondary.opacity(0.5))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+            ForEach(series, id: \.date) { point in
+                AreaMark(
+                    x: .value("Date", point.date),
+                    yStart: .value("Peak", 0),
+                    yEnd: .value("Below peak", point.drawdown)
+                )
+                .foregroundStyle(StockbarPalette.loss.opacity(0.18))
+                LineMark(
+                    x: .value("Date", point.date),
+                    y: .value("Below peak", point.drawdown)
+                )
+                .foregroundStyle(StockbarPalette.loss)
+                .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+            if let lowest, lowest.drawdown < 0 {
+                PointMark(
+                    x: .value("Date", lowest.date),
+                    y: .value("Below peak", lowest.drawdown)
+                )
+                .foregroundStyle(StockbarPalette.loss)
+                .symbolSize(40)
+                .annotation(position: .bottom, alignment: .center, spacing: 4,
+                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                    Text(RiskText.lowestPointLabel(lowest))
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+        }
+        .chartYScale(domain: floor...0)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
+                AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent.percent.precision(.fractionLength(0)))
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                // Under about two months the months alone would repeat.
+                if let first = series.first?.date, let last = series.last?.date,
+                   last.timeIntervalSince(first) < 70 * 86_400 {
+                    AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                } else {
+                    AxisValueLabel(format: .dateTime.month(.abbreviated))
+                }
+            }
+        }
+        .chartReveal(trigger: revealTrigger)
     }
 }
 
