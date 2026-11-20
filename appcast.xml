@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.12)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.12</link>
+      <pubDate>Fri, 20 Nov 2026 18:06:08 +0000</pubDate>
+      <sparkle:version>382.3.12</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.12 of Stockbar 3.8.2. Changes since experimental-382.3.11:
+
+- Add the Income page: dividends expected, received and by holding (#143)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.12/Stockbar-382.3.12.zip" length="8055145" type="application/octet-stream" sparkle:edSignature="DG6EomORQga4Oa31XrmObZDqDOxqKXOue8XN60a2tyx63HqlJYQ/zyV6JsCBShMnVvC/aXsGwlOjr9vkc4KmCw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.11)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.11</link>
       <pubDate>Fri, 20 Nov 2026 17:58:27 +0000</pubDate>
@@ -123,35 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Let the acceptance copy reach a Folync on this Mac (#134)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.3/Stockbar-382.3.3.zip" length="7227126" type="application/octet-stream" sparkle:edSignature="xGKwZiQCH3ngEj1+Ou1FDa70ntzw+ne1+Ily3TVc9Ve5qWUC1ovrD6jor34w08J7jmnnMLTYIKsGA98J6GCuBw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.2)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.2</link>
-      <pubDate>Thu, 19 Nov 2026 21:34:11 +0000</pubDate>
-      <sparkle:version>382.3.2</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.2 of Stockbar 3.8.2. Changes since experimental-380.0.1:
-
-- Say "Couldn't reach Folync" on the Performance tab's portfolio charts
-- Keep the settings-transfer tests' defaults in memory
-- Release 3.8.2
-- Name a stale Folync chart and count any connection failure as unreachable
-- Say when Folync can't be reached
-- Draw the saved Folync chart while Folync is asked for a newer one
-- Release 3.8.1
-- Never take net deposits from a stale cached history
-- Measure portfolio P&amp;L against net deposits
-- Show when a cached quote was fetched, not when it was read
-- Save price alerts' last checked prices once per refresh
-- Correct the Folync and exchange-rate intervals; keep the wiki in step
-- Make the docs match the app
-- Link the wiki from the README
-- chore(python): update locked packages</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.2/Stockbar-382.3.2.zip" length="7225945" type="application/octet-stream" sparkle:edSignature="hW9XLSYOP7eeMktyJsdDVigFHgrjGaVIawKy4f7AgRf32h3RXAOp7w45qDkvrjTvYdPLblhJ/8V60/xRBxaNCg=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Ow3DipGSJxPYORW9+s0iP3uFPAFkqPbdQ1P4sOdpJBRXSE56W5SKQRNxSy44wt9sFo1scJ0/7LerGofxu52NDQ==
-length: 10902
+edSignature: AakvHf9zPNAWGYQjKlB0Wyr+tW4zEY93TMnFWaRhw+ws0cfaEY9bd12i5kj17mQIyZ1HERw1m94qKazrit7VDw==
+length: 10249
 -->
