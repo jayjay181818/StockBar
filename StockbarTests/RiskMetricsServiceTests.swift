@@ -736,6 +736,7 @@ final class RiskPageTests: XCTestCase {
         var worstFallDetail: String?
         var tradingDays: Int
         var falls: [String]
+        var worstFallIsLoss = true
     }
 
     private func shown(_ series: RiskMetricsService.DailyRiskSeries) async throws -> Shown {
@@ -744,18 +745,21 @@ final class RiskPageTests: XCTestCase {
         let metrics = try XCTUnwrap(computed)
         let periods = await RiskMetricsService.shared.findDrawdownPeriods(
             portfolioValues: series.values, dates: series.dates, threshold: RiskText.fallThreshold)
+        // What the page shows: its tiles and bad-day figures, as the view lays them out.
+        let tiles = RiskText.tiles(metrics)
+        XCTAssertEqual(tiles.map(\.title), ["Volatility", "Sharpe ratio", "Sortino ratio", "Worst fall"])
+        let badDay = RiskText.badDayFigures(metrics, currency: "GBP")
+        XCTAssertEqual(badDay.map(\.lead), [RiskText.oneDayIn20, RiskText.oneDayIn100])
+        XCTAssertEqual(badDay.map(\.caption), [RiskText.valueAtRisk95, RiskText.valueAtRisk99])
         return Shown(
-            var95: RiskText.amount(metrics.valueAtRisk95, currency: "GBP"),
-            var99: RiskText.amount(metrics.valueAtRisk99, currency: "GBP"),
-            sharpe: RiskText.ratio(metrics.sharpeRatio), sortino: RiskText.ratio(metrics.sortinoRatio),
-            worstFall: RiskText.fall(metrics.maxDrawdown), volatility: RiskText.percent(metrics.volatility),
+            var95: badDay[0].amount, var99: badDay[1].amount,
+            sharpe: tiles[1].value, sortino: tiles[2].value, worstFall: tiles[3].value, volatility: tiles[0].value,
             downside: RiskText.percent(metrics.downsideDeviation),
-            sharpeDetail: RiskText.sharpeDetail(metrics.sharpeRatio),
-            volatilityDetail: RiskText.volatilityDetail(metrics.volatility),
-            sortinoDetail: RiskText.sortinoDetail(metrics.sortinoRatio),
-            worstFallDetail: RiskText.worstFallDetail(fall: metrics.maxDrawdown, duration: metrics.maxDrawdownDuration),
+            sharpeDetail: tiles[1].detail, volatilityDetail: tiles[0].detail,
+            sortinoDetail: tiles[2].detail ?? "", worstFallDetail: tiles[3].detail,
             tradingDays: series.returns.count,
-            falls: periods.map { "\(RiskText.fall($0.drawdownPercent)) \(RiskText.fallLength($0.durationDays))" }
+            falls: periods.map { "\(RiskText.fall($0.drawdownPercent)) \(RiskText.fallLength($0.durationDays))" },
+            worstFallIsLoss: tiles[3].isLoss
         )
     }
 
@@ -773,30 +777,30 @@ final class RiskPageTests: XCTestCase {
         let whole = try await shown(base)
         XCTAssertEqual(whole, Shown(
             var95: "£721.47", var99: "£990.51", sharpe: "-2.553", sortino: "-3.247", worstFall: "-11.31%",
-            volatility: "13.96%", downside: "10.81%", sharpeDetail: "Poor", volatilityDetail: "Low",
+            volatility: "13.96%", downside: "10.81%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
             sortinoDetail: "Counts only the falls", worstFallDetail: "55 trading days, peak to low",
             tradingDays: 59, falls: ["-11.31% 55 days, peak to low"]))
 
         let lastPart = try await shown(Self.lastPart(base, days: 25))
         XCTAssertEqual(lastPart, Shown(
             var95: "£652.94", var99: "£721.47", sharpe: "-2.944", sortino: "-3.699", worstFall: "-5.09%",
-            volatility: "14.04%", downside: "11.01%", sharpeDetail: "Poor", volatilityDetail: "Low",
+            volatility: "14.04%", downside: "11.01%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
             sortinoDetail: "Counts only the falls", worstFallDetail: "9 trading days, peak to low",
             tradingDays: 24, falls: ["-5.09% 9 days, peak to low", "-5.01% 12 days, peak to low"]))
 
         let longer = try await shown(Self.invented(120, seed: 99))
         XCTAssertEqual(longer, Shown(
             var95: "£804.04", var99: "£1,058.39", sharpe: "0.241", sortino: "0.343", worstFall: "-16.05%",
-            volatility: "14.63%", downside: "10.11%", sharpeDetail: "Below average", volatilityDetail: "Low",
+            volatility: "14.63%", downside: "10.11%", sharpeDetail: "Below average, return for the risk taken", volatilityDetail: "Low, over a year",
             sortinoDetail: "Counts only the falls", worstFallDetail: "42 trading days, peak to low",
             tradingDays: 119, falls: ["-16.05% 42 days, peak to low"]))
 
         let rising = try await shown(Self.rising)
         XCTAssertEqual(rising, Shown(
             var95: "£0.00", var99: "£0.00", sharpe: "–", sortino: "–", worstFall: "0.00%",
-            volatility: "0.00%", downside: "0.00%", sharpeDetail: nil, volatilityDetail: "Very low",
+            volatility: "0.00%", downside: "0.00%", sharpeDetail: nil, volatilityDetail: "Very low, over a year",
             sortinoDetail: "No falling days", worstFallDetail: "Never below its peak",
-            tradingDays: 24, falls: []))
+            tradingDays: 24, falls: [], worstFallIsLoss: false))
     }
 
     // MARK: Text
@@ -821,10 +825,12 @@ final class RiskPageTests: XCTestCase {
     }
 
     func testThresholdsAreTheOldOnes() {
-        XCTAssertEqual([0.31, 0.30, 0.21, 0.16, 0.11, 0.10].map { RiskText.volatilityDetail($0) },
+        XCTAssertEqual([0.31, 0.30, 0.21, 0.16, 0.11, 0.10].map { RiskText.volatilityReading($0) },
                        ["Very high", "High", "High", "Moderate", "Low", "Very low"])
-        XCTAssertEqual([3.01, 3.0, 2.0, 1.0, 0.5, 0.0, -1].map { RiskText.sharpeDetail($0) },
+        XCTAssertEqual([3.01, 3.0, 2.0, 1.0, 0.5, 0.0, -1].map { RiskText.sharpeReading($0) },
                        ["Exceptional", "Very good", "Good", "Adequate", "Below average", "Poor", "Poor"])
+        XCTAssertEqual(RiskText.volatilityDetail(0.12), "Low, over a year")
+        XCTAssertEqual(RiskText.sharpeDetail(1.08), "Good, return for the risk taken")
     }
 
     func testBadDaySentences() {
@@ -832,6 +838,8 @@ final class RiskPageTests: XCTestCase {
                        "On 1 day in 20, expect to lose more than £719.96. 95% value at risk.")
         XCTAssertEqual(RiskText.badDaySentence(lead: RiskText.oneDayIn100, amount: "£1,028.38", caption: RiskText.valueAtRisk99),
                        "On 1 day in 100, more than £1,028.38. 99% value at risk.")
+        XCTAssertEqual(RiskText.BadDayFigure(lead: RiskText.oneDayIn20, amount: "–", caption: RiskText.valueAtRisk95).accessibility,
+                       "On 1 day in 20, expect to lose more than –. 95% value at risk.")
     }
 
     func testFallRowAndEmptyLine() {
@@ -846,7 +854,7 @@ final class RiskPageTests: XCTestCase {
         XCTAssertEqual(RiskText.dateRange(utcDate(2025, 3, 3), utcDate(2025, 4, 1), now: now, locale: britishEnglish, timeZone: utc),
                        "3 Mar 2025 to 1 Apr 2025")
         XCTAssertEqual(RiskText.fallAccessibility(period, now: now, locale: britishEnglish, timeZone: utc),
-                       "Fell -7.00%, 26 Jan to 15 May, 109 days, peak to low")
+                       "Fell 7.00%, 26 Jan to 15 May, 109 days, peak to low")
         XCTAssertEqual(RiskText.noFalls, "No falls of more than 5% in this range.")
         XCTAssertNil(RiskText.fallsShownNote(shown: 5, total: 5))
         XCTAssertEqual(RiskText.fallsShownNote(shown: 5, total: 7), "Showing the 5 largest of 7.")
@@ -860,11 +868,11 @@ final class RiskPageTests: XCTestCase {
         ]
         XCTAssertEqual(RiskText.lowestPointLabel(series[1], locale: britishEnglish, timeZone: utc), "-7.00%, 15 May")
         XCTAssertEqual(RiskText.chartAccessibility(series, locale: britishEnglish, timeZone: utc),
-                       "Lowest -7.00% below its peak, on 15 May 2026. Now -1.20% below its peak.")
+                       "Lowest point 7.00% below its peak, on 15 May 2026. Now 1.20% below its peak.")
 
         let recovered = series + [RiskMetricsService.DrawdownPoint(date: utcDate(2026, 5, 19), drawdown: 0)]
         XCTAssertEqual(RiskText.chartAccessibility(recovered, locale: britishEnglish, timeZone: utc),
-                       "Lowest -7.00% below its peak, on 15 May 2026. Now at its peak.")
+                       "Lowest point 7.00% below its peak, on 15 May 2026. Now at its peak.")
         XCTAssertEqual(RiskText.chartAccessibility([series[0]], locale: britishEnglish, timeZone: utc),
                        "Never below its peak in this range.")
         XCTAssertEqual(RiskText.chartAccessibility([], locale: britishEnglish, timeZone: utc), "No values in this range.")

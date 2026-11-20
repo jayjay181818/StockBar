@@ -336,17 +336,10 @@ struct RiskFiguresView: View {
 
     private func metricStrip(metrics: RiskMetricsService.RiskMetrics) -> some View {
         StockbarMetricStrip {
-            StockbarMetricTile(title: "Volatility", value: RiskText.percent(metrics.volatility),
-                               detail: RiskText.volatilityDetail(metrics.volatility))
-            StockbarMetricTile(title: "Sharpe ratio", value: RiskText.ratio(metrics.sharpeRatio),
-                               detail: RiskText.sharpeDetail(metrics.sharpeRatio))
-            StockbarMetricTile(title: "Sortino ratio", value: RiskText.ratio(metrics.sortinoRatio),
-                               detail: RiskText.sortinoDetail(metrics.sortinoRatio))
-            StockbarMetricTile(title: "Worst fall", value: RiskText.fall(metrics.maxDrawdown),
-                               detail: RiskText.worstFallDetail(fall: metrics.maxDrawdown,
-                                                                duration: metrics.maxDrawdownDuration),
-                               valueColor: metrics.maxDrawdown.isFinite && metrics.maxDrawdown > 0
-                                   ? StockbarPalette.loss : .primary)
+            ForEach(RiskText.tiles(metrics), id: \.title) { tile in
+                StockbarMetricTile(title: tile.title, value: tile.value, detail: tile.detail,
+                                   valueColor: tile.isLoss ? StockbarPalette.loss : .primary)
+            }
         }
     }
 
@@ -355,7 +348,7 @@ struct RiskFiguresView: View {
     private func drawdownChartSection(metrics: RiskMetricsService.RiskMetrics) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             StockbarSectionTitle(title: "How far below its peak")
-            RiskDrawdownChart(series: drawdownSeries, revealTrigger: timeRange)
+            RiskDrawdownChart(series: drawdownSeries, revealTrigger: [drawdownSeries.first?.date, drawdownSeries.last?.date])
                 .frame(height: 200)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("How far below its peak, \(timeRange.description)")
@@ -375,36 +368,34 @@ struct RiskFiguresView: View {
         VStack(alignment: .leading, spacing: 12) {
             StockbarSectionTitle(title: "On a bad day")
             HStack(alignment: .top, spacing: 18) {
-                badDayFigure(lead: RiskText.oneDayIn20,
-                             amount: RiskText.amount(metrics.valueAtRisk95, currency: currency),
-                             caption: RiskText.valueAtRisk95)
-                Divider()
-                badDayFigure(lead: RiskText.oneDayIn100,
-                             amount: RiskText.amount(metrics.valueAtRisk99, currency: currency),
-                             caption: RiskText.valueAtRisk99)
+                let figures = RiskText.badDayFigures(metrics, currency: currency)
+                ForEach(Array(figures.enumerated()), id: \.offset) { index, figure in
+                    if index > 0 { Divider() }
+                    badDayFigure(figure)
+                }
             }
             .fixedSize(horizontal: false, vertical: true)
         }
         .stockbarCard()
     }
 
-    private func badDayFigure(lead: String, amount: String, caption: String) -> some View {
+    private func badDayFigure(_ figure: RiskText.BadDayFigure) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(lead)
+            Text(figure.lead)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(amount)
+            Text(figure.amount)
                 .font(.system(.title2, design: .rounded).weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text(caption)
+            Text(figure.caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(RiskText.badDaySentence(lead: lead, amount: amount, caption: caption))
+        .accessibilityLabel(figure.accessibility)
     }
 
     // MARK: - Falls of more than 5%
@@ -479,7 +470,9 @@ struct RiskFiguresView: View {
 /// lowest point marked and labelled. Its text for VoiceOver is set by the page.
 private struct RiskDrawdownChart: View {
     let series: [RiskMetricsService.DrawdownPoint]
-    let revealTrigger: RiskAnalyticsView.TimeRange
+    /// Replays the draw-in when a new series lands (its first and last day), not
+    /// when the range is picked, which is before its figures are worked out.
+    let revealTrigger: [Date?]
 
     var body: some View {
         let lowest = RiskMetricsService.lowestPoint(of: series)
@@ -522,14 +515,17 @@ private struct RiskDrawdownChart: View {
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine().foregroundStyle(Color.secondary.opacity(0.2))
-                AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent.percent.precision(.fractionLength(0)))
+                // A shallow range has ticks half a percent or less apart.
+                AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent.percent
+                    .precision(.fractionLength(floor > -0.04 ? 1 : 0)))
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
-                // Under about two months the months alone would repeat.
+            // Aligned, so the last date's label stays inside the card.
+            AxisMarks(preset: .aligned, values: .automatic(desiredCount: 6)) { _ in
+                // Up to about four months the months alone would repeat.
                 if let first = series.first?.date, let last = series.last?.date,
-                   last.timeIntervalSince(first) < 70 * 86_400 {
+                   last.timeIntervalSince(first) < 130 * 86_400 {
                     AxisValueLabel(format: .dateTime.day().month(.abbreviated))
                 } else {
                     AxisValueLabel(format: .dateTime.month(.abbreviated))

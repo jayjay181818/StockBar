@@ -44,16 +44,26 @@ enum RiskText {
 
     /// The page's long-standing reading of annual volatility, thresholds unchanged.
     /// Nil when volatility is not known.
-    static func volatilityDetail(_ volatility: Double) -> String? {
+    static func volatilityReading(_ volatility: Double) -> String? {
         guard volatility.isFinite else { return nil }
         if volatility > 0.30 { return "Very high" } else if volatility > 0.20 { return "High" } else if volatility > 0.15 { return "Moderate" } else if volatility > 0.10 { return "Low" } else { return "Very low" }
     }
 
     /// The page's long-standing reading of the Sharpe ratio, thresholds unchanged.
     /// Nil when the ratio is not defined.
-    static func sharpeDetail(_ sharpe: Double?) -> String? {
+    static func sharpeReading(_ sharpe: Double?) -> String? {
         guard let sharpe, sharpe.isFinite else { return nil }
         if sharpe > 3.0 { return "Exceptional" } else if sharpe > 2.0 { return "Very good" } else if sharpe > 1.0 { return "Good" } else if sharpe > 0.5 { return "Adequate" } else if sharpe > 0 { return "Below average" } else { return "Poor" }
+    }
+
+    /// "Low, over a year" under volatility: the reading, and that the figure is annual.
+    static func volatilityDetail(_ volatility: Double) -> String? {
+        volatilityReading(volatility).map { "\($0), over a year" }
+    }
+
+    /// "Good, return for the risk taken" under the Sharpe ratio.
+    static func sharpeDetail(_ sharpe: Double?) -> String? {
+        sharpeReading(sharpe).map { "\($0), return for the risk taken" }
     }
 
     /// A plain description, or why there is no ratio.
@@ -72,7 +82,48 @@ enum RiskText {
     /// Under the chart: what the worst fall's length counts.
     static let recoveryNote = "The worst fall's length runs from the peak to the lowest point; the time to recover is not counted."
 
+    /// One tile of the strip.
+    struct Tile: Equatable {
+        let title: String
+        let value: String
+        let detail: String?
+        /// True for a fall, drawn in the loss colour beside its minus sign.
+        let isLoss: Bool
+    }
+
+    /// The strip, in order: volatility, Sharpe, Sortino and the worst fall.
+    static func tiles(_ metrics: RiskMetricsService.RiskMetrics) -> [Tile] {
+        [
+            Tile(title: "Volatility", value: percent(metrics.volatility),
+                 detail: volatilityDetail(metrics.volatility), isLoss: false),
+            Tile(title: "Sharpe ratio", value: ratio(metrics.sharpeRatio),
+                 detail: sharpeDetail(metrics.sharpeRatio), isLoss: false),
+            Tile(title: "Sortino ratio", value: ratio(metrics.sortinoRatio),
+                 detail: sortinoDetail(metrics.sortinoRatio), isLoss: false),
+            Tile(title: "Worst fall", value: fall(metrics.maxDrawdown),
+                 detail: worstFallDetail(fall: metrics.maxDrawdown, duration: metrics.maxDrawdownDuration),
+                 isLoss: fall(metrics.maxDrawdown).hasPrefix("-"))
+        ]
+    }
+
     // MARK: On a bad day
+
+    /// One value-at-risk figure in words.
+    struct BadDayFigure: Equatable {
+        let lead: String
+        let amount: String
+        let caption: String
+
+        var accessibility: String { RiskText.badDaySentence(lead: lead, amount: amount, caption: caption) }
+    }
+
+    /// The 95% figure, then the 99% figure, in the display currency.
+    static func badDayFigures(_ metrics: RiskMetricsService.RiskMetrics, currency: String) -> [BadDayFigure] {
+        [
+            BadDayFigure(lead: oneDayIn20, amount: amount(metrics.valueAtRisk95, currency: currency), caption: valueAtRisk95),
+            BadDayFigure(lead: oneDayIn100, amount: amount(metrics.valueAtRisk99, currency: currency), caption: valueAtRisk99)
+        ]
+    }
 
     static let oneDayIn20 = "On 1 day in 20, expect to lose more than"
     static let oneDayIn100 = "On 1 day in 100, more than"
@@ -115,7 +166,7 @@ enum RiskText {
     /// What VoiceOver reads for one row of the list.
     static func fallAccessibility(_ period: RiskMetricsService.DrawdownPeriod, now: Date = Date(),
                                   locale: Locale = .current, timeZone: TimeZone = .current) -> String {
-        "Fell \(fall(period.drawdownPercent)), \(dateRange(period.startDate, period.endDate, now: now, locale: locale, timeZone: timeZone)), "
+        "Fell \(percent(abs(period.drawdownPercent))), \(dateRange(period.startDate, period.endDate, now: now, locale: locale, timeZone: timeZone)), "
             + fallLength(period.durationDays)
     }
 
@@ -134,10 +185,10 @@ enum RiskText {
             return "No values in this range."
         }
         guard lowest.drawdown < 0 else { return "Never below its peak in this range." }
-        let lowestText = "Lowest \(fall(-lowest.drawdown)) below its peak, on "
+        let lowestText = "Lowest point \(percent(abs(lowest.drawdown))) below its peak, on "
             + longDate(lowest.date, locale: locale, timeZone: timeZone) + "."
         let nowText = latest.drawdown < 0
-            ? "Now \(fall(-latest.drawdown)) below its peak."
+            ? "Now \(percent(abs(latest.drawdown))) below its peak."
             : "Now at its peak."
         return "\(lowestText) \(nowText)"
     }
