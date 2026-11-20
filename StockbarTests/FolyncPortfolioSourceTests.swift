@@ -3530,6 +3530,15 @@ private actor TradesRouterStandIn: StockbarTradeAnalysisRouting {
     }
 }
 
+/// The debounce durations the Trades view model asked to wait.
+private actor DebounceRecorder {
+    private(set) var durations: [Duration] = []
+
+    func record(_ duration: Duration) {
+        durations.append(duration)
+    }
+}
+
 @MainActor
 final class StockbarTradesPageTests: XCTestCase {
     private typealias Model = StockbarTradesViewModel
@@ -3606,8 +3615,9 @@ final class StockbarTradesPageTests: XCTestCase {
         try JSONDecoder().decode(FolyncTradeLot.self, from: Data(json.utf8))
     }
 
-    private func makeModel(_ router: TradesRouterStandIn, folync: Bool = true) -> Model {
-        Model(router: router, isFolyncPortfolio: folync, sleep: { _ in try await Task.sleep(for: .milliseconds(30)) })
+    private func makeModel(_ router: TradesRouterStandIn, folync: Bool = true,
+                           debounce: Duration = .milliseconds(30)) -> Model {
+        Model(router: router, isFolyncPortfolio: folync, sleep: { _ in try await Task.sleep(for: debounce) })
     }
 
     /// Waits, briefly, for the model's tasks to reach `condition`.
@@ -3711,6 +3721,8 @@ final class StockbarTradesPageTests: XCTestCase {
         model.activate()
         model.activate()
         await settle { model.state == .loaded }
+        model.activate()
+        await settle(timeout: .milliseconds(100))
         var calls = await router.calls
         XCTAssertEqual(calls, [.init(query: Model.query(for: .all), forceRefresh: false, cursor: nil)],
                        "one request on opening, none on a second activate")
@@ -3794,12 +3806,21 @@ final class StockbarTradesPageTests: XCTestCase {
         let closed = try Self.response(lots: [Self.lotJSON(id: "lot-c", status: "Closed")])
         await router.answerFirst(.folync(all, status: .current, paging: .firstPage),
                                  .folync(closed, status: .current, paging: .firstPage))
-        let model = makeModel(router)
+        let asked = DebounceRecorder()
+        let model = Model(router: router, isFolyncPortfolio: true) { duration in
+            await asked.record(duration)
+            try await Task.sleep(for: .milliseconds(400))
+        }
         model.activate()
         await settle { model.state == .loaded }
 
         model.select(.open)
         XCTAssertTrue(model.lots.isEmpty, "the old position's rows are not shown under the new one")
+        await settle(timeout: .milliseconds(100))
+        let whileWaiting = await router.calls.count
+        XCTAssertEqual(whileWaiting, 1, "a switch change waits before asking")
+        let durations = await asked.durations
+        XCTAssertEqual(durations, [Model.filterDebounce])
         model.select(.closed)
         await settle { model.lots.first?.id == "lot-c" }
         await settle(timeout: .milliseconds(100))
