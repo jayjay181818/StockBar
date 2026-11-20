@@ -295,15 +295,6 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     }
 }
 
-private enum ProfitLossDisplayMode {
-    case amount
-    case percent
-
-    mutating func toggle() {
-        self = self == .amount ? .percent : .amount
-    }
-}
-
 @MainActor
 private struct StockbarHoldingsView: View {
     let dataModel: DataModel
@@ -315,9 +306,10 @@ private struct StockbarHoldingsView: View {
     /// the cursor in its symbol field instead of leaving it off screen.
     @State private var newlyAddedHoldingID: UUID?
     @State private var selectedHoldingID: UUID?
-    @State private var sortOrder: [KeyPathComparator<RealTimeTrade>] = []
-    @State private var dayProfitLossDisplayMode: ProfitLossDisplayMode = .amount
-    @State private var totalProfitLossDisplayMode: ProfitLossDisplayMode = .amount
+    @State private var sortOrder: [KeyPathComparator<HoldingsTableRow>] = []
+    /// Amounts or percentages in both the Today and Total gain columns.
+    @AppStorage(HoldingsGainDisplayMode.storageKey, store: StockbarRuntimeStorage.userDefaults)
+    private var gainDisplayMode = HoldingsGainDisplayMode.defaultValue
     @State private var pendingRemoval: PendingHoldingRemoval?
 
     private struct PendingHoldingRemoval: Identifiable {
@@ -391,20 +383,30 @@ private struct StockbarHoldingsView: View {
             }
 
             StockbarMetricStrip {
+                let netValue = dataModel.calculateNetValue()
                 StockbarMetricTile(
-                    title: "Net Value",
-                    value: HoldingsSummaryAmountFormatter.format(dataModel.calculateNetValue(), dataModel: dataModel),
+                    title: "Net value",
+                    value: HoldingsCurrencyFormatter.amount(netValue.amount, currency: netValue.currency),
+                    detail: HoldingsText.netValueDetail(
+                        currency: netValue.currency,
+                        usdAmount: HoldingsSummaryAmountFormatter.usdSecondaryAmount(for: netValue, dataModel: dataModel)
+                    ),
                     systemImage: "banknote"
                 )
                 let gains = dataModel.calculateNetGains()
                 StockbarMetricTile(
-                    title: "Total Net Gains",
-                    value: HoldingsSummaryAmountFormatter.format(gains, dataModel: dataModel, signed: true),
+                    title: "Total gains",
+                    value: HoldingsCurrencyFormatter.signedAmount(gains.amount, currency: gains.currency),
+                    detail: HoldingsText.gainsDetail(
+                        source: dataModel.netGainsSource,
+                        currency: gains.currency,
+                        usdAmount: HoldingsSummaryAmountFormatter.usdSecondaryAmount(for: gains, dataModel: dataModel)
+                    ),
                     systemImage: "chart.line.uptrend.xyaxis",
                     valueColor: StockbarPalette.signedOnSurface(gains.amount, neutral: .primary)
                 )
                 StockbarMetricTile(
-                    title: "Tracked Symbols",
+                    title: "Tracked symbols",
                     value: "\(trackedTrades.count)",
                     detail: trackedSymbolsDetail,
                     systemImage: "list.bullet"
@@ -426,6 +428,12 @@ private struct StockbarHoldingsView: View {
                     Label("Editing — changes save automatically", systemImage: "pencil.circle.fill")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                } else {
+                    // Only the read-only table has the Today and Total gain columns.
+                    StockbarSegmentedControl("Show gains as", selection: $gainDisplayMode,
+                                             options: HoldingsGainDisplayMode.allCases) { $0.title }
+                        .help("Show the Today and Total gain columns as amounts or as percentages")
                         .transition(.opacity)
                 }
             }
@@ -463,6 +471,59 @@ private struct StockbarHoldingsView: View {
         return watchlist == 0 ? "\(owned) held" : "\(owned) held · \(watchlist) watchlist"
     }
 
+    /// The line under a table. `showsWeight` is true under the table that has the Weight column.
+    private func footer(showsWeight: Bool) -> some View {
+        let watchlist = trackedTrades.filter(\.trade.isWatchlistOnly).count
+        let text = HoldingsText.footer(
+            held: trackedTrades.count - watchlist,
+            watchlist: watchlist,
+            weightIsFolyncs: showsWeight ? dataModel.isFolyncPortfolioActive : nil
+        )
+        return Group {
+            if let text {
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+            }
+        }
+    }
+
+    /// The visible rows with their weights, each worked out against one net value.
+    private var tableRows: [HoldingsTableRow] {
+        let netValue = dataModel.calculateNetValue()
+        return visibleIndices.map { index in
+            let trade = dataModel.realTimeTrades[index]
+            return HoldingsTableRow(trade: trade, weight: dataModel.calculatePositionWeight(for: trade, netValue: netValue))
+        }
+    }
+
+    private func rowSentence(_ row: HoldingsTableRow, mode gainDisplayMode: HoldingsGainDisplayMode) -> String {
+        let trade = row.trade
+        let value = dataModel.calculatePositionValue(for: trade)
+        let summary = dataModel.calculatePositionProfitLoss(for: trade)
+        return HoldingsText.rowSentence(
+            symbol: trade.trade.name,
+            name: trade.displayLabel ?? trade.realTimeInfo.shortName,
+            isWatchlist: trade.trade.isWatchlistOnly,
+            price: priceText(trade),
+            value: HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency),
+            weight: row.weight,
+            today: HoldingsText.gain(amount: summary.dayAmount, percent: summary.dayPercent,
+                                     currency: summary.currency, mode: gainDisplayMode),
+            totalGain: HoldingsText.gain(amount: summary.totalAmount, percent: summary.totalPercent,
+                                         currency: summary.currency, mode: gainDisplayMode)
+        )
+    }
+
+    private func priceText(_ trade: RealTimeTrade) -> String {
+        HoldingsCurrencyFormatter.amount(trade.realTimeInfo.getCurrentDisplayPrice(),
+                                         currency: trade.realTimeInfo.currency ?? "")
+    }
+
     private func setEditing(_ editing: Bool) {
         withAnimation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion)) {
             isEditing = editing
@@ -479,9 +540,21 @@ private struct StockbarHoldingsView: View {
     }
 
     private var compactTable: some View {
-        Table(visibleIndices.map { dataModel.realTimeTrades[$0] }.sorted(using: sortOrder),
+        VStack(spacing: 0) {
+            readOnlyTable
+            footer(showsWeight: true)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+    }
+
+    private var readOnlyTable: some View {
+        Table(tableRows.sorted(using: sortOrder),
               selection: $selectedHoldingID, sortOrder: $sortOrder) {
-            TableColumn("Instrument", value: \.trade.name) { trade in
+            // Every column fits the card at the window's minimum width; at wider
+            // sizes the columns share the extra room. The name line truncates.
+            TableColumn("Instrument", value: \.trade.trade.name) { row in
+                let trade = row.trade
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(trade.trade.name).fontWeight(.semibold)
@@ -499,31 +572,47 @@ private struct StockbarHoldingsView: View {
                     }
                 }
                 .padding(.vertical, 4)
-            }.width(min: 130, ideal: 190)
-            TableColumn("Price", value: \.realTimeInfo.currentPrice) { trade in
-                Text(HoldingsCurrencyFormatter.amount(trade.realTimeInfo.getCurrentDisplayPrice(),
-                                                      currency: trade.realTimeInfo.currency ?? ""))
+                // The row reads as one sentence; the figures' own cells stay quiet.
+                .modifier(HoldingsRowSentence { rowSentence(row, mode: $0) })
+            }.width(min: 90, ideal: 120)
+            TableColumn("Price", value: \.trade.realTimeInfo.currentPrice) { row in
+                Text(priceText(row.trade))
                     .monospacedDigit()
-            }.width(min: 85, ideal: 100)
-            TableColumn("Value") { trade in
-                if trade.trade.isWatchlistOnly {
-                    // No position: a $0.00 value would read as a real holding.
-                    Text("—").foregroundStyle(.secondary).help("Watchlist only")
-                } else {
-                    let value = dataModel.calculatePositionValue(for: trade)
-                    Text(HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
-                        .monospacedDigit()
+                    .accessibilityHidden(true)
+            }.width(min: 70, ideal: 80)
+            .alignment(.numeric)
+            TableColumn("Value") { row in
+                let trade = row.trade
+                Group {
+                    if trade.trade.isWatchlistOnly {
+                        // No position: a $0.00 value would read as a real holding.
+                        Text("—").foregroundStyle(.secondary).help("Watchlist only")
+                    } else {
+                        let value = dataModel.calculatePositionValue(for: trade)
+                        Text(HoldingsCurrencyFormatter.amount(value.amount, currency: value.currency))
+                            .monospacedDigit()
+                    }
                 }
-            }.width(min: 95, ideal: 115)
-            TableColumn("Today") { trade in
-                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: trade), kind: .day,
-                               displayMode: dayProfitLossDisplayMode, action: { dayProfitLossDisplayMode.toggle() })
-            }.width(min: 90, ideal: 110)
-            TableColumn("Total P&L") { trade in
-                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: trade), kind: .total,
-                               displayMode: totalProfitLossDisplayMode, action: { totalProfitLossDisplayMode.toggle() })
-            }.width(min: 100, ideal: 120)
-            TableColumn("Menu Bar") { trade in
+                .accessibilityHidden(true)
+            }.width(min: 80, ideal: 95)
+            .alignment(.numeric)
+            TableColumn("Weight", value: \.weightSortKey) { row in
+                Text(HoldingsWeight.text(row.weight))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }.width(min: 52, ideal: 60)
+            .alignment(.numeric)
+            TableColumn("Today") { row in
+                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: row.trade), kind: .day)
+            }.width(min: 72, ideal: 85)
+            .alignment(.numeric)
+            TableColumn("Total gain") { row in
+                ProfitLossCell(summary: dataModel.calculatePositionProfitLoss(for: row.trade), kind: .total)
+            }.width(min: 80, ideal: 95)
+            .alignment(.numeric)
+            TableColumn("Menu Bar") { row in
+                let trade = row.trade
                 Toggle("Show \(trade.trade.name) in menu bar", isOn: Binding(
                     get: { trade.trade.showInMenuBar },
                     set: { dataModel.setPositionMenuBarVisibility($0, for: trade) }
@@ -535,10 +624,9 @@ private struct StockbarHoldingsView: View {
             }.width(70)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
+        .environment(\.holdingsGainDisplayMode, gainDisplayMode)
         // The table sits on a Glass card instead of drawing its own background.
         .scrollContentBackground(.hidden)
-        .clipShape(RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
-        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
         .overlay {
             if visibleIndices.isEmpty {
                 ContentUnavailableView {
@@ -600,6 +688,7 @@ private struct StockbarHoldingsView: View {
                     }
                     }
                     .frame(maxHeight: .infinity)
+                    footer(showsWeight: false)
                 }
                 .frame(
                     width: max(HoldingsTableLayout.contentWidth, geometry.size.width),
@@ -820,7 +909,7 @@ private struct HoldingsEditableRow: View {
                 .monospacedDigit()
                 .frame(width: HoldingsTableLayout.valueWidth, alignment: .leading)
 
-            HStack(spacing: 8) {
+            HStack(spacing: HoldingsTableLayout.actionSpacing) {
                 Button {
                     realTimeTrade.trade.isWatchlistOnly.toggle()
                     dataModel.triggerTradeUpdate()
@@ -897,32 +986,46 @@ private struct HoldingsEditableRow: View {
     }
 }
 
+/// Makes a read-only row's first cell read the whole row as one sentence, in
+/// the amount-or-percent mode the table shows.
+@MainActor
+private struct HoldingsRowSentence: ViewModifier {
+    let sentence: (HoldingsGainDisplayMode) -> String
+    @Environment(\.holdingsGainDisplayMode) private var mode
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(sentence(mode))
+    }
+}
+
+private extension EnvironmentValues {
+    @Entry var holdingsGainDisplayMode = HoldingsGainDisplayMode.defaultValue
+}
+
 private enum ProfitLossKind {
     case day
     case total
 }
 
+/// One Today or Total gain figure. Which of amount or percentage it shows is
+/// the page's one choice; the row's VoiceOver sentence reads it.
 @MainActor
 private struct ProfitLossCell: View {
     let summary: PositionProfitLossSummary
     let kind: ProfitLossKind
-    let displayMode: ProfitLossDisplayMode
-    let action: () -> Void
+    /// Read from the environment: the table keeps its cells when only the
+    /// choice changes, and the environment is what reaches them.
+    @Environment(\.holdingsGainDisplayMode) private var displayMode
 
     var body: some View {
-        Button(action: action) {
-            Text(text)
-                .monospacedDigit()
-                .foregroundStyle(foregroundStyle)
-                .stockbarRollingDigits()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(helpText)
-        .accessibilityLabel(kind == .day ? "Today's profit and loss" : "Total profit and loss")
-        .accessibilityValue("\(text), \(AttributionFormat.direction(amount))")
-        .accessibilityHint(helpText)
+        Text(text)
+            .monospacedDigit()
+            .foregroundStyle(foregroundStyle)
+            .stockbarRollingDigits()
+            .help(helpText)
+            .accessibilityHidden(true)
     }
 
     private var amount: Double {
@@ -940,14 +1043,7 @@ private struct ProfitLossCell: View {
     }
 
     private var text: String {
-        switch displayMode {
-        case .amount:
-            guard amount.isFinite else { return "—" }
-            return HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency)
-        case .percent:
-            guard percent.isFinite else { return "—" }
-            return String(format: "%+.2f%%", percent)
-        }
+        HoldingsText.gain(amount: amount, percent: percent, currency: summary.currency, mode: displayMode)
     }
 
     private var foregroundStyle: Color {
@@ -956,14 +1052,9 @@ private struct ProfitLossCell: View {
     }
 
     private var helpText: String {
-        let toggle = switch displayMode {
-        case .amount: "Click to show the percentage."
-        case .percent: "Click to show the amount."
-        }
         switch kind {
-        case .day: return toggle
-        case .total:
-            return "Unrealised gain or loss against the average cost; sales and dividends are not included. \(toggle)"
+        case .day: "Today's gain or loss"
+        case .total: "Unrealised gain or loss against the average cost; sales and dividends are not included."
         }
     }
 }

@@ -1453,6 +1453,46 @@ class DataModel {
         )
     }
 
+    /// Which figure `calculateNetGains()` gives, decided the same way, so a
+    /// label can say what the total is without working it out again.
+    var netGainsSource: PortfolioGainsSource {
+        if let value = folyncPortfolioSnapshot?.profitLoss.unrealized.value, value.isFinite {
+            return .folync
+        }
+        guard portfolioCalculationService != nil else { return .averageCost }
+        if let gain = freshTrading212BrokerValuationSnapshot()?.totalUnrealizedProfitLoss, gain.isFinite {
+            return .trading212
+        }
+        return .averageCost
+    }
+
+    /// The holding's share of the portfolio, in percent, or nil when it is not known.
+    /// For a Folync portfolio this is Folync's own `allocationPct`, as given. Otherwise
+    /// it is the holding's value as a share of `netValue` (the total the Holdings
+    /// strip shows, from `calculateNetValue()`), both in that total's currency.
+    /// A watchlist-only row has no position, so no weight.
+    func calculatePositionWeight(for trade: RealTimeTrade,
+                                 netValue: (amount: Double, currency: String)) -> Double? {
+        guard !trade.trade.isWatchlistOnly else { return nil }
+        if let snapshot = folyncPortfolioSnapshot {
+            guard let identity = trade.sourceIdentity,
+                  let holding = snapshot.holdings.first(where: { $0.overlayKey(scopeID: snapshot.scope.id) == identity })
+            else { return nil }
+            return HoldingsWeight.given(holding.allocationPct)
+        }
+        if freshTrading212BrokerValuationSnapshot()?.position(for: trade.trade.name) == nil {
+            // The net value leaves out a holding with no usable price, so it has no share of it.
+            let price = trade.realTimeInfo.getCurrentDisplayPrice()
+            guard price.isFinite, price > 0 else { return nil }
+        }
+        let value = calculatePositionValue(for: trade)
+        return HoldingsWeight.share(
+            value: value.amount, currency: value.currency,
+            of: netValue.amount, currency: netValue.currency,
+            convert: currencyConverter.convert(amount:from:to:)
+        )
+    }
+
     /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
     func calculateNetValue() -> (amount: Double, currency: String) {
         if let snapshot = folyncPortfolioSnapshot,
