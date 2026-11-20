@@ -312,6 +312,8 @@ struct StockbarOverviewView: View {
                 }
             }
             .chartYScale(domain: domain)
+            // Room for the last "Nov 2026" label inside the plot.
+            .chartXScale(range: .plotDimension(endPadding: chartModel.selectedTimeRange == .all ? 28 : 0))
             .chartXSelection(value: hoverSelection)
             .chartYAxis {
                 AxisMarks(position: .leading) { value in
@@ -550,7 +552,9 @@ struct StockbarOverviewView: View {
         switch range {
         case .day: .dateTime.hour().minute()
         case .week, .month, .threeMonths: .dateTime.day().month(.abbreviated)
-        case .year, .all: .dateTime.month(.abbreviated).year()
+        // A year back from today needs no year; "All" can span several.
+        case .year: .dateTime.month(.abbreviated)
+        case .all: .dateTime.month(.abbreviated).year()
         }
     }
 
