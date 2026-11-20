@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum MenuChartTimeRange: String, CaseIterable {
+enum MenuChartTimeRange: String {
     case day = "1D"
     case week = "1W"
     case month = "1M"

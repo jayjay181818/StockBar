@@ -2625,6 +2625,17 @@ final class PortfolioTotalCompositionTests: XCTestCase {
         XCTAssertEqual(shown.reduce(0, +), total, file: file, line: line)
     }
 
+    func testAFigureRoundedToPenniesPrintsAsTheFormatterPrintsIt() {
+        // The hero and the card print `displayed(x)`; elsewhere the app prints `x`.
+        var values: [Double] = [1.015, 2.675, 1.005, 0.125, 84_310.465, 1_000.006, -0.005, -2.675]
+        values += (0..<2_000).map { Double($0 * 10 + 5) / 1_000 }
+        values += (0..<2_000).map { 84_000 + Double($0 * 10 + 5) / 1_000 }
+        for value in values {
+            XCTAssertEqual(HoldingsCurrencyFormatter.amount(Composition.displayed(value), currency: "GBP"),
+                           HoldingsCurrencyFormatter.amount(value, currency: "GBP"), "\(value)")
+        }
+    }
+
     func testTheCardIsNotBuiltFromMixedOrUnknownCurrencies() {
         XCTAssertNotNil(make(currencies: ["gbp", "GBP", " GBP", "GBP"]), "the same code, written differently")
         XCTAssertNil(make(currencies: ["GBP", "GBP", "GBP", "USD"]), "realised gains in another currency")
@@ -2818,6 +2829,25 @@ final class StockbarOverviewTextTests: XCTestCase {
         XCTAssertFalse(PortfolioMenuChartDataBuilder.coversRange(points, range: .year, now: now))
         let old = points.map { MenuChartDataPoint(date: $0.date.addingTimeInterval(-30 * 86_400), price: 100, symbol: "Portfolio") }
         XCTAssertFalse(PortfolioMenuChartDataBuilder.coversRange(old, range: .all, now: now), "history that stopped a month ago")
+    }
+
+    func testStoredHistoryDrawsTheLongerRangesForALocalPortfolio() {
+        // A local or Trading 212 portfolio draws from Stockbar's stored values (invented).
+        let now = Date(timeIntervalSince1970: 1_795_000_000)
+        let stored = stride(from: 400, through: 1, by: -1).map {
+            ChartDataPoint(date: now.addingTimeInterval(-Double($0) * 86_400), value: 1_000 + Double(400 - $0))
+        }
+        for (range, days) in [(MenuChartTimeRange.threeMonths, 90.0), (.year, 365), (.all, 400)] {
+            let points = PortfolioMenuChartDataBuilder.prepareChartPoints(
+                storedPoints: stored, currentValue: 1_400, range: range, now: now
+            )
+            XCTAssertGreaterThan(points.count, 2, "\(range)")
+            let first = try? XCTUnwrap(points.first)
+            XCTAssertEqual(first.map { now.timeIntervalSince($0.date) / 86_400 } ?? 0, days, accuracy: 1, "\(range)")
+            XCTAssertEqual(points.last?.price, 1_400, "\(range) ends at the current value")
+            XCTAssertTrue(PortfolioMenuChartDataBuilder.coversRange(points, range: range, now: now), "\(range)")
+            XCTAssertNotNil(PortfolioMenuChartDataBuilder.rangeChange(for: points), "\(range)")
+        }
     }
 
     func testTheRangeLineSaysWhyItHasNoFigure() {

@@ -550,7 +550,7 @@ struct StockbarOverviewView: View {
         switch range {
         case .day: .dateTime.hour().minute()
         case .week, .month, .threeMonths: .dateTime.day().month(.abbreviated)
-        case .year, .all: .dateTime.month(.abbreviated).year(.twoDigits)
+        case .year, .all: .dateTime.month(.abbreviated).year()
         }
     }
 

@@ -166,12 +166,21 @@ struct PortfolioTotalComposition: Equatable {
     /// Every amount Stockbar displays has two decimals (`HoldingsCurrencyFormatter`).
     static let minorUnitsPerUnit = 100.0
 
-    /// `value` rounded to whole minor units the way a number formatter rounds
-    /// for display (half to even). Nil for a value that is not finite or too large.
+    /// `value` in whole minor units, rounded exactly as `HoldingsCurrencyFormatter`
+    /// rounds it for display: by a number formatter with the same settings, whose
+    /// output is read back. (Scaling the double by 100 can round the other way at
+    /// a half penny: 1.015 prints as 1.02.) Nil for a value that is not finite or too large.
     static func minorUnits(_ value: Double) -> Int64? {
-        let scaled = (value * minorUnitsPerUnit).rounded(.toNearestOrEven)
-        guard scaled.isFinite, abs(scaled) < 9e15 else { return nil }
-        return Int64(scaled)
+        guard value.isFinite, abs(value) < 1e13 else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        guard let text = formatter.string(from: NSNumber(value: value)),
+              let digits = Int64(text.filter(\.isNumber)) else { return nil }
+        return text.hasPrefix("-") ? -digits : digits
     }
 
     static func amount(_ minorUnits: Int64) -> Double {
