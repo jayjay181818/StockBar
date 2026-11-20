@@ -596,6 +596,13 @@ struct StockbarSettingsView: View {
     }
 }
 
+extension StockbarSettingsView {
+    /// Settings opens on Connections the next time it is shown.
+    static func showConnectionsTab(defaults: UserDefaults = StockbarRuntimeStorage.userDefaults) {
+        defaults.set(SettingsTab.dataSources.rawValue, forKey: "settings.selectedTab")
+    }
+}
+
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case menuBar

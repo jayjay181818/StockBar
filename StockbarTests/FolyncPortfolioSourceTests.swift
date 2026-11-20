@@ -3503,6 +3503,593 @@ private final class FolyncURLProtocolStub: URLProtocol {
     override func stopLoading() {}
 }
 
+// MARK: - Trades page
+
+/// Stands in for the coordinator's trade-analysis routes. Records every call;
+/// answers from queues, and can hold a call until the test lets it go.
+private actor TradesRouterStandIn: StockbarTradeAnalysisRouting {
+    struct Call: Equatable {
+        let query: FolyncTradeAnalysisQuery
+        let forceRefresh: Bool
+        let cursor: String?
+    }
+
+    private(set) var calls: [Call] = []
+    private var firstAnswers: [FolyncRoutedTradeAnalysisResult] = []
+    private var moreAnswers: [FolyncRoutedTradeAnalysisResult] = []
+    private var holdsNext = false
+    private var held: CheckedContinuation<FolyncRoutedTradeAnalysisResult, Never>?
+
+    func answerFirst(_ results: FolyncRoutedTradeAnalysisResult...) { firstAnswers += results }
+    func answerMore(_ results: FolyncRoutedTradeAnalysisResult...) { moreAnswers += results }
+    func holdNextCall() { holdsNext = true }
+    var isHolding: Bool { held != nil }
+
+    /// Lets the held call return `result`.
+    func release(with result: FolyncRoutedTradeAnalysisResult) {
+        held?.resume(returning: result)
+        held = nil
+    }
+
+    func routeTradeAnalysis(_ query: FolyncTradeAnalysisQuery, forceRefresh: Bool) async -> FolyncRoutedTradeAnalysisResult {
+        calls.append(Call(query: query, forceRefresh: forceRefresh, cursor: nil))
+        if holdsNext {
+            holdsNext = false
+            return await withCheckedContinuation { held = $0 }
+        }
+        return firstAnswers.isEmpty ? .unavailable : firstAnswers.removeFirst()
+    }
+
+    func loadMoreTradeAnalysis(
+        _ query: FolyncTradeAnalysisQuery,
+        after continuation: FolyncLedgerContinuation
+    ) async -> FolyncRoutedTradeAnalysisResult {
+        calls.append(Call(query: query, forceRefresh: true, cursor: continuation.cursor))
+        return moreAnswers.isEmpty ? .unavailable : moreAnswers.removeFirst()
+    }
+}
+
+/// The debounce durations the Trades view model asked to wait.
+/// A hold-back that ends when the test says so. A waiter whose task is
+/// cancelled stops waiting at once, as `Task.sleep` does.
+private actor DebounceGate {
+    private var waiting: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var isOpen = false
+
+    func wait() async throws {
+        if isOpen { return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiting[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+    }
+
+    func open() {
+        isOpen = true
+        waiting.values.forEach { $0.resume() }
+        waiting.removeAll()
+    }
+
+    private func cancel(_ id: UUID) {
+        waiting.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    }
+}
+
+private actor DebounceRecorder {
+    private(set) var durations: [Duration] = []
+
+    func record(_ duration: Duration) {
+        durations.append(duration)
+    }
+}
+
+@MainActor
+final class StockbarTradesPageTests: XCTestCase {
+    /// Waits, for at most five seconds, until `condition` holds.
+    private static func waitUntil(file: StaticString = #filePath, line: UInt = #line,
+                                  _ condition: @Sendable () async -> Bool) async {
+        for _ in 0..<5_000 {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("The expected state was not reached in time", file: file, line: line)
+    }
+
+    private typealias Model = StockbarTradesViewModel
+    private typealias Text = StockbarTradesText
+    private let britain = Locale(identifier: "en_GB")
+
+    // MARK: Fixtures (invented figures)
+
+    private static let identity = """
+    {"assetId":"asset_a","canonicalTicker":"NVDA","displayTicker":"NVDA","quoteSymbol":"NVDA","aliases":[],"isin":null}
+    """
+
+    private static let freshness = """
+    {"responseGeneratedAt":"2026-03-02T09:00:00.000Z","asOf":"2026-03-02","status":"current","reasonCodes":[],
+     "sources":{"snapshots":{"asOfDate":"2026-03-02","status":"clean","generation":7,"dirtySince":null,
+     "rebuildStartedAt":null,"failedAt":null,"completedAt":"2026-03-02T08:59:00.000Z"},
+     "prices":{"asOfDate":"2026-03-02","ageSeconds":60,"missingCount":0},
+     "fx":{"asOfDate":"2026-03-02","ageSeconds":60,"missingCount":0},
+     "provider":{"lastSuccessfulSyncAt":"2026-03-02T08:58:00.000Z","ageSeconds":120,"requiredCount":3,"coveredCount":3,"missingCount":0}}}
+    """
+
+    private static func number(_ value: Double?) -> String {
+        value.map { "\($0)" } ?? "null"
+    }
+
+    private static func lotJSON(
+        id: String, ticker: String = "NVDA", status: String = "Open", openDate: String = "2025-02-11",
+        cost: Double = 7420, gain: Double? = 5540.35, returnPct: Double? = 74.66, alpha: Double? = 53.4,
+        index: String = "S&P 500", days: Int = 646, valuationQuality: String = "complete"
+    ) -> String {
+        let identity = identity.replacingOccurrences(of: "NVDA", with: ticker)
+        let comparison = alpha == nil
+            ? """
+              {"quality":"unavailable","reasonCodes":["missing_benchmark_price"],"requestedStartDate":"\(openDate)",
+               "requestedEndDate":null,"startPriceDate":null,"endPriceDate":null,"holdingPriceDate":null,
+               "awaitingHoldingClose":false,"awaitedHoldingCloseDate":null,"holdingPriceFinal":false}
+              """
+            : "null"
+        return """
+        {"id":"\(id)","ticker":"\(ticker)","side":"Long","openDate":"\(openDate)","price":10,"currency":"GBP",
+         "shares":10,"openedShares":10,"costBasis":\(cost),"totalGain":\(number(gain)),"totalReturnPct":\(number(returnPct)),
+         "comparisonReturnPct":null,"alphaPct":\(number(alpha)),"benchmarkId":"b","benchmarkName":"\(index)",
+         "benchmarkReturnPct":null,"benchmarkComparison":\(comparison),"holdingDays":\(days),"status":"\(status)",
+         "valuation":{"value":1,"currency":"GBP","quality":"\(valuationQuality)","reasonCodes":[],"asOfDate":null},
+         "portfolioId":"pf","assetId":"asset_a","identity":\(identity)}
+        """
+    }
+
+    private static func response(
+        lots: [String], cursor: String? = nil, revision: String = "rev-a", quality: String = "complete",
+        method: String = "\"average\"", activity: String = """
+        {"period":"2026","fees":48.2,"feesPctOfAvgValue":0.06,"buyCount":7,"sellCount":3,"tradeCount":10,
+         "buyValue":6840,"sellValue":2410,"tradeValue":9250,"turnoverPct":9.4}
+        """
+    ) throws -> FolyncTradeAnalysisResponse {
+        let next = cursor.map { "\"\($0)\"" } ?? "null"
+        let json = """
+        {"schemaVersion":2,"sourceRevision":"src","generatedAt":"2026-03-02T09:00:00.000Z",
+         "scope":{"id":"all","name":"Example","kind":"aggregate","currency":"GBP"},"currency":"GBP",
+         "quality":"\(quality)","reasonCodes":\(quality == "complete" ? "[]" : "[\"prices_stale\"]"),"freshness":\(freshness),
+         "costBasisMethod":\(method),
+         "stats":{"attributionLots":14,"closedAttributionLots":5,"winRatePct":64.3,"wins":9,"losses":5,
+          "winRateVsSp500Pct":57.1,"winsVsSp500":8,"lossesVsSp500":6,"comparisonScope":"configured_benchmarks",
+          "benchmarkWinRatePct":57.1,"benchmarkWins":8,"benchmarkLosses":6,"unavailableBenchmarkComparisons":0,
+          "openLotComparisonDate":"2026-03-01","benchmarkBreakdown":[],"totalTradeGain":1611.86,"unavailableAttributionLots":0},
+         "activity":[\(activity)],
+         "lots":[\(lots.joined(separator: ","))],
+         "page":{"limit":200,"hasMore":\(cursor != nil),"nextCursor":\(next),"collectionRevision":"\(revision)"}}
+        """
+        return try JSONDecoder().decode(FolyncTradeAnalysisResponse.self, from: Data(json.utf8))
+    }
+
+    private static func lot(_ json: String) throws -> FolyncTradeLot {
+        try JSONDecoder().decode(FolyncTradeLot.self, from: Data(json.utf8))
+    }
+
+    private func makeModel(_ router: TradesRouterStandIn, folync: Bool = true,
+                           debounce: Duration = .milliseconds(30)) -> Model {
+        Model(router: router, isFolyncPortfolio: folync, sleep: { _ in try await Task.sleep(for: debounce) })
+    }
+
+    /// Waits, briefly, for the model's tasks to reach `condition`.
+    private func settle(_ condition: @MainActor () async -> Bool = { false }, timeout: Duration = .seconds(2)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if await condition() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    // MARK: States
+
+    func testANonFolyncPortfolioExplainsItselfAndAsksNothing() async {
+        let router = TradesRouterStandIn()
+        let model = makeModel(router, folync: false)
+
+        model.activate()
+        model.refresh()
+        model.select(.closed)
+        model.loadMore()
+        await settle(timeout: .milliseconds(150))
+
+        XCTAssertEqual(model.state, .needsFolync)
+        let calls = await router.calls
+        XCTAssertTrue(calls.isEmpty, "no request for a portfolio that is not Folync's")
+    }
+
+    func testNothingIsAskedUntilThePageIsSelected() async {
+        let router = TradesRouterStandIn()
+        let model = makeModel(router)
+
+        model.refresh()
+        model.select(.open)
+        model.loadMore()
+        await settle(timeout: .milliseconds(150))
+
+        XCTAssertEqual(model.state, .idle)
+        let calls = await router.calls
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func testEachAnswerGivesItsState() async throws {
+        let page = try Self.response(lots: [Self.lotJSON(id: "lot-1")])
+        let cases: [(FolyncRoutedTradeAnalysisResult, Model.State)] = [
+            (.folync(page, status: .current, paging: .firstPage), .loaded),
+            (.folync(page, status: .partial, paging: .firstPage), .loaded),
+            (.folync(page, status: .stale, paging: .firstPage), .stale),
+            (.unreachable, .unreachable),
+            (.unavailable, .unavailable),
+            (.disabled, .disabled)
+        ]
+        for (result, expected) in cases {
+            let router = TradesRouterStandIn()
+            await router.answerFirst(result)
+            let model = makeModel(router)
+            model.activate()
+            await settle { model.state != .loading }
+
+            XCTAssertEqual(model.state, expected, "\(expected)")
+            switch expected {
+            case .loaded, .stale:
+                XCTAssertEqual(model.lots.map(\.id), ["lot-1"])
+            default:
+                XCTAssertTrue(model.lots.isEmpty)
+                XCTAssertNil(model.answer)
+            }
+            if expected == .stale {
+                XCTAssertEqual(model.savedAt, FolyncSupplementalDateParser.instant("2026-03-02T09:00:00.000Z"),
+                               "the saved copy's time is shown")
+            } else {
+                XCTAssertNil(model.savedAt)
+            }
+        }
+    }
+
+    func testTheFirstLoadShowsLoading() async throws {
+        let router = TradesRouterStandIn()
+        await router.holdNextCall()
+        let model = makeModel(router)
+
+        model.activate()
+        await settle { await router.isHolding }
+        XCTAssertEqual(model.state, .loading)
+
+        await router.release(with: .folync(try Self.response(lots: []), status: .current, paging: .firstPage))
+        await settle { model.state != .loading }
+        XCTAssertEqual(model.state, .loaded)
+    }
+
+    // MARK: The load rule
+
+    func testOpeningAsksOnceAndLeavesReuseToThePolicy() async throws {
+        let router = TradesRouterStandIn()
+        let page = try Self.response(lots: [Self.lotJSON(id: "lot-1")])
+        await router.answerFirst(.folync(page, status: .current, paging: .firstPage),
+                                 .folync(page, status: .current, paging: .firstPage))
+        let model = makeModel(router)
+
+        model.activate()
+        model.activate()
+        await settle { model.state == .loaded }
+        model.activate()
+        await settle(timeout: .milliseconds(100))
+        var calls = await router.calls
+        XCTAssertEqual(calls, [.init(query: Model.query(for: .all), forceRefresh: false, cursor: nil)],
+                       "one request on opening, none on a second activate")
+
+        // Opened again: asked without forcing, so the fetch policy's five-minute reuse applies.
+        model.deactivate()
+        model.activate()
+        await settle { await router.calls.count == 2 }
+        calls = await router.calls
+        XCTAssertEqual(calls.last, .init(query: Model.query(for: .all), forceRefresh: false, cursor: nil))
+    }
+
+    func testTheRefreshControlForcesARequest() async throws {
+        let router = TradesRouterStandIn()
+        let page = try Self.response(lots: [Self.lotJSON(id: "lot-1")])
+        await router.answerFirst(.folync(page, status: .current, paging: .firstPage),
+                                 .folync(page, status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate()
+        await settle { model.state == .loaded }
+
+        model.refresh()
+        await settle { await router.calls.count == 2 }
+        await settle { !model.isRefreshing }
+
+        let calls = await router.calls
+        XCTAssertEqual(calls.map(\.forceRefresh), [false, true])
+        XCTAssertEqual(model.state, .loaded)
+    }
+
+    func testLoadMoreAppendsAndARestartDropsTheRowsGathered() async throws {
+        let router = TradesRouterStandIn()
+        let first = try Self.response(lots: [Self.lotJSON(id: "lot-1")], cursor: "c1")
+        let second = try Self.response(lots: [Self.lotJSON(id: "lot-2")], cursor: "c2")
+        let restarted = try Self.response(lots: [Self.lotJSON(id: "lot-9")], cursor: "c9", revision: "rev-b")
+        await router.answerFirst(.folync(first, status: .current, paging: .firstPage))
+        await router.answerMore(.folync(second, status: .current, paging: .nextPage),
+                                .unreachable,
+                                .folync(restarted, status: .current, paging: .restarted))
+        let model = makeModel(router)
+        model.activate()
+        await settle { model.state == .loaded }
+        XCTAssertTrue(model.hasMore)
+
+        model.loadMore()
+        await settle { model.lots.count == 2 }
+        XCTAssertEqual(model.lots.map(\.id), ["lot-1", "lot-2"])
+
+        model.loadMore()
+        await settle { model.loadMoreFailed }
+        XCTAssertEqual(model.lots.map(\.id), ["lot-1", "lot-2"], "a failed load more keeps the rows")
+        XCTAssertEqual(model.state, .loaded)
+
+        model.loadMore()
+        await settle { model.lots.first?.id == "lot-9" }
+        XCTAssertEqual(model.lots.map(\.id), ["lot-9"], "a restart drops the rows gathered")
+        XCTAssertFalse(model.loadMoreFailed)
+
+        let calls = await router.calls
+        XCTAssertEqual(calls.map(\.cursor), [nil, "c1", "c2", "c2"])
+        XCTAssertTrue(calls.allSatisfy { $0.query == Model.query(for: .all) })
+    }
+
+    func testNoLoadMoreWithoutAContinuation() async throws {
+        let router = TradesRouterStandIn()
+        await router.answerFirst(.folync(try Self.response(lots: [Self.lotJSON(id: "lot-1")]),
+                                         status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate()
+        await settle { model.state == .loaded }
+
+        model.loadMore()
+        await settle(timeout: .milliseconds(100))
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 1)
+    }
+
+    func testASupersededSwitchChangeIsCancelled() async throws {
+        let router = TradesRouterStandIn()
+        let all = try Self.response(lots: [Self.lotJSON(id: "lot-1")])
+        let closed = try Self.response(lots: [Self.lotJSON(id: "lot-c", status: "Closed")])
+        await router.answerFirst(.folync(all, status: .current, paging: .firstPage),
+                                 .folync(closed, status: .current, paging: .firstPage))
+        let asked = DebounceRecorder()
+        let gate = DebounceGate()
+        let model = Model(router: router, isFolyncPortfolio: true) { duration in
+            await asked.record(duration)
+            // The hold-back ends when the test opens the gate, not after a
+            // real 400 ms, so a busy Mac cannot change what is seen.
+            try await gate.wait()
+        }
+        model.activate()
+        await settle { model.state == .loaded }
+
+        model.select(.open)
+        XCTAssertTrue(model.lots.isEmpty, "the old position's rows are not shown under the new one")
+        await Self.waitUntil { await asked.durations.count == 1 }
+        let whileWaiting = await router.calls.count
+        XCTAssertEqual(whileWaiting, 1, "a switch change waits before asking")
+        let durations = await asked.durations
+        XCTAssertEqual(durations, [Model.filterDebounce])
+        model.select(.closed)
+        await Self.waitUntil { await asked.durations.count == 2 }
+        await gate.open()
+        await settle { model.lots.first?.id == "lot-c" }
+
+        let calls = await router.calls
+        XCTAssertEqual(calls.map(\.query.status), [.all, .closed], "the superseded Open query was never asked")
+        XCTAssertEqual(model.filter, .closed)
+        XCTAssertEqual(model.lots.map(\.id), ["lot-c"])
+    }
+
+    func testACancelledAnswerIsNeverApplied() async throws {
+        // Closed while the first request is out: the coordinator answers a
+        // cancelled caller `.unavailable`, which must not reach the page.
+        let router = TradesRouterStandIn()
+        await router.holdNextCall()
+        let model = makeModel(router)
+        model.activate()
+        await settle { await router.isHolding }
+
+        model.deactivate()
+        await router.release(with: .unavailable)
+        await settle(timeout: .milliseconds(100))
+        XCTAssertEqual(model.state, .loading)
+        XCTAssertNil(model.answer)
+
+        // A request overtaken by a switch change is ignored too, whatever it says.
+        let second = TradesRouterStandIn()
+        await second.holdNextCall()
+        let closed = try Self.response(lots: [Self.lotJSON(id: "lot-c", status: "Closed")])
+        await second.answerFirst(.folync(closed, status: .current, paging: .firstPage))
+        let switched = makeModel(second)
+        switched.activate()
+        await settle { await second.isHolding }
+        switched.select(.closed)
+        await settle { switched.state == .loaded }
+        await second.release(with: .folync(try Self.response(lots: [Self.lotJSON(id: "lot-old")]),
+                                           status: .current, paging: .firstPage))
+        await settle(timeout: .milliseconds(100))
+        XCTAssertEqual(switched.lots.map(\.id), ["lot-c"])
+    }
+
+    func testBecomingAFolyncPortfolioWhileOpenAsksOnce() async throws {
+        let router = TradesRouterStandIn()
+        await router.answerFirst(.folync(try Self.response(lots: []), status: .current, paging: .firstPage))
+        let model = makeModel(router, folync: false)
+        model.activate()
+        XCTAssertEqual(model.state, .needsFolync)
+
+        model.setFolyncPortfolio(true)
+        await settle { model.state == .loaded }
+        model.setFolyncPortfolio(false)
+        XCTAssertEqual(model.state, .needsFolync)
+        XCTAssertNil(model.answer)
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 1)
+    }
+
+    // MARK: Derived values
+
+    func testTheQueryForEachSwitchPosition() {
+        XCTAssertEqual(Model.query(for: .all).cacheKey, "status=all&limit=200")
+        XCTAssertEqual(Model.query(for: .open).cacheKey, "status=open&limit=200")
+        XCTAssertEqual(Model.query(for: .partial).cacheKey, "status=partial&limit=200")
+        XCTAssertEqual(Model.query(for: .closed).cacheKey, "status=closed&limit=200")
+        XCTAssertEqual(Model.Filter.allCases.map(\.title), ["All", "Open", "Partial", "Closed"],
+                       "one position of the switch for each status Folync filters by")
+    }
+
+    func testTheWinRateCaptionComesFromTheCounts() {
+        XCTAssertEqual(Text.winRateCaption(wins: 9, losses: 5), "9 of 14 trades made money")
+        XCTAssertEqual(Text.winRateCaption(wins: 1, losses: 0), "1 of 1 trade made money")
+        XCTAssertNil(Text.winRateCaption(wins: nil, losses: 5), "a missing count gives no caption")
+        XCTAssertNil(Text.winRateCaption(wins: 3, losses: nil))
+        XCTAssertNil(Text.winRateCaption(wins: 0, losses: 0), "nothing counted yet")
+        XCTAssertEqual(Text.beatIndexCaption(wins: 8, losses: 6), "8 of 14, over the same days")
+        XCTAssertNil(Text.beatIndexCaption(wins: nil, losses: 6))
+        XCTAssertEqual(Text.wholePercent(64.3), "64%")
+        XCTAssertEqual(Text.wholePercent(nil), "–", "unknown is a dash, never zero")
+    }
+
+    func testTheStatusPillForEachStatus() {
+        XCTAssertEqual(Text.pill(.known(.open)), .init(title: "Open", kind: .open))
+        XCTAssertEqual(Text.pill(.known(.partial)), .init(title: "Partial", kind: .partial))
+        XCTAssertEqual(Text.pill(.known(.closed)), .init(title: "Closed", kind: .closed))
+        XCTAssertEqual(Text.pill(.unknown("Reopened")), .init(title: "Reopened", kind: .other),
+                       "a status this build does not know is shown as sent")
+        XCTAssertEqual(Text.pill(FolyncOpenEnum(rawValue: "Partial")), .init(title: "Partial", kind: .partial))
+    }
+
+    func testHeldForTextAndDates() {
+        XCTAssertEqual(Text.heldFor(days: 646).text, "646 d")
+        XCTAssertEqual(Text.heldFor(days: 646).spoken, "646 days")
+        XCTAssertEqual(Text.heldFor(days: 1).spoken, "1 day")
+        XCTAssertEqual(Text.heldFor(days: 0).text, "0 d")
+        XCTAssertEqual(Text.openedOn("2025-02-11", locale: britain), "11 Feb 2025")
+        XCTAssertEqual(Text.openedOn("not a day", locale: britain), "not a day")
+    }
+
+    func testGainReturnAndComparisonCarrySignAndColour() {
+        let gain = Text.signedAmount(5540.35, currency: "GBP")
+        XCTAssertEqual(gain.text, "+£5,540.35")
+        XCTAssertEqual(gain.tone, .gain)
+        let loss = Text.signedAmount(-64.1, currency: "GBP")
+        XCTAssertEqual(loss.text, "-£64.10")
+        XCTAssertEqual(loss.tone, .loss)
+        let nothing = Text.signedAmount(-0.001, currency: "GBP")
+        XCTAssertEqual(nothing.text, "£0.00")
+        XCTAssertEqual(nothing.tone, .neutral, "a figure that shows as zero is not red")
+        XCTAssertEqual(Text.signedAmount(nil, currency: "GBP"), .unknown)
+
+        XCTAssertEqual(Text.signedPercent(74.66).text, "+74.7%")
+        XCTAssertEqual(Text.signedPercent(74.66).tone, .gain)
+        XCTAssertEqual(Text.signedPercent(-2.94).text, "-2.9%")
+        XCTAssertEqual(Text.signedPercent(-2.94).tone, .loss)
+        XCTAssertEqual(Text.signedPercent(0.04).text, "0.0%")
+        XCTAssertEqual(Text.signedPercent(0.04).tone, .neutral)
+        XCTAssertEqual(Text.signedPercent(nil).text, "–")
+
+        let ahead = Text.signedPoints(53.4, index: "S&P 500")
+        XCTAssertEqual(ahead.text, "+53.4")
+        XCTAssertEqual(ahead.tone, .gain)
+        XCTAssertEqual(ahead.spoken, "53.4 points ahead of the S&P 500")
+        let behind = Text.signedPoints(-7.8, index: "S&P 500")
+        XCTAssertEqual(behind.text, "-7.8")
+        XCTAssertEqual(behind.tone, .loss)
+        XCTAssertEqual(behind.spoken, "7.8 points behind the S&P 500")
+
+    }
+
+    func testALotWithNoBenchmarkFigureShowsADashNotZero() throws {
+        let none = Text.signedPoints(nil, index: "S&P 500")
+        XCTAssertEqual(none.text, "–")
+        XCTAssertEqual(none.tone, .neutral)
+        XCTAssertEqual(none.spoken, "no comparison with the S&P 500")
+
+        let lot = try Self.lot(Self.lotJSON(id: "lot-v", ticker: "VUSA", alpha: nil))
+        XCTAssertEqual(StockbarTradesView.comparisonHelp(lot), "No comparison with the S&P 500: missing benchmark price")
+    }
+
+    func testTheCostYearChosenByDefaultAndTheYearsOffered() throws {
+        let activity = try Self.response(lots: []).activity
+        XCTAssertEqual(Text.activity(activity, year: 2026)?.fees, 48.2)
+        XCTAssertNil(Text.activity(activity, year: 2025), "no entry for a year gives no figure")
+
+        func period(_ year: String) -> FolyncActivityPeriod {
+            FolyncActivityPeriod(period: year, fees: nil, feesPctOfAvgValue: nil, buyCount: 0, sellCount: 0,
+                                 tradeCount: 0, buyValue: nil, sellValue: nil, tradeValue: nil, turnoverPct: nil)
+        }
+        let unsorted = [period("2024"), period("2026"), period("2025")]
+        XCTAssertEqual(Text.costYears(unsorted, currentYear: 2026).offered, ["2026", "2025", "2024"])
+        XCTAssertEqual(Text.costYears(unsorted, currentYear: 2026).chosen, "2026", "this year by default")
+        XCTAssertEqual(Text.costYears(unsorted, currentYear: 2027).chosen, "2026", "else the newest Folync gives")
+        XCTAssertEqual(Text.costYears([], currentYear: 2026).offered, [])
+        XCTAssertNil(Text.costYears([], currentYear: 2026).chosen)
+        XCTAssertEqual(Text.percentOfAverageValue(0.06), "0.06% of average value")
+        XCTAssertNil(Text.percentOfAverageValue(nil))
+        XCTAssertEqual(Text.amount(nil, currency: "GBP"), "–")
+    }
+
+    func testEachRowReadsAsOneSentence() throws {
+        let nvda = try Self.lot(Self.lotJSON(id: "lot-1"))
+        XCTAssertEqual(Text.rowSentence(nvda, locale: britain),
+                       "NVDA, open, opened 11 Feb 2025, held 646 days, cost £7,420.00, gain +£5,540.35, "
+                       + "return +74.7 percent, 53.4 points ahead of the S&P 500.")
+        let vusa = try Self.lot(Self.lotJSON(id: "lot-2", ticker: "VUSA", status: "Partial", openDate: "2026-10-14",
+                                             cost: 504.72, gain: nil, returnPct: nil, alpha: nil, days: 1,
+                                             valuationQuality: "partial"))
+        XCTAssertEqual(Text.rowSentence(vusa, locale: britain),
+                       "VUSA, partial, opened 14 Oct 2026, held 1 day, cost £504.72, gain not given, "
+                       + "return not given, no comparison with the S&P 500, value partial.")
+    }
+
+    func testTheTableNoteAndHeadingNameWhatFolyncReports() throws {
+        let sp = try Self.lot(Self.lotJSON(id: "a"))
+        let ftse = try Self.lot(Self.lotJSON(id: "b", ticker: "SHEL", index: "FTSE 100"))
+        XCTAssertEqual(Text.comparisonHeading([sp]), "vs S&P")
+        XCTAssertEqual(Text.comparisonHeading([sp, ftse]), "vs index")
+        XCTAssertEqual(Text.tableNote(lots: [sp], method: .known(.average)),
+                       "The last column is points ahead of or behind the S&P 500 over the same days. "
+                       + "Trades are matched by average cost, as Folync reports; these are not tax lots.")
+        XCTAssertTrue(Text.tableNote(lots: [sp, ftse], method: .known(.fifo))
+            .contains("(S&P 500 or FTSE 100, as Folync compares them). Trades are matched by first in, first out"))
+        XCTAssertTrue(Text.tableNote(lots: [], method: nil).hasSuffix("Folync does not say how trades are matched; these are not tax lots."))
+        XCTAssertEqual(Text.shownCount(1), "Showing 1 trade")
+        XCTAssertEqual(StockbarTradesView.gainCaption, "Open and closed trades, all time")
+    }
+
+    func testPartialFiguresAreSaidSo() throws {
+        let partial = try Self.response(lots: [], quality: "partial")
+        XCTAssertEqual(StockbarTradesView.qualityNotice(partial), "Folync marks some of these figures partial: prices stale.")
+    }
+
+    func testTheSidebarEntryIsDimmedWithItsReason() throws {
+        let entries = StockbarSidebarModel.groups(dimmed: [.trades: StockbarTradesView.needsFolyncReason],
+                                                  new: [.trades]).flatMap(\.entries)
+        let trades = try XCTUnwrap(entries.first { $0.section == .trades })
+        let order = StockbarMainSection.sidebarOrder
+        let place = (order.firstIndex(of: .trades) ?? -1) + 1
+        XCTAssertEqual(trades.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, \(place) of \(order.count)")
+        XCTAssertEqual(StockbarMainSection.trades.title, "Trades")
+    }
+}
+
 // MARK: - Activity page
 
 /// Stands in for the coordinator's transactions route. Answers in order, or
@@ -4114,6 +4701,8 @@ final class StockbarActivityPageTests: XCTestCase {
         let dimmed = StockbarSidebarModel.groups(dimmed: [.activity: StockbarMainSection.needsFolyncReason],
                                                  new: StockbarMainSection.newSections).flatMap(\.entries)
         let entry = try XCTUnwrap(dimmed.first { $0.section == .activity })
-        XCTAssertEqual(entry.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, 3 of 11")
+        let sidebar = StockbarMainSection.sidebarOrder
+        XCTAssertEqual(sidebar.firstIndex(of: .activity), 2, "Activity is the third entry, after Holdings")
+        XCTAssertEqual(entry.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, 3 of \(sidebar.count)")
     }
 }
