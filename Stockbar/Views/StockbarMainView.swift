@@ -24,7 +24,7 @@ struct StockbarMainView: View {
             if !sidebarHidden {
                 StockbarSidebar(
                     navigationState: navigationState,
-                    groups: StockbarSidebarModel.groups(dimmed: dimmedSections, new: newSections),
+                    groups: StockbarSidebarModel.groups(dimmed: dimmedSections, new: StockbarMainSection.newSections),
                     footer: footerInputs,
                     isRefreshing: isRefreshing,
                     refresh: refresh
@@ -101,16 +101,10 @@ struct StockbarMainView: View {
         )
     }
 
-    /// Pages that are new in this release carry a "New" badge.
-    private var newSections: Set<StockbarMainSection> { [.trades] }
-
-    /// Pages with nothing to show for the current portfolio are dimmed, with the reason.
+    /// Pages whose data only a Folync portfolio has are dimmed for any other source.
     private var dimmedSections: [StockbarMainSection: String] {
-        var dimmed: [StockbarMainSection: String] = [:]
-        if !dataModel.isFolyncPortfolioActive {
-            dimmed[.trades] = StockbarTradesView.needsFolyncReason
-        }
-        return dimmed
+        guard !dataModel.isFolyncPortfolioActive else { return [:] }
+        return StockbarMainSection.folyncOnlySections.reduce(into: [:]) { $0[$1] = StockbarMainSection.needsFolyncReason }
     }
 
     private var portfolioSourceTitle: String {
@@ -134,6 +128,8 @@ struct StockbarMainView: View {
             StockbarOverviewView(dataModel: dataModel, navigationState: navigationState)
         case .holdings:
             StockbarHoldingsView(dataModel: dataModel)
+        case .activity:
+            StockbarActivityView(dataModel: dataModel)
         case .charts:
             VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
                 StockbarPageHeader(StockbarMainSection.charts.title,
@@ -218,6 +214,7 @@ struct StockbarSidebarGroup: Identifiable, Equatable {
 enum StockbarMainSection: String, CaseIterable, Identifiable {
     case overview
     case holdings
+    case activity
     case charts
     case trades
     case risk
@@ -234,10 +231,18 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// ⌘1 to ⌘9 are all built from this one list, so they cannot drift apart.
     /// A section is listed only once its page exists.
     static let sidebarGroups: [StockbarSidebarGroup] = [
-        StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .alerts]),
+        StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .activity, .alerts]),
         StockbarSidebarGroup(title: "Analysis", sections: [.charts, .trades, .risk, .allocation]),
         StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
+
+    /// Sections drawn with the "New" badge.
+    static let newSections: Set<StockbarMainSection> = [.activity, .trades]
+
+    /// Sections whose data only a Folync portfolio has: dimmed, with this
+    /// reason, for any other source.
+    static let folyncOnlySections: Set<StockbarMainSection> = [.activity, .trades]
+    static let needsFolyncReason = "Needs a Folync portfolio"
 
     /// Every entry in sidebar order, top to bottom.
     static var sidebarOrder: [StockbarMainSection] {
@@ -254,6 +259,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "Overview"
         case .holdings: "Holdings"
+        case .activity: "Activity"
         case .charts: "Charts"
         case .trades: "Trades"
         case .risk: "Risk"
@@ -270,6 +276,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "chart.xyaxis.line"
         case .holdings: "tablecells"
+        case .activity: "list.bullet"
         case .charts: "chart.line.uptrend.xyaxis"
         case .trades: "arrow.left.arrow.right"
         case .risk: "waveform.path.ecg"

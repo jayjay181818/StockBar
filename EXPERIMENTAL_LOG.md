@@ -347,9 +347,19 @@ the same day as `fe59b8d`. The shell, the popover and the Overview were then
 built at the same time, each as its own pull request; the popover's, 138,
 was ready first and was merged as `564056b`. The Overview's, 139, was
 brought up to date with it and followed as `c9453fd`. The shell's, 140, is
-the last of Phase A. With it merged, the phase's comparison is owed: from
-`5fa923b`, the last commit measured, to the head, in the first quiet
-window.
+the last of Phase A, and was merged as `92145d7`. With it the phase's
+comparison is owed: from `5fa923b`, the last commit measured, to the head,
+in the first quiet window. A first try the same afternoon measured
+nothing: the other project's builds ran during the wait for twenty quiet
+minutes, and the Mac then went onto battery power. The owner chose to have
+it run that night at 02:30 UTC, with the Mac on mains power and left
+alone.
+
+Phase B's pages followed the same day, built at the same time, each as its
+own pull request: Activity (141, merged as `474d187`), Trades (142) and
+Income. A local stand-in
+server with a made-up portfolio now serves the three ledger routes, so
+each page can be looked at in the acceptance copy.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -4389,8 +4399,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   shown it turns amber and says "Couldn't reach Folync · figures from"
   and their time; a rejected token and a rate limit have their own words.
   It uses the status the app already has and makes no request.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `92145d7`. The merge published
+  experimental build 382.3.9 as the prerelease `experimental-382.3.9`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. Of the redesign's
   pull requests so far this is the one most likely to move a row: the
   main window the launches open is now see-through, with a blurred
@@ -4468,6 +4480,216 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     before macOS 26, zoom and full screen, and the see-through effect
     itself, which a capture of one window leaves out. Not heard:
     VoiceOver. Not tried: Full Keyboard Access.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 141: Add the Activity page: every Folync transaction, by month
+
+- What: the first of the redesign's new pages. Activity lists every
+  transaction of a Folync portfolio, read-only, from the transactions
+  route that pull request 135 added. It is a new section in the Portfolio
+  group after Holdings, with a "New" badge. For a portfolio that is not
+  Folync's the entry is dimmed with "Needs a Folync portfolio", the page
+  explains, and no request is made. ⌘1 to ⌘9 follow the sidebar, so the
+  numbers shift again: Activity is ⌘3, and Diagnostics no longer has one.
+
+  A capsule switch chooses the kind: All, Trades, Dividends or Cash. Each
+  kind is a set of the route's actions, and every known action is in
+  exactly one: buys, sells, splits and corporate actions under Trades;
+  dividends and stock dividends under Dividends; deposits, withdrawals,
+  interest, fees, tax, transfers and notes under Cash. All sends no
+  filter, so an action this build does not know still appears. A second
+  switch chooses "As entered" or "Adjusted", the route's two modes, and a
+  search field filters by one holding's ticker.
+
+  Rows are grouped by month, newest first, with no sums in the headings,
+  because a month may be only partly loaded. A row has the day, the
+  action, the ticker, a detail line with the quantity and price as Folync
+  gives them, and the amount in the portfolio's currency. The amount is
+  coloured by its direction and carries a written sign, which the owner
+  asked for; a figure Folync does not give is "–", and a figure it marks
+  partial or unavailable says so. The foot counts the rows shown and
+  offers "Load more"; the route gives no total, so none is shown.
+
+  The page keeps the rule that pull request 135 set for these routes. It
+  asks when it becomes the selected page and on its refresh control, and
+  at no other time. More rows come only from "Load more". A change of
+  kind, mode or holding is held back for 400 ms and cancels the query it
+  replaces. A result that arrives after its request was cancelled is never
+  shown. It keeps no cache of its own: reuse inside five minutes is the
+  fetch policy's.
+- Merged: 2026-11-20, squash commit `474d187`. The merge published
+  experimental build 382.3.10 as the prerelease `experimental-382.3.10`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page, so only the extra
+  sidebar entry is in what they run. Covered by the comparison set for
+  the night of 2026-11-20, if this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 881 XCTest tests with 0
+  failures. Twenty-five are new, in `FolyncPortfolioSourceTests.swift`,
+  with the coordinator stood in for: each state of the page; no request
+  for a portfolio that is not Folync's; one request on opening and none on
+  opening again; the refresh control forcing; load more, and a restart
+  dropping the rows gathered; a change held back and a superseded change
+  cancelled; a cancelled result never shown; going back to the query on
+  screen asking nothing; the kinds, with every action in exactly one; the
+  query for each combination of kind, mode and holding; months grouped by
+  the transaction's own day; the direction, colour and sign of an amount
+  for each action; the detail line; an unknown action; and each row's
+  text for VoiceOver. One of them found a fault that was then fixed:
+  going back to the previous choice while the new one was loading left
+  the page on a spinner with nothing in flight. `checks`, `docs-check`
+  and `build-release` pass on the final commit, and so do 103 Python
+  helper tests and 95 script tests on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: the cancellation check removed (two tests failed); opening
+  the page forcing a refresh (two); one action put in two kinds (two); a
+  portfolio that is not Folync's asking (two); a restart adding to the
+  rows (one); the hold-back removed (two); the spinner fix removed (one).
+
+  Two tests of pull request 135's fetch policy are changed here. They
+  waited on fixed delays, and during this work one of them failed once
+  while other builds loaded the Mac: its two later callers had arrived in
+  the other order. Both now wait until the policy has counted each caller
+  before the next step, through a count the policy exposes for tests. The
+  class was then run three more times.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time, in dark and light, at the
+  default and the minimum size; in Adjusted mode on a holding with a
+  split; filtered to one holding; with no match; loading, with the
+  stand-in answering slowly; with a 503 and nothing saved; with a 404;
+  and with the capability left out. The stand-in's log matched the rule:
+  one request on opening, one for "Load more", one for four letters
+  typed, none for a leading space, none with the capability left out, and
+  none on going back to "As entered" inside five minutes.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the page's view model
+  in full, looked at two of the captures, and changed the two tests
+  above. It did not read the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync. The stand-in's answers follow the
+    written contract and decode with the app's own models, and that is
+    all.
+  - A transfer is shown with no sign and a neutral colour, because the
+    contract does not say which way its money goes.
+  - A 503 with a saved copy was not seen on screen: each acceptance run
+    starts with empty storage. Nor was the dimmed entry, since the
+    acceptance copy always has a Folync portfolio. Both are tested.
+  - Month headings have no sums, the search covers holdings only, and
+    the foot gives no total, where the mock-up had all three.
+  - A note has no money, and is shown with £0.00 as Folync gives it.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 142: Add the Trades page: every position opened, and how it did
+
+- What: Trades shows Folync's trade analysis for a Folync portfolio,
+  read-only, from the route that pull request 135 added. It is a new
+  section in the Analysis group after Charts, with a "New" badge, dimmed
+  with "Needs a Folync portfolio" for any other source. ⌘1 to ⌘9 follow
+  the sidebar: with Activity and Trades added, Trades is ⌘6, Data Health
+  is ⌘9, and Backups and Diagnostics have no number.
+
+  Every figure on the page is Folync's own; the page works nothing out. A
+  strip of four: the win rate, with a caption from the counts of wins and
+  losses; how often a trade beat the S&P 500 over the same days; the
+  total gain on trades; and this year's fees. Then a table with a row for
+  each lot: the holding and its status, the day it was opened, the days
+  held, its cost, its gain, its return, and its return against an index
+  over the same days, in points. Then a card of one year's costs: fees as
+  one figure, the value bought and sold with their counts, and turnover,
+  with a switch for the year when Folync gives more than one.
+
+  Three things are worded by what Folync's contract says, not by the
+  mock-up. The last column is measured against each lot's own index,
+  which is the FTSE 100 for a London holding, so it is headed "vs S&P"
+  only when every row uses the S&P 500 and "vs index" otherwise; the note
+  under the table names the indexes, and so do each cell's tooltip and
+  its text for VoiceOver. The contract does not say which lots the win
+  counts and the total gain cover, so their captions say "trades" and
+  "open and closed trades, all time", not "closed trades". And Folync
+  gives one figure for a year's fees, so commission and tax are not
+  shown apart.
+
+  The switch has four positions, All, Open, Partial and Closed, one for
+  each status the route filters by. The worker built three; the route's
+  "open" leaves out a position that is partly sold and still held, so
+  the session lead added Partial.
+
+  The page keeps the rule for these routes: it asks when it becomes the
+  selected page, on its refresh control and on "Load more", and once more
+  if the portfolio becomes a Folync portfolio while the page is open. A
+  change of the switch is held back for 400 ms and cancels the query it
+  replaces, and a result whose request was cancelled is never shown.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 141 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 903 XCTest tests with 0 failures.
+  Twenty-two are new, in `FolyncPortfolioSourceTests.swift`, with the
+  coordinator stood in for: each state of the page; no request for a
+  portfolio that is not Folync's; one request on opening and none on
+  opening again; the refresh control forcing; load more, and a restart
+  dropping the rows; a switch change held back and a superseded one
+  cancelled; a cancelled answer never shown; the query for each position
+  of the switch; the captions from the counts, a missing count included;
+  the pill for each status and for one this build does not know; a lot
+  with no benchmark figure showing "–" and not zero; the year chosen and
+  the years offered; and each row's text for VoiceOver. `checks`,
+  `docs-check` and `build-release` pass on the combined code. 103 Python
+  helper tests and 95 script tests passed on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: a cancelled answer shown; the refresh control not forcing;
+  a restart adding to the rows; a missing benchmark figure read as zero
+  (two tests failed). Two more breakages were caught by nothing at first,
+  a switch change that did not wait and a second opening that asked
+  again; the worker strengthened the tests until each was caught.
+
+  The worker's test of the hold-back waited on a real 400 ms and looked
+  inside a 100 ms window. The session lead replaced the wait with a gate
+  the test opens, so a busy Mac cannot change what the test sees.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time, in dark and light, at the
+  default and the minimum size, on All, Open and Closed; with a 503 and a
+  saved copy; with a 503 and nothing saved; with a 404; with the
+  capability left out; loading; and the explanation for a portfolio that
+  is not Folync's. For the saved copy and the 404 it restarted its own
+  stand-in on the same port during the run. The stand-in's log matched
+  the rule: one request on opening, one for each change of the switch,
+  only the last of two quick changes, and none on going back to All
+  inside five minutes. After the merge with pull request 141 the session
+  lead ran the acceptance copy of the combined code once, in dark, and
+  captured its window: Activity and Trades are both in the sidebar with
+  their badges, and the switch shows its four positions. It did not
+  press the Partial position there.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the switch, the
+  hold-back and how a first page is asked for and applied, looked at the
+  worker's capture of the page with data, and changed the two things
+  above. It did not read the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync.
+  - The captions of the win rate and the total gain rest on a reading of
+    a contract that does not say which lots they cover.
+  - Turnover is captioned "of average value", the base the fees figure
+    names; the contract gives turnover no base.
+  - The "Partial" pill and a "–" in the last column were not seen on
+    screen, because the window could not be scrolled from the
+    background. Both are tested.
+  - The "New" badge is faint on the selected sidebar entry in dark mode.
+  - "Showing 7 of 31" in the mock-up is "Showing N trades": the route
+    gives no total.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

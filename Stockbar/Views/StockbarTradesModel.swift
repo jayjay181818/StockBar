@@ -36,12 +36,16 @@ final class StockbarTradesViewModel {
     enum Filter: String, CaseIterable, Hashable, Sendable {
         case all
         case open
+        /// Partly sold and still held. Folync filters it as a status of its
+        /// own, so "Open" alone would leave these positions out.
+        case partial
         case closed
 
         var title: String {
             switch self {
             case .all: "All"
             case .open: "Open"
+            case .partial: "Partial"
             case .closed: "Closed"
             }
         }
@@ -50,6 +54,7 @@ final class StockbarTradesViewModel {
             switch self {
             case .all: .all
             case .open: .open
+            case .partial: .partial
             case .closed: .closed
             }
         }

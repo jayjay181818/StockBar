@@ -177,6 +177,7 @@ struct StockbarTradesView: View {
         switch filter {
         case .all: "No trades to show."
         case .open: "No open trades."
+        case .partial: "No partly closed trades."
         case .closed: "No closed trades."
         }
     }

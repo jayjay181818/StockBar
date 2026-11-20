@@ -150,6 +150,10 @@ actor FolyncLedgerFetchPolicy {
     /// How many first pages are held for reuse. For tests.
     var keptPageCount: Int { kept.count }
 
+    /// How many callers are waiting on a request that has not finished. For
+    /// tests, which wait on this instead of on the clock.
+    var waitingCallerCount: Int { pending.values.reduce(0) { $0 + $1.callers } }
+
     /// Forgets every kept first page, for example when the connection changes.
     func removeAll() {
         kept.removeAll()
