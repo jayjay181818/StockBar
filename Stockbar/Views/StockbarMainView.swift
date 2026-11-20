@@ -345,7 +345,7 @@ private struct StockbarHoldingsView: View {
                     .accessibilityLabel("Warning: live exchange rates unavailable, converted values are approximate")
             }
 
-            HStack(spacing: 14) {
+            StockbarMetricStrip {
                 StockbarMetricTile(
                     title: "Net Value",
                     value: HoldingsSummaryAmountFormatter.format(dataModel.calculateNetValue(), dataModel: dataModel),
@@ -356,7 +356,7 @@ private struct StockbarHoldingsView: View {
                     title: "Total Net Gains",
                     value: HoldingsSummaryAmountFormatter.format(gains, dataModel: dataModel, signed: true),
                     systemImage: "chart.line.uptrend.xyaxis",
-                    valueColor: StockbarPalette.signed(gains.amount, neutral: .primary)
+                    valueColor: StockbarPalette.signedOnSurface(gains.amount, neutral: .primary)
                 )
                 StockbarMetricTile(
                     title: "Tracked Symbols",
@@ -444,9 +444,7 @@ private struct StockbarHoldingsView: View {
                             Text("Watchlist")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(StockbarPalette.hoverFill, in: Capsule())
+                                .stockbarPill()
                         }
                     }
                     let name = trade.displayLabel ?? trade.realTimeInfo.shortName
@@ -492,11 +490,10 @@ private struct StockbarHoldingsView: View {
             }.width(70)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
+        // The table sits on a Glass card instead of drawing its own background.
+        .scrollContentBackground(.hidden)
         .clipShape(RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
-                .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
-        )
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
         .overlay {
             if visibleIndices.isEmpty {
                 ContentUnavailableView {
@@ -544,11 +541,7 @@ private struct StockbarHoldingsView: View {
                                     onDelete: { requestRemoval(of: realTimeTrade) },
                                     onMove: { move(from: index, by: $0) }
                                 )
-                                .background(
-                                    index.isMultiple(of: 2)
-                                    ? Color.clear
-                                    : StockbarPalette.cardFill
-                                )
+                                .stockbarRow(isAlternate: !index.isMultiple(of: 2))
                                 .transition(.opacity)
                                 .id(entry.id)
                             }
@@ -572,10 +565,7 @@ private struct StockbarHoldingsView: View {
         }
         .frame(minHeight: 280, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
-                .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
-        )
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     /// Blank rows go immediately; anything with a symbol asks first.
@@ -630,7 +620,7 @@ private struct HoldingsHeaderRow: View {
         .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StockbarPalette.cardFill)
+        .stockbarSurface(.sheetHeader, in: Rectangle())
     }
 
     private func header(_ title: String, width: CGFloat) -> some View {
@@ -816,7 +806,7 @@ private struct HoldingsEditableRow: View {
         .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isHovered ? StockbarPalette.hoverFill : Color.clear)
+        .stockbarRow(isHovered: isHovered)
         .onHover { hovering in
             withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) { isHovered = hovering }
         }
@@ -917,7 +907,7 @@ private struct ProfitLossCell: View {
 
     private var foregroundStyle: Color {
         // Coloured by what is shown, so "£0.00" is never red or green.
-        StockbarPalette.signed(HoldingsCurrencyFormatter.displayedSign(of: amount, currency: summary.currency))
+        StockbarPalette.signedOnSurface(HoldingsCurrencyFormatter.displayedSign(of: amount, currency: summary.currency))
     }
 
     private var helpText: String {
@@ -956,7 +946,7 @@ private struct StockbarBackupsView: View {
                 subtitle: "Stockbar backs up your holdings once a day while it runs. Backups don't include Keychain credentials."
             )
 
-            HStack(spacing: 14) {
+            StockbarMetricStrip {
                 StockbarMetricTile(
                     title: "Last Backup",
                     value: lastBackupDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "None yet",

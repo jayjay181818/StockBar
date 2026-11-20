@@ -19,6 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = CoreDataStack.shared.persistentContainer
         SettingsTransferService().removeLeftoverStagedFiles()
+        // Explicit acceptance runs only; nothing in a normal run or under XCTest.
+        StockbarAcceptanceLaunchOptions.current.apply(to: StockbarRuntimeStorage.userDefaults)
         dataModel = DataModel()
         setupMainMenu()
         AppUpdateService.shared.start()

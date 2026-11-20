@@ -1008,3 +1008,137 @@ private struct RollingDigitsProbe: View {
         Color.clear
     }
 }
+
+// MARK: - Glass surfaces
+
+@MainActor
+final class StockbarSurfaceTests: XCTestCase {
+    func testEverySurfaceIsSolidUnderReduceTransparency() {
+        let solid = StockbarSurfaceAccessibility(reduceTransparency: true)
+        for scheme in [ColorScheme.light, .dark] {
+            for surface in StockbarSurface.allCases {
+                for tint in [nil, Color.orange] {
+                    let style = StockbarSurfaceStyle.resolve(surface, tint: tint, scheme: scheme, accessibility: solid)
+                    XCTAssertEqual(style.drawnOpacity, 1, accuracy: 0.001, "\(surface) \(scheme) tint \(tint != nil)")
+                    XCTAssertNil(style.highlight, "\(surface) keeps no translucent highlight")
+                }
+            }
+        }
+    }
+
+    func testIncreaseContrastStrengthensTheStrokeAndTheFill() {
+        for scheme in [ColorScheme.light, .dark] {
+            for surface in StockbarSurface.allCases {
+                let normal = StockbarSurfaceStyle.resolve(surface, scheme: scheme)
+                let strong = StockbarSurfaceStyle.resolve(surface, scheme: scheme,
+                                                          accessibility: .init(increasedContrast: true))
+                XCTAssertGreaterThan(strong.strokeWidth, normal.strokeWidth, "\(surface) \(scheme)")
+                XCTAssertGreaterThan(alpha(strong.stroke), alpha(normal.stroke), "\(surface) \(scheme)")
+                XCTAssertGreaterThanOrEqual(strong.drawnOpacity, normal.drawnOpacity, "\(surface) \(scheme)")
+            }
+        }
+    }
+
+    func testTheCardIsTranslucentAndDiffersByScheme() {
+        let light = StockbarSurfaceStyle.resolve(.card, scheme: .light)
+        let dark = StockbarSurfaceStyle.resolve(.card, scheme: .dark)
+        XCTAssertNotNil(dark.highlight, "the dark card has its faint top highlight")
+        XCTAssertNil(light.highlight, "on the white detail column a white highlight would erase the top hairline")
+        XCTAssertNotEqual(light.shadow, .clear, "a light card lifts off the white page with a soft shadow")
+        XCTAssertLessThan(light.drawnOpacity, 1)
+        XCTAssertLessThan(dark.drawnOpacity, 0.2, "a dark card is a faint tint, not a slab")
+        XCTAssertNotEqual(light, dark)
+    }
+
+    func testACardHonoursTheSettingsItIsDrawnUnder() {
+        XCTAssertEqual(drawnSurface(scheme: .dark, accessibility: .init()),
+                       StockbarSurfaceStyle.resolve(.card, scheme: .dark))
+        XCTAssertEqual(drawnSurface(scheme: .light, accessibility: .init(increasedContrast: true)),
+                       StockbarSurfaceStyle.resolve(.card, scheme: .light, accessibility: .init(increasedContrast: true)))
+        let solid = drawnSurface(scheme: .light, accessibility: .init(reduceTransparency: true))
+        XCTAssertEqual(solid?.drawnOpacity ?? 0, 1, accuracy: 0.001)
+    }
+
+    func testGainAndLossDeepenOnlyInLightModeAndTheSystemColoursStay() throws {
+        XCTAssertEqual(StockbarPalette.signed(1), .green, "menu-bar titles, popovers and chart series keep the system green")
+        XCTAssertEqual(StockbarPalette.signed(-1), .red)
+        XCTAssertEqual(StockbarPalette.signedOnSurface(0, neutral: .primary), .primary)
+        XCTAssertEqual(StockbarPalette.signedOnSurface(.nan), .secondary)
+
+        let lightGain = try components(StockbarPalette.signedOnSurface(2), in: .aqua)
+        let darkGain = try components(StockbarPalette.signedOnSurface(2), in: .darkAqua)
+        let systemGreen = try components(Color(nsColor: .systemGreen), in: .darkAqua)
+        XCTAssertEqual(darkGain.green, systemGreen.green, accuracy: 0.01)
+        XCTAssertLessThan(lightGain.green, darkGain.green, "a darker green on a light card")
+        let lightLoss = try components(StockbarPalette.signedOnSurface(-2), in: .aqua)
+        XCTAssertLessThan(lightLoss.red, 0.9)
+        XCTAssertGreaterThan(lightLoss.red, lightLoss.green * 3)
+    }
+
+    private func alpha(_ color: Color) -> CGFloat {
+        NSColor(color).usingColorSpace(.sRGB)?.alphaComponent ?? 0
+    }
+
+    private func components(_ color: Color, in appearance: NSAppearance.Name) throws -> (red: CGFloat, green: CGFloat) {
+        var result: (CGFloat, CGFloat)?
+        try XCTUnwrap(NSAppearance(named: appearance)).performAsCurrentDrawingAppearance {
+            if let rgb = NSColor(color).usingColorSpace(.sRGB) { result = (rgb.redComponent, rgb.greenComponent) }
+        }
+        return try XCTUnwrap(result)
+    }
+
+    /// The surface a card's content is drawn on, read from a real hosting view.
+    private func drawnSurface(scheme: ColorScheme, accessibility: StockbarSurfaceAccessibility?) -> StockbarSurfaceStyle? {
+        let seen = SurfaceSeen()
+        let host = NSHostingView(
+            rootView: SurfaceProbe(seen: seen)
+                .stockbarCard()
+                .environment(\.stockbarSurfaceAccessibilityOverride, accessibility)
+                .environment(\.colorScheme, scheme)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 80, height: 40)
+        host.layoutSubtreeIfNeeded()
+        return seen.value
+    }
+}
+
+@MainActor
+private final class SurfaceSeen {
+    var value: StockbarSurfaceStyle?
+}
+
+private struct SurfaceProbe: View {
+    @Environment(\.stockbarSurface) private var surface
+    let seen: SurfaceSeen
+
+    var body: some View {
+        let _ = (seen.value = surface)
+        Color.clear
+    }
+}
+
+// MARK: - Range switch
+
+@MainActor
+final class StockbarSegmentedControlTests: XCTestCase {
+    func testTheArrowKeysStepThroughTheOptionsAndStopAtEitherEnd() {
+        let options = TestRange.allCases
+        XCTAssertEqual(StockbarSegmentedControl<TestRange>.step(from: .day, by: 1, in: options), .week)
+        XCTAssertEqual(StockbarSegmentedControl<TestRange>.step(from: .month, by: -1, in: options), .week)
+        XCTAssertNil(StockbarSegmentedControl<TestRange>.step(from: .month, by: 1, in: options))
+        XCTAssertNil(StockbarSegmentedControl<TestRange>.step(from: .day, by: -1, in: options))
+    }
+
+    func testItExposesOneLabelledGroupWithEachSegmentsSelectedState() {
+        let exposure = StockbarSegmentedControl<TestRange>.accessibility(
+            label: "Time range", options: TestRange.allCases, selection: .week, title: \.rawValue
+        )
+        XCTAssertEqual(exposure.label, "Time range")
+        XCTAssertEqual(exposure.segments.map(\.label), ["1D", "1W", "1M"])
+        XCTAssertEqual(exposure.segments.map(\.isSelected), [false, true, false])
+    }
+}
+
+private enum TestRange: String, CaseIterable {
+    case day = "1D", week = "1W", month = "1M"
+}

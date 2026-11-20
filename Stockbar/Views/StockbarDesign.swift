@@ -1,8 +1,16 @@
+import AppKit
 import SwiftUI
 
 // Shared visual language for the main window and menu-bar popovers: one set of
-// motion curves, gain/loss colours, card surfaces and header styles so every
+// motion curves, gain/loss colours, surfaces and header styles so every
 // screen reads as part of the same app.
+//
+// A surface is anything drawn behind content to group it: a card, an inset
+// panel, a metric strip, a notice bar, an empty state, a pill, a list row's
+// hover or selection, a chart callout, a sheet header, the track of a range
+// switch. Views take every surface from this file, through `stockbarCard()`,
+// `stockbarSurface(_:)` and the components below, and never draw one from a
+// raw colour or material. `Scripts/validate_invariants.sh` checks that.
 
 enum StockbarMotion {
     /// Page, card and state changes.
@@ -21,51 +29,357 @@ enum StockbarMotion {
 enum StockbarPalette {
     /// Gains green, losses red; zero and unknown values stay neutral so an
     /// unchanged or missing figure never reads as a gain.
+    ///
+    /// The system green and red. Used where the colour does not sit on a
+    /// main-window surface: menu-bar titles (which follow the menu bar, not the
+    /// app's appearance), the menu-bar popovers and chart series.
     static func signed(_ value: Double?, neutral: Color = .secondary) -> Color {
         guard let value, value.isFinite, value != 0 else { return neutral }
         return value > 0 ? .green : .red
     }
 
-    /// The fill of the older analytics panels and sheet headers. Named here so
-    /// those views stop spelling out system colours one by one.
-    static let panelFill = Color(NSColor.controlBackgroundColor)
-    static let sheetHeaderFill = Color(NSColor.controlBackgroundColor).opacity(0.5)
-    /// A quiet grey behind small tiles and inactive chips.
-    static let subtleFill = Color.gray.opacity(0.1)
-    static let faintFill = Color.gray.opacity(0.05)
+    /// Gains and losses on a main-window surface: `gain` and `loss`, so the
+    /// figures stay readable on a light card. Zero and unknown stay neutral.
+    static func signedOnSurface(_ value: Double?, neutral: Color = .secondary) -> Color {
+        guard let value, value.isFinite, value != 0 else { return neutral }
+        return value > 0 ? gain : loss
+    }
 
-    static let cardFill = Color.primary.opacity(0.035)
-    static let cardStroke = Color.primary.opacity(0.08)
-    static let hoverFill = Color.primary.opacity(0.06)
+    /// A deeper green and red in light mode, where the system ones are too
+    /// pale on a near-white card; the system ones in dark mode.
+    static let gain = adaptive(light: NSColor(srgbRed: 0.09, green: 0.55, blue: 0.24, alpha: 1), dark: .systemGreen)
+    static let loss = adaptive(light: NSColor(srgbRed: 0.82, green: 0.18, blue: 0.16, alpha: 1), dark: .systemRed)
+
+    // The menu-bar popovers keep today's surfaces until their own redesign.
+    // Nothing in the main window uses these.
+    static let popoverCardFill = Color.primary.opacity(0.035)
+    static let popoverCardStroke = Color.primary.opacity(0.08)
+    static let popoverHoverFill = Color.primary.opacity(0.06)
+
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 enum StockbarLayout {
     static let pagePadding: CGFloat = 28
     /// The transparent title bar already leaves room above each page.
     static let pageInsets = EdgeInsets(top: 10, leading: 28, bottom: 28, trailing: 28)
-    static let cardRadius: CGFloat = 12
-    static let sectionSpacing: CGFloat = 22
+    static let cardRadius: CGFloat = 13
+    /// Inset panels, notices and fields inside a page.
+    static let insetRadius: CGFloat = 9
+    static let sectionSpacing: CGFloat = 18
 }
 
-private struct StockbarCardModifier: ViewModifier {
-    let padding: CGFloat
+// MARK: - Surfaces
+
+/// Each kind of surface the app draws.
+enum StockbarSurface: CaseIterable, Sendable {
+    /// The Glass card: tinted fill, hairline stroke, a faint highlight along the top.
+    case card
+    /// A quieter panel inside a card, or a tinted block (with a tint).
+    case inset
+    /// A text field or search box.
+    case field
+    /// A small capsule: a badge, a "Paused" or "Watchlist" label, a chip.
+    case pill
+    /// A warning or information bar, always tinted.
+    case notice
+    /// A chart's hover callout or an annotation label over a plot.
+    case callout
+    /// The band across the top of a sheet or a toolbar strip inside a page.
+    case sheetHeader
+    /// The track of a range switch.
+    case track
+    /// The selected segment of a range switch.
+    case selectedSegment
+    /// A list or table row under the pointer.
+    case rowHover
+    /// A selected list or table row.
+    case rowSelected
+    /// Every other row of a striped list.
+    case rowAlternate
+}
+
+/// The two accessibility settings every surface honours.
+struct StockbarSurfaceAccessibility: Equatable, Sendable {
+    /// Increase Contrast: a stronger stroke and a more solid fill.
+    var increasedContrast = false
+    /// Reduce Transparency: fully solid fills.
+    var reduceTransparency = false
+}
+
+/// How one surface is drawn, for a colour scheme and the accessibility settings.
+struct StockbarSurfaceStyle: Equatable {
+    /// An opaque colour drawn under `fill`, so a tinted or translucent fill
+    /// becomes solid under Reduce Transparency. Nil otherwise.
+    var base: Color?
+    var fill: Color
+    var stroke: Color
+    var strokeWidth: CGFloat
+    /// The brighter hairline along the top of a card; nil for every other surface.
+    var highlight: Color?
+    /// Drop shadow under a raised element (a light card, a callout, the selected segment).
+    var shadow: Color
+    var shadowRadius: CGFloat = 3
+
+    /// The fill's opacity once drawn over `base`: 1 when the surface is solid.
+    var drawnOpacity: Double {
+        if base != nil { return 1 }
+        return Double(NSColor(fill).usingColorSpace(.sRGB)?.alphaComponent ?? 0)
+    }
+
+    /// Raised surfaces (cards, fields, callouts, the selected segment) are
+    /// white with alpha in light mode; recessed ones (insets, pills, tracks,
+    /// rows) are black with a little alpha. In dark mode all are white with a
+    /// little alpha. The solid greys under Reduce Transparency are what the
+    /// translucent fills come to over the window's background.
+    static func resolve(
+        _ surface: StockbarSurface,
+        tint: Color? = nil,
+        scheme: ColorScheme,
+        accessibility: StockbarSurfaceAccessibility = .init()
+    ) -> Self {
+        let recipe = Recipe.of(surface, isDark: scheme == .dark)
+        if let tint = tint ?? recipe.defaultTint {
+            return tinted(tint, recipe: recipe, accessibility: accessibility)
+        }
+        return neutral(recipe, isDark: scheme == .dark, accessibility: accessibility)
+    }
+
+    /// The numbers behind one surface in one colour scheme.
+    private struct Recipe {
+        /// Opacity of the fill: white when `raised` or dark, black otherwise.
+        var fill: Double
+        var raised = false
+        /// In dark mode, a near-opaque grey instead of a white tint.
+        var darkGrey: Double?
+        /// The grey drawn instead under Reduce Transparency.
+        var solid: Double
+        /// Opacity of the hairline stroke; nil for none.
+        var stroke: Double?
+        var highlight: Double?
+        var shadow: Double?
+        /// Opacity of a tinted fill.
+        var tintFill: Double = 0.14
+        var tintStroke: Double?
+        var defaultTint: Color?
+
+        // swiftlint:disable:next cyclomatic_complexity function_body_length
+        static func of(_ surface: StockbarSurface, isDark dark: Bool) -> Self {
+            switch surface {
+            case .card:
+                // Until the window shell turns tinted, the light detail column
+                // is plain white: a white highlight there would erase the top
+                // hairline, so a light card has a firmer stroke and a soft
+                // shadow instead.
+                Recipe(fill: dark ? 0.055 : 0.72, raised: true, solid: dark ? 0.165 : 0.98,
+                       stroke: 0.10, highlight: dark ? 0.20 : nil,
+                       shadow: dark ? nil : 0.06, tintFill: dark ? 0.14 : 0.10, tintStroke: 0.22)
+            case .field:
+                Recipe(fill: dark ? 0.055 : 0.72, raised: true, solid: dark ? 0.165 : 0.98,
+                       stroke: dark ? 0.12 : 0.10)
+            case .inset:
+                Recipe(fill: dark ? 0.045 : 0.035, solid: dark ? 0.20 : 0.945,
+                       tintFill: dark ? 0.14 : 0.10)
+            case .pill:
+                Recipe(fill: dark ? 0.09 : 0.06, solid: dark ? 0.24 : 0.91,
+                       tintFill: dark ? 0.16 : 0.14)
+            case .notice:
+                Recipe(fill: 0, solid: dark ? 0.19 : 0.95, tintFill: dark ? 0.16 : 0.12,
+                       tintStroke: 0.25, defaultTint: .orange)
+            case .callout:
+                // Over a plot a dark callout needs body: a solid-looking grey.
+                Recipe(fill: 0.96, raised: true, darkGrey: 0.20, solid: dark ? 0.22 : 0.99,
+                       stroke: dark ? 0.16 : 0.10, shadow: dark ? 0.35 : 0.12)
+            case .sheetHeader:
+                Recipe(fill: dark ? 0.04 : 0.03, solid: dark ? 0.19 : 0.95)
+            case .track:
+                Recipe(fill: dark ? 0.06 : 0.045, solid: dark ? 0.20 : 0.93, stroke: dark ? 0.08 : 0.05)
+            case .selectedSegment:
+                Recipe(fill: dark ? 0.16 : 0.95, raised: true, solid: dark ? 0.32 : 1.0,
+                       stroke: dark ? 0.12 : 0.08, shadow: dark ? 0.25 : 0.12)
+            case .rowHover:
+                Recipe(fill: dark ? 0.05 : 0.04, solid: dark ? 0.215 : 0.935)
+            case .rowSelected:
+                Recipe(fill: 0, solid: dark ? 0.19 : 0.95, tintFill: dark ? 0.22 : 0.14,
+                       defaultTint: .accentColor)
+            case .rowAlternate:
+                Recipe(fill: dark ? 0.025 : 0.02, solid: dark ? 0.185 : 0.96)
+            }
+        }
+    }
+
+    private static func white(_ white: Double, _ opacity: Double = 1) -> Color {
+        Color(.sRGB, white: white, opacity: opacity)
+    }
+
+    private static func neutral(_ recipe: Recipe, isDark dark: Bool, accessibility: StockbarSurfaceAccessibility) -> Self {
+        // Hairlines are white on dark and black on light.
+        let ink = dark ? 1.0 : 0.0
+        let contrast = accessibility.increasedContrast
+        let stroke: Color = contrast ? white(ink, dark ? 0.5 : 0.45) : recipe.stroke.map { white(ink, $0) } ?? .clear
+        let strokeWidth: CGFloat = contrast ? 1.5 : (recipe.stroke == nil ? 0 : 1)
+        let fill: Color
+        if accessibility.reduceTransparency {
+            fill = white(recipe.solid)
+        } else if dark, let grey = recipe.darkGrey {
+            fill = white(grey, contrast ? 1 : 0.94)
+        } else {
+            // Increase Contrast: a more solid fill.
+            let opacity = contrast ? min(recipe.fill * 1.6 + 0.02, 1) : recipe.fill
+            fill = white(dark || recipe.raised ? 1 : 0, opacity)
+        }
+        let plain = !contrast && !accessibility.reduceTransparency
+        var style = Self(
+            base: nil,
+            fill: fill,
+            stroke: stroke,
+            strokeWidth: strokeWidth,
+            highlight: plain ? recipe.highlight.map { white(1, $0) } : nil,
+            shadow: recipe.shadow.map { accessibility.reduceTransparency ? .clear : Color.black.opacity($0) } ?? .clear
+        )
+        if recipe.raised && recipe.fill < 0.9 { style.shadowRadius = 6 }
+        return style
+    }
+
+    private static func tinted(_ tint: Color, recipe: Recipe, accessibility: StockbarSurfaceAccessibility) -> Self {
+        let contrast = accessibility.increasedContrast
+        let stroke: Color = contrast ? tint.opacity(0.75) : recipe.tintStroke.map { tint.opacity($0) } ?? .clear
+        let strokeWidth: CGFloat = contrast ? 1.5 : (recipe.tintStroke == nil ? 0 : 1)
+        return Self(
+            base: accessibility.reduceTransparency ? white(recipe.solid) : nil,
+            fill: tint.opacity(min(recipe.tintFill * (contrast ? 1.5 : 1), 1)),
+            stroke: stroke,
+            strokeWidth: strokeWidth,
+            highlight: nil,
+            shadow: .clear
+        )
+    }
+}
+
+private struct StockbarSurfaceAccessibilityOverrideKey: EnvironmentKey {
+    static let defaultValue: StockbarSurfaceAccessibility? = nil
+}
+
+private struct StockbarResolvedSurfaceKey: EnvironmentKey {
+    static let defaultValue: StockbarSurfaceStyle? = nil
+}
+
+extension EnvironmentValues {
+    /// Replaces the system's Increase Contrast and Reduce Transparency for the
+    /// surfaces below. SwiftUI does not let either be set, so tests set this.
+    var stockbarSurfaceAccessibilityOverride: StockbarSurfaceAccessibility? {
+        get { self[StockbarSurfaceAccessibilityOverrideKey.self] }
+        set { self[StockbarSurfaceAccessibilityOverrideKey.self] = newValue }
+    }
+
+    /// The surface the content sits on, as drawn. Nil outside any surface.
+    var stockbarSurface: StockbarSurfaceStyle? {
+        get { self[StockbarResolvedSurfaceKey.self] }
+        set { self[StockbarResolvedSurfaceKey.self] = newValue }
+    }
+}
+
+private struct StockbarSurfaceModifier<S: InsettableShape>: ViewModifier {
+    let surface: StockbarSurface
+    let tint: Color?
+    let shape: S
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.stockbarSurfaceAccessibilityOverride) private var override
 
     func body(content: Content) -> some View {
+        let accessibility = override ?? StockbarSurfaceAccessibility(
+            increasedContrast: contrast == .increased,
+            reduceTransparency: reduceTransparency
+        )
+        let style = StockbarSurfaceStyle.resolve(surface, tint: tint, scheme: scheme, accessibility: accessibility)
         content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(StockbarPalette.cardFill, in: RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
-                    .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
-            )
+            .environment(\.stockbarSurface, style)
+            .background {
+                ZStack {
+                    if let base = style.base {
+                        shape.fill(base)
+                    }
+                    shape.fill(style.fill)
+                }
+                .shadow(color: style.shadow, radius: style.shadow == .clear ? 0 : style.shadowRadius,
+                        y: style.shadow == .clear ? 0 : style.shadowRadius / 3)
+            }
+            .overlay {
+                if style.strokeWidth > 0 {
+                    shape.strokeBorder(style.stroke, lineWidth: style.strokeWidth)
+                }
+            }
+            .overlay {
+                // The faint top highlight: a brighter hairline that fades out by mid-card.
+                if let highlight = style.highlight {
+                    shape.strokeBorder(
+                        LinearGradient(colors: [highlight, .clear], startPoint: .top, endPoint: .init(x: 0.5, y: 0.35)),
+                        lineWidth: 1
+                    )
+                }
+            }
     }
 }
 
 extension View {
-    /// A quiet rounded surface that groups related content.
-    func stockbarCard(padding: CGFloat = 18) -> some View {
-        modifier(StockbarCardModifier(padding: padding))
+    /// Draws one of the app's surfaces behind this view, in `shape`.
+    func stockbarSurface<S: InsettableShape>(_ surface: StockbarSurface, tint: Color? = nil, in shape: S) -> some View {
+        modifier(StockbarSurfaceModifier(surface: surface, tint: tint, shape: shape))
+    }
+
+    /// Draws one of the app's surfaces behind this view, in a rounded rectangle.
+    func stockbarSurface(_ surface: StockbarSurface, tint: Color? = nil, cornerRadius: CGFloat = StockbarLayout.insetRadius) -> some View {
+        stockbarSurface(surface, tint: tint, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    /// The Glass card: groups related content on a page.
+    func stockbarCard(padding: CGFloat = 18, tint: Color? = nil) -> some View {
+        self
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .stockbarSurface(.card, tint: tint, cornerRadius: StockbarLayout.cardRadius)
+    }
+
+    /// A panel inside a card, or a tinted block, with its own padding.
+    func stockbarInset(padding: CGFloat = 12, tint: Color? = nil) -> some View {
+        self
+            .padding(padding)
+            .stockbarSurface(.inset, tint: tint)
+    }
+
+    /// A small capsule label such as "Paused" or "Watchlist".
+    func stockbarPill(tint: Color? = nil) -> some View {
+        self
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .stockbarSurface(.pill, tint: tint, in: Capsule())
+    }
+
+    /// The hover, selection or stripe behind one row of a list or table that
+    /// draws its own rows. Nothing is drawn for a plain row.
+    func stockbarRow(isHovered: Bool = false, isSelected: Bool = false, isAlternate: Bool = false,
+                     cornerRadius: CGFloat = 0) -> some View {
+        modifier(StockbarRowModifier(isHovered: isHovered, isSelected: isSelected, isAlternate: isAlternate,
+                                     cornerRadius: cornerRadius))
+    }
+
+    /// A chart's hover callout or a label over a plot.
+    func stockbarCallout(cornerRadius: CGFloat = 8) -> some View {
+        stockbarSurface(.callout, cornerRadius: cornerRadius)
+    }
+
+    /// An empty, loading or error state that stands on a page by itself: a
+    /// card at least `minHeight` tall. One inside a card needs no surface.
+    func stockbarEmptyState(minHeight: CGFloat = 260) -> some View {
+        self
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+            .stockbarCard()
     }
 
     /// Standard scrollable page layout used by every main-window section.
@@ -74,6 +388,22 @@ extension View {
             self
                 .padding(StockbarLayout.pageInsets)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct StockbarRowModifier: ViewModifier {
+    let isHovered: Bool
+    let isSelected: Bool
+    let isAlternate: Bool
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let surface: StockbarSurface? = isSelected ? .rowSelected : isHovered ? .rowHover : isAlternate ? .rowAlternate : nil
+        if let surface {
+            content.stockbarSurface(surface, cornerRadius: cornerRadius)
+        } else {
+            content
         }
     }
 }
@@ -132,16 +462,49 @@ struct StockbarSectionTitle: View {
     }
 }
 
-/// A labelled figure in a card, optionally tinted and with an icon.
+private struct StockbarInMetricStripKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private extension EnvironmentValues {
+    var stockbarInMetricStrip: Bool {
+        get { self[StockbarInMetricStripKey.self] }
+        set { self[StockbarInMetricStripKey.self] = newValue }
+    }
+}
+
+/// A row of metric tiles drawn as one card, the tiles divided by hairlines.
+struct StockbarMetricStrip<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Group(subviews: content) { tiles in
+                ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
+                    if index > 0 {
+                        Divider()
+                    }
+                    tile
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .environment(\.stockbarInMetricStrip, true)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
+    }
+}
+
+/// A labelled figure: its own card, or one cell of a `StockbarMetricStrip`.
 struct StockbarMetricTile: View {
     let title: String
     let value: String
     var detail: String?
     var systemImage: String?
     var valueColor: Color = .primary
+    @Environment(\.stockbarInMetricStrip) private var inStrip
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let tile = VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -168,7 +531,16 @@ struct StockbarMetricTile: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .topLeading)
-        .stockbarCard(padding: 16)
+
+        Group {
+            if inStrip {
+                tile
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                tile.stockbarCard(padding: 16)
+            }
+        }
         .accessibilityElement(children: .combine)
     }
 }
@@ -177,13 +549,17 @@ struct StockbarMetricTile: View {
 struct StockbarChangeBadge: View {
     let percent: Double?
     var size: ControlSize = .regular
+    /// True on a main-window surface: the pill is a surface from this file and
+    /// takes `gain`/`loss`. The menu-bar popovers leave it false and keep
+    /// today's system colours until their own redesign.
+    var onSurface = false
 
     private var value: Double? { percent.flatMap { $0.isFinite ? $0 : nil } }
 
     var body: some View {
-        let tint = StockbarPalette.signed(value)
+        let tint = onSurface ? StockbarPalette.signedOnSurface(value) : StockbarPalette.signed(value)
         let symbol = value.map { $0 > 0 ? "arrow.up.right" : ($0 < 0 ? "arrow.down.right" : "minus") } ?? "minus"
-        HStack(spacing: 3) {
+        let badge = HStack(spacing: 3) {
             Image(systemName: symbol)
                 .font(.system(size: size == .small ? 8 : 9, weight: .bold))
             Text(value.map { String(format: "%.2f%%", abs($0)) } ?? "—")
@@ -196,7 +572,14 @@ struct StockbarChangeBadge: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .foregroundStyle(tint)
-        .background(tint.opacity(0.14), in: Capsule())
+
+        Group {
+            if onSurface {
+                badge.stockbarSurface(.pill, tint: tint, in: Capsule())
+            } else {
+                badge.background(tint.opacity(0.14), in: Capsule())
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(value.map {
             $0 == 0 ? "Unchanged" : String(format: "%@ %.2f percent", $0 > 0 ? "Up" : "Down", abs($0))
@@ -231,7 +614,7 @@ struct StockbarDetailRow: View {
     }
 }
 
-/// Inline warning/notice banner.
+/// Inline warning/notice bar.
 struct StockbarNotice: View {
     let message: String
     var systemImage = "exclamationmark.triangle.fill"
@@ -247,7 +630,110 @@ struct StockbarNotice: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .stockbarSurface(.notice, tint: tint, cornerRadius: 10)
+    }
+}
+
+// MARK: - Range switch
+
+/// The capsule switch for choosing a range, period or mode inside a page.
+/// Pickers in Settings forms stay native.
+///
+/// For assistive technology it is one group named by `label`, and each
+/// segment is a button that reports whether it is selected. With Full
+/// Keyboard Access each segment can be focused and pressed, and the left and
+/// right arrows move the selection while any segment has focus.
+struct StockbarSegmentedControl<Value: Hashable>: View {
+    let label: String
+    let options: [Value]
+    @Binding var selection: Value
+    let title: (Value) -> String
+    /// Equal-width segments that fill the width the control is given.
+    var expands = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var pill
+
+    init(_ label: String, selection: Binding<Value>, options: [Value], expands: Bool = false,
+         title: @escaping (Value) -> String) {
+        self.label = label
+        self._selection = selection
+        self.options = options
+        self.expands = expands
+        self.title = title
+    }
+
+    /// One segment as assistive technology reads it.
+    struct Segment: Equatable {
+        let option: Value
+        let label: String
+        let isSelected: Bool
+    }
+
+    /// What the control exposes: one group named `label`, and a button per
+    /// option that reports whether it is selected. The body draws from this.
+    static func accessibility(label: String, options: [Value], selection: Value,
+                              title: (Value) -> String) -> (label: String, segments: [Segment]) {
+        (label, options.map { Segment(option: $0, label: title($0), isSelected: $0 == selection) })
+    }
+
+    /// The option `offset` places away from `current`, stopping at either end.
+    static func step(from current: Value, by offset: Int, in options: [Value]) -> Value? {
+        guard let index = options.firstIndex(of: current) else { return options.first }
+        let target = min(max(index + offset, 0), options.count - 1)
+        return target == index ? nil : options[target]
+    }
+
+    var body: some View {
+        let exposure = Self.accessibility(label: label, options: options, selection: selection, title: title)
+        HStack(spacing: 2) {
+            ForEach(exposure.segments, id: \.option) { segment in
+                self.segment(segment)
+            }
+        }
+        // One group around exactly the segment buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(exposure.label)
+        .padding(2)
+        .stockbarSurface(.track, in: Capsule())
+        .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
+            let offset = press.key == .leftArrow ? -1 : 1
+            guard let next = Self.step(from: selection, by: offset, in: options) else { return .handled }
+            select(next)
+            return .handled
+        }
+    }
+
+    private func segment(_ segment: Segment) -> some View {
+        let isSelected = segment.isSelected
+        return Button {
+            select(segment.option)
+        } label: {
+            Text(segment.label)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .frame(maxWidth: expands ? .infinity : nil)
+                .background {
+                    if isSelected {
+                        Color.clear
+                            .stockbarSurface(.selectedSegment, in: Capsule())
+                            .matchedGeometryEffect(id: "selected", in: pill)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(segment.label)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func select(_ option: Value) {
+        guard option != selection else { return }
+        withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
+            selection = option
+        }
     }
 }
 
@@ -360,11 +846,7 @@ struct StockbarSearchField: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(StockbarPalette.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
-        )
+        .stockbarSurface(.field, cornerRadius: 8)
     }
 }
 

@@ -111,13 +111,11 @@ struct AttributionAnalysisView: View {
     // MARK: - Time Range Picker
 
     private var timeRangePicker: some View {
-        Picker("Time Range", selection: $selectedTimeRange) {
-            // Attribution has no custom date range, so `.custom` would always fail.
-            ForEach(ChartTimeRange.allCases.filter { $0 != .custom }, id: \.self) { range in
-                Text(range.description).tag(range)
-            }
+        // Attribution has no custom date range, so `.custom` would always fail.
+        StockbarSegmentedControl("Time range", selection: $selectedTimeRange,
+                                 options: ChartTimeRange.allCases.filter { $0 != .custom }, expands: true) {
+            $0.description
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal)
     }
 
@@ -139,7 +137,7 @@ struct AttributionAnalysisView: View {
             metricCard(
                 title: "Return (excl. new money)",
                 value: AttributionFormat.signedPercent(result.portfolioReturn),
-                color: StockbarPalette.signed(result.portfolioReturn),
+                color: StockbarPalette.signedOnSurface(result.portfolioReturn),
                 spokenValue: AttributionFormat.spokenPercent(result.portfolioReturn)
             )
 
@@ -160,7 +158,7 @@ struct AttributionAnalysisView: View {
                 metricCard(
                     title: "Net Cash Flow",
                     value: formatSignedCurrency(netCashFlow),
-                    color: StockbarPalette.signed(netCashFlow)
+                    color: StockbarPalette.signedOnSurface(netCashFlow)
                 )
             }
         }
@@ -179,8 +177,7 @@ struct AttributionAnalysisView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(StockbarPalette.subtleFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(spokenValue ?? value)
@@ -231,8 +228,7 @@ struct AttributionAnalysisView: View {
                 .padding(.top, 4)
         }
         .padding()
-        .background(StockbarPalette.subtleFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     // MARK: - Top Contributors
@@ -262,8 +258,7 @@ struct AttributionAnalysisView: View {
             }
         }
         .padding()
-        .background(StockbarPalette.subtleFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     private func contributionRow(_ contribution: StockContribution) -> some View {
@@ -281,7 +276,7 @@ struct AttributionAnalysisView: View {
 
                 Text(formatSignedCurrency(contribution.dollarContribution))
                     .font(.body)
-                    .foregroundColor(StockbarPalette.signed(contribution.dollarContribution))
+                    .foregroundColor(StockbarPalette.signedOnSurface(contribution.dollarContribution))
             }
         }
         .accessibilityElement(children: .ignore)
@@ -305,8 +300,7 @@ struct AttributionAnalysisView: View {
             }
         }
         .padding()
-        .background(StockbarPalette.subtleFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     private func sectorRow(_ sector: SectorContribution) -> some View {
@@ -326,7 +320,7 @@ struct AttributionAnalysisView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(AttributionFormat.signedPercent(sector.totalContribution))
                     .font(.body)
-                    .foregroundColor(StockbarPalette.signed(sector.totalContribution))
+                    .foregroundColor(StockbarPalette.signedOnSurface(sector.totalContribution))
 
                 Text(formatSignedCurrency(sector.dollarContribution))
                     .font(.caption)
@@ -380,8 +374,7 @@ struct AttributionAnalysisView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
-        .background(StockbarPalette.subtleFill)
-        .cornerRadius(8)
+        .stockbarSurface(.card, cornerRadius: StockbarLayout.cardRadius)
     }
 
     private func waterfallSummary(_ result: AttributionAnalysisResult, bars: [WaterfallBars.Bar]) -> String {

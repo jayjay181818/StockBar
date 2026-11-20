@@ -87,28 +87,12 @@ struct PortfolioAnalyticsView: View {
                 } else if dataModel.realTimeTrades.count < 2 {
                     emptyStateView
                 } else {
-                    // Sector Allocation Section
-                    sectorAllocationSection
-
-                    Divider()
-
-                    // Diversification Section
-                    diversificationSection
-
-                    Divider()
-
-                    // Correlation Matrix Section
-                    correlationMatrixSection
-
-                    Divider()
-
-                    // Correlation Insights Section
-                    correlationInsightsSection
-
-                    Divider()
-
-                    // Attribution Analysis Section (v2.3.1)
-                    attributionAnalysisSection
+                    // Each section is a card, as on Risk.
+                    sectorAllocationSection.stockbarCard()
+                    diversificationSection.stockbarCard()
+                    correlationMatrixSection.stockbarCard()
+                    correlationInsightsSection.stockbarCard()
+                    attributionAnalysisSection.stockbarCard()
                 }
             }
             .padding(StockbarLayout.pageInsets)
@@ -142,13 +126,8 @@ struct PortfolioAnalyticsView: View {
         VStack(alignment: .leading, spacing: 8) {
             StockbarPageHeader("Allocation", subtitle: "Sector allocation, diversification, correlation and attribution.") {
                 // Time Range Picker
-                Picker("Time Range", selection: $selectedTimeRange) {
-                    ForEach(TimeRange.allCases, id: \.self) { range in
-                        Text(range.rawValue).tag(range)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases,
+                                         expands: true) { $0.rawValue }
                 .frame(width: 250)
                 .help("Price history window used for the correlation analysis")
             }
@@ -225,7 +204,7 @@ struct PortfolioAnalyticsView: View {
                             // Unknown day change is a dash in a neutral colour, never green.
                             Text(completeDayCoverage ? AttributionFormat.signedPercent(allocation.dayChangePercent) : "—")
                                 .font(.caption)
-                                .foregroundColor(StockbarPalette.signed(completeDayCoverage ? allocation.dayChangePercent : nil))
+                                .foregroundColor(StockbarPalette.signedOnSurface(completeDayCoverage ? allocation.dayChangePercent : nil))
                                 .frame(width: 70, alignment: .trailing)
                                 .accessibilityLabel(completeDayCoverage
                                     ? "Day change \(AttributionFormat.spokenPercent(allocation.dayChangePercent))"
@@ -233,8 +212,7 @@ struct PortfolioAnalyticsView: View {
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
-                        .background(StockbarPalette.faintFill)
-                        .cornerRadius(6)
+                        .stockbarSurface(.inset, cornerRadius: 6)
                     }
                 }
 
@@ -282,8 +260,7 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
                 .padding()
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(10)
+                .stockbarSurface(.inset, tint: .blue, cornerRadius: 10)
 
                 if analysis.unclassifiedPercentage > 0 {
                     Text("\(analysis.unclassifiedPercentage, specifier: "%.1f")% of the portfolio has no known sector and is excluded from this score.")
@@ -309,8 +286,7 @@ struct PortfolioAnalyticsView: View {
                         }
                     }
                     .padding()
-                    .background(StockbarPalette.faintFill)
-                    .cornerRadius(8)
+                    .stockbarSurface(.inset, cornerRadius: 8)
                 }
             } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
                 Text("Diversification unavailable: \(analysis.unclassifiedPercentage, specifier: "%.0f")% of the portfolio has no known sector.")
@@ -408,8 +384,7 @@ struct PortfolioAnalyticsView: View {
                             }
                             .padding(.vertical, 4)
                             .padding(.horizontal, 8)
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(4)
+                            .stockbarSurface(.inset, tint: .red, cornerRadius: 4)
                         }
                     }
                 }
@@ -439,8 +414,7 @@ struct PortfolioAnalyticsView: View {
                             }
                             .padding(.vertical, 4)
                             .padding(.horizontal, 8)
-                            .background(Color.green.opacity(0.1))
-                            .cornerRadius(4)
+                            .stockbarSurface(.inset, tint: .green, cornerRadius: 4)
                         }
                     }
                 }
@@ -468,7 +442,7 @@ struct PortfolioAnalyticsView: View {
                 .padding(.horizontal, 40)
         }
         .padding(.vertical, 60)
-        .frame(maxWidth: .infinity)
+        .stockbarEmptyState(minHeight: 0)
     }
 
     // MARK: - Helper Views
@@ -489,8 +463,7 @@ struct PortfolioAnalyticsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
-        .background(StockbarPalette.faintFill)
-        .cornerRadius(8)
+        .stockbarSurface(.inset, cornerRadius: 8)
     }
 
     // MARK: - Color Helpers

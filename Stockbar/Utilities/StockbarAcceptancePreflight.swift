@@ -9,6 +9,8 @@ struct StockbarAcceptancePreflightReport: Codable, Equatable, Sendable {
     let liveProviderRequestsAllowed: Bool
     /// The one exception to the line above: Folync requests to this Mac.
     let loopbackFolyncAllowed: Bool
+    /// The STOCKBAR_ACCEPTANCE_* launch options the app will apply.
+    let launchOptions: StockbarAcceptanceLaunchOptions
     let resolvedWritablePaths: [String]
 }
 
@@ -102,6 +104,7 @@ enum StockbarAcceptancePreflight {
             keychainService: runtime.folyncKeychainService,
             liveProviderRequestsAllowed: runtime.liveProviderRequestsAllowed,
             loopbackFolyncAllowed: runtime.loopbackFolyncAllowed,
+            launchOptions: StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime),
             resolvedWritablePaths: (directories + [coreDataStore]).map(\.path).sorted()
         )
         let encoder = JSONEncoder()

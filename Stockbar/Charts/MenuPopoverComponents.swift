@@ -363,10 +363,10 @@ extension View {
     func menuPopoverTile() -> some View {
         frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
             .padding(10)
-            .background(StockbarPalette.cardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(StockbarPalette.popoverCardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(StockbarPalette.cardStroke, lineWidth: 1)
+                    .strokeBorder(StockbarPalette.popoverCardStroke, lineWidth: 1)
             )
     }
 }
@@ -438,7 +438,7 @@ private struct MenuPopoverFooterButtonStyle: ButtonStyle {
                 .foregroundStyle(isHovered ? Color.primary : Color.secondary)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isHovered || configuration.isPressed ? StockbarPalette.hoverFill : Color.clear)
+                        .fill(isHovered || configuration.isPressed ? StockbarPalette.popoverHoverFill : Color.clear)
                 )
                 .contentShape(Rectangle())
                 .onHover { hovering in
