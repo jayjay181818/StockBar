@@ -72,11 +72,11 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate, 
         window.backgroundColor = .clear
         // A unified toolbar moves the traffic lights in and down, onto the
         // floating sidebar panel, and holds the sidebar button beside them. The
-        // button lives in the toolbar because AppKit keeps clicks in the top
-        // strip for itself: a SwiftUI button drawn there on the panel never
-        // received a real click in the acceptance copy.
+        // button is a toolbar item because a SwiftUI button drawn on the panel
+        // at the height of the traffic lights never received a real click in
+        // the acceptance copy, while page controls lower in the strip did. Why
+        // is not established; check real clicks for anything placed up there.
         let toolbar = NSToolbar(identifier: "StockbarMainWindowToolbar")
-        toolbar.showsBaselineSeparator = false
         toolbar.allowsUserCustomization = false
         toolbar.displayMode = .iconOnly
         toolbar.delegate = self

@@ -573,7 +573,7 @@ struct StockbarWindowBackground: View {
             } else {
                 ZStack {
                     StockbarWindowBacking()
-                    scheme == .dark ? Color.black.opacity(0.38) : Color.white.opacity(0.40)
+                    Color(.sRGB, white: scheme == .dark ? 0 : 1, opacity: scheme == .dark ? 0.38 : 0.40)
                 }
             }
         }

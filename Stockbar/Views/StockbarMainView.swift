@@ -218,7 +218,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     static let sidebarGroups: [StockbarSidebarGroup] = [
         StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .alerts]),
         StockbarSidebarGroup(title: "Analysis", sections: [.charts, .risk, .allocation]),
-        StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings]),
+        StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
 
     /// Every entry in sidebar order, top to bottom.

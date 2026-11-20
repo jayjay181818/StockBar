@@ -649,7 +649,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
             [.overview, .holdings, .alerts],
             [.charts, .risk, .allocation],
-            [.dataHealth, .backups, .diagnostics, .settings],
+            [.dataHealth, .backups, .diagnostics, .settings]
         ])
         XCTAssertEqual(Set(StockbarMainSection.sidebarOrder), Set(StockbarMainSection.allCases))
         XCTAssertEqual(StockbarMainSection.sidebarOrder.count, StockbarMainSection.allCases.count,
@@ -771,7 +771,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
     }
 
     private func footer(_ inputs: StockbarSidebarFooterStatus.Inputs, now: Date) -> StockbarSidebarFooterStatus {
-        StockbarSidebarFooterStatus.make(inputs, now: now, timeZone: TimeZone(identifier: "UTC")!,
+        StockbarSidebarFooterStatus.make(inputs, now: now, timeZone: TimeZone(secondsFromGMT: 0) ?? .gmt,
                                          locale: Locale(identifier: "en_GB"))
     }
 

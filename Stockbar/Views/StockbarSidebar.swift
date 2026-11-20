@@ -7,9 +7,10 @@ import SwiftUI
 // - Keyboard: one stop in the Tab loop, like a native list. With focus in it,
 //   Up and Down move the selection, Home and End go to the first and last
 //   entry. The selected entry shows a focus ring while the sidebar has focus.
-// - VoiceOver: one container named "Sidebar" holding the group headings and
-//   the entries. Each entry reads its title, any "New" badge or dimmed reason,
-//   its position ("2 of 10") and whether it is selected.
+// - VoiceOver: the group headings are headings, and each entry is a button
+//   that reads its title, any "New" badge or dimmed reason, its position
+//   ("2 of 10") and whether it is selected. The entries are wrapped in a
+//   container labelled "Sidebar"; SwiftUI draws no list role.
 // - Hiding and showing, through View → Hide Sidebar (⌃⌘S) or the button by the
 //   traffic lights (a toolbar item, so AppKit delivers its clicks).
 
@@ -350,7 +351,7 @@ private struct StockbarSidebarFooter: View {
                 Text(status.detail)
                     .font(.caption2)
                     .foregroundStyle(panelStyle?.strongText == true || status.isWarning ? .primary : .secondary)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .help(inputs.sourceHelp)
@@ -381,7 +382,7 @@ private struct StockbarSidebarFooter: View {
                     notification: .announcementRequested,
                     userInfo: [
                         .announcement: message,
-                        .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                        .priority: NSAccessibilityPriorityLevel.high.rawValue
                     ]
                 )
             }
