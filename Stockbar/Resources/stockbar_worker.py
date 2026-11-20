@@ -25,7 +25,7 @@ import os
 import sys
 import traceback
 
-SCRIPTS = ("get_stock_data.py", "get_ohlc_data.py")
+SCRIPTS = ("get_stock_data.py", "get_ohlc_data.py", "get_instrument_events.py")
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 

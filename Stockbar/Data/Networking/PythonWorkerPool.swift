@@ -4,7 +4,7 @@ import Foundation
 /// A bridge script request that a long-lived worker can serve.
 struct PythonWorkerRequest: Equatable, Sendable {
     static let workerScriptName = "stockbar_worker.py"
-    static let workerScripts: Set<String> = ["get_stock_data.py", "get_ohlc_data.py"]
+    static let workerScripts: Set<String> = ["get_stock_data.py", "get_ohlc_data.py", "get_instrument_events.py"]
 
     let workerPath: String
     let script: String

@@ -72,7 +72,7 @@ run_action() {
       xcrun xccov view --report --json "$bundle" >"$result_dir/coverage.json"
       "$python_bin" Scripts/coverage_summary.py "$result_dir/coverage.json" | tee "$result_dir/coverage.txt" ;;
     python-tests)
-      PYTHONPYCACHEPREFIX="$ROOT_DIR/build/python-cache" "$python_bin" -m py_compile Stockbar/Resources/get_stock_data.py Stockbar/Resources/get_ohlc_data.py Stockbar/Resources/stockbar_worker.py
+      PYTHONPYCACHEPREFIX="$ROOT_DIR/build/python-cache" "$python_bin" -m py_compile Stockbar/Resources/get_stock_data.py Stockbar/Resources/get_ohlc_data.py Stockbar/Resources/get_instrument_events.py Stockbar/Resources/stockbar_worker.py
       PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m unittest discover -s PythonTests -p 'test_*.py' ;;
     checks)
       mkdir -p "$ROOT_DIR/build/swiftlint-cache"
