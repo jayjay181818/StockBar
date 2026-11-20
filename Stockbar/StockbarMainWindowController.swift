@@ -26,7 +26,8 @@ enum StockbarAutosavePolicy {
 
 @MainActor
 final class StockbarMainWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSToolbarDelegate {
-    private enum WindowMetrics {
+    /// Internal so tests can work out the page's width at the minimum size.
+    enum WindowMetrics {
         static let preferredSize = NSSize(width: 1500, height: 860)
         static let minimumSize = NSSize(width: 1060, height: 680)
         static let visibleScreenInset: CGFloat = 24

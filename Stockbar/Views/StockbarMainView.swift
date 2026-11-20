@@ -654,9 +654,12 @@ private struct StockbarHoldingsView: View {
         let indices = visibleIndices
         let trades = dataModel.realTimeTrades
         return GeometryReader { geometry in
+            // The regular widths where they fit, the compact ones otherwise, so
+            // the row actions stay in view at the window's minimum size.
+            let layout = HoldingsTableLayout.fitting(availableWidth: geometry.size.width)
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 0) {
-                    HoldingsHeaderRow()
+                    HoldingsHeaderRow(layout: layout)
                     Divider()
                     ScrollViewReader { scroller in
                     ScrollView(.vertical) {
@@ -668,6 +671,7 @@ private struct StockbarHoldingsView: View {
                                 let index = entry.index
                                 let realTimeTrade = entry.trade
                                 HoldingsEditableRow(
+                                    layout: layout,
                                     realTimeTrade: realTimeTrade,
                                     dataModel: dataModel,
                                     rowIndex: index,
@@ -693,7 +697,7 @@ private struct StockbarHoldingsView: View {
                     .frame(maxHeight: .infinity)
                 }
                 .frame(
-                    width: max(HoldingsTableLayout.contentWidth, geometry.size.width),
+                    width: max(layout.contentWidth, geometry.size.width),
                     height: geometry.size.height,
                     alignment: .topLeading
                 )
@@ -742,18 +746,20 @@ private struct StockbarHoldingsView: View {
 /// so the editing columns, including row actions, fit the window.
 @MainActor
 private struct HoldingsHeaderRow: View {
+    let layout: HoldingsTableLayout
+
     var body: some View {
-        HStack(spacing: HoldingsTableLayout.spacing) {
-            header("Menu Bar", width: HoldingsTableLayout.visibleWidth)
-            header("Symbol", width: HoldingsTableLayout.symbolWidth)
-            header("Units", width: HoldingsTableLayout.unitsWidth)
-            header("Avg Cost", width: HoldingsTableLayout.averageCostWidth)
-            header("Currency", width: HoldingsTableLayout.currencyWidth)
-            header("Current", width: HoldingsTableLayout.currentWidth)
-            header("Value", width: HoldingsTableLayout.valueWidth)
-            header("Actions", width: HoldingsTableLayout.actionsWidth)
+        HStack(spacing: layout.spacing) {
+            header("Menu Bar", width: layout.visibleWidth)
+            header("Symbol", width: layout.symbolWidth)
+            header("Units", width: layout.unitsWidth)
+            header("Avg Cost", width: layout.averageCostWidth)
+            header("Currency", width: layout.currencyWidth)
+            header("Current", width: layout.currentWidth)
+            header("Value", width: layout.valueWidth)
+            header("Actions", width: layout.actionsWidth)
         }
-        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
+        .padding(.horizontal, layout.horizontalPadding)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .stockbarSurface(.sheetHeader, in: Rectangle())
@@ -770,6 +776,7 @@ private struct HoldingsHeaderRow: View {
 
 @MainActor
 private struct HoldingsEditableRow: View {
+    let layout: HoldingsTableLayout
     @Bindable var realTimeTrade: RealTimeTrade
     let dataModel: DataModel
     let rowIndex: Int
@@ -815,7 +822,7 @@ private struct HoldingsEditableRow: View {
     }
 
     var body: some View {
-        HStack(spacing: HoldingsTableLayout.spacing) {
+        HStack(spacing: layout.spacing) {
             Toggle("Show \(realTimeTrade.trade.name) in menu bar", isOn: Binding(
                 get: { realTimeTrade.trade.showInMenuBar },
                 set: { newValue in
@@ -823,16 +830,16 @@ private struct HoldingsEditableRow: View {
                 }
             ))
             .labelsHidden()
-            .frame(width: HoldingsTableLayout.visibleWidth, alignment: .leading)
+            .frame(width: layout.visibleWidth, alignment: .leading)
 
             if let displayLabel = realTimeTrade.displayLabel, realTimeTrade.sourceIdentity != nil {
                 Text(displayLabel)
                     .lineLimit(2)
-                    .frame(width: HoldingsTableLayout.symbolWidth, alignment: .leading)
+                    .frame(width: layout.symbolWidth, alignment: .leading)
             } else {
                 TextField("Symbol", text: $realTimeTrade.trade.name)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: HoldingsTableLayout.symbolWidth)
+                    .frame(width: layout.symbolWidth)
                     .holdingsFieldProblem(
                         isSymbolAcceptable && !isDuplicateSymbol ? nil : symbolHelp,
                         help: symbolHelp
@@ -864,17 +871,17 @@ private struct HoldingsEditableRow: View {
             if financialFieldsReadOnly {
                 Text(realTimeTrade.trade.position.unitSize, format: .number.precision(.fractionLength(0...6)))
                     .monospacedDigit()
-                    .frame(width: HoldingsTableLayout.unitsWidth, alignment: .leading)
+                    .frame(width: layout.unitsWidth, alignment: .leading)
                 Text(realTimeTrade.trade.position.getNormalizedAvgCost(for: realTimeTrade.trade.name),
                      format: .number.precision(.fractionLength(2...4)))
                     .monospacedDigit()
-                    .frame(width: HoldingsTableLayout.averageCostWidth, alignment: .leading)
+                    .frame(width: layout.averageCostWidth, alignment: .leading)
                 Text(realTimeTrade.realTimeInfo.currency ?? "—")
-                    .frame(width: HoldingsTableLayout.currencyWidth, alignment: .leading)
+                    .frame(width: layout.currencyWidth, alignment: .leading)
             } else {
             TextField("Units", text: $realTimeTrade.trade.position.unitSizeString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: HoldingsTableLayout.unitsWidth)
+                .frame(width: layout.unitsWidth)
                 .holdingsFieldProblem(
                     Position.isReadableAmount(realTimeTrade.trade.position.unitSizeString)
                         ? nil : "Not a number Stockbar can read; it counts as 0 units",
@@ -884,7 +891,7 @@ private struct HoldingsEditableRow: View {
 
             TextField("Avg Cost", text: $realTimeTrade.trade.position.positionAvgCostString)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: HoldingsTableLayout.averageCostWidth)
+                .frame(width: layout.averageCostWidth)
                 .holdingsFieldProblem(
                     Position.isReadableAmount(realTimeTrade.trade.position.positionAvgCostString)
                         ? nil : "Not a number Stockbar can read; cost and P&L are left blank",
@@ -898,20 +905,20 @@ private struct HoldingsEditableRow: View {
                 }
             }
             .labelsHidden()
-            .frame(width: HoldingsTableLayout.currencyWidth)
+            .frame(width: layout.currencyWidth)
 
             }
 
             Text(currentPriceText)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-                .frame(width: HoldingsTableLayout.currentWidth, alignment: .leading)
+                .frame(width: layout.currentWidth, alignment: .leading)
 
             Text(valueText)
                 .monospacedDigit()
-                .frame(width: HoldingsTableLayout.valueWidth, alignment: .leading)
+                .frame(width: layout.valueWidth, alignment: .leading)
 
-            HStack(spacing: HoldingsTableLayout.actionSpacing) {
+            HStack(spacing: layout.actionSpacing) {
                 Button {
                     realTimeTrade.trade.isWatchlistOnly.toggle()
                     dataModel.triggerTradeUpdate()
@@ -937,9 +944,9 @@ private struct HoldingsEditableRow: View {
             .buttonStyle(.borderless)
             .disabled(financialFieldsReadOnly)
             .foregroundStyle(.secondary)
-            .frame(width: HoldingsTableLayout.actionsWidth, alignment: .leading)
+            .frame(width: layout.actionsWidth, alignment: .leading)
         }
-        .padding(.horizontal, HoldingsTableLayout.horizontalPadding)
+        .padding(.horizontal, layout.horizontalPadding)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .stockbarRow(isHovered: isHovered)

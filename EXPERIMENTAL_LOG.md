@@ -5325,8 +5325,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   No saved setting changes its key, and nothing about how or when a
   chart's data is loaded is touched.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `241aeb7`. The merge published
+  experimental build 382.3.18 as the prerelease `experimental-382.3.18`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
   opens the main window on the Overview and opens neither page. Covered
   by the comparison set for the night of 2026-11-20, if this is merged
@@ -5374,6 +5376,87 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - The fallback that puts the range switch on a row of its own was
     never seen: the two fit on one row at the minimum size.
   - Not tried against a real Folync or live prices.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 150: Holdings: the editing table fits at the minimum window size
+
+- What: for a local portfolio in Edit mode the Holdings table's columns
+  have fixed widths that add up to 969 points, and the card is 784
+  points wide at the window's minimum size. The last column, the row's
+  watchlist, move and remove buttons, was out of sight there; the table
+  scrolls sideways, but nothing showed that. Pull request 148 made it
+  possible to see this in the acceptance copy.
+
+  The table now has two sets of widths and chooses by the room it has.
+  The regular set is the old one, unchanged, and is used whenever the
+  table is at least 969 points wide, which is a window at least 1245
+  wide. Below that a compact set is used: 66, 100, 86, 90, 84, 84, 96
+  and 88 points, with 8 between columns, 12 at the sides and 6 between
+  the action buttons, 774 in all, so every column is inside the card at
+  the minimum size. The table measures its width where it already did
+  and hands one set to the header and to every row, so the two cannot
+  disagree. The sideways scroll view stays as the fallback.
+
+  Nothing else in the editing rows changes: the fields, the buttons,
+  their tooltips and VoiceOver labels, the order of the columns and how
+  a change is saved. Weight is still not shown in the editing table.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview, with no local holdings being
+  edited. Covered by the comparison set for the night of 2026-11-20, if
+  this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 149 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 999 XCTest tests with 0 failures.
+  Five replace the one that pinned the old widths: the regular set's
+  figures and their sum; the compact set's; that the compact set fits
+  the card at the minimum window size, worked out from the same values
+  the window and the shell use; which set is chosen at, just above, just
+  below and far below the threshold; and that a set's width is its
+  columns, spacing and padding. `checks`, `docs-check` and
+  `build-release` pass on the combined code, and the Python helper tests
+  and the script tests pass.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a compact column made wider; the threshold's "at
+  least" made "more than"; the threshold ignored, so that the regular
+  set was always used (two tests failed); and one space too many counted
+  in a set's width (three tests failed).
+
+  **The worker was cut off before its checks.** The Mac's disk filled
+  while it was showing the tests to fail, and no command could start. It
+  stopped with two breakages done, one of them still in its working
+  tree, and no full test run. The session lead cleared the space,
+  removed the leftover breakage, ran the remaining breakages and every
+  check, and that is what the figures above are.
+
+  On screen, in a copy made a local portfolio: at the minimum size, in
+  dark and light, every column is inside the card with entries of
+  realistic length ("VUSA.L", 1234.5678 units, costs of 87.4321 and
+  12345.67, the currency pickers) and nothing is cut short. The worker
+  pressed watchlist, move up and move down with pointer clicks and each
+  worked; remove showed its confirmation, which was cancelled. At 1250
+  points wide the regular set is used and the columns stand where they
+  did before; at 1240 the compact set is used. The read-only table is
+  the same before and after. Typing in the compact fields behaved
+  normally.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) looked at the capture at
+  the minimum size, finished the worker's checks as set out above, and
+  did not read the changed views. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The Current and Value columns showed "-" throughout, because the
+    acceptance copy fetches no prices. Their compact widths are sized by
+    estimate: a price of £10,000 or more is close to the edge of 84
+    points. A figure too long for its column wraps and makes the row
+    taller; it is not cut off.
+  - That the header and the rows use the same widths rests on one value
+    being passed to both; no test covers it, because those views are
+    private.
+  - One of the units entries was put in through accessibility, not as
+    keystrokes.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

@@ -3457,15 +3457,66 @@ final class HoldingsWeightAndTextTests: XCTestCase {
 
     // MARK: Layout
 
-    func testTheEditingTableKeepsItsColumnWidths() {
-        // The editing layout is not changed by the Weight column: its fields
-        // keep their widths, and the table scrolls sideways where it is wider
-        // than its card.
-        XCTAssertEqual(HoldingsTableLayout.symbolWidth, 130)
-        XCTAssertEqual(HoldingsTableLayout.unitsWidth, 110)
-        XCTAssertEqual(HoldingsTableLayout.averageCostWidth, 110)
-        XCTAssertEqual(HoldingsTableLayout.currencyWidth, 100)
-        XCTAssertEqual(HoldingsTableLayout.contentWidth, 969)
+    /// The Holdings card's width at the window's minimum size, from the
+    /// constants the shell lays itself out with: the window, less the sidebar
+    /// panel and its leading inset, less the page's side insets.
+    @MainActor
+    private var holdingsCardWidthAtMinimumWindow: CGFloat {
+        StockbarMainWindowController.WindowMetrics.minimumSize.width
+            - StockbarShell.panelInset
+            - StockbarShell.sidebarWidth
+            - StockbarLayout.pageInsets.leading
+            - StockbarLayout.pageInsets.trailing
+    }
+
+    func testTheEditingTableKeepsItsRegularColumnWidths() {
+        let regular = HoldingsTableLayout.regular
+        XCTAssertEqual(regular.spacing, 10)
+        XCTAssertEqual(regular.horizontalPadding, 14)
+        XCTAssertEqual(regular.columnWidths, [66, 130, 110, 110, 100, 115, 130, 110])
+        XCTAssertEqual(regular.actionSpacing, 8)
+        XCTAssertEqual(regular.contentWidth, 969)
+    }
+
+    func testTheCompactColumnWidths() {
+        let compact = HoldingsTableLayout.compact
+        XCTAssertEqual(compact.spacing, 8)
+        XCTAssertEqual(compact.horizontalPadding, 12)
+        XCTAssertEqual(compact.columnWidths, [66, 100, 86, 90, 84, 84, 96, 88])
+        XCTAssertEqual(compact.actionSpacing, 6)
+        XCTAssertEqual(compact.contentWidth, 774)
+    }
+
+    @MainActor
+    func testTheCompactTableFitsTheCardAtTheMinimumWindowSize() {
+        // The fault this guards against: at the minimum size the regular set
+        // put the row actions past the card's right edge.
+        XCTAssertGreaterThan(HoldingsTableLayout.regular.contentWidth, holdingsCardWidthAtMinimumWindow)
+        XCTAssertLessThanOrEqual(HoldingsTableLayout.compact.contentWidth, holdingsCardWidthAtMinimumWindow)
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: holdingsCardWidthAtMinimumWindow), .compact)
+    }
+
+    func testTheEditingTableChoosesItsWidthsByTheRoomThereIs() {
+        let threshold = HoldingsTableLayout.regular.contentWidth
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: threshold), .regular)
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: threshold + 1), .regular)
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: 1_400), .regular)
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: threshold - 0.5), .compact)
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: HoldingsTableLayout.compact.contentWidth), .compact)
+        // Narrower than even the compact set: still compact, and the table
+        // scrolls sideways rather than squeezing further.
+        XCTAssertEqual(HoldingsTableLayout.fitting(availableWidth: 500), .compact)
+    }
+
+    func testEachSetsWidthIsItsColumnsSpacingAndPadding() {
+        // The header and the rows are drawn from the one chosen value, so they
+        // agree as long as each set adds up to the width the table is given.
+        for layout in [HoldingsTableLayout.regular, .compact] {
+            XCTAssertEqual(layout.columnWidths.count, 8)
+            XCTAssertEqual(layout.contentWidth,
+                           layout.columnWidths.reduce(0, +) + layout.spacing * 7 + layout.horizontalPadding * 2)
+        }
+        XCTAssertNotEqual(HoldingsTableLayout.regular, HoldingsTableLayout.compact)
     }
 }
 

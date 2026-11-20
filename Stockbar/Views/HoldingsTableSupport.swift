@@ -2,38 +2,72 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-/// The editing table's columns. Wider than the Holdings card at the window's
-/// minimum size, where the table scrolls sideways, as it always has.
-enum HoldingsTableLayout {
-    static let spacing: CGFloat = 10
-    static let horizontalPadding: CGFloat = 14
+/// The editing table's column widths. There are two sets: `regular`, used
+/// whenever the table has room for it, and `compact`, narrow enough for the
+/// Holdings card at the window's minimum size so the row actions stay in view.
+/// The header and the rows are given the same value, so their columns line up.
+struct HoldingsTableLayout: Equatable, Sendable {
+    var spacing: CGFloat
+    var horizontalPadding: CGFloat
 
-    static let visibleWidth: CGFloat = 66
-    static let symbolWidth: CGFloat = 130
-    static let unitsWidth: CGFloat = 110
-    static let averageCostWidth: CGFloat = 110
-    static let currencyWidth: CGFloat = 100
-    static let currentWidth: CGFloat = 115
-    static let valueWidth: CGFloat = 130
-    static let actionsWidth: CGFloat = 110
+    var visibleWidth: CGFloat
+    var symbolWidth: CGFloat
+    var unitsWidth: CGFloat
+    var averageCostWidth: CGFloat
+    var currencyWidth: CGFloat
+    var currentWidth: CGFloat
+    var valueWidth: CGFloat
+    var actionsWidth: CGFloat
     /// Space between the row's action buttons.
-    static let actionSpacing: CGFloat = 8
+    var actionSpacing: CGFloat
 
-    static let contentWidth: CGFloat = {
-        let columnWidths = [
-            visibleWidth,
-            symbolWidth,
-            unitsWidth,
-            averageCostWidth,
-            currencyWidth,
-            currentWidth,
-            valueWidth,
-            actionsWidth
-        ]
-        return columnWidths.reduce(0, +)
+    /// The widths the table has always had.
+    static let regular = HoldingsTableLayout(
+        spacing: 10,
+        horizontalPadding: 14,
+        visibleWidth: 66,
+        symbolWidth: 130,
+        unitsWidth: 110,
+        averageCostWidth: 110,
+        currencyWidth: 100,
+        currentWidth: 115,
+        valueWidth: 130,
+        actionsWidth: 110,
+        actionSpacing: 8
+    )
+
+    /// For a table narrower than `regular`: fits the card at the window's
+    /// minimum size with a typical entry in every field.
+    static let compact = HoldingsTableLayout(
+        spacing: 8,
+        horizontalPadding: 12,
+        visibleWidth: 66,
+        symbolWidth: 100,
+        unitsWidth: 86,
+        averageCostWidth: 90,
+        currencyWidth: 84,
+        currentWidth: 84,
+        valueWidth: 96,
+        actionsWidth: 88,
+        actionSpacing: 6
+    )
+
+    /// The regular set whenever it fits, the compact one otherwise. Below the
+    /// compact set's width the table still scrolls sideways.
+    static func fitting(availableWidth: CGFloat) -> HoldingsTableLayout {
+        availableWidth >= regular.contentWidth ? regular : compact
+    }
+
+    var columnWidths: [CGFloat] {
+        [visibleWidth, symbolWidth, unitsWidth, averageCostWidth,
+         currencyWidth, currentWidth, valueWidth, actionsWidth]
+    }
+
+    var contentWidth: CGFloat {
+        columnWidths.reduce(0, +)
             + spacing * CGFloat(columnWidths.count - 1)
             + horizontalPadding * 2
-    }()
+    }
 }
 
 enum HoldingsCurrencyFormatter {
