@@ -481,9 +481,10 @@ struct PerformanceChartView: View {
         HStack(spacing: 16) {
             // Chart Style Picker (only for individual stocks)
             if case .individualStock = selectedChartType {
+                // Sized to its labels: at the old picker's 180 points "Candlestick" was cut off.
                 StockbarSegmentedControl("Style", selection: $chartVisualizationStyle,
-                                         options: ChartVisualizationStyle.allCases, expands: true) { $0.rawValue }
-                .frame(width: 180)
+                                         options: ChartVisualizationStyle.allCases) { $0.rawValue }
+                .fixedSize()
             }
 
             Menu("Chart options") {
