@@ -281,20 +281,20 @@ private struct StockbarIncomeUpcomingRowView: View {
                 .frame(width: 14)
             Text(IncomeText.upcomingDayLabel(row.date, today: today))
                 .foregroundStyle(.secondary)
-                .frame(width: 130, alignment: .leading)
+                .frame(width: 115, alignment: .leading)
             Text(row.holding)
                 .fontWeight(.semibold)
                 .frame(width: 70, alignment: .leading)
             description
             Spacer(minLength: 8)
             // Fixed columns, so amounts line up whatever the pill says.
+            // An ex-dividend row's amount is the payment to follow: shown quieter.
             VStack(alignment: .trailing, spacing: 0) {
-                if row.kind == .payment {
-                    Text(IncomeText.amount(row.amount, currency: currency))
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-                    if row.amountIsPartial { partialTag }
-                }
+                Text(IncomeText.amount(row.amount, currency: currency))
+                    .fontWeight(row.kind == .payment ? .semibold : .regular)
+                    .foregroundStyle(row.kind == .payment ? .primary : .secondary)
+                    .monospacedDigit()
+                if row.amountIsPartial { partialTag }
             }
             .frame(width: 90, alignment: .trailing)
             Group {
@@ -307,7 +307,7 @@ private struct StockbarIncomeUpcomingRowView: View {
                     Color.clear.frame(height: 1)
                 }
             }
-            .frame(width: 200, alignment: .trailing)
+            .frame(width: 190, alignment: .trailing)
         }
         .lineLimit(1)
         .padding(.vertical, 9)
@@ -319,9 +319,7 @@ private struct StockbarIncomeUpcomingRowView: View {
     private var description: some View {
         switch row.kind {
         case .exDividend(let payDay):
-            let detail = ", pays \(IncomeText.dayMonth(payDay)), \(IncomeText.amount(row.amount, currency: currency))"
-                + (row.amountIsPartial ? " (partial)" : "")
-            (Text("Ex-dividend") + Text(detail).foregroundStyle(.secondary))
+            (Text("Ex-dividend") + Text(", pays \(IncomeText.dayMonth(payDay))").foregroundStyle(.secondary))
                 .truncationMode(.tail)
         case .payment:
             Text("Dividend")
