@@ -273,6 +273,8 @@ enum PortfolioMenuChartDataBuilder {
 
     static func coversRange(_ points: [MenuChartDataPoint], range: MenuChartTimeRange, now: Date = Date()) -> Bool {
         guard let first = points.first, let last = points.last, points.count > 1 else { return false }
+        // "All" starts wherever the stored history starts; it only has to be recent.
+        if range == .all { return last.date >= now.addingTimeInterval(-MenuChartTimeRange.week.timeInterval) }
         let duration = now.timeIntervalSince(range.startDate(from: now))
         return first.date <= range.startDate(from: now).addingTimeInterval(duration * 0.2)
             && last.date >= now.addingTimeInterval(-duration * 0.2)
@@ -630,7 +632,7 @@ struct PortfolioMenuPopoverView: View {
                     hoveredPoint = nil
                     viewModel.setTimeRange(range)
                 }),
-                options: MenuChartTimeRange.allCases,
+                options: MenuChartTimeRange.menuRanges,
                 expands: true,
                 title: PortfolioMenuFigures.rangeTitle
             )
@@ -762,10 +764,15 @@ struct PortfolioMenuFigures: Equatable {
             changeAmount = "–"
             changePercent = ""
         }
+        // The popover offers only `MenuChartTimeRange.menuRanges`; the longer
+        // ranges are the Overview's and are worded here for completeness.
         changeWord = switch range {
         case .day: "today"
         case .week: "past week"
         case .month: "past month"
+        case .threeMonths: "past 3 months"
+        case .year: "past year"
+        case .all: "all time"
         }
         let totalReturn = summary.totalReturn(measuredAgainst: gainBasis)
         self.totalReturn = MenuPopoverFormatter.currencyExact(totalReturn.gain, currency: summary.currency, includeSign: true)
@@ -782,6 +789,9 @@ struct PortfolioMenuFigures: Equatable {
         case .day: "Today"
         case .week: "1 week"
         case .month: "1 month"
+        case .threeMonths: "3 months"
+        case .year: "1 year"
+        case .all: "All"
         }
     }
 

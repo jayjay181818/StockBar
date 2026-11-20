@@ -345,7 +345,8 @@ app looks like: on 2026-11-20 the owner chose the floating sidebar and said
 to build the Glass look and judge it on experimental builds. It was merged
 the same day as `fe59b8d`. The shell, the popover and the Overview were then
 built at the same time, each as its own pull request; the popover's, 138,
-was ready first.
+was ready first and was merged as `564056b`. The Overview's, 139, was
+brought up to date with it and followed.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -4161,8 +4162,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   seconds after launch, the way a click does and with the same dismissal.
   Without it the popover could not be looked at unless something clicked
   in the owner's menu bar. It has the gate of the other launch options.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `564056b`. The merge published
+  experimental build 382.3.7 as the prerelease `experimental-382.3.7`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark never
   opens the popover, so its launches do not run this layout; the status
   item's set-up gains one check of the launch options. Covered by the
@@ -4221,6 +4224,118 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - Not looked at: the popover on a real short screen, Increase Contrast
     and Reduce Transparency on screen, and the glass the system gives the
     popover on macOS 26. Not listened to: VoiceOver.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 139: Give the Overview its total, longer ranges and what the total is made of
+
+- What: the Overview takes the approved layout. At the head, the total
+  as a large figure with its pence smaller, and beside it two lines,
+  today's change and the change over the selected range, each with an
+  amount and a badge. An unknown change shows "–" with the reason under
+  it. Then the graph in a card, and under it a card that shows what the
+  total is made of. The "Selected Position" panel stays, with everything
+  it does, as a card of its own; the mock-up left it out, and removing a
+  working feature is the owner's decision.
+
+  The range switch offers six ranges where it offered three: 1D, 1W, 1M,
+  3M, 1Y and All. For a Folync portfolio they use the history route and
+  the saved copy the page already used; for the other sources, the stored
+  portfolio values. No route, stored series or timer was added. There is
+  no year-to-date range: Folync's history route has none, and asking for a
+  custom span instead would save a new copy every day. The menu-bar
+  popovers keep their three ranges. The range type no longer lists all
+  its cases by itself, so code that offers ranges has to name them.
+
+  The card is headed "What £84,310.47 is made of", with the total return
+  after it, and has one bar in four parts with a legend: net deposits, the
+  figure "Measure P&L Against" already uses; unrealised and realised
+  gains, as Folync's snapshot gives them (realised gains were already
+  decoded and unused); and "Income, interest and fees", which is the rest
+  of the total. The rules, in `PortfolioTotalComposition`:
+  - One currency. The card is built only when the total and the three
+    figures are all known and all in the summary's currency. Nothing is
+    converted. A figure Folync marks unavailable counts as unknown.
+  - It adds up. Every figure is held in whole pennies, rounded as the
+    app's money formatter rounds for display, and the remainder takes the
+    rounding difference, so the four figures shown sum to the total shown.
+  - A part that is zero or negative has no segment. Its figure is still
+    shown, in red when negative, and a line under the bar says that the
+    bar shows the positive parts only.
+  - A figure Folync marks partial is labelled "Partial", and so is the
+    remainder taken from it.
+  - Only a Folync portfolio gets the card. The other sources give neither
+    net deposits nor realised gains, and keep the old Summary card, as
+    does a Folync portfolio whenever the card cannot be built.
+
+  When Folync is not answering and saved figures are shown, an amber
+  notice at the top says so and gives their time, and the total's label
+  gains "as of" that time. It uses the connection state the app already
+  has and makes no request. When the last failure was not a failure to
+  connect, it says that Folync did not send new figures.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. This pull request
+  changes code the benchmark runs: its launches open the main window on
+  the Overview. Covered by the comparison after Phase A's last pull
+  request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 138 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 841 XCTest tests with 0 failures. Fourteen are
+  new, in `PortfolioCalculationTests.swift`: the parts adding up to the
+  total after rounding, over 211 made-up cases, half pennies among them;
+  the card hidden for a mixed or unknown currency and for sources without
+  the figures; negative and zero parts; the ranges offered and the stored
+  history serving the longer ones; the range line's text when history is
+  stale or missing; the notice's states and words; the large figure's
+  split in more than one locale; and the card's text for VoiceOver.
+  `checks`, `docs-check` and `build-release` pass on the combined code.
+  103 Python helper tests and 95 script tests passed on the worker's last
+  commit; nothing they cover changed after it.
+
+  Bringing it up to date took three small changes by the session lead,
+  all where the popover meets the longer ranges: the popover's range
+  switch lists the three menu ranges by name, its wording covers the
+  longer ranges, and its test of the heading names every range itself.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: realised gains converted on their own (one test failed); a
+  negative part given a width (one); the rounding difference dropped
+  (one, in 211 cases); the notice shown while Folync answers (one); an
+  unknown failure called unreachable (one).
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Overview, one window at a time, in dark and light, at the
+  default and the minimum window size, at each of the six ranges. Six of
+  those captures were taken before a last change to the axis labels and
+  are named so. The stand-in always answers, so the notice and a negative
+  part were rendered off screen from a temporary test and are shown by
+  the committed preview. After bringing the branch up to date the session
+  lead ran the combined build in the acceptance copy and captured its
+  Overview and its popover in dark: six ranges on the Overview, three in
+  the popover, both as intended.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read `PortfolioTotalComposition`
+  in full and looked at five of the captures: the Overview in dark at one
+  month, in light at the minimum size, the notice with a negative part,
+  and the combined build's Overview and popover. It did not read the
+  whole view. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The range line counts money paid in or taken out as change. It is the
+    last value less the first, as it was for one week and one month, and
+    over a year that can be far from the return: in the acceptance copy
+    one year shows +12.80% beside a total return of +23.25%. The user
+    guide says so. Whether long ranges should show the gain without
+    deposits is put to the owner.
+  - No year-to-date range, as set out above.
+  - Net deposits are kept for about fifteen minutes after Folync stops
+    answering. In a longer outage the card gives way to the Summary card,
+    where the mock-up of an outage shows the card.
+  - Not seen on screen: a "–" change with its reason; the Overview of a
+    local or Trading 212 portfolio; the Summary card as the fallback;
+    Increase Contrast and Reduce Transparency on the new card.
+  - On the stand-in, 1Y and All look the same, because its history starts
+    about a year back.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

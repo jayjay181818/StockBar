@@ -1,15 +1,26 @@
 import SwiftUI
 
-enum MenuChartTimeRange: String, CaseIterable {
+enum MenuChartTimeRange: String {
     case day = "1D"
     case week = "1W"
     case month = "1M"
+    /// The longer ranges are offered by the Overview only. Folync's history
+    /// route and Stockbar's stored portfolio values both serve them.
+    case threeMonths = "3M"
+    case year = "1Y"
+    case all = "All"
+
+    /// The ranges the menu-bar popovers and per-symbol charts offer.
+    static let menuRanges: [MenuChartTimeRange] = [.day, .week, .month]
 
     var description: String {
         switch self {
         case .day: return "1 Day"
         case .week: return "1 Week"
         case .month: return "1 Month"
+        case .threeMonths: return "3 Months"
+        case .year: return "1 Year"
+        case .all: return "All Time"
         }
     }
 
@@ -18,6 +29,10 @@ enum MenuChartTimeRange: String, CaseIterable {
         case .day: return 24 * 60 * 60
         case .week: return 7 * 24 * 60 * 60
         case .month: return 30 * 24 * 60 * 60
+        case .threeMonths: return 90 * 24 * 60 * 60
+        case .year: return 365 * 24 * 60 * 60
+        // Ten years, as `ChartTimeRange.all` reads stored history.
+        case .all: return 3650 * 24 * 60 * 60
         }
     }
 
@@ -26,6 +41,9 @@ enum MenuChartTimeRange: String, CaseIterable {
         case .day: return .day
         case .week: return .week
         case .month: return .month
+        case .threeMonths: return .threeMonths
+        case .year: return .year
+        case .all: return .all
         }
     }
 
@@ -310,9 +328,11 @@ enum MenuPopoverFormatter {
 
     /// Hover label for a chart point, in the user's locale.
     static func date(_ date: Date, range: MenuChartTimeRange) -> String {
-        range == .day
-            ? date.formatted(date: .omitted, time: .shortened)
-            : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        switch range {
+        case .day: date.formatted(date: .omitted, time: .shortened)
+        case .week, .month: date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        case .threeMonths, .year, .all: date.formatted(.dateTime.day().month(.abbreviated).year())
+        }
     }
 
     /// "Updated 14:05" for today, otherwise with the date, in the user's locale.
@@ -458,7 +478,7 @@ struct MenuPopoverTimeRangePicker: View {
                 onSelect(range)
             }
         )) {
-            ForEach(MenuChartTimeRange.allCases, id: \.self) { range in
+            ForEach(MenuChartTimeRange.menuRanges, id: \.self) { range in
                 Text(range == .day ? dayLabel : range.description).tag(range)
             }
         }
