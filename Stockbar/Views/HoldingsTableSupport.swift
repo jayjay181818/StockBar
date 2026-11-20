@@ -151,7 +151,7 @@ enum HoldingsCurrencyFormatter {
         return trimmedCurrency.uppercased()
     }
 
-    private static func currencySymbol(for currency: String) -> String? {
+    static func currencySymbol(for currency: String) -> String? {
         switch currency {
         case "USD": "$"
         case "GBP", "GBX": "£"
