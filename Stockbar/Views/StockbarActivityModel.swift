@@ -261,20 +261,25 @@ enum StockbarActivityFormat {
         let currency = transaction.portfolioAmount.currency ?? transaction.portfolioCurrency
         let magnitude = money(abs(value), currency: currency)
         guard HoldingsCurrencyFormatter.showsNonZeroDigit(magnitude) else { return magnitude }
+        // A negative amount keeps the sign Folync gave it.
+        guard value > 0 else { return minus + magnitude }
         switch StockbarActivityDirection(transaction.action) {
         case .moneyIn: return "+" + magnitude
         case .moneyOut: return minus + magnitude
-        case .neutral: return value < 0 ? minus + magnitude : magnitude
+        case .neutral: return magnitude
         }
     }
 
     /// Positive for money in, negative for money out, nil when the amount is
-    /// unknown, shows as zero, or has no fixed direction.
+    /// unknown, shows as zero, or has no fixed direction. A negative amount on
+    /// an action that moves money is money out, whatever the action.
     static func colourSign(_ transaction: FolyncTransaction) -> Double? {
         guard let value = transaction.portfolioAmount.value, value.isFinite,
               HoldingsCurrencyFormatter.showsNonZeroDigit(money(abs(value), currency: transaction.portfolioAmount.currency ?? transaction.portfolioCurrency))
         else { return nil }
-        switch StockbarActivityDirection(transaction.action) {
+        let direction = StockbarActivityDirection(transaction.action)
+        if value < 0 { return direction == .neutral ? nil : -1 }
+        switch direction {
         case .moneyIn: return 1
         case .moneyOut: return -1
         case .neutral: return nil
@@ -452,7 +457,7 @@ enum StockbarActivityFormat {
         var text: String
         if let value = transaction.portfolioAmount.value, value.isFinite {
             let magnitude = money(abs(value), currency: transaction.portfolioAmount.currency ?? transaction.portfolioCurrency)
-            switch StockbarActivityDirection(transaction.action) {
+            switch value < 0 ? .neutral : StockbarActivityDirection(transaction.action) {
             case .moneyIn: text = "\(magnitude) in"
             case .moneyOut: text = "\(magnitude) out"
             case .neutral: text = value < 0 ? "minus \(magnitude)" : magnitude
@@ -632,7 +637,9 @@ final class StockbarActivityViewModel {
             guard !Task.isCancelled, let self else { return }
             if query != self.appliedQuery {
                 // Other rows answered another query: show loading, not them.
+                // Nothing is on screen now, so going back to that query asks again.
                 self.clearRows()
+                self.appliedQuery = nil
                 self.phase = .loading
             }
             let result = await router.routeTransactions(query, forceRefresh: forceRefresh)

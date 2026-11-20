@@ -3698,6 +3698,13 @@ final class StockbarActivityPageTests: XCTestCase {
         XCTAssertEqual(StockbarActivityFormat.amount(zero), "£0.00", "a zero Folync gives is shown, without a sign")
         XCTAssertNil(StockbarActivityFormat.colourSign(zero))
 
+        let negative = transaction(action: "dividend", amount: -3.2)
+        XCTAssertEqual(StockbarActivityFormat.amount(negative), "−£3.20", "a sign Folync gives is kept")
+        XCTAssertEqual(StockbarActivityFormat.colourSign(negative), -1)
+        XCTAssertEqual(StockbarActivityFormat.spokenAmount(negative), "minus £3.20")
+        XCTAssertEqual(StockbarActivityFormat.amount(transaction(action: "split", amount: -3.2)), "−£3.20")
+        XCTAssertNil(StockbarActivityFormat.colourSign(transaction(action: "split", amount: -3.2)))
+
         let partial = StockbarActivityFormat.row(transaction(action: "dividend", amount: 14.6, quality: .partial))
         XCTAssertEqual(partial.amount, "+£14.60")
         XCTAssertEqual(partial.qualityNote, "partial")
@@ -3938,6 +3945,29 @@ final class StockbarActivityPageTests: XCTestCase {
         let calls = await router.calls
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+    }
+
+    func testRevertingAChangeWhileItLoadsShowsRowsAgain() async throws {
+        let router = ActivityRouterStub()
+        await router.queue(try page(["a"]))
+        let viewModel = model(router)
+        viewModel.activate(isFolyncPortfolio: true)
+        await settle(viewModel)
+
+        await router.hold(true)
+        viewModel.mode = .adjusted
+        await waitUntil { await router.heldCount == 1 }
+        XCTAssertEqual(viewModel.phase, .loading)
+        viewModel.mode = .asEntered
+        await waitUntil { await router.heldCount == 2 }
+        await router.release(with: try page(["late-adjusted"]))
+        await router.release(with: try page(["a"]))
+        await settle(viewModel)
+        XCTAssertEqual(viewModel.phase, .loaded, "never left on a spinner with nothing in flight")
+        XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
+        let calls = await router.calls
+        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: ""),
+                                          forceRefresh: false), "asked without forcing, so the five-minute reuse answers")
     }
 
     func testACancelledResultIsNeverApplied() async throws {
