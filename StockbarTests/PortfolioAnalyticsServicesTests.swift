@@ -720,3 +720,636 @@ final class AttributionPresentationTests: XCTestCase {
         XCTAssertEqual(lookbacks, lookbacks.sorted(), "a longer range never means a shorter window")
     }
 }
+
+// MARK: - Income page (invented figures)
+
+/// Stands in for `FolyncSupplementalCoordinator`: records every call and
+/// answers from a queue. With `holds` on, each call waits until `release()`.
+private actor IncomeRouterStandIn: StockbarIncomeRouting {
+    struct Call: Equatable {
+        let query: FolyncDividendsQuery
+        let forceRefresh: Bool
+        let cursor: String?
+    }
+
+    private(set) var calls: [Call] = []
+    private var answers: [FolyncRoutedDividendsResult] = []
+    private var holds = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func answer(_ results: FolyncRoutedDividendsResult...) { answers += results }
+    func hold(_ on: Bool) { holds = on }
+    func release() {
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+    var waitingCount: Int { waiting.count }
+    func releaseLast() {
+        if !waiting.isEmpty { waiting.removeLast().resume() }
+    }
+
+    func routeDividends(_ query: FolyncDividendsQuery, forceRefresh: Bool) async -> FolyncRoutedDividendsResult {
+        await record(Call(query: query, forceRefresh: forceRefresh, cursor: nil))
+    }
+
+    func loadMoreDividends(_ query: FolyncDividendsQuery, after continuation: FolyncLedgerContinuation) async
+        -> FolyncRoutedDividendsResult {
+        await record(Call(query: query, forceRefresh: true, cursor: continuation.cursor))
+    }
+
+    private func record(_ call: Call) async -> FolyncRoutedDividendsResult {
+        calls.append(call)
+        let answer = answers.isEmpty ? FolyncRoutedDividendsResult.unavailable : answers.removeFirst()
+        if holds { await withCheckedContinuation { waiting.append($0) } }
+        return answer
+    }
+}
+
+private enum IncomeFixture {
+    /// Friday 20 November 2026, noon UTC.
+    static let now = Date(timeIntervalSince1970: 1_795_176_000)
+    static let today = FolyncLedgerDay(year: 2026, month: 11, day: 20)
+    static let utc = TimeZone(identifier: "UTC") ?? .gmt
+    static let britishEnglish = Locale(identifier: "en_GB")
+
+    static func identity(_ ticker: String) -> FolyncInstrumentIdentity {
+        FolyncInstrumentIdentity(assetId: "asset_\(ticker)", canonicalTicker: ticker, displayTicker: ticker,
+                                 quoteSymbol: "\(ticker).L", aliases: [ticker], isin: nil)
+    }
+
+    static func metric(_ value: Double?, currency: String = "GBP",
+                       quality: FolyncFinancialQuality = .complete) -> FolyncFinancialMetric {
+        FolyncFinancialMetric(value: value, currency: currency, quality: quality, reasonCodes: [], asOfDate: nil)
+    }
+
+    static func discovery(_ id: String, amount: String, date: String) -> FolyncDividendEventDiscovery {
+        FolyncDividendEventDiscovery(
+            eventId: id, exDate: nil, declarationDate: nil, recordDate: nil,
+            amountCertainty: FolyncOpenEnum(rawValue: amount), dateCertainty: FolyncOpenEnum(rawValue: date),
+            source: nil, lastCheckedAt: nil, entitlementBasis: nil, quantity: nil, originalCurrency: nil,
+            perShare: nil, fxAsOfDate: nil, fxEstimated: nil, receiptStatus: nil, issues: nil
+        )
+    }
+
+    static func event(_ id: String, _ ticker: String, pay: String, ex: String? = nil, status: String = "upcoming",
+                      gbp: Double?, quality: FolyncFinancialQuality = .complete, metricCurrency: String = "GBP",
+                      own: Double? = nil, ownCurrency: String = "GBP",
+                      certainty: (amount: String, date: String)? = nil) -> FolyncDividendEvent {
+        FolyncDividendEvent(
+            eventId: id, portfolioId: "pf_demo", portfolioName: "Demo", assetId: "asset_\(ticker)",
+            identity: identity(ticker), transactionId: nil, exDate: ex, payDate: pay,
+            status: FolyncOpenEnum(rawValue: status), amount: own ?? gbp, currency: ownCurrency,
+            portfolioAmount: metric(gbp, currency: metricCurrency, quality: quality),
+            discovery: certainty.map { discovery(id, amount: $0.amount, date: $0.date) }
+        )
+    }
+
+    static let base: FolyncDividendsResponse = {
+        let json = """
+        {"schemaVersion":2,"sourceRevision":"rev","generatedAt":"2026-11-20T10:05:00.000Z",
+         "scope":{"id":"all","name":"Demo","kind":"aggregate","currency":"GBP"},"currency":"GBP",
+         "quality":"complete","reasonCodes":[],
+         "freshness":{"responseGeneratedAt":"2026-11-20T10:05:00.000Z","asOf":"2026-11-20","status":"current","reasonCodes":[],
+          "sources":{"snapshots":{"asOfDate":"2026-11-20","status":"clean","generation":1,"dirtySince":null,
+          "rebuildStartedAt":null,"failedAt":null,"completedAt":"2026-11-20T10:00:00.000Z"},
+          "prices":{"asOfDate":"2026-11-20","ageSeconds":60,"missingCount":0},
+          "fx":{"asOfDate":"2026-11-20","ageSeconds":60,"missingCount":0},
+          "provider":{"lastSuccessfulSyncAt":"2026-11-20T10:00:00.000Z","ageSeconds":60,"requiredCount":1,"coveredCount":1,"missingCount":0}}},
+         "valuation":{"value":5000,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":"2026-11-20"},
+         "holdingCoverage":{"totalHoldings":9,"valuedHoldings":9,"missingHoldings":0,
+          "marketValue":{"value":5000,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":"2026-11-20"}},
+         "summary":{"receivedIncome":321.5,"grossIncome":330,"withholdingTax":8.5,"fees":0,"netIncome":321.5,
+          "withholdingProvenance":"actual","declaredIncome":100.25,"estimatedIncome":null,"knownProjectedIncome":400,
+          "incomplete":true,"projectedAnnualIncome":456.78,"yoyChangePct":null,"portfolioYieldTTMPct":2.5,
+          "yieldOnCostTTMPct":null,"avgMonthlyIncome":null,"avgDailyIncome":null,"dividendPayingAssets":8},
+         "events":[],
+         "page":{"limit":200,"hasMore":false,"nextCursor":null,"collectionRevision":"rev-a"}}
+        """
+        // swiftlint:disable:next force_try
+        return try! JSONDecoder().decode(FolyncDividendsResponse.self, from: Data(json.utf8))
+    }()
+
+    static func response(_ events: [FolyncDividendEvent], cursor: String? = nil, revision: String = "rev-a",
+                         quality: FolyncFinancialQuality = .complete, reasons: [String] = []) -> FolyncDividendsResponse {
+        let base = base
+        return FolyncDividendsResponse(
+            schemaVersion: base.schemaVersion, sourceRevision: base.sourceRevision, generatedAt: base.generatedAt,
+            scope: base.scope, currency: base.currency, quality: quality, reasonCodes: reasons,
+            freshness: base.freshness, valuation: base.valuation, holdingCoverage: base.holdingCoverage,
+            summary: base.summary, discovery: nil, events: events,
+            page: FolyncReadPage(limit: 200, hasMore: cursor != nil, nextCursor: cursor, collectionRevision: revision)
+        )
+    }
+}
+
+@MainActor
+final class StockbarIncomePageTests: XCTestCase {
+    private typealias F = IncomeFixture
+
+    private func makeModel(_ router: IncomeRouterStandIn) -> StockbarIncomeModel {
+        StockbarIncomeModel(router: router, now: { F.now }, timeZone: F.utc)
+    }
+
+    /// Lets queued main-actor work run until `condition` holds, or fails.
+    private func settle(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if await condition() { return }
+            await Task.yield()
+        }
+        XCTFail("condition never held", file: file, line: line)
+    }
+
+    /// Gives any stray work plenty of turns to run.
+    private func drain() async {
+        for _ in 0..<200 { await Task.yield() }
+    }
+
+    // MARK: When it asks
+
+    func testNoRequestUntilThePageIsSelected() async {
+        let router = IncomeRouterStandIn()
+        let model = makeModel(router)
+        await drain()
+        let calls = await router.calls
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    func testNoRequestForAPortfolioThatIsNotFolyncs() async {
+        let router = IncomeRouterStandIn()
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: false)
+        model.refresh()
+        model.loadMore()
+        await drain()
+        let calls = await router.calls
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(model.phase, .needsFolync)
+        XCTAssertEqual(StockbarIncomeModel.needsFolyncReason, "Needs a Folync portfolio")
+    }
+
+    func testOneRequestOnActivateNoneOnASecondAndReopeningLeavesReuseToThePolicy() async throws {
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response([]), status: .current, paging: .firstPage),
+                            .folync(F.response([]), status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        var calls = await router.calls
+        XCTAssertEqual(calls.count, 1, "one request serves all three views")
+        let call = try XCTUnwrap(calls.first)
+        XCTAssertFalse(call.forceRefresh, "opening the page lets the fetch policy reuse a recent answer")
+        XCTAssertEqual(call.query, IncomeFigures.query(today: F.today))
+
+        model.deactivate()
+        model.activate(isFolyncPortfolio: true)
+        await settle { await router.calls.count == 2 }
+        calls = await router.calls
+        XCTAssertFalse(calls[1].forceRefresh, "reopening never bypasses the policy's five-minute reuse")
+    }
+
+    func testSwitchingViewsMakesNoRequest() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response([]), status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        for view in [StockbarIncomeModel.View.history, .byHolding, .outlook, .history] {
+            model.view = view
+        }
+        await drain()
+        let count = await router.calls.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testTheRefreshControlAsksWithForceRefresh() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response([]), status: .current, paging: .firstPage),
+                            .folync(F.response([]), status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        model.refresh()
+        await settle { await router.calls.count == 2 }
+        let calls = await router.calls
+        XCTAssertEqual(calls.map(\.forceRefresh), [false, true])
+        XCTAssertEqual(calls[0].query, calls[1].query)
+    }
+
+    func testTheQueryCoversTwelveMonthsEachWayAtTheLargestPage() {
+        let query = IncomeFigures.query(today: F.today)
+        XCTAssertEqual(query.status, .all)
+        XCTAssertEqual(query.from, FolyncLedgerDay(year: 2025, month: 11, day: 20))
+        XCTAssertEqual(query.to, FolyncLedgerDay(year: 2027, month: 11, day: 20))
+        XCTAssertEqual(query.limit, FolyncDividendsQuery.maximumLimit)
+        let leap = IncomeFigures.query(today: FolyncLedgerDay(year: 2028, month: 2, day: 29))
+        XCTAssertEqual(leap.from, FolyncLedgerDay(year: 2027, month: 2, day: 28), "a short month keeps its last day")
+    }
+
+    // MARK: States
+
+    func testEachStateTheAnswerCanPutThePageIn() async {
+        let saved = F.response([F.event("e1", "ULVR", pay: "2026-10-01", status: "received", gbp: 10)])
+        let cases: [(FolyncRoutedDividendsResult, StockbarIncomeModel.Phase, Bool)] = [
+            (.folync(F.response([]), status: .current, paging: .firstPage), .loaded, true),
+            (.folync(F.response([], quality: .partial, reasons: ["fx_stale"]), status: .partial, paging: .firstPage), .loaded, true),
+            (.folync(saved, status: .stale, paging: .firstPage),
+             .saved(savedAt: FolyncSupplementalDateParser.instant(saved.generatedAt)), true),
+            (.unreachable, .unreachable, false),
+            (.unavailable, .unavailable, false),
+            (.disabled, .switchedOff, false)
+        ]
+        for (result, phase, hasContent) in cases {
+            let router = IncomeRouterStandIn()
+            await router.hold(true)
+            await router.answer(result)
+            let model = makeModel(router)
+            model.activate(isFolyncPortfolio: true)
+            XCTAssertEqual(model.phase, .loading, "loading for the first time")
+            await settle { await router.waitingCount == 1 }
+            await router.release()
+            await settle { model.phase != .loading }
+            XCTAssertEqual(model.phase, phase)
+            XCTAssertEqual(model.hasContent, hasContent)
+        }
+    }
+
+    func testTheSavedCopyAndPartialNoticesSayWhatTheyAre() {
+        let savedAt = Date(timeIntervalSince1970: 1_795_169_400) // 10:10 UTC on 20 Nov 2026
+        XCTAssertEqual(IncomeText.savedNotice(savedAt: savedAt, now: F.now, locale: F.britishEnglish, timeZone: F.utc),
+                       "Couldn't get new figures from Folync. Showing the income saved at 10:10.")
+        XCTAssertNil(IncomeText.partialNotice(F.response([])))
+        XCTAssertEqual(IncomeText.partialNotice(F.response([], quality: .partial, reasons: ["fx_stale", "prices_stale"])),
+                       "Folync marks these figures partial: fx stale, prices stale.")
+    }
+
+    // MARK: Load more
+
+    func testLoadMoreAppendsTheNextPageOfTheSameQuery() async throws {
+        let router = IncomeRouterStandIn()
+        await router.answer(
+            .folync(F.response([F.event("e1", "ULVR", pay: "2026-12-11", gbp: 58.4)], cursor: "c1"), status: .current, paging: .firstPage),
+            .folync(F.response([F.event("e2", "HSBA", pay: "2026-11-24", gbp: 38.2)]), status: .current, paging: .nextPage)
+        )
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        XCTAssertEqual(model.chart?.isIncomplete, true, "more events exist than the first page holds")
+        model.loadMore()
+        await settle { model.events.count == 2 }
+        let calls = await router.calls
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls[1].cursor, "c1")
+        XCTAssertEqual(calls[1].query, calls[0].query, "the cursor is bound to the query that made it")
+        XCTAssertEqual(model.events.map(\.eventId), ["e1", "e2"])
+        XCTAssertNil(model.continuation)
+        XCTAssertEqual(model.chart?.isIncomplete, false)
+    }
+
+    func testARestartedResultDropsTheRowsGathered() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(
+            .folync(F.response([F.event("e1", "ULVR", pay: "2026-12-11", gbp: 58.4)], cursor: "c1"), status: .current, paging: .firstPage),
+            .folync(F.response([F.event("n1", "LGEN", pay: "2027-01-08", gbp: 112.6)], revision: "rev-b"),
+                    status: .current, paging: .restarted)
+        )
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        model.loadMore()
+        await settle { model.events.first?.eventId == "n1" }
+        XCTAssertEqual(model.events.map(\.eventId), ["n1"])
+        XCTAssertNil(model.continuation)
+    }
+
+    func testALoadMoreThatFailsKeepsTheRows() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(
+            .folync(F.response([F.event("e1", "ULVR", pay: "2026-12-11", gbp: 58.4)], cursor: "c1"), status: .current, paging: .firstPage),
+            .unreachable
+        )
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        model.loadMore()
+        await settle { model.loadMoreFailed }
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(model.events.map(\.eventId), ["e1"])
+        XCTAssertNotNil(model.continuation, "Load more can be tried again")
+    }
+
+    // MARK: Superseded and cancelled work
+
+    func testARefreshCancelsTheLoadItSupersedesAndThatResultIsNeverApplied() async {
+        let router = IncomeRouterStandIn()
+        await router.hold(true)
+        await router.answer(.unavailable, // the superseded call; must never reach the screen
+                            .folync(F.response([F.event("e1", "ULVR", pay: "2026-12-11", gbp: 58.4)]),
+                                    status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { await router.waitingCount == 1 }
+        model.refresh()
+        await settle { await router.waitingCount == 2 }
+        await router.releaseLast() // the refresh answers first
+        await settle { model.phase == .loaded }
+        await router.release() // then the superseded call's .unavailable arrives
+        await drain()
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(model.events.map(\.eventId), ["e1"])
+        let calls = await router.calls
+        XCTAssertEqual(calls.map(\.forceRefresh), [false, true])
+    }
+
+    func testAResultForAPageNoLongerSelectedIsNeverApplied() async {
+        let router = IncomeRouterStandIn()
+        await router.hold(true)
+        await router.answer(.unavailable)
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { await router.waitingCount == 1 }
+        model.deactivate()
+        await router.release()
+        await drain()
+        XCTAssertNotEqual(model.phase, .unavailable, "a cancelled caller's .unavailable never reaches the screen")
+        XCTAssertFalse(model.hasContent)
+    }
+
+    func testARefreshWhileOneIsInFlightIsIgnored() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response([]), status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        await router.hold(true)
+        model.refresh()
+        model.refresh()
+        await settle { await router.waitingCount == 1 }
+        await drain()
+        let count = await router.calls.count
+        XCTAssertEqual(count, 2)
+        await router.release()
+    }
+
+    // MARK: Derived values
+
+    func testDaysAreReadAsCalendarDaysWithNoTimeZoneShift() {
+        XCTAssertEqual(FolyncLedgerDay(string: "2026-11-30"), FolyncLedgerDay(year: 2026, month: 11, day: 30))
+        XCTAssertEqual(FolyncLedgerDay(string: "2026-11-30T23:30:00-08:00"), FolyncLedgerDay(year: 2026, month: 11, day: 30))
+        XCTAssertNil(FolyncLedgerDay(string: "2026-13-01"))
+        XCTAssertNil(FolyncLedgerDay(string: "30/11/2026"))
+        XCTAssertEqual(FolyncLedgerDay(year: 2026, month: 12, day: 31).next, FolyncLedgerDay(year: 2027, month: 1, day: 1))
+    }
+
+    func testEventsGoInTheMonthOfTheirPayDate() {
+        let events = [
+            F.event("a", "ULVR", pay: "2026-05-31", status: "received", gbp: 1), // before the chart
+            F.event("b", "ULVR", pay: "2026-06-01", status: "received", gbp: 2),
+            F.event("c", "ULVR", pay: "2026-11-30", status: "received", gbp: 4),
+            F.event("d", "ULVR", pay: "2026-12-01", gbp: 8, certainty: ("published", "published")),
+            F.event("e", "ULVR", pay: "2027-05-31", gbp: 16, certainty: ("estimated", "estimated")),
+            F.event("f", "ULVR", pay: "2027-06-01", gbp: 32, certainty: ("estimated", "estimated")) // after it
+        ]
+        let chart = IncomeFigures.chart(events: events, currency: "GBP", today: F.today, isIncomplete: false)
+        XCTAssertEqual(chart.months.map(\.month), (0..<12).map { IncomeMonth(year: 2026, month: 6).adding($0) })
+        XCTAssertEqual(chart.months.first?.month, IncomeMonth(year: 2026, month: 6))
+        XCTAssertEqual(chart.months.last?.month, IncomeMonth(year: 2027, month: 5))
+        XCTAssertEqual(chart.currentIndex, 5)
+        XCTAssertEqual(chart.months.map(\.total), [2, 0, 0, 0, 0, 4, 8, 0, 0, 0, 0, 16])
+    }
+
+    func testABarHasItsReceivedDeclaredAndEstimatedParts() throws {
+        let events = [
+            F.event("r", "ULVR", pay: "2026-11-05", status: "received", gbp: 100,
+                    certainty: ("published", "published")), // received wins over any discovery detail
+            F.event("d", "HSBA", pay: "2026-11-24", gbp: 38.2, certainty: ("published", "published")),
+            F.event("e", "LGEN", pay: "2026-11-27", gbp: 12.5, certainty: ("estimated", "published")),
+            F.event("u", "MSFT", pay: "2026-11-28", gbp: 6, certainty: ("unknown", "published")),
+            F.event("n", "SHEL", pay: "2026-11-29", gbp: 4), // no discovery detail
+            F.event("x", "AZN", pay: "2026-11-30", status: "announced_later", gbp: 2,
+                    certainty: ("estimated", "estimated")) // a status this build does not know
+        ]
+        let chart = IncomeFigures.chart(events: events, currency: "GBP", today: F.today, isIncomplete: false)
+        let november = try XCTUnwrap(chart.months.first { $0.month == IncomeMonth(year: 2026, month: 11) })
+        XCTAssertEqual(november.received, 100, accuracy: 1e-9)
+        XCTAssertEqual(november.declared, 38.2, accuracy: 1e-9)
+        XCTAssertEqual(november.estimated, 14.5, accuracy: 1e-9)
+        XCTAssertEqual(november.toCome, 10, accuracy: 1e-9, "not marked either way is neither declared nor estimated")
+        XCTAssertEqual(chart.partsShown, [.received, .declared, .estimated, .toCome])
+    }
+
+    func testAPaymentWithNoAmountAddsNothingAndIsCounted() throws {
+        let events = [
+            F.event("a", "AZN", pay: "2026-12-10", gbp: nil, quality: .unavailable, certainty: ("unknown", "estimated")),
+            F.event("b", "AZN", pay: "2026-12-11", gbp: 5, quality: .unavailable),
+            F.event("c", "AAPL", pay: "2026-12-12", gbp: 7, metricCurrency: "USD"),
+            F.event("d", "ULVR", pay: "2026-12-13", gbp: 9, quality: .partial, certainty: ("published", "published"))
+        ]
+        let chart = IncomeFigures.chart(events: events, currency: "GBP", today: F.today, isIncomplete: false)
+        let december = try XCTUnwrap(chart.months.first { $0.month == IncomeMonth(year: 2026, month: 12) })
+        XCTAssertEqual(december.total, 9, accuracy: 1e-9, "a partial amount is still Folync's amount")
+        XCTAssertEqual(december.missingAmounts, 3, "no value, unavailable, or another currency")
+        XCTAssertEqual(december.partialAmounts, 1)
+        XCTAssertEqual(IncomeText.missingAmountsNote(chart.missingAmounts), "3 payments with no amount yet")
+        XCTAssertEqual(IncomeText.missingAmountsNote(1), "1 payment with no amount yet")
+        XCTAssertNil(IncomeText.missingAmountsNote(0))
+    }
+
+    func testTheChartIsIncompleteOnlyWhileMorePagesExist() async {
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response([], cursor: "c1"), status: .current, paging: .firstPage))
+        let model = makeModel(router)
+        model.activate(isFolyncPortfolio: true)
+        await settle { model.phase == .loaded }
+        XCTAssertEqual(model.chart?.isIncomplete, true)
+        XCTAssertEqual(IncomeFigures.chart(events: [], currency: "GBP", today: F.today, isIncomplete: false).isIncomplete, false)
+    }
+
+    func testWhatIsComingIsSoonestFirstWithExDatesBeforePayments() {
+        let events = [
+            F.event("lgen", "LGEN", pay: "2027-01-08", ex: "2026-12-03", gbp: 112.6, certainty: ("published", "published")),
+            F.event("hsba", "HSBA", pay: "2026-11-24", ex: "2026-10-09", gbp: 38.2, certainty: ("published", "published")),
+            F.event("ulvr", "ULVR", pay: "2026-12-11", ex: "2026-11-21", gbp: 58.4, certainty: ("published", "published")),
+            F.event("msft", "MSFT", pay: "2026-12-11", gbp: 6.12),
+            F.event("bats", "BATS", pay: "2026-12-11", ex: "2026-12-11", gbp: 1), // ex on the pay day: one row
+            F.event("past", "SHEL", pay: "2026-09-18", status: "received", gbp: 41.02)
+        ]
+        let rows = IncomeFigures.upcoming(events: events, currency: "GBP", today: F.today)
+        XCTAssertEqual(rows.map(\.id), ["ulvr#ex", "hsba#pay", "lgen#ex", "bats#pay", "msft#pay", "ulvr#pay", "lgen#pay"])
+        XCTAssertEqual(rows.first?.kind, .exDividend(payDay: FolyncLedgerDay(year: 2026, month: 12, day: 11)))
+        XCTAssertEqual(IncomeText.dayLabel(rows[0].date, today: F.today, locale: F.britishEnglish), "Tomorrow")
+        XCTAssertEqual(IncomeText.dayLabel(rows[1].date, today: F.today, locale: F.britishEnglish), "Tue 24 Nov")
+        XCTAssertEqual(IncomeText.dayLabel(F.today, today: F.today, locale: F.britishEnglish), "Today")
+        XCTAssertEqual(IncomeText.upcomingDayLabel(FolyncLedgerDay(year: 2027, month: 5, day: 20), today: F.today,
+                                                   locale: F.britishEnglish), "Thu 20 May", "within six months")
+        XCTAssertEqual(IncomeText.upcomingDayLabel(FolyncLedgerDay(year: 2027, month: 6, day: 8), today: F.today,
+                                                   locale: F.britishEnglish), "Tue 8 Jun 2027", "past the chart")
+    }
+
+    func testThePillComesOnlyFromFolyncsDiscoveryDetail() {
+        func pill(_ amount: String, _ date: String) -> String? {
+            IncomeFigures.pill(for: F.discovery("e", amount: amount, date: date))
+        }
+        XCTAssertNil(IncomeFigures.pill(for: nil), "no detail, no pill")
+        XCTAssertEqual(pill("published", "published"), "Declared")
+        XCTAssertEqual(pill("estimated", "estimated"), "Estimated")
+        XCTAssertEqual(pill("published", "estimated"), "Amount declared, date estimated")
+        XCTAssertEqual(pill("estimated", "published"), "Amount estimated, date declared")
+        XCTAssertEqual(pill("unknown", "published"), "Amount unknown, date declared")
+        XCTAssertEqual(pill("published", "unknown"), "Amount declared, date unknown")
+        XCTAssertEqual(pill("unknown", "estimated"), "Amount unknown, date estimated")
+        XCTAssertNil(pill("unknown", "unknown"), "nothing known either way says nothing")
+        XCTAssertEqual(pill("rumoured", "published"), "Amount unknown, date declared", "a value this build does not know")
+    }
+
+    func testHistoryIsReceivedPaymentsNewestFirstWithTheirOwnCurrency() {
+        let events = [
+            F.event("old", "SHEL", pay: "2026-03-20", status: "received", gbp: 30),
+            F.event("usd", "AAPL", pay: "2026-11-13", status: "received", gbp: 3.04, quality: .partial,
+                    own: 4, ownCurrency: "USD"),
+            F.event("soon", "ULVR", pay: "2026-12-11", gbp: 58.4)
+        ]
+        let rows = IncomeFigures.history(events: events, currency: "GBP")
+        XCTAssertEqual(rows.map(\.eventID), ["usd", "old"])
+        XCTAssertEqual(rows[0].ownAmount?.currency, "USD")
+        XCTAssertEqual(rows[0].ownAmount?.value, 4)
+        XCTAssertTrue(rows[0].amountIsPartial)
+        XCTAssertNil(rows[1].ownAmount, "same currency as the portfolio")
+    }
+
+    func testWithNoCurrencyNamedNoSymbolIsGuessed() {
+        let base = F.base
+        let unnamed = FolyncDividendsResponse(
+            schemaVersion: base.schemaVersion, sourceRevision: base.sourceRevision, generatedAt: base.generatedAt,
+            scope: FolyncPortfolio(id: base.scope.id, name: base.scope.name, kind: base.scope.kind, currency: nil),
+            currency: nil, quality: base.quality, reasonCodes: [], freshness: base.freshness,
+            valuation: FolyncFinancialMetric(value: 5000, currency: nil, quality: .complete, reasonCodes: [], asOfDate: nil),
+            holdingCoverage: base.holdingCoverage, summary: base.summary, discovery: nil, events: [], page: base.page
+        )
+        XCTAssertEqual(IncomeFigures.portfolioCurrency(base), "GBP")
+        XCTAssertEqual(IncomeFigures.portfolioCurrency(unnamed), "", "no currency is made up")
+        XCTAssertEqual(IncomeText.projected(unnamed), "456.78", "a plain figure, not one under a guessed symbol")
+
+        // An amount that names a currency is not summed into an unnamed one,
+        // and a received payment still shows its own.
+        let paid = F.event("p", "SHEL", pay: "2026-10-20", status: "received", gbp: 30, own: 38, ownCurrency: "USD")
+        XCTAssertNil(IncomeFigures.portfolioAmount(of: paid, currency: ""))
+        let row = IncomeFigures.history(events: [paid], currency: "")[0]
+        XCTAssertNil(row.amount)
+        XCTAssertEqual(row.ownAmount?.currency, "USD")
+
+        let chart = IncomeFigures.chart(events: [], currency: "", today: F.today, isIncomplete: false)
+        XCTAssertEqual(IncomeText.chartCaption(chart), "Monthly sums from the payments listed, by pay date.")
+        XCTAssertEqual(IncomeText.byHoldingCaption(span: "May to April", currency: ""),
+                       "Sums of the payments listed for May to April. Holdings with no payment listed are not shown.")
+        XCTAssertEqual(IncomeText.byHoldingCaption(span: "May to April", currency: "GBP"),
+                       "Sums of the payments listed for May to April, in GBP. Holdings with no payment listed are not shown.")
+    }
+
+    func testByHoldingSumsThePaymentsListedInTheChartsMonths() throws {
+        let events = [
+            F.event("u1", "ULVR", pay: "2026-09-11", status: "received", gbp: 50),
+            F.event("u2", "ULVR", pay: "2026-12-11", gbp: 58.4, certainty: ("published", "published")),
+            F.event("u3", "ULVR", pay: "2027-03-11", gbp: nil, quality: .unavailable),
+            F.event("u0", "ULVR", pay: "2026-01-11", status: "received", gbp: 999), // before the chart's months
+            F.event("h1", "HSBA", pay: "2026-11-24", gbp: 38.2),
+            F.event("h2", "HSBA", pay: "2026-07-01", status: "received", gbp: 40)
+        ]
+        let rows = IncomeFigures.byHolding(events: events, currency: "GBP", today: F.today)
+        XCTAssertEqual(rows.map(\.holding), ["ULVR", "HSBA"])
+        let ulvr = try XCTUnwrap(rows.first)
+        XCTAssertEqual(try XCTUnwrap(ulvr.received), 50, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(ulvr.toCome), 58.4, accuracy: 1e-9)
+        XCTAssertEqual(ulvr.missingAmounts, 1)
+        XCTAssertEqual(ulvr.nextPayment?.date, FolyncLedgerDay(year: 2026, month: 12, day: 11))
+        let hsba = try XCTUnwrap(rows.last)
+        XCTAssertEqual(try XCTUnwrap(hsba.received), 40, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(hsba.toCome), 38.2, accuracy: 1e-9)
+        XCTAssertEqual(hsba.nextPayment?.amount, 38.2)
+    }
+
+    func testAHoldingWhosePaymentsHaveNoAmountShowsADashNotZero() throws {
+        let events = [
+            F.event("a1", "AZN", pay: "2026-09-23", status: "received", gbp: 47.21),
+            F.event("a2", "AZN", pay: "2027-03-23", gbp: nil, quality: .unavailable)
+        ]
+        let row = try XCTUnwrap(IncomeFigures.byHolding(events: events, currency: "GBP", today: F.today).first)
+        XCTAssertEqual(row.received, 47.21)
+        XCTAssertNil(row.toCome, "a payment to come with no amount is unknown, not zero")
+        XCTAssertEqual(IncomeText.amount(row.toCome, currency: "GBP"), "–")
+        XCTAssertEqual(IncomeText.accessibilitySentence(row, currency: "GBP", locale: F.britishEnglish),
+                       "AZN: £47.21 received and – to come, 1 payment with no amount yet; next payment Tue 23 Mar, –.")
+        let nothingToCome = try XCTUnwrap(IncomeFigures.byHolding(events: [events[0]], currency: "GBP", today: F.today).first)
+        XCTAssertEqual(nothingToCome.toCome, 0, "nothing listed to come sums to zero")
+    }
+
+    func testFolyncsFiguresAreShownAsGivenAndUnknownIsADash() {
+        let response = F.response([])
+        XCTAssertEqual(IncomeText.projected(response), "£456.78")
+        XCTAssertEqual(IncomeText.figureLines(response), [
+            IncomeFigureLine(title: "Declared", value: "£100.25"),
+            IncomeFigureLine(title: "Yield, last 12 months, on today's value", value: "2.50%"),
+            IncomeFigureLine(title: "Received in the last 12 months", value: "£321.50")
+        ], "estimated income and yield on cost are left out when Folync gives none")
+        XCTAssertEqual(IncomeText.holdingsLine(response), "8 of 9 holdings pay dividends")
+        XCTAssertEqual(IncomeText.amount(nil, currency: "GBP"), "–")
+        XCTAssertEqual(IncomeText.wholeAmount(148.4, currency: "GBP"), "£148")
+    }
+
+    // MARK: What VoiceOver reads
+
+    func testEachMonthAndRowReadsAsOneSentence() throws {
+        let events = [
+            F.event("r", "ULVR", pay: "2026-11-05", status: "received", gbp: 96.8),
+            F.event("d", "HSBA", pay: "2026-11-24", ex: "2026-10-09", gbp: 38.2, certainty: ("published", "published")),
+            F.event("m", "AZN", pay: "2026-11-27", gbp: nil, quality: .unavailable),
+            F.event("x", "ULVR", pay: "2026-12-11", ex: "2026-11-21", gbp: 58.4, certainty: ("published", "published")),
+            F.event("h", "AAPL", pay: "2026-09-10", status: "received", gbp: 3.04, own: 4, ownCurrency: "USD")
+        ]
+        let chart = IncomeFigures.chart(events: events, currency: "GBP", today: F.today, isIncomplete: false)
+        let november = try XCTUnwrap(chart.months.first { $0.month == IncomeMonth(year: 2026, month: 11) })
+        XCTAssertEqual(IncomeText.accessibilitySentence(november, currency: "GBP", locale: F.britishEnglish),
+                       "November 2026: £96.80 received and £38.20 declared, still to come; 1 payment with no amount yet.")
+        let july = try XCTUnwrap(chart.months.first { $0.month == IncomeMonth(year: 2026, month: 7) })
+        XCTAssertEqual(IncomeText.accessibilitySentence(july, currency: "GBP", locale: F.britishEnglish),
+                       "July 2026: no payments listed.")
+
+        let upcoming = IncomeFigures.upcoming(events: events, currency: "GBP", today: F.today)
+        XCTAssertEqual(IncomeText.accessibilitySentence(upcoming[0], currency: "GBP", today: F.today, locale: F.britishEnglish),
+                       "Tomorrow, ULVR, ex-dividend, pays 11 Dec, £58.40, declared.")
+        let azn = try XCTUnwrap(upcoming.first { $0.holding == "AZN" })
+        XCTAssertEqual(IncomeText.accessibilitySentence(azn, currency: "GBP", today: F.today, locale: F.britishEnglish),
+                       "Fri 27 Nov, AZN, dividend, amount not known yet.")
+
+        let history = IncomeFigures.history(events: events, currency: "GBP")
+        XCTAssertEqual(IncomeText.accessibilitySentence(history[1], currency: "GBP", locale: F.britishEnglish),
+                       "Thu 10 Sep 2026, AAPL, received £3.04, $4.00.")
+
+        let holdings = IncomeFigures.byHolding(events: events, currency: "GBP", today: F.today)
+        let ulvr = try XCTUnwrap(holdings.first { $0.holding == "ULVR" })
+        XCTAssertEqual(IncomeText.accessibilitySentence(ulvr, currency: "GBP", locale: F.britishEnglish),
+                       "ULVR: £96.80 received and £58.40 to come; next payment Fri 11 Dec, £58.40.")
+    }
+
+    // MARK: Sidebar
+
+    func testIncomeSitsAfterChartsMarkedNewAndDimmedWithoutAFolyncPortfolio() throws {
+        XCTAssertEqual(StockbarMainSection.income.title, "Income")
+        XCTAssertEqual(StockbarMainSection.income.rawValue, "income")
+        let analysis = try XCTUnwrap(StockbarMainSection.sidebarGroups.first { $0.title == "Analysis" })
+        XCTAssertEqual(analysis.sections.prefix(2), [.charts, .income])
+        let entries = StockbarSidebarModel.groups(dimmed: [.income: StockbarIncomeModel.needsFolyncReason],
+                                                  new: [.income]).flatMap(\.entries)
+        let income = try XCTUnwrap(entries.first { $0.section == .income })
+        XCTAssertTrue(income.isNew)
+        XCTAssertEqual(income.dimmedReason, "Needs a Folync portfolio")
+        let order = StockbarMainSection.sidebarOrder
+        let place = try XCTUnwrap(order.firstIndex(of: .income)) + 1
+        XCTAssertEqual(income.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, \(place) of \(order.count)")
+        // The main window marks and dims its entries from these two sets.
+        XCTAssertTrue(StockbarMainSection.newSections.contains(.income))
+        XCTAssertTrue(StockbarMainSection.folyncOnlySections.contains(.income))
+        XCTAssertEqual(StockbarMainSection.needsFolyncReason, StockbarIncomeModel.needsFolyncReason)
+    }
+}

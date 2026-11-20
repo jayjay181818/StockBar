@@ -4624,8 +4624,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   if the portfolio becomes a Folync portfolio while the page is open. A
   change of the switch is held back for 400 ms and cancels the query it
   replaces, and a result whose request was cancelled is never shown.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `a60edd0`. The merge published
+  experimental build 382.3.11 as the prerelease `experimental-382.3.11`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches set up no Folync and never open this page. Covered by the
   comparison set for the night of 2026-11-20, if this is merged by then,
@@ -4690,6 +4692,120 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - The "New" badge is faint on the selected sidebar entry in dark mode.
   - "Showing 7 of 31" in the mock-up is "Showing N trades": the route
     gives no total.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 143: Add the Income page: dividends expected, received and by holding
+
+- What: Income shows a Folync portfolio's dividends, read-only, from the
+  route that pull request 135 added. It is a new section in the Analysis
+  group after Charts, with a "New" badge, dimmed with "Needs a Folync
+  portfolio" for any other source. ⌘1 to ⌘9 follow the sidebar: with the
+  three new pages, Income is ⌘6, Trades ⌘7, Risk ⌘8 and Allocation ⌘9,
+  and Data Health, Backups and Diagnostics have no number.
+
+  At the top are Folync's own figures: the income expected in the next 12
+  months, its declared and estimated parts, the yield on today's value
+  and on cost, the income received in the last 12 months, and how many
+  holdings pay. Each line is shown only when Folync gives the figure.
+  Under them is a chart of twelve months, the six up to this one and the
+  six after it, and three views: Outlook lists what is coming, soonest
+  first, with ex-dividend dates; History lists payments received, newest
+  first, with a payment's own currency when it differs; By holding sums
+  each paying holding.
+
+  Two sets of figures are Stockbar's own, and the page says so: the
+  chart's bars and the By holding sums add up the payments Folync lists,
+  by pay date read as a calendar day. An amount that is missing, marked
+  unavailable or in another currency adds nothing and is counted in the
+  note under the chart, and a sum with no known amount is "–", not zero.
+  A payment is called Declared or Estimated only when Folync says which.
+
+  The page keeps the rule for these routes: one request when it becomes
+  the selected page, which serves all three views (every status, pay
+  dates from twelve months back to twelve ahead, at the route's largest
+  page); none on a change of view or on opening again inside five
+  minutes; the refresh control and "Try now" force; "Load more" asks for
+  the next page. No control changes the query, so nothing is held back.
+  A result whose request was cancelled is never shown, and the page
+  keeps no cache of its own.
+
+  Against the mock-up: "Received so far in 2026" is "Received in the last
+  12 months", the figure Folync gives; "all 9 holdings" is Folync's count
+  of the holdings that pay; the earnings row is left for the Calendar;
+  and an ex-dividend row has its amount in the amount column, so it fits
+  at the minimum width.
+
+  The session lead changed one thing in the worker's code. The contract
+  lets Folync name no currency, and the page then labelled every figure
+  as pounds. It now shows those figures without a symbol, leaves the
+  currency out of the two captions, and does not add an amount that
+  names a currency into a sum that has none.
+
+  The User Guide said the Trades switch has three positions. It has had
+  four since pull request 142, and the guide is corrected here.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 142 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the three pages together: 931 XCTest tests with 0
+  failures. Twenty-eight are new, in `PortfolioAnalyticsServicesTests.swift`,
+  with the coordinator stood in for: each state of the page; no request
+  for a portfolio that is not Folync's; one request on opening and none
+  on opening again; the refresh control forcing; a refresh cancelling the
+  load it replaces; a result for a page no longer selected never shown;
+  load more, and a restart replacing the rows; the chart's months and the
+  parts of a bar; a payment with no amount, and one in another currency,
+  counted and not added; the order of what is coming; the pills; the By
+  holding sums, a sum with no known amount included; each row's text for
+  VoiceOver; and, added by the session lead, an answer that names no
+  currency. `checks`, `docs-check` and `build-release` pass on the
+  combined code. `python-tests` and 95 script tests passed on the
+  worker's last commit; nothing they cover changed after it.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a second opening that asked again; a cancelled or
+  superseded result shown (two tests failed); an opening that forced a
+  refresh (three tests failed); a payment with no detail counted as
+  declared; amounts in another currency added up; and, by the session
+  lead, the pound fallback put back.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time: the three views in dark at
+  the default size, Outlook and History in light and at the minimum
+  size, loading, a 503 with nothing saved, the saved copy, a 404 and the
+  capability left out. For the saved copy it stopped its own stand-in
+  after the page had loaded. The stand-in's log matched the rule: one
+  request on opening, none for four changes of view, one for the refresh
+  control, none on leaving and coming back, and none with the capability
+  left out. After the merge with pull request 142 the session lead ran
+  the acceptance copy of the combined code once, in dark, and captured
+  its window: Activity, Income and Trades are in the sidebar with their
+  badges, and Outlook shows its figures, chart and rows.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read how the page chooses
+  its currency and what depends on it, looked at the worker's capture of
+  Outlook, and made the change above. It did not read the view, the view
+  model in full or every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync.
+  - "Load more" and the "incomplete" notice were not seen on screen: the
+    stand-in's 109 payments fit in one page. Both are tested.
+  - The dimmed entry and the explanation for a portfolio that is not
+    Folync's were not seen on screen. Both are tested.
+  - Rows below the fold in "What is coming" were checked through their
+    VoiceOver text, not on screen: the window could not be scrolled from
+    the background.
+  - A Folync user sees "Income needs a Folync portfolio" until the first
+    Folync snapshot exists, as on the other two pages.
+  - A payment's own reason for being partial is not shown; only the
+    reasons Folync gives for the whole answer are.
+  - With no currency named, a payment whose amount does name one shows
+    "–" in the portfolio column. Not seen with a real Folync.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12

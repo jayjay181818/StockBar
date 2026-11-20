@@ -895,6 +895,13 @@ extension StockbarPalette {
         light: NSColor(srgbRed: 0.80, green: 0.55, blue: 0.05, alpha: 1),
         dark: NSColor(srgbRed: 0.99, green: 0.78, blue: 0.20, alpha: 1)
     )
+
+    /// The Income chart: received income takes `incomeFill`; income still to
+    /// come takes this darker gold, solid when declared and hatched when estimated.
+    static let incomeToComeFill = adaptive(
+        light: NSColor(srgbRed: 0.55, green: 0.42, blue: 0.13, alpha: 1),
+        dark: NSColor(srgbRed: 0.62, green: 0.50, blue: 0.22, alpha: 1)
+    )
 }
 
 /// The single bar of a `PortfolioTotalComposition`: one segment per positive part,

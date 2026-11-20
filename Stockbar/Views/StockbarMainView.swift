@@ -137,6 +137,8 @@ struct StockbarMainView: View {
                 PerformanceChartView(availableSymbols: availableSymbols, dataModel: dataModel)
             }
             .stockbarPage()
+        case .income:
+            StockbarIncomeView(dataModel: dataModel)
         case .trades:
             StockbarTradesView(isFolyncPortfolio: dataModel.isFolyncPortfolioActive) {
                 StockbarSettingsView.showConnectionsTab()
@@ -216,6 +218,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     case holdings
     case activity
     case charts
+    case income
     case trades
     case risk
     case allocation
@@ -232,16 +235,16 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// A section is listed only once its page exists.
     static let sidebarGroups: [StockbarSidebarGroup] = [
         StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .activity, .alerts]),
-        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .trades, .risk, .allocation]),
+        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .income, .trades, .risk, .allocation]),
         StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
 
     /// Sections drawn with the "New" badge.
-    static let newSections: Set<StockbarMainSection> = [.activity, .trades]
+    static let newSections: Set<StockbarMainSection> = [.activity, .income, .trades]
 
     /// Sections whose data only a Folync portfolio has: dimmed, with this
     /// reason, for any other source.
-    static let folyncOnlySections: Set<StockbarMainSection> = [.activity, .trades]
+    static let folyncOnlySections: Set<StockbarMainSection> = [.activity, .income, .trades]
     static let needsFolyncReason = "Needs a Folync portfolio"
 
     /// Every entry in sidebar order, top to bottom.
@@ -261,6 +264,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .holdings: "Holdings"
         case .activity: "Activity"
         case .charts: "Charts"
+        case .income: "Income"
         case .trades: "Trades"
         case .risk: "Risk"
         case .allocation: "Allocation"
@@ -278,6 +282,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .holdings: "tablecells"
         case .activity: "list.bullet"
         case .charts: "chart.line.uptrend.xyaxis"
+        case .income: "dollarsign.circle"
         case .trades: "arrow.left.arrow.right"
         case .risk: "waveform.path.ecg"
         case .allocation: "chart.pie"

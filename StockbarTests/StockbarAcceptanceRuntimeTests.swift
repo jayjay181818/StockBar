@@ -652,7 +652,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.title), ["Portfolio", "Analysis", "System"])
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
             [.overview, .holdings, .activity, .alerts],
-            [.charts, .trades, .risk, .allocation],
+            [.charts, .income, .trades, .risk, .allocation],
             [.dataHealth, .backups, .diagnostics, .settings]
         ])
         XCTAssertEqual(Set(StockbarMainSection.sidebarOrder), Set(StockbarMainSection.allCases))
@@ -674,8 +674,10 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.activity.shortcutNumber, 3)
         XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 4)
         XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 5)
-        XCTAssertEqual(StockbarMainSection.trades.shortcutNumber, 6)
-        XCTAssertEqual(StockbarMainSection.dataHealth.shortcutNumber, 9)
+        XCTAssertEqual(StockbarMainSection.income.shortcutNumber, 6)
+        XCTAssertEqual(StockbarMainSection.trades.shortcutNumber, 7)
+        XCTAssertEqual(StockbarMainSection.allocation.shortcutNumber, 9)
+        XCTAssertNil(StockbarMainSection.dataHealth.shortcutNumber, "the tenth entry has no number")
         XCTAssertNil(StockbarMainSection.diagnostics.shortcutNumber, "only the first nine entries take a number")
         XCTAssertNil(StockbarMainSection.settings.shortcutNumber, "Settings keeps ⌘, and takes no number")
     }
@@ -746,7 +748,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         let count = StockbarMainSection.sidebarOrder.count
         func place(_ section: StockbarMainSection) -> Int { (StockbarMainSection.sidebarOrder.firstIndex(of: section) ?? -1) + 1 }
         XCTAssertEqual(entries.map(\.position), Array(1...count))
-        XCTAssertTrue(entries.allSatisfy { !$0.isDimmed && !$0.isNew }, "no section uses either state yet")
+        XCTAssertTrue(entries.allSatisfy { !$0.isDimmed && !$0.isNew }, "nothing is marked unless passed in")
         XCTAssertEqual(entries[1].accessibilityValue, "2 of \(count)")
 
         let marked = StockbarSidebarModel.groups(dimmed: [.risk: "Needs more history."], new: [.charts]).flatMap(\.entries)
