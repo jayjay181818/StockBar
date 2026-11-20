@@ -50,12 +50,6 @@ enum StockbarPalette {
     static let gain = adaptive(light: NSColor(srgbRed: 0.09, green: 0.55, blue: 0.24, alpha: 1), dark: .systemGreen)
     static let loss = adaptive(light: NSColor(srgbRed: 0.82, green: 0.18, blue: 0.16, alpha: 1), dark: .systemRed)
 
-    // The menu-bar popovers keep today's surfaces until their own redesign.
-    // Nothing in the main window uses these.
-    static let popoverCardFill = Color.primary.opacity(0.035)
-    static let popoverCardStroke = Color.primary.opacity(0.08)
-    static let popoverHoverFill = Color.primary.opacity(0.06)
-
     static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
@@ -876,6 +870,97 @@ enum StockbarAppearance {
         case "dark": NSAppearance(named: .darkAqua)
         default: nil
         }
+    }
+}
+
+// MARK: - Portfolio popover
+
+// The popover keeps the system's own popover background, which covers the
+// arrow as well as the body. How it reads under Reduce Transparency and
+// Increase Contrast, and as glass on macOS 26, is left to the system; nothing
+// here paints over it. Increase Contrast also strengthens the popover's text.
+
+extension StockbarPalette {
+    /// Gains and losses in the portfolio popover: the deeper green and red in
+    /// light mode, the system ones in dark, resolved against the popover's own
+    /// appearance. Zero and unknown stay neutral.
+    static func signedOnPopover(_ value: Double?, neutral: Color = .secondary) -> Color {
+        signedOnSurface(value, neutral: neutral)
+    }
+}
+
+/// How text in the portfolio popover is drawn for the accessibility settings.
+struct StockbarPopoverText: Equatable {
+    /// Labels and secondary figures. Under Increase Contrast they take the
+    /// primary colour instead of the faded secondary one.
+    var secondaryIsPrimary: Bool
+
+    static func resolve(accessibility: StockbarSurfaceAccessibility) -> Self {
+        Self(secondaryIsPrimary: accessibility.increasedContrast)
+    }
+
+    var secondary: HierarchicalShapeStyle { secondaryIsPrimary ? .primary : .secondary }
+    var tertiary: HierarchicalShapeStyle { secondaryIsPrimary ? .secondary : .tertiary }
+}
+
+extension View {
+    /// Hands the popover's text style to the views below, from the system's
+    /// Increase Contrast or a test's `stockbarSurfaceAccessibilityOverride`.
+    func stockbarPopoverText() -> some View {
+        modifier(StockbarPopoverTextModifier())
+    }
+}
+
+private struct StockbarPopoverTextKey: EnvironmentKey {
+    static let defaultValue = StockbarPopoverText(secondaryIsPrimary: false)
+}
+
+extension EnvironmentValues {
+    var stockbarPopoverText: StockbarPopoverText {
+        get { self[StockbarPopoverTextKey.self] }
+        set { self[StockbarPopoverTextKey.self] = newValue }
+    }
+}
+
+private struct StockbarPopoverTextModifier: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.stockbarSurfaceAccessibilityOverride) private var override
+
+    func body(content: Content) -> some View {
+        let accessibility = override ?? StockbarSurfaceAccessibility(
+            increasedContrast: contrast == .increased,
+            reduceTransparency: reduceTransparency
+        )
+        content.environment(\.stockbarPopoverText, .resolve(accessibility: accessibility))
+    }
+}
+
+/// A large money figure with its decimals smaller and quieter: "£84,310" ".47".
+struct StockbarSplitFigure: View {
+    let text: String
+    var size: CGFloat = 36
+    @Environment(\.stockbarPopoverText) private var textStyle
+
+    /// The whole part and the fraction with its separator. A figure with no
+    /// fraction, or text that is not a figure ("-"), stays whole. The app's
+    /// money figures (`HoldingsCurrencyFormatter`) always use a full stop.
+    static func split(_ text: String, separator: String = ".") -> (whole: String, fraction: String) {
+        guard let range = text.range(of: separator, options: .backwards) else { return (text, "") }
+        let digits = text[range.upperBound...]
+        guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return (text, "") }
+        return (String(text[..<range.lowerBound]), String(text[range.lowerBound...]))
+    }
+
+    var body: some View {
+        let parts = Self.split(text)
+        let whole = Text(parts.whole).font(.system(size: size, weight: .bold, design: .rounded))
+        let fraction = Text(parts.fraction).font(.system(size: size * 0.56, weight: .semibold, design: .rounded))
+            .foregroundStyle(textStyle.secondary)
+        Text("\(whole)\(fraction)")
+            .monospacedDigit()
+            .lineLimit(1)
+            .accessibilityLabel(text)
     }
 }
 
