@@ -343,7 +343,12 @@ private struct StockbarIncomeHistoryRowView: View {
                 .fontWeight(.semibold)
                 .monospacedDigit()
                 .frame(minWidth: 90, alignment: .trailing)
-            if row.amountIsPartial { partialTag }
+            // A fixed slot, so a "partial" tag does not push its amount out of line.
+            Text(row.amountIsPartial ? "partial" : "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+                .help(row.amountIsPartial ? "Folync marks this amount partial" : "")
         }
         .lineLimit(1)
         .padding(.vertical, 9)
