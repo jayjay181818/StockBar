@@ -391,6 +391,38 @@ actor RiskMetricsService {
         )
     }
 
+    /// One day of the drawdown chart: how far the index stood below its highest
+    /// value so far, as a fraction at or below zero (-0.07 is 7% below the peak).
+    struct DrawdownPoint: Equatable, Sendable {
+        let date: Date
+        let drawdown: Double
+    }
+
+    /// The drawdown on each day: the value divided by the highest value so far, less one.
+    /// Reads `values` exactly as `calculateMaxDrawdown(portfolioValues:dates:)` does, leaving
+    /// out a value that is not a positive finite number and any value without a date, and
+    /// works each fall out as `-(peak - value) / peak`, so the lowest point is that function's
+    /// `maxDrawdown` negated, to the last bit.
+    nonisolated static func drawdownSeries(values: [Double], dates: [Date]) -> [DrawdownPoint] {
+        var points: [DrawdownPoint] = []
+        var peak = 0.0
+        for (index, value) in values.enumerated() where value.isFinite && value > 0 && index < dates.count {
+            if value > peak { peak = value }
+            let drawdown = value >= peak ? 0 : -((peak - value) / peak)
+            points.append(DrawdownPoint(date: dates[index], drawdown: drawdown))
+        }
+        return points
+    }
+
+    /// The first day on which the series is at its lowest, or nil for an empty series.
+    nonisolated static func lowestPoint(of series: [DrawdownPoint]) -> DrawdownPoint? {
+        var lowest: DrawdownPoint?
+        for point in series where point.drawdown < (lowest?.drawdown ?? .infinity) {
+            lowest = point
+        }
+        return lowest
+    }
+
     /// Find all drawdown periods exceeding a threshold
     /// - Parameters:
     ///   - portfolioValues: Array of portfolio values with corresponding dates
