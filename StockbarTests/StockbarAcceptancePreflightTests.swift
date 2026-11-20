@@ -40,6 +40,7 @@ final class StockbarAcceptancePreflightTests: XCTestCase {
         XCTAssertTrue(report.loopbackFolyncAllowed)
         XCTAssertTrue(String(decoding: output, as: UTF8.self).contains(#""loopbackFolyncAllowed" : true"#))
         XCTAssertTrue(report.keychainService.contains(runID))
+        XCTAssertEqual(report.launchOptions, .none)
         XCTAssertFalse(String(decoding: output, as: UTF8.self).localizedCaseInsensitiveContains("bearer"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".stockbar-acceptance-run").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Application Support/Stockbar/StockbarDataModel.sqlite").path))
@@ -47,6 +48,22 @@ final class StockbarAcceptancePreflightTests: XCTestCase {
         for path in report.resolvedWritablePaths {
             XCTAssertTrue(URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/"))
         }
+    }
+
+    func testPreflightRecordsTheLaunchOptionsTheAppWillApply() throws {
+        var environment = environment
+        environment["STOCKBAR_ACCEPTANCE_APPEARANCE"] = "dark"
+        environment["STOCKBAR_ACCEPTANCE_SECTION"] = "allocation"
+        environment["STOCKBAR_ACCEPTANCE_CURRENCY"] = "nope"
+        var output = Data()
+        _ = try StockbarAcceptancePreflight.runIfRequested(
+            arguments: ["Stockbar", "--acceptance-preflight"],
+            environment: environment
+        ) { output.append($0) }
+
+        let report = try JSONDecoder().decode(StockbarAcceptancePreflightReport.self, from: output)
+        XCTAssertEqual(report.launchOptions, StockbarAcceptanceLaunchOptions(appearance: .dark, section: "allocation"))
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).contains(#""appearance" : "dark""#))
     }
 
     func testPreflightAllowsRestartOnlyWithMatchingMarker() throws {

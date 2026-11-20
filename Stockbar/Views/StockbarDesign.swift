@@ -654,6 +654,20 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
         self.title = title
     }
 
+    /// One segment as assistive technology reads it.
+    struct Segment: Equatable {
+        let option: Value
+        let label: String
+        let isSelected: Bool
+    }
+
+    /// What the control exposes: one group named `label`, and a button per
+    /// option that reports whether it is selected. The body draws from this.
+    static func accessibility(label: String, options: [Value], selection: Value,
+                              title: (Value) -> String) -> (label: String, segments: [Segment]) {
+        (label, options.map { Segment(option: $0, label: title($0), isSelected: $0 == selection) })
+    }
+
     /// The option `offset` places away from `current`, stopping at either end.
     static func step(from current: Value, by offset: Int, in options: [Value]) -> Value? {
         guard let index = options.firstIndex(of: current) else { return options.first }
@@ -662,9 +676,10 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
     }
 
     var body: some View {
+        let exposure = Self.accessibility(label: label, options: options, selection: selection, title: title)
         HStack(spacing: 2) {
-            ForEach(options, id: \.self) { option in
-                segment(option)
+            ForEach(exposure.segments, id: \.option) { segment in
+                self.segment(segment)
             }
         }
         .padding(2)
@@ -676,15 +691,15 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
             return .handled
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(label)
+        .accessibilityLabel(exposure.label)
     }
 
-    private func segment(_ option: Value) -> some View {
-        let isSelected = option == selection
+    private func segment(_ segment: Segment) -> some View {
+        let isSelected = segment.isSelected
         return Button {
-            select(option)
+            select(segment.option)
         } label: {
-            Text(title(option))
+            Text(segment.label)
                 .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .lineLimit(1)
@@ -701,7 +716,7 @@ struct StockbarSegmentedControl<Value: Hashable>: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title(option))
+        .accessibilityLabel(segment.label)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

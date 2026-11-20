@@ -106,6 +106,10 @@ final class StockbarMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func initialContentSize() -> NSSize {
+        // An acceptance run can ask for the minimum size, to check the tightest layout.
+        if StockbarAcceptanceLaunchOptions.current.opensAtMinimumSize {
+            return WindowMetrics.minimumSize
+        }
         guard let visibleFrame = NSScreen.main?.visibleFrame else {
             return WindowMetrics.preferredSize
         }

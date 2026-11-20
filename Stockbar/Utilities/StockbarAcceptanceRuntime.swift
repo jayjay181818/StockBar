@@ -43,6 +43,13 @@ struct StockbarAcceptanceRuntime: Sendable {
 
     var isEnabled: Bool { root != nil }
 
+    /// True only for an acceptance run started explicitly with its own root
+    /// and run identifier and live providers disabled. False for a normal run
+    /// and for the automatic XCTest isolation, which also has a root.
+    var isExplicitAcceptanceRun: Bool {
+        root != nil && runID != nil && !liveProviderRequestsAllowed && loopbackFolyncAllowed
+    }
+
     /// Acceptance and XCTest runs keep Trading 212 credentials in their own
     /// Keychain service, like Folync, so they never read or replace the real item.
     var trading212KeychainService: String {

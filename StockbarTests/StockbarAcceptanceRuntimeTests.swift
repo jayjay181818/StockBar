@@ -534,3 +534,89 @@ final class StockbarAutosavePolicyTests: XCTestCase {
         XCTAssertTrue(statusName.hasSuffix(".acceptance.run-12345678"))
     }
 }
+
+final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
+    private let allOptions = [
+        "STOCKBAR_ACCEPTANCE_APPEARANCE": "light",
+        "STOCKBAR_ACCEPTANCE_SECTION": "risk",
+        "STOCKBAR_ACCEPTANCE_CURRENCY": "gbp",
+        "STOCKBAR_ACCEPTANCE_WINDOW": "min"
+    ]
+
+    private let explicitRun = StockbarAcceptanceRuntime(
+        root: URL(fileURLWithPath: "/tmp/stockbar-acceptance-test", isDirectory: true), runID: "run-12345678",
+        folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+        liveProviderRequestsAllowed: false, loopbackFolyncAllowed: true)
+
+    func testAnExplicitAcceptanceRunReadsEveryOption() {
+        XCTAssertTrue(explicitRun.isExplicitAcceptanceRun)
+        let options = StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: explicitRun)
+
+        XCTAssertEqual(options.appearance, .light)
+        XCTAssertEqual(options.section, StockbarMainSection.risk.rawValue)
+        XCTAssertEqual(options.currency, "GBP")
+        XCTAssertTrue(options.opensAtMinimumSize)
+    }
+
+    func testANormalRunIgnoresTheOptions() throws {
+        let normal = try StockbarAcceptanceRuntime.resolve(environment: allOptions)
+
+        XCTAssertFalse(normal.isExplicitAcceptanceRun)
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: normal), .none)
+    }
+
+    func testTheAutomaticXCTestIsolationIgnoresTheOptions() throws {
+        // It has a root and a run identifier too, so `isEnabled` alone is not the gate.
+        var environment = allOptions
+        environment["XCTestConfigurationFilePath"] = "/tmp/StockbarTests.xctestconfiguration"
+        let isolation = try StockbarAcceptanceRuntime.resolveCurrent(
+            environment: environment, processIdentifier: 4242, uniqueSuffix: "run-0002", isRunningUnderXCTest: true
+        )
+
+        XCTAssertTrue(isolation.isEnabled)
+        XCTAssertFalse(isolation.isExplicitAcceptanceRun)
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: isolation), .none)
+        XCTAssertTrue(StockbarAcceptanceLaunchOptions.current.isEmpty, "the test process itself must not pick them up")
+    }
+
+    func testEachUnknownValueIsDroppedOnItsOwn() {
+        let unknown: [(key: String, value: String)] = [
+            ("STOCKBAR_ACCEPTANCE_APPEARANCE", "sepia"),
+            ("STOCKBAR_ACCEPTANCE_SECTION", "performance"),
+            ("STOCKBAR_ACCEPTANCE_CURRENCY", "XYZ"),
+            ("STOCKBAR_ACCEPTANCE_WINDOW", "max")
+        ]
+        let expected = StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: explicitRun)
+        for (key, value) in unknown {
+            var environment = allOptions
+            environment[key] = value
+            var withoutIt = expected
+            switch key {
+            case StockbarAcceptanceLaunchOptions.appearanceKey: withoutIt.appearance = nil
+            case StockbarAcceptanceLaunchOptions.sectionKey: withoutIt.section = nil
+            case StockbarAcceptanceLaunchOptions.currencyKey: withoutIt.currency = nil
+            default: withoutIt.opensAtMinimumSize = false
+            }
+            XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicitRun),
+                           withoutIt, "\(key)=\(value) must be ignored and leave the other options alone")
+        }
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: [:], runtime: explicitRun), .none)
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(
+            environment: ["STOCKBAR_ACCEPTANCE_SECTION": "  "], runtime: explicitRun), .none)
+    }
+
+    @MainActor
+    func testApplyingWritesOnlyTheSettingsTheOptionsName() throws {
+        let suite = "StockbarAcceptanceLaunchOptionsTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("USD", forKey: "preferredCurrency")
+
+        StockbarAcceptanceLaunchOptions(appearance: .dark, section: "holdings").apply(to: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: "appearanceMode"), "dark")
+        XCTAssertEqual(defaults.string(forKey: "mainWindow.selectedSection"), "holdings")
+        XCTAssertEqual(defaults.string(forKey: "preferredCurrency"), "USD", "an option not given changes nothing")
+        XCTAssertEqual(StockbarMainNavigationState(defaults: defaults).selectedSection, .holdings)
+    }
+}
