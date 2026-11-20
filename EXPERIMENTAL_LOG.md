@@ -322,8 +322,12 @@ From 2026-11-19, at the owner's word, `experimental` is in use again for a
 major change: the Glass redesign and the new Folync pages. Pull request 133
 brought it up to `testing` first, with merge commit `01d4768`. The owner
 said the benchmark for this work can wait until after 02:30 on 2026-11-20
-or later, so the before/after table of pull request 134 is to be added
-then.
+or later. Pull request 134's comparison was run that morning, twice, with
+another project's tests running on the same Mac throughout. After the
+repeat no row shows a measurable change, and both tables are in its
+record. It is not merged yet: no launch was measured on a quiet Mac, and
+the rule written before the first launch leaves the merge to the owner in
+that case.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -3542,10 +3546,98 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   `Docs/Development.md` describes it.
 - Merged: not yet. The date and squash commit are filled in by the next
   pull request.
-- Benchmark: pending, see [Where things stand](#where-things-stand). The
-  benchmark's launches are acceptance runs with no Folync set up, so they
-  never reach the exception, and no row is expected to move. That is
-  expected, not measured.
+- Benchmark: before `01d4768`, after `7aba2f7`, the standard comparison,
+  six launches a side in turns, run twice on 2026-11-20, on macOS 27.2.1
+  and mains power, with the screen unlocked and the display awake. After
+  the repeat no row shows a measurable change. This pull request names no
+  row: the benchmark's launches are acceptance runs with no Folync set
+  up, so they never reach the exception.
+
+  Neither run was measured on a quiet Mac. The comparison was scheduled
+  for 02:30 UTC and did not run then. The Mac restarted at 08:35 UTC and
+  the owner said "Try now" at about 08:55. Another session on the Mac was
+  running a different project's simulator tests, one after another. A
+  wait for a quiet Mac passed at 09:06 and the next test began within the
+  minute, so no start time avoided them, and the first run started at
+  once under rules written into its script before it began. Two are the
+  rules of 2026-11-16, which say when a run is set aside and repeated
+  (see
+  [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed)).
+  The third is new and decides the merge. A sample every ten seconds
+  notes whether another project's `xcodebuild` is present, and a measured
+  launch with one or more such samples counts as overlapped. With any
+  launch overlapped, the pull request is not merged on that run without
+  the owner's word or a repeat with the other session paused.
+
+  First run, turns from 09:14 to 09:47 UTC. No reading inside the turns
+  showed input. The four busiest processes together averaged 260% of a
+  core over the before side's 17 readings and 313% over the after side's
+  16, a ratio of 1.20, so the run stands. All twelve measured launches
+  were overlapped. The load average at the once-a-minute readings inside
+  the turns ran from 5.8 to 48.8. Besides the other project's tests,
+  `StorageManagementService` and `ApplicationsStorageExtension`, two
+  system processes, were among the four busiest in 31 of the run's 37
+  readings. The report flagged no launch. One row is marked: idle CPU
+  wake-ups, possibly lower.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 88.9 (87.1 to 94.8) MB | 90.8 (84.8 to 93.4) MB | +1.9 MB, +2.1% | no measurable change (p = 1.000) |
+  | Idle memory the app holds allocated | 49.1 (40.0 to 51.8) MB | 49.5 (40.0 to 51.7) MB | +0.4 MB, +0.8% | no measurable change (p = 0.859) |
+  | Peak memory, launch and history load | 238.6 (234.9 to 256.9) MB | 247.7 (237.2 to 252.3) MB | +9.1 MB, +3.8% | no measurable change (p = 0.180) |
+  | Idle memory growth across the window | -0.1 (-2.2 to 0.0) MB | 0.0 (-6.5 to 0.1) MB | +0.1 MB, -100.0% | no measurable change (p = 0.364) |
+  | Idle CPU | 0.091 (0.075 to 0.104) s/min | 0.088 (0.079 to 0.097) s/min | -0.003 s/min, -2.7% | no measurable change (p = 0.788) |
+  | Idle CPU wake-ups | 28 (26 to 29) /min | 24 (22 to 28) /min | -4 /min, -12.5% | possibly lower (p = 0.019) |
+  | Idle CPU power | 4.64 (4.25 to 5.22) mW | 5.02 (4.44 to 5.28) mW | +0.38 mW, +8.2% | no measurable change (p = 0.331) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.06 (0.99 to 1.35) s | 1.04 (0.96 to 1.88) s | -0.02 s, -1.9% | no measurable change (p = 0.669) |
+  | Launch to history loaded | 1.11 (1.01 to 1.34) s | 1.03 (0.93 to 1.86) s | -0.08 s, -7.2% | no measurable change (p = 0.457) |
+  | CPU from launch to the idle window | 2.25 (2.11 to 2.75) s | 2.18 (2.03 to 3.46) s | -0.07 s, -2.9% | no measurable change (p = 0.485) |
+  | CPU energy from launch to the idle window | 6.31 (5.26 to 6.69) J | 6.39 (4.47 to 6.64) J | +0.08 J, +1.2% | no measurable change (p = 0.937) |
+  | Python helper start to ready, no network | 0.34 (0.30 to 1.03) s | 0.31 (0.29 to 1.02) s | -0.03 s, -8.8% | no measurable change (p = 0.247) |
+  | Python helper start, CPU | 0.33 (0.30 to 0.45) s | 0.31 (0.28 to 0.45) s | -0.02 s, -7.5% | no measurable change (p = 0.411) |
+  | Python helper memory once started | 71.2 (70.4 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.961) |
+
+  Repeat, for that row, turns from 10:08 to 10:41 UTC. A wait of twenty
+  minutes for a quiet Mac found another project's `xcodebuild` at 39 of
+  its 40 checks, so the repeat started without one, under the same
+  rules. No reading inside the turns showed input. The four busiest
+  together averaged 228% of a core over the before side's 16 readings
+  and 276% over the after side's 16, a ratio of 1.21, so it stands.
+  Again all twelve measured launches were overlapped. The load ran from
+  5.1 to 41.1, and the same two system processes were among the four
+  busiest in 32 of 33 readings. The report flagged no launch and marks
+  no row. Idle CPU wake-ups are 26 a minute on both sides.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 93.3 (90.4 to 95.6) MB | 92.7 (85.3 to 95.8) MB | -0.7 MB, -0.7% | no measurable change (p = 0.699) |
+  | Idle memory the app holds allocated | 50.4 (48.1 to 51.9) MB | 49.6 (46.1 to 50.6) MB | -0.8 MB, -1.6% | no measurable change (p = 0.197) |
+  | Peak memory, launch and history load | 248.2 (241.7 to 257.8) MB | 245.4 (238.0 to 261.1) MB | -2.8 MB, -1.1% | no measurable change (p = 0.818) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-3.9 to 0.0) MB | +0.0 MB | no measurable change (p = 0.273) |
+  | Idle CPU | 0.084 (0.074 to 0.097) s/min | 0.079 (0.070 to 0.091) s/min | -0.005 s/min, -6.0% | no measurable change (p = 0.457) |
+  | Idle CPU wake-ups | 26 (24 to 31) /min | 26 (22 to 28) /min | -0 /min, -1.9% | no measurable change (p = 0.662) |
+  | Idle CPU power | 4.25 (3.79 to 4.61) mW | 4.51 (3.89 to 4.84) mW | +0.26 mW, +6.1% | no measurable change (p = 0.394) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.83 (0.62 to 1.05) s | 0.91 (0.56 to 1.04) s | +0.08 s, +9.6% | no measurable change (p = 0.937) |
+  | Launch to history loaded | 0.89 (0.61 to 1.01) s | 0.90 (0.66 to 1.02) s | +0.01 s, +1.7% | no measurable change (p = 0.734) |
+  | CPU from launch to the idle window | 2.06 (1.74 to 2.19) s | 2.12 (1.87 to 2.17) s | +0.06 s, +2.9% | no measurable change (p = 0.677) |
+  | CPU energy from launch to the idle window | 5.80 (4.52 to 6.58) J | 5.91 (5.50 to 6.49) J | +0.11 J, +1.8% | no measurable change (p = 0.818) |
+  | Python helper start to ready, no network | 0.60 (0.33 to 1.09) s | 0.36 (0.29 to 1.00) s | -0.24 s, -40.0% | no measurable change (p = 0.329) |
+  | Python helper start, CPU | 0.43 (0.32 to 0.58) s | 0.34 (0.29 to 0.45) s | -0.09 s, -20.7% | no measurable change (p = 0.102) |
+  | Python helper memory once started | 71.3 (70.3 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.920) |
+
+  The "possibly lower" row did not repeat, so it does not count. The
+  conditions limit what the two tables show. Their ranges are wide: in
+  the first run one launch on the after side took 1.88 s to its first
+  window where the side's median was 1.04 s. A change smaller than that
+  spread would not show, and these figures are not set beside those of
+  other days. What they show is that the app builds and runs the standard
+  launches with the change in it, and that nothing moved by more than a
+  busy Mac's noise. The readings, the samples, the rules and the scripts
+  are kept beside the results, in
+  `build/bench/results/compare-pr134-20261120-091103/conditions` and
+  `build/bench/results/compare-pr134-repeat-20261120-100818/conditions`.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 754 XCTest tests with 0
   failures. Twelve are new. Eight in `StockbarProviderAccessPolicyTests`
   cover the policy: the three loopback forms allowed; ten other forms
@@ -3595,6 +3687,8 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   and the tests against the specification. Written by an Opus subagent from
   that specification. No independent second review.
 - Known issues:
+  - No launch of either comparison was measured on a quiet Mac, as set out
+    above.
   - The stand-in answers 200 with a new body every time, so the app's 304
     path was not exercised in the run.
   - A manifest with `http://[::1]:<port>` passes the launcher, the
@@ -3605,7 +3699,11 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     redirect's target. A Folync on this Mac that redirected elsewhere would
     be followed. The stand-in never redirects, and a normal run behaves the
     same way. Not changed here.
-- Verdict: pending the benchmark.
+- Verdict: pending the owner's word on the merge. The benchmark record
+  is complete, and no row shows a measurable change after the repeat. But
+  every measured launch ran beside another project's tests, and the rule
+  written before the first launch leaves the merge to the owner in that
+  case.
 
 ## Rust evaluation, 2026-11-12
 
