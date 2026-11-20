@@ -346,7 +346,10 @@ to build the Glass look and judge it on experimental builds. It was merged
 the same day as `fe59b8d`. The shell, the popover and the Overview were then
 built at the same time, each as its own pull request; the popover's, 138,
 was ready first and was merged as `564056b`. The Overview's, 139, was
-brought up to date with it and followed.
+brought up to date with it and followed as `c9453fd`. The shell's, 140, is
+the last of Phase A. With it merged, the phase's comparison is owed: from
+`5fa923b`, the last commit measured, to the head, in the first quiet
+window.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -4272,8 +4275,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   gains "as of" that time. It uses the connection state the app already
   has and makes no request. When the last failure was not a failure to
   connect, it says that Folync did not send new figures.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `c9453fd`. The merge published
+  experimental build 382.3.8 as the prerelease `experimental-382.3.8`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. This pull request
   changes code the benchmark runs: its launches open the main window on
   the Overview. Covered by the comparison after Phase A's last pull
@@ -4336,6 +4341,133 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     Increase Contrast and Reduce Transparency on the new card.
   - On the stand-in, 1Y and All look the same, because its history starts
     about a year back.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 140: Give the main window the Glass shell with a floating sidebar
+
+- What: the main window becomes the shell of the approved design. The
+  owner chose the floating sidebar on 2026-11-20, knowing that macOS gives
+  none in this window: a unified toolbar on the split view, a split-view
+  controller's sidebar item and a background extension effect had each
+  given the flat full-height one. So the app draws the panel and rebuilds
+  what a standard sidebar gives for free.
+
+  The window is see-through: it is no longer opaque, and the root view
+  draws a blurred view of what is behind it under a light or dark wash.
+  Under Reduce Transparency it is opaque. A unified toolbar with no
+  customisation moves the traffic lights onto the panel and holds the
+  sidebar button. The minimum size, 1060 by 680, is now held by
+  constraints on the content view; the old way let the toolbar's height
+  in, and the window could not be made shorter than about 700 points.
+
+  The sidebar is a floating panel, inset 7 points with a 16-point corner.
+  It uses real glass only behind `#available(macOS 26, *)`, and a system
+  material with a hairline from macOS 15.4 to 25. Its width is fixed at
+  213 points, which keeps every page as wide as it was. Its entries are
+  in three groups: Portfolio (Overview, Holdings, Alerts), Analysis
+  (Charts, Risk, Allocation) and System (Data Health, Backups,
+  Diagnostics, Settings). Only sections that exist are listed. The page
+  that was titled "Performance" is titled "Charts" everywhere a user sees
+  it; its stored value does not change. A selected, a hovered and a
+  pressed entry each look different. An entry can be dimmed with a
+  reason, or carry a "New" badge; both are built and tested and nothing
+  uses them yet.
+
+  One list, `StockbarMainSection.sidebarGroups`, drives the sidebar, the
+  View menu and the shortcuts, so they cannot drift apart. ⌘1 to ⌘9 now
+  run in sidebar order: Overview, Holdings, Alerts, Charts, Risk,
+  Allocation, Data Health, Backups, Diagnostics. That changes which
+  number opens which page, and the user guide says so. View → Hide
+  Sidebar and Show Sidebar, ⌃⌘S and the toolbar button collapse the
+  panel, the page takes the width, and the choice is remembered. With
+  focus in the sidebar, Up and Down move the selection and Home and End
+  go to the first and last entry; Tab goes into the page and Shift-Tab
+  comes back.
+
+  The footer names the portfolio's source and says how fresh it is, with
+  the refresh button. When Folync is not answering and saved figures are
+  shown it turns amber and says "Couldn't reach Folync · figures from"
+  and their time; a rejected token and a rate limit have their own words.
+  It uses the status the app already has and makes no request.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. Of the redesign's
+  pull requests so far this is the one most likely to move a row: the
+  main window the launches open is now see-through, with a blurred
+  backing and a toolbar. It completes Phase A, so the phase's comparison,
+  from `5fa923b` to the head, is due in the first quiet window.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull requests 138 and
+  139 were merged this branch was brought up to date with them, and the
+  figures here are for all of it together: 856 XCTest tests with 0
+  failures. Fifteen are new, in `StockbarAcceptanceRuntimeTests.swift`:
+  the groups and their order; each entry's shortcut, and the View menu
+  and the sidebar coming from one list; the title "Charts"; hiding the
+  sidebar and remembering it; the dimmed and badge states and the entry
+  states; the footer's words for each state, the warning and its time
+  among them; when the warning is announced; the keyboard's movement of
+  the selection; and the words each entry gives VoiceOver. `checks`,
+  `docs-check` and `build-release` pass on the combined code. 103 Python
+  helper tests and 95 script tests passed on the worker's last commit;
+  nothing they cover changed after it.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: Backups put before Data Health (the order, shortcut and
+  keyboard tests failed); the sidebar choice not saved (two tests); the
+  warning shown for a portfolio that is not Folync's (one); pressed drawn
+  like hovered (one).
+
+  On screen, in the acceptance copy against the stand-in, by the worker:
+  captures, one window at a time, in dark and light, at the default and
+  the minimum size, with the sidebar shown and hidden, and the amber
+  footer with the stand-in stopped. Real clicks: all ten entries; the
+  Overview's range switch at the default and the minimum size, sidebar
+  shown and hidden; the toolbar's sidebar button; dragging the window by
+  the page's strip and by the top of the panel. The keyboard: Up, Down,
+  Home, End, Tab and Shift-Tab, ⌘-number for five pages, ⌃⌘S and ⌘R. Home
+  and End did nothing at first, because AppKit turns them into scroll
+  commands, and were fixed. The headings, each entry's title, position
+  and selected state, and the footer's status were read from the copy's
+  real accessibility tree. After bringing the branch up to date the
+  session lead ran the combined build in the acceptance copy, captured
+  the new Overview inside the new shell in dark and light, and made one
+  real click on the Overview's range switch, which now sits in the
+  window's top strip beside the toolbar: the range changed.
+
+  Two of the worker's test clicks landed outside the acceptance window,
+  near the top of the owner's screen: it had measured its coordinates
+  against a screenshot of another size. No dialog appeared, the owner was
+  told, and later clicks were taken from captures at the window's own
+  size.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the changes to the
+  window controller and the menus, looked at three of the worker's
+  captures, brought the branch up to date and looked at the combined
+  build. It did not read the sidebar's view or its tests. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - A SwiftUI button drawn on the panel at the height of the traffic
+    lights never received a real click, though it worked through
+    accessibility. Why is not established. The sidebar button is a
+    toolbar item for that reason, and anything placed that high needs a
+    real-click check.
+  - After opening Charts, the next click on another entry was lost twice
+    in six tries; a second click always worked. Whether the app or the
+    click tool is at fault is not known.
+  - The sidebar cannot be dragged wider. Its width is fixed.
+  - At the minimum width the Holdings table runs past the right edge of
+    its card. Whether it did before is not known: the page is as wide as
+    it was, but the old minimum could not be reached in the same way.
+  - Not confirmed: that VoiceOver hears the sidebar as one list. SwiftUI
+    gives it no list role, and the inspection tool shows no groups.
+  - Not compiled with Xcode 26, which CI uses for `testing` and `main`.
+    The glass call is guarded and nothing else is believed newer than
+    macOS 14.
+  - Never seen on screen: the dimmed and "New" entries, the hover and
+    pressed states, Reduce Transparency, Increase Contrast, the fallback
+    before macOS 26, zoom and full screen, and the see-through effect
+    itself, which a capture of one window leaves out. Not heard:
+    VoiceOver. Not tried: Full Keyboard Access.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
