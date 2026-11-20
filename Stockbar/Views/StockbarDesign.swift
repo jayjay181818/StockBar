@@ -55,6 +55,34 @@ enum StockbarPalette {
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
         })
     }
+
+    // MARK: Allocation (donut slices and the correlation grid)
+
+    /// Slice colours for groups with no colour of their own (holdings and
+    /// currencies). None is red or green: those mean loss and gain here.
+    static let allocationSlices: [Color] = [
+        .blue, .orange, .purple, .cyan, .pink, .yellow, .indigo, .brown, .teal, allocationLavender
+    ]
+    /// The "Other" slice, and holdings with no known sector.
+    static let allocationOther = Color.gray
+    /// Replaces the red and green two sectors had, which read as loss and gain.
+    static let allocationLavender = adaptive(light: NSColor(srgbRed: 0.55, green: 0.45, blue: 0.85, alpha: 1),
+                                             dark: NSColor(srgbRed: 0.70, green: 0.62, blue: 0.98, alpha: 1))
+    static let allocationSectorTeal = Color.teal
+    /// Correlation cells: one hue for figures above zero, another below.
+    static let correlationPositive = adaptive(light: NSColor(srgbRed: 0.16, green: 0.42, blue: 0.82, alpha: 1),
+                                              dark: NSColor(srgbRed: 0.24, green: 0.52, blue: 0.95, alpha: 1))
+    static let correlationNegative = adaptive(light: NSColor(srgbRed: 0.78, green: 0.42, blue: 0.08, alpha: 1),
+                                              dark: NSColor(srgbRed: 0.95, green: 0.58, blue: 0.20, alpha: 1))
+
+    /// The fill behind one correlation cell; clear at zero or unknown.
+    static func correlationFill(_ shade: CorrelationShade) -> Color {
+        switch shade {
+        case .none: return .clear
+        case .positive(let strength): return correlationPositive.opacity(0.10 + 0.70 * strength)
+        case .negative(let strength): return correlationNegative.opacity(0.10 + 0.70 * strength)
+        }
+    }
 }
 
 enum StockbarLayout {

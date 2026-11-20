@@ -3,7 +3,7 @@
 //  Stockbar
 //
 //  Created by Claude Code on 2025-10-03.
-//  Comprehensive portfolio analytics with correlation matrix and sector allocation
+//  Allocation: a donut by sector, holding or currency, diversification, the correlation grid and attribution
 //
 
 import SwiftUI
@@ -34,6 +34,13 @@ struct PortfolioAnalyticsView: View {
     @State private var portfolioUpdateTick = 0
     /// True once a calculation has produced results, so later recalculations keep them visible.
     @State private var hasLoadedOnce = false
+    /// The donut's view: by sector, by holding or by currency.
+    @State private var grouping: AllocationGrouping = .sector
+    /// Each valued holding with the currency it is priced in, for the currency view.
+    @State private var valuedHoldings: [AllocationHolding] = []
+    /// Slice colours for holdings and currencies, kept while the page is open.
+    @State private var holdingColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
+    @State private var currencyColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
 
     private let correlationService = CorrelationMatrixService()
     private let sectorService = SectorAnalysisService()
@@ -76,22 +83,18 @@ struct PortfolioAnalyticsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
+            VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
                 headerSection
 
                 if isLoading && !hasLoadedOnce {
                     ProgressView("Calculating portfolio analytics...")
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 40)
+                        .stockbarEmptyState(minHeight: 180)
                 } else if dataModel.realTimeTrades.count < 2 {
                     emptyStateView
                 } else {
-                    // Each section is a card, as on Risk.
-                    sectorAllocationSection.stockbarCard()
+                    allocationSection.stockbarCard()
                     diversificationSection.stockbarCard()
-                    correlationMatrixSection.stockbarCard()
-                    correlationInsightsSection.stockbarCard()
+                    correlationSection.stockbarCard()
                     attributionAnalysisSection.stockbarCard()
                 }
             }
@@ -104,7 +107,8 @@ struct PortfolioAnalyticsView: View {
         }
         // One task for every trigger. SwiftUI cancels the previous run when the id changes, and the
         // sleep debounces bursts of price updates. The first calculation runs immediately, and
-        // earlier results stay on screen while a recalculation is in flight.
+        // earlier results stay on screen while a recalculation is in flight. The donut's view
+        // switch is not a trigger: it only regroups figures already worked out.
         .task(id: AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency, tick: portfolioUpdateTick)) {
             if hasLoadedOnce {
                 try? await Task.sleep(for: .seconds(1))
@@ -123,23 +127,35 @@ struct PortfolioAnalyticsView: View {
     // MARK: - Header
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StockbarPageHeader("Allocation", subtitle: "Sector allocation, diversification, correlation and attribution.") {
-                // Time Range Picker
-                StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases,
-                                         expands: true) { $0.rawValue }
-                .frame(width: 250)
-                .help("Price history window used for the correlation analysis")
-            }
+        StockbarPageHeader("Allocation", subtitle: "Where the money is") {
+            StockbarSegmentedControl("Group by", selection: $grouping, options: AllocationGrouping.allCases,
+                                     expands: true) { $0.rawValue }
+            .frame(width: 280)
+            .help("Group the allocation by sector, by holding or by the currency each holding is priced in")
         }
     }
 
-    // MARK: - Sector Allocation
+    // MARK: - Allocation donut and list
 
-    private var sectorAllocationSection: some View {
+    /// The groups for the chosen view, at most eight.
+    private var displayedGroups: [AllocationGroup] {
+        let groups: [AllocationGroup]
+        switch grouping {
+        case .sector:
+            groups = AllocationPresentation.sectorGroups(sectorAllocations, showsDayChange: completeDayCoverage)
+        case .holding:
+            groups = AllocationPresentation.holdingGroups(sectorAllocations)
+        case .currency:
+            groups = AllocationPresentation.currencyGroups(valuedHoldings)
+        }
+        return AllocationPresentation.folded(groups)
+    }
+
+    private var allocationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Sector Allocation")
+            Text("\(grouping.rawValue) Allocation")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
 
             if sectorAllocations.isEmpty {
                 Text(analyticsEligible > 0
@@ -156,67 +172,22 @@ struct PortfolioAnalyticsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 }
-                // Pie Chart
-                Chart(sectorAllocations) { allocation in
-                    SectorMark(
-                        angle: .value("Value", allocation.totalValue),
-                        innerRadius: .ratio(0.5),
-                        angularInset: 1.5
-                    )
-                    .foregroundStyle(by: .value("Sector", sectorLabel(allocation.sector)))
-                }
-                // Same colours as the breakdown table below.
-                .chartForegroundStyleScale(
-                    domain: sectorAllocations.map { sectorLabel($0.sector) },
-                    range: sectorAllocations.map { colorForSector($0.sector) }
-                )
-                .frame(height: 300)
-                .chartLegend(position: .trailing)
-                .accessibilityLabel("Sector allocation")
-                .accessibilityValue(sectorAllocations
-                    .map { "\(sectorLabel($0.sector)) \(String(format: "%.1f", $0.percentageOfPortfolio)) percent" }
-                    .joined(separator: ", "))
 
-                // Sector Breakdown Table
-                VStack(spacing: 4) {
-                    ForEach(sectorAllocations) { allocation in
-                        HStack {
-                            Circle()
-                                .fill(colorForSector(allocation.sector))
-                                .frame(width: 10, height: 10)
-
-                            Text(sectorLabel(allocation.sector))
-                                .font(.subheadline)
-
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text(HoldingsCurrencyFormatter.amount(allocation.totalValue, currency: analyticsCurrency))
-                                    .monospacedDigit()
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-
-                                Text("\(allocation.percentageOfPortfolio, specifier: "%.1f")%")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            // Unknown day change is a dash in a neutral colour, never green.
-                            Text(completeDayCoverage ? AttributionFormat.signedPercent(allocation.dayChangePercent) : "—")
-                                .font(.caption)
-                                .foregroundColor(StockbarPalette.signedOnSurface(completeDayCoverage ? allocation.dayChangePercent : nil))
-                                .frame(width: 70, alignment: .trailing)
-                                .accessibilityLabel(completeDayCoverage
-                                    ? "Day change \(AttributionFormat.spokenPercent(allocation.dayChangePercent))"
-                                    : "Day change unavailable")
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 8)
-                        .stockbarSurface(.inset, cornerRadius: 6)
+                let groups = displayedGroups
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 28) {
+                        donut(groups)
+                        allocationList(groups)
+                            .frame(minWidth: 420)
+                    }
+                    VStack(alignment: .center, spacing: 16) {
+                        donut(groups)
+                        allocationList(groups)
                     }
                 }
 
-                if let unclassified = diversificationAnalysis?.unclassifiedPercentage, unclassified > 0 {
+                if grouping == .sector,
+                   let unclassified = diversificationAnalysis?.unclassifiedPercentage, unclassified > 0 {
                     Text("\(unclassified, specifier: "%.1f")% of the portfolio is in holdings with no known sector (shown as Unclassified).")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -225,42 +196,135 @@ struct PortfolioAnalyticsView: View {
         }
     }
 
+    private func donut(_ groups: [AllocationGroup]) -> some View {
+        let holdingCount = sectorAllocations.reduce(0) { $0 + $1.positions.count }
+        let total = sectorAllocations.reduce(0) { $0 + $1.totalValue }
+        let centre = AllocationPresentation.centreText(total: total, holdingCount: holdingCount, currency: analyticsCurrency)
+        return ZStack {
+            Chart(groups) { group in
+                SectorMark(
+                    angle: .value("Value", group.value),
+                    innerRadius: .ratio(0.62),
+                    angularInset: 1.5
+                )
+                .foregroundStyle(colour(for: group))
+            }
+            .chartLegend(.hidden)
+            VStack(spacing: 2) {
+                Text(centre.total)
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(centre.count)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 110)
+        }
+        .frame(width: 210, height: 210)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(grouping.rawValue) allocation, \(centre.total), \(centre.count)")
+        .accessibilityValue(groups
+            .map { "\(AllocationPresentation.rowLabel($0, grouping: grouping)) \(String(format: "%.1f", $0.share)) percent" }
+            .joined(separator: ", "))
+    }
+
+    private func allocationList(_ groups: [AllocationGroup]) -> some View {
+        VStack(spacing: 2) {
+            ForEach(groups) { group in
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(colour(for: group))
+                        .frame(width: 10, height: 10)
+                    Text(AllocationPresentation.rowLabel(group, grouping: grouping))
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    Text(HoldingsCurrencyFormatter.amount(group.value, currency: analyticsCurrency))
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(AllocationPresentation.shareText(group.share))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 54, alignment: .trailing)
+                    if grouping == .sector {
+                        // Unknown day change is a dash in a neutral colour, never green.
+                        Text(AllocationPresentation.dayChangeText(group))
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundColor(StockbarPalette.signedOnSurface(group.dayChangePercent))
+                            .frame(width: 64, alignment: .trailing)
+                    }
+                }
+                .padding(.vertical, 5)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(AllocationPresentation.spokenRow(group, grouping: grouping, currency: analyticsCurrency))
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func colour(for group: AllocationGroup) -> Color {
+        if group.isOther { return StockbarPalette.allocationOther }
+        switch grouping {
+        case .sector:
+            return SectorAnalysisService.Sector(rawValue: group.key).map(Self.colorForSector) ?? StockbarPalette.allocationOther
+        case .holding:
+            return paletteColour(holdingColours.index(for: group.key))
+        case .currency:
+            return paletteColour(currencyColours.index(for: group.key))
+        }
+    }
+
+    private func paletteColour(_ index: Int?) -> Color {
+        guard let index else { return StockbarPalette.allocationOther }
+        let palette = StockbarPalette.allocationSlices
+        return palette[index % palette.count]
+    }
+
     // MARK: - Diversification
 
     private var diversificationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Diversification Analysis")
+            Text("Diversification")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
 
             if let analysis = diversificationAnalysis, analysis.isAvailable {
-                // Diversification Score
-                HStack {
+                HStack(alignment: .top, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Diversification Score")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-
-                        Text("\(analysis.score, specifier: "%.1f")/100")
+                        Text(AllocationPresentation.scoreText(analysis.score))
                             .font(.title2)
                             .fontWeight(.bold)
+                            .monospacedDigit()
                             .foregroundColor(colorForDiversificationScore(analysis.score))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
 
-                    Spacer()
+                    Divider()
 
-                    VStack(alignment: .trailing, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text("Concentration Risk")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-
                         Text(analysis.concentrationRisk.rawValue)
-                            .font(.title3)
-                            .fontWeight(.semibold)
+                            .font(.title2)
+                            .fontWeight(.bold)
                             .foregroundColor(colorForRiskLevel(analysis.concentrationRisk))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
                 }
-                .padding()
-                .stockbarSurface(.inset, tint: .blue, cornerRadius: 10)
+                .fixedSize(horizontal: false, vertical: true)
 
                 if analysis.unclassifiedPercentage > 0 {
                     Text("\(analysis.unclassifiedPercentage, specifier: "%.1f")% of the portfolio has no known sector and is excluded from this score.")
@@ -268,25 +332,16 @@ struct PortfolioAnalyticsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // Recommendations
                 if !analysis.recommendations.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Recommendations")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(analysis.recommendations, id: \.self) { recommendation in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text("•")
-                                    .foregroundColor(.blue)
-                                Text(recommendation)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                            Text(recommendation)
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .padding()
-                    .stockbarSurface(.inset, cornerRadius: 8)
                 }
             } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
                 Text("Diversification unavailable: \(analysis.unclassifiedPercentage, specifier: "%.0f")% of the portfolio has no known sector.")
@@ -300,15 +355,23 @@ struct PortfolioAnalyticsView: View {
         }
     }
 
-    // MARK: - Correlation Matrix
+    // MARK: - Correlation
 
-    private var correlationMatrixSection: some View {
+    private var correlationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Correlation Summary")
-                .font(.headline)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    correlationHeading
+                    Spacer(minLength: 12)
+                    rangeControl
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    correlationHeading
+                    rangeControl
+                }
+            }
 
             if let matrix = correlationMatrix {
-                // Correlation Summary
                 Text("Calculated across \(matrix.symbols.count) holdings")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -323,26 +386,39 @@ struct PortfolioAnalyticsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if let metrics = diversificationMetrics {
-                    HStack(spacing: 20) {
-                        metricCard(
-                            title: "Avg Correlation",
-                            value: String(format: "%.3f", metrics.averageCorrelation),
-                            subtitle: interpretCorrelation(metrics.averageCorrelation)
-                        )
-
-                        metricCard(
-                            title: "Effective N",
-                            value: String(format: "%.1f", metrics.effectiveN),
-                            subtitle: "Independent positions"
-                        )
-
-                        metricCard(
-                            title: "Diversification Ratio",
-                            value: String(format: "%.2f", metrics.diversificationRatio),
-                            subtitle: metrics.diversificationRatio > 1 ? "Good" : "Needs work"
-                        )
+                let symbols = AllocationPresentation.gridSymbols(matrix.symbols, values: holdingValues)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        correlationGrid(matrix, symbols: symbols)
+                        if let metrics = diversificationMetrics {
+                            VStack(spacing: 10) { correlationMetrics(metrics) }
+                                .frame(width: 190)
+                        }
                     }
+                    VStack(alignment: .leading, spacing: 14) {
+                        correlationGrid(matrix, symbols: symbols)
+                        if let metrics = diversificationMetrics {
+                            HStack(spacing: 12) { correlationMetrics(metrics) }
+                        }
+                    }
+                }
+
+                if let note = AllocationPresentation.gridNote(totalHoldings: matrix.symbols.count) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let line = AllocationPresentation.pairsLine(top: topCorrelations, bottom: bottomCorrelations) {
+                    Text(line)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Past the grid's limit, some listed pairs involve holdings the grid leaves out.
+                if matrix.symbols.count > AllocationPresentation.maximumGridHoldings {
+                    correlationPairLists
                 }
             } else {
                 Text("Not enough shared price history. Correlation needs at least \(Self.minimumCorrelationDays) common trading days for two or more holdings.")
@@ -352,75 +428,135 @@ struct PortfolioAnalyticsView: View {
         }
     }
 
-    // MARK: - Correlation Insights
+    private var correlationHeading: some View {
+        Text("How the holdings move together")
+            .font(.headline)
+            .accessibilityAddTraits(.isHeader)
+    }
 
-    private var correlationInsightsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Correlation Insights")
-                .font(.headline)
+    private var rangeControl: some View {
+        StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases,
+                                 expands: true) { $0.rawValue }
+        .frame(width: 250)
+        .help("Price history window used for the correlation analysis")
+    }
 
-            HStack(alignment: .top, spacing: 20) {
-                // Highest Correlations
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Highest Correlations (Risk)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.red)
+    /// Each holding's value in the display currency, to pick the grid's largest holdings.
+    private var holdingValues: [String: Double] {
+        Dictionary(sectorAllocations.flatMap(\.positions).map { ($0.symbol, $0.value) },
+                   uniquingKeysWith: +)
+    }
 
-                    if topCorrelations.isEmpty {
-                        Text("No data")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(topCorrelations) { pair in
-                            HStack {
-                                Text("\(pair.symbol1) ↔ \(pair.symbol2)")
-                                    .font(.caption)
-                                Spacer()
-                                Text("\(pair.correlation, specifier: "%.3f")")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.red)
-                            }
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 8)
-                            .stockbarSurface(.inset, tint: .red, cornerRadius: 4)
-                        }
+    private func correlationGrid(_ matrix: CorrelationMatrixService.CorrelationMatrix, symbols: [String]) -> some View {
+        Grid(horizontalSpacing: 3, verticalSpacing: 3) {
+            GridRow {
+                Color.clear.frame(width: 1, height: 1)
+                ForEach(symbols, id: \.self) { symbol in
+                    Text(symbol)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(width: 42)
+                        .accessibilityHidden(true)
+                }
+            }
+            ForEach(symbols, id: \.self) { row in
+                GridRow {
+                    Text(row)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: 64, alignment: .leading)
+                        .help(row)
+                        .accessibilityHidden(true)
+                    ForEach(symbols, id: \.self) { column in
+                        correlationCell(matrix, row: row, column: column)
                     }
                 }
-                .frame(maxWidth: .infinity)
-
-                // Lowest Correlations
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Lowest Correlations (Diversification)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
-
-                    if bottomCorrelations.isEmpty {
-                        Text("No data")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(bottomCorrelations) { pair in
-                            HStack {
-                                Text("\(pair.symbol1) ↔ \(pair.symbol2)")
-                                    .font(.caption)
-                                Spacer()
-                                Text("\(pair.correlation, specifier: "%.3f")")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.green)
-                            }
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 8)
-                            .stockbarSurface(.inset, tint: .green, cornerRadius: 4)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    @ViewBuilder
+    private func correlationCell(_ matrix: CorrelationMatrixService.CorrelationMatrix, row: String, column: String) -> some View {
+        if row == column {
+            Text("–")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+                .frame(width: 42, height: 26)
+                .accessibilityHidden(true)
+        } else {
+            let value = matrix.correlation(between: row, between: column)
+            let label = AllocationPresentation.cellLabel(row, column, value: value)
+            Text(AllocationPresentation.cellText(value))
+                .font(.caption.monospacedDigit().weight(.medium))
+                .frame(width: 42, height: 26)
+                .background {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(StockbarPalette.correlationFill(AllocationPresentation.shade(value)))
+                }
+                .help(label)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+        }
+    }
+
+    @ViewBuilder
+    private func correlationMetrics(_ metrics: CorrelationMatrixService.DiversificationMetrics) -> some View {
+        metricCard(
+            title: "Avg Correlation",
+            value: String(format: "%.3f", metrics.averageCorrelation),
+            subtitle: interpretCorrelation(metrics.averageCorrelation)
+        )
+        metricCard(
+            title: "Effective N",
+            value: String(format: "%.1f", metrics.effectiveN),
+            subtitle: "Independent positions"
+        )
+        metricCard(
+            title: "Diversification Ratio",
+            value: String(format: "%.2f", metrics.diversificationRatio),
+            subtitle: metrics.diversificationRatio > 1 ? "Good" : "Needs work"
+        )
+    }
+
+    /// The two pair lists, shown only when the grid cannot hold every holding.
+    private var correlationPairLists: some View {
+        HStack(alignment: .top, spacing: 20) {
+            pairList("Highest Correlations (Risk)", pairs: topCorrelations)
+            pairList("Lowest Correlations (Diversification)", pairs: bottomCorrelations)
+        }
+    }
+
+    private func pairList(_ title: String, pairs: [CorrelationMatrixService.CorrelationPair]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+            if pairs.isEmpty {
+                Text("No data")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(pairs) { pair in
+                    HStack {
+                        Text("\(pair.symbol1) ↔ \(pair.symbol2)")
+                            .font(.caption)
+                        Spacer()
+                        Text("\(pair.correlation, specifier: "%.3f")")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .stockbarSurface(.inset, cornerRadius: 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Empty State
@@ -456,27 +592,27 @@ struct PortfolioAnalyticsView: View {
             Text(value)
                 .font(.title3)
                 .fontWeight(.bold)
+                .monospacedDigit()
 
             Text(subtitle)
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding()
+        .padding(10)
         .stockbarSurface(.inset, cornerRadius: 8)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Color Helpers
 
-    private func sectorLabel(_ sector: SectorAnalysisService.Sector) -> String {
-        sector == .unknown ? "Unclassified" : sector.displayName
-    }
-
-    private func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
+    /// Each sector keeps the colour it had, except Healthcare and Financials, which were red
+    /// and green: those mean loss and gain here.
+    nonisolated static func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
         switch sector {
         case .technology: return .blue
-        case .healthcare: return .red
-        case .financials: return .green
+        case .healthcare: return StockbarPalette.allocationLavender
+        case .financials: return StockbarPalette.allocationSectorTeal
         case .consumerCyclical: return .purple
         case .consumerDefensive: return .orange
         case .industrials: return .brown
@@ -485,7 +621,7 @@ struct PortfolioAnalyticsView: View {
         case .realEstate: return .pink
         case .basicMaterials: return .mint
         case .communicationServices: return .indigo
-        case .unknown: return .gray
+        case .unknown: return StockbarPalette.allocationOther
         }
     }
 
@@ -520,6 +656,8 @@ struct PortfolioAnalyticsView: View {
         // Calculate sector allocations
         var positions: [String: Double] = [:]
         var dayChanges: [String: Double] = [:]
+        // The same values as `positions`, kept per holding with the currency it is priced in.
+        var valuedHoldings: [AllocationHolding] = []
 
         let preferredCurrency = dataModel.preferredCurrency
         var covered = 0
@@ -539,6 +677,7 @@ struct PortfolioAnalyticsView: View {
                 guard !sourceCurrency.isEmpty,
                       let converted = convertAnalyticsAmount(value, from: sourceCurrency, to: preferredCurrency), converted > 0 else { continue }
                 positions[holding.resolvedDisplayTicker, default: 0] += converted
+                valuedHoldings.append(AllocationHolding(symbol: holding.resolvedDisplayTicker, value: converted, currency: sourceCurrency))
                 if let dayGain = holding.dayGain,
                    let convertedDayGain = convertAnalyticsAmount(dayGain, from: sourceCurrency, to: preferredCurrency) {
                     dayChanges[holding.resolvedDisplayTicker, default: 0] += convertedDayGain
@@ -559,6 +698,7 @@ struct PortfolioAnalyticsView: View {
                   !sourceCurrency.isEmpty else { continue }
             guard let currentValue = convertAnalyticsAmount(currentPrice * units, from: sourceCurrency, to: preferredCurrency), currentValue > 0 else { continue }
             positions[trade.trade.name, default: 0] += currentValue
+            valuedHoldings.append(AllocationHolding(symbol: trade.trade.name, value: currentValue, currency: sourceCurrency))
             if previousClose.isFinite, previousClose > 0 {
                 let rawChange = (currentPrice - previousClose) * units
                 if let convertedChange = convertAnalyticsAmount(rawChange, from: sourceCurrency, to: preferredCurrency) {
@@ -586,6 +726,10 @@ struct PortfolioAnalyticsView: View {
             // Show what could be valued and say what is missing, rather than
             // blanking the whole section because one holding has no price yet.
             self.sectorAllocations = sectors
+            self.valuedHoldings = valuedHoldings
+            // Colours are handed out here, never while drawing, and kept while the page is open.
+            self.holdingColours.assign(AllocationPresentation.holdingGroups(sectors).map(\.key))
+            self.currencyColours.assign(AllocationPresentation.currencyGroups(valuedHoldings).map(\.key))
             self.analyticsEligible = eligibleCount
             self.diversificationAnalysis = completeCoverage ? diversification : nil
             self.analyticsCurrency = preferredCurrency
