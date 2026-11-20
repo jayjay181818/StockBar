@@ -389,24 +389,36 @@ enum HoldingsText {
         return "\(counts) \(weight)"
     }
 
-    /// What VoiceOver reads for one row of the read-only table: one sentence
-    /// with every figure the row shows, in the chosen mode.
+    /// The figures one row of the read-only table shows, as text, in the chosen mode.
     /// `todaySign` and `totalSign` are the figures' displayed signs (see
     /// `HoldingsCurrencyFormatter.displayedSign`), read as gain, loss or unchanged.
-    static func rowSentence(symbol: String, name: String?, isWatchlist: Bool, price: String, value: String,
-                            weight: Double?, today: String, todaySign: Double,
-                            totalGain: String, totalSign: Double) -> String {
-        var parts = [symbol]
-        if let name, !name.isEmpty, name != symbol { parts.append(name) }
-        if isWatchlist {
+    struct RowFigures {
+        var symbol: String
+        var name: String?
+        var isWatchlist: Bool
+        var price: String
+        var value: String
+        var weight: Double?
+        var today: String
+        var todaySign: Double
+        var totalGain: String
+        var totalSign: Double
+    }
+
+    /// What VoiceOver reads for one row of the read-only table: one sentence
+    /// with every figure the row shows.
+    static func rowSentence(_ row: RowFigures) -> String {
+        var parts = [row.symbol]
+        if let name = row.name, !name.isEmpty, name != row.symbol { parts.append(name) }
+        if row.isWatchlist {
             parts.append("watchlist only")
-            parts.append("price \(spoken(price))")
+            parts.append("price \(spoken(row.price))")
         } else {
-            parts.append("price \(spoken(price))")
-            parts.append("value \(spoken(value))")
-            parts.append("weight \(weight == nil ? "not known" : HoldingsWeight.text(weight))")
-            parts.append("today \(movement(today, sign: todaySign))")
-            parts.append("total gain \(movement(totalGain, sign: totalSign))")
+            parts.append("price \(spoken(row.price))")
+            parts.append("value \(spoken(row.value))")
+            parts.append("weight \(row.weight == nil ? "not known" : HoldingsWeight.text(row.weight))")
+            parts.append("today \(movement(row.today, sign: row.todaySign))")
+            parts.append("total gain \(movement(row.totalGain, sign: row.totalSign))")
         }
         return parts.joined(separator: ", ") + "."
     }

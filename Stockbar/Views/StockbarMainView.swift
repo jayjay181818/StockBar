@@ -505,7 +505,7 @@ private struct StockbarHoldingsView: View {
         let trade = row.trade
         let value = dataModel.calculatePositionValue(for: trade)
         let summary = dataModel.calculatePositionProfitLoss(for: trade)
-        return HoldingsText.rowSentence(
+        return HoldingsText.rowSentence(HoldingsText.RowFigures(
             symbol: trade.trade.name,
             name: trade.displayLabel ?? trade.realTimeInfo.shortName,
             isWatchlist: trade.trade.isWatchlistOnly,
@@ -519,7 +519,7 @@ private struct StockbarHoldingsView: View {
             totalGain: HoldingsText.gain(amount: summary.totalAmount, percent: summary.totalPercent,
                                          currency: summary.currency, mode: gainDisplayMode),
             totalSign: HoldingsCurrencyFormatter.displayedSign(of: summary.totalAmount, currency: summary.currency)
-        )
+        ))
     }
 
     private func priceText(_ trade: RealTimeTrade) -> String {
