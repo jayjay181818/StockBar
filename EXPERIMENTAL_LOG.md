@@ -356,10 +356,35 @@ it run that night at 02:30 UTC, with the Mac on mains power and left
 alone.
 
 Phase B's pages followed the same day, built at the same time, each as its
-own pull request: Activity (141, merged as `474d187`), Trades (142) and
-Income. A local stand-in
+own pull request: Activity (141, merged as `474d187`), Trades (142,
+`a60edd0`) and Income (143, `9292744`). A local stand-in
 server with a made-up portfolio now serves the three ledger routes, so
-each page can be looked at in the acceptance copy.
+each page can be looked at in the acceptance copy. A second batch, built
+the same way, gave Allocation a donut and its correlations as a grid
+(144, `c34be9e`), put switches for the three new pages in Settings (145,
+`80dfcbc`), gave Holdings a Weight column (146, `9d87d22`) and said each
+of Risk's figures once, with a chart of the falls (147, `995293c`). Pull
+request 148 (`3aff316`) let the acceptance copy change the settings it
+was started with, which showed for the first time that the Holdings
+editing table did not fit at the minimum window size. Pull request 149
+(`241aeb7`) tidied Charts and Data Health, and pull request 150
+(`2d5d992`) made the editing table fit. All were merged on 2026-11-20
+with their benchmark owed; the last of them published experimental build
+382.3.19.
+
+The comparison owed for all of it was run that evening, at the owner's
+request, instead of at 02:30 UTC: from `5fa923b` to `2d5d992`, which
+covers pull requests 135 to 150, twice, from 22:10 to 22:43 UTC and from
+23:03 to 23:35 UTC, each after twenty quiet minutes on mains power. Both
+runs were kept under all three set-aside rules. Three rows rose in both:
+idle memory by 21 to 22 MB, peak memory at launch by 20 to 23 MB, and
+CPU from launch to the idle window by 0.09 to 0.11 s. The memory the app
+holds allocated did not hold its rise in the repeat, so the extra memory
+is most likely what the system holds for the app, such as what it draws
+the window with, rather than the app's own objects. Pull request 140, the
+Glass shell, is the likeliest cause, unproven, and is to be measured on
+its own next. Both tables are in
+[pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date).
 
 ## Review of the refresh path, 2026-11-13
 
@@ -5400,8 +5425,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Nothing else in the editing rows changes: the fields, the buttons,
   their tooltips and VoiceOver labels, the order of the columns and how
   a change is saved. Weight is still not shown in the editing table.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-20, squash commit `2d5d992`. The merge published
+  experimental build 382.3.19 as the prerelease `experimental-382.3.19`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
   opens the main window on the Overview, with no local holdings being
   edited. Covered by the comparison set for the night of 2026-11-20, if
@@ -5458,6 +5485,139 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - One of the units entries was put in through accessibility, not as
     keystrokes.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 151: Record the redesign benchmark and bring the log up to date
+
+- What: the comparison of `5fa923b` against `2d5d992`, which covers pull
+  requests 135 to 150, with both of its runs and their tables, in this
+  entry; the merge line of pull request 150;
+  [Where things stand](#where-things-stand) brought up to date from pull
+  request 141; and rows in "Who did what" for pull requests 144 to 150,
+  the disk that filled during pull request 150 included, and for this
+  one. Only this file changes.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: no before/after run for this pull request. No file that goes
+  into the app changes (nothing under `Stockbar/`, `StockbarTests/` or
+  `Stockbar.xcodeproj`), so before, `2d5d992`, and after build the same
+  app. What it records is the comparison owed by pull requests 135 to 150
+  under the rule of 2026-11-20 (see
+  [How this branch works](#how-this-branch-works)).
+
+  Before `5fa923b`, the last commit measured, after `2d5d992`, the
+  standard comparison, six launches a side in turns, run twice on
+  2026-11-20, on macOS 27.2.1 and an Apple M3 Pro with 18 GB, on mains
+  power, with the lid open, the screen unlocked and no other project's
+  build present. It had been set for 02:30 UTC on 2026-11-21; the owner
+  asked for it that evening instead. Each run started only after twenty
+  quiet minutes on mains power, checked every twenty seconds, and under
+  the three rules of pull request 134's comparison, written into its
+  script before it began: a run is set aside and repeated if more than
+  two readings inside the turns show input in the minute before, if the
+  four busiest processes together are more than 1.5 times busier over
+  one side's turns than the other's, or if any measured launch has
+  another project's build beside it.
+
+  A first attempt began its wait at 21:27 UTC, started at 21:46, built
+  both commits and was cut off by a restart of T3 Code during round 1's
+  warm-up launch, at 21:49. It measured nothing. Its folder is kept, with
+  an empty `before-1`, as
+  `build/bench/results/interrupted-compare-redesign-20261120-214659`.
+
+  First run: wait from 21:50 UTC, turns from 22:10 to 22:43 UTC. The Mac
+  had been untouched for 9466 s when it started, and no reading inside
+  the turns showed input. The four busiest processes together averaged
+  108% of a core over the before side's 16 readings and 100% over the
+  after side's 16, a ratio of 1.08, so the run stands. None of the
+  measured segments, six launches and two helper measurements a side,
+  had another project's `xcodebuild` beside it. The highest load average
+  at the ten-second samples was 8.9, once, during the after side's second
+  launch; everywhere else it stayed at or below 4.4. Three rows are
+  higher, and two are marked possibly higher.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.9 (96.3 to 99.3) MB | 119.1 (118.0 to 120.4) MB | +22.2 MB, +22.9% | higher (p = 0.002) |
+  | Idle memory the app holds allocated | 50.8 (50.7 to 51.2) MB | 52.2 (51.3 to 53.2) MB | +1.3 MB, +2.6% | higher (p = 0.002) |
+  | Peak memory, launch and history load | 244.2 (242.7 to 248.3) MB | 267.5 (262.7 to 271.9) MB | +23.3 MB, +9.5% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.1 (0.0 to 0.4) MB | 0.2 (0.1 to 0.5) MB | +0.2 MB, +400.0% | no measurable change (p = 0.054) |
+  | Idle CPU | 0.087 (0.073 to 0.090) s/min | 0.098 (0.075 to 0.108) s/min | +0.011 s/min, +12.1% | possibly higher (p = 0.037) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 26 (25 to 28) /min | +0 /min, +0.0% | no measurable change (p = 0.634) |
+  | Idle CPU power | 3.60 (3.51 to 3.93) mW | 3.94 (3.61 to 4.73) mW | +0.34 mW, +9.4% | possibly higher (p = 0.037) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.48 (0.45 to 0.52) s | 0.49 (0.45 to 0.51) s | +0.01 s, +1.0% | no measurable change (p = 1.000) |
+  | Launch to history loaded | 0.59 (0.57 to 0.60) s | 0.59 (0.56 to 0.61) s | +0.00 s, +0.0% | no measurable change (p = 0.998) |
+  | CPU from launch to the idle window | 1.67 (1.63 to 1.70) s | 1.78 (1.76 to 1.82) s | +0.11 s, +6.9% | higher (p = 0.002) |
+  | CPU energy from launch to the idle window | 5.28 (5.18 to 5.34) J | 5.46 (5.20 to 5.69) J | +0.18 J, +3.4% | no measurable change (p = 0.132) |
+  | Python helper start to ready, no network | 0.27 (0.26 to 1.20) s | 0.27 (0.25 to 0.53) s | -0.01 s, -1.9% | no measurable change (p = 0.621) |
+  | Python helper start, CPU | 0.27 (0.25 to 0.38) s | 0.26 (0.25 to 0.33) s | -0.01 s, -1.9% | no measurable change (p = 0.671) |
+  | Python helper memory once started | 71.1 (71.0 to 71.2) MB | 71.1 (71.1 to 71.2) MB | +0.0 MB, +0.0% | no measurable change (p = 0.394) |
+
+  Repeat, for those rows: wait from 22:43 UTC, turns from 23:03 to 23:35
+  UTC. No reading inside the turns showed input. The four busiest
+  together averaged 91% of a core over the before side's 16 readings and
+  105% over the after side's 16, a ratio of 1.16, so it stands. Again no
+  measured segment had another project's build beside it, and the load
+  stayed at or below 5.5.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 97.3 (95.5 to 99.3) MB | 118.3 (116.6 to 119.6) MB | +21.0 MB, +21.6% | higher (p = 0.002) |
+  | Idle memory the app holds allocated | 51.0 (50.7 to 52.1) MB | 51.1 (50.5 to 52.6) MB | +0.1 MB, +0.3% | no measurable change (p = 0.509) |
+  | Peak memory, launch and history load | 245.9 (241.8 to 248.4) MB | 266.1 (260.9 to 275.5) MB | +20.2 MB, +8.2% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.4) MB | 0.2 (0.2 to 0.5) MB | +0.2 MB | possibly higher (p = 0.013) |
+  | Idle CPU | 0.084 (0.070 to 0.101) s/min | 0.102 (0.074 to 0.105) s/min | +0.018 s/min, +20.8% | no measurable change (p = 0.078) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 26 (24 to 28) /min | +0 /min, +0.0% | no measurable change (p = 0.470) |
+  | Idle CPU power | 3.58 (3.40 to 4.14) mW | 3.79 (3.63 to 4.27) mW | +0.21 mW, +5.9% | no measurable change (p = 0.143) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.47 (0.46 to 0.49) s | 0.48 (0.45 to 0.54) s | +0.01 s, +1.1% | no measurable change (p = 0.983) |
+  | Launch to history loaded | 0.58 (0.57 to 0.59) s | 0.60 (0.59 to 0.67) s | +0.03 s, +4.3% | higher (p = 0.006) |
+  | CPU from launch to the idle window | 1.68 (1.62 to 1.71) s | 1.77 (1.75 to 1.94) s | +0.09 s, +5.7% | higher (p = 0.002) |
+  | CPU energy from launch to the idle window | 5.27 (5.17 to 5.40) J | 5.35 (5.22 to 5.45) J | +0.08 J, +1.4% | no measurable change (p = 0.223) |
+  | Python helper start to ready, no network | 0.27 (0.26 to 0.53) s | 0.30 (0.26 to 0.60) s | +0.03 s, +13.2% | no measurable change (p = 0.675) |
+  | Python helper start, CPU | 0.27 (0.25 to 0.34) s | 0.29 (0.25 to 0.39) s | +0.03 s, +11.3% | no measurable change (p = 0.740) |
+  | Python helper memory once started | 71.2 (71.1 to 71.3) MB | 71.2 (71.1 to 71.3) MB | +0.0 MB, +0.0% | no measurable change (p = 1.000) |
+
+  Firm in both runs, each at p = 0.002: idle memory (physical footprint)
+  rose by 22.2 and 21.0 MB, from about 97 MB to about 118 MB; peak
+  memory, launch and history load, by 23.3 and 20.2 MB; and CPU from
+  launch to the idle window by 0.11 and 0.09 s.
+
+  Not held across both runs: the memory the app holds allocated was 1.3
+  MB higher in the first run (p = 0.002) and showed no measurable change
+  in the repeat (+0.1 MB); idle CPU and idle CPU power were possibly
+  higher in the first run only; launch to history loaded was 0.03 s
+  higher (p = 0.006), and idle memory growth possibly higher, in the
+  repeat only. None of those counts without another repeat.
+
+  The memory the app holds allocated is the heap, read after the idle
+  window. It rose by 1.3 MB at most, and not in the repeat, while the
+  physical footprint rose by 21 to 22 MB, so the extra memory is most likely not the app's
+  own objects but memory the system holds for it, such as what it draws
+  the window with. Pull request 140, which gave the main window the Glass
+  shell with a floating sidebar, is the likeliest cause; that is unproven
+  until it is measured. Under the rule of 2026-11-20 a row that moves and
+  holds is followed by measuring the phase's pull requests one by one, so
+  pull request 140 is measured on its own next, against pull request 139
+  (`c9453fd` against `92145d7`). Whether about 21 MB more is acceptable is
+  the owner's decision. The readings, the samples, the rules and the
+  scripts are kept beside the results, in
+  `build/bench/results/compare-redesign-20261120-221038/conditions` and
+  `build/bench/results/compare-redesign-repeat-20261120-230329/conditions`.
+- Testing: `docs-check` passes on this pull request's branch. No code
+  changes.
+- Review: read by its author, with every figure checked against the two
+  `report.md` files and the chain logs,
+  `build/bench/chain/compare-redesign.log` and
+  `compare-redesign-repeat.log`. Both tables were taken from the reports
+  by script, without the column that names how each row is read, and
+  compared with them again after the edit. No independent review, for a
+  record of measurements that changes no code.
+- Known issues: the rise of about 21 MB in idle memory, 20 to 23 MB in
+  peak memory and 0.09 to 0.11 s in CPU from launch to the idle window
+  across pull requests 135 to 150 is not yet put down to any one pull
+  request. Pull request 140 is to be measured on its own next.
+- Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
 
@@ -5734,6 +5894,9 @@ launch.
 | The redesign's groundwork, pull requests 135 and 136 | Fable 5.2 (session lead) for the specifications, the review and the records; one Opus 5.5 worker for each pull request's code, in its own worktree | Worth it. The lead's reading found faults in both before they were merged: in 135 the fetch policy never dropped kept pages, a queued request still ran after its callers had gone, and a day given as a date could shift by a day; in 136 the helper read Yahoo's dates in the Mac's time zone and asked again for symbols Yahoo does not know. Each was fixed with a test. The workers' tool calls and tokens were not recorded |
 | The Glass redesign, pull requests 137 to 140 | The same arrangement: one worker for the surfaces, then three in parallel for the popover, the Overview and the shell | Worth it for the building. Merging three branches written at the same time cost the lead a round of conflicts for each, and the popover could not be opened in the acceptance copy until the lead added a launch option. One worker clicked twice outside its own window; the owner was told, and the specifications since require a click to be measured against a capture of the same window |
 | The Folync pages, pull requests 141 to 143 | One worker for the stand-in server's ledger routes, then three in parallel for Activity, Trades and Income | Worth it for the building, with the same cost on merging: all three added a sidebar section, so six files conflicted twice. Later batches add at most one section each. The lead added the Partial position to Trades, removed a guessed currency from Income, and replaced timed waits in three tests with conditions the tests control |
+| The second batch, pull requests 144 to 147: Allocation, the Settings switches, Holdings and Risk | Fable 5.2 (session lead) for the specifications, the review, the merges and the records; four Opus 5.5 workers in parallel, each in its own worktree | Worth it for the building. During 145 the lead traced why the acceptance copy could not change a setting seeded before it started: its defaults suite is named by a path, and on macOS 27.2.1 a process never reads back its own change to a key already in such a file. That became pull request 148. In 146 the lead restored the editing table's column widths, which the worker had narrowed without seeing them, and in 147 corrected "trading days" to "days" for the worst fall's length, which is counted in calendar days. Neither the filled Risk page nor Allocation's grid of correlations was seen in the running acceptance copy, only in drawings made off screen, and the owner was asked to look at both in the real build |
+| Pull requests 148 to 150: the acceptance copy's seeded settings, the Charts and Data Health tidy, and the Holdings editing table | Fable 5.2 (session lead), with three Opus 5.5 workers, each in its own worktree | Worth it, with one cut-off. During pull request 150 the Mac's disk filled to 119 MB free with this work's own leftovers: the build folder every acceptance launch left in the temporary directory, and the build caches of every worktree. It stopped the D1b worker part-way through showing its tests fail. The lead removed about 45 GB of those leftovers, keeping the logs, captures and benchmark results, removed the breakage left in the worker's tree, and finished the breakages and checks. Two workers' accessibility reads returned the system's Apple menu, Recent Items included; neither saved or repeated it, and the owner was told. The D4 worker scrolled once without a capture id of the same window. Later specifications are to say: read a window's tree with a query and never the menu bar, give no pointer or scroll input without a capture of the same window, and clear build folders after each batch |
+| The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
