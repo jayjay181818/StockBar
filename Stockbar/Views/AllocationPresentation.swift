@@ -73,6 +73,16 @@ enum AllocationCashOmission: Equatable, Sendable {
     case totalDiffers
 }
 
+extension AllocationCashOmission {
+    /// The reason for a Holdings total that does not cover the holdings it weighs.
+    init(_ mismatch: HoldingsWeightBasis.Mismatch) {
+        switch mismatch {
+        case .folyncWithoutTotal: self = .folyncWithoutTotal
+        case .holdingsOutsideBrokerAccount: self = .holdingsOutsideBrokerAccount
+        }
+    }
+}
+
 /// What the page's percentages are of, for the notes that give one.
 enum AllocationShareBasis: Equatable, Sendable {
     /// The holdings, and there is no cash beside them to speak of.

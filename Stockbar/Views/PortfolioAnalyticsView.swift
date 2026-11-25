@@ -893,10 +893,9 @@ struct AllocationValuation {
         cash = .none
         sourceTotal = nil
         cashOmission = nil
-        switch basis.mismatch {
-        case .folyncWithoutTotal?: cashOmission = .folyncWithoutTotal; return
-        case .holdingsOutsideBrokerAccount?: cashOmission = .holdingsOutsideBrokerAccount; return
-        case nil: break
+        if let mismatch = basis.mismatch {
+            cashOmission = AllocationCashOmission(mismatch)
+            return
         }
         guard let sourceCash = basis.cash, sourceCash.value != 0 else { return }
         let converted = convert(sourceCash.value, sourceCash.currency)
