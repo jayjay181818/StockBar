@@ -1809,3 +1809,366 @@ final class Trading212BrokerSyncTests: XCTestCase {
         ))!
     }
 }
+
+// MARK: - The ordinary sync through the app, against a fake broker
+
+/// The ordinary Trading 212 sync (`DataModel.syncLinkedTrading212Holdings`) for an account
+/// with nothing linked, driven through the app's own code against `FakeTrading212Account`.
+@MainActor
+final class Trading212UnlinkedAccountSyncTests: XCTestCase {
+    private static let cashOnlySummary = """
+    { "cash": { "availableToTrade": 2400.5, "inPies": 0, "reservedForOrders": 100 }, "currency": "GBP", "id": 42,
+      "investments": { "currentValue": 0, "realizedProfitLoss": 0, "totalCost": 0, "unrealizedProfitLoss": 0 },
+      "totalValue": 2500.5 }
+    """
+
+    func testACashOnlyAccountIsValuedAsItsCashWithOneSummaryRequest() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        model.realTimeTrades = [FakeTrading212Account.watchlistRow("WTCH")]
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        XCTAssertNil(result.skippedReason)
+        XCTAssertTrue(result.valuedAccountOnly)
+        XCTAssertEqual(result.updatedCount + result.deletedCount + result.missingCount + result.brokerOnlyCount, 0)
+        XCTAssertEqual(result.userMessage,
+                       "No linked Trading 212 holdings, so the account is valued from its summary: its cash and anything not linked. "
+                       + "To track holdings one by one, run Preview Import and Link Matched Holdings.")
+        XCTAssertEqual(account.requestedRoutes, ["/equity/account/summary"], "one summary, no positions, no metadata")
+
+        let snapshot = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        XCTAssertTrue(snapshot.isAccountOnly)
+        XCTAssertTrue(snapshot.positionsByManualSymbol.isEmpty)
+        XCTAssertEqual(snapshot.currency, "GBP")
+        XCTAssertEqual(snapshot.cashValue ?? .nan, 2_500.5, accuracy: 1e-9, "available, in pies and reserved")
+        XCTAssertEqual(snapshot.accountValue, 2_500.5, accuracy: 1e-9)
+        XCTAssertTrue(snapshot.accountKey.hasPrefix("Trading212|demo|stocksAndSharesISA|"))
+        XCTAssertTrue(snapshot.accountKey.hasSuffix(Trading212Hashing.sha256Hex("42")), "keyed on the account's id")
+
+        // What Holdings, the menu bar and the popover read: the cash is the whole portfolio.
+        let netValue = model.calculateNetValue()
+        XCTAssertEqual(netValue.amount, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(netValue.currency, "GBP")
+        XCTAssertEqual(model.netGainsSource, .trading212)
+        XCTAssertEqual(model.calculateNetGains().amount, 0, accuracy: 1e-9)
+        let summary = model.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(summary.valuationSource, .brokerProvided)
+        XCTAssertEqual(summary.totalValue, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(summary.totalGain, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.totalGainPct, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.dayGain, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.dayGainPct, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.totalCost, 0, accuracy: 1e-9)
+        XCTAssertEqual(summary.ownedPositionCount, 0)
+        XCTAssertEqual(model.displayValuationSource, .brokerProvided)
+        XCTAssertNil(model.calculatePositionWeight(for: model.realTimeTrades[0], netValue: netValue),
+                     "a watchlist row has no weight")
+
+        // The next ordinary sync asks again, once, and stores a new valuation.
+        account.answer(summary: Self.cashOnlySummary.replacingOccurrences(of: "2400.5", with: "2600.5")
+            .replacingOccurrences(of: "2500.5", with: "2700.5"))
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(account.requestedRoutes, ["/equity/account/summary", "/equity/account/summary"])
+        XCTAssertEqual(model.trading212BrokerValuationSnapshot?.cashValue ?? .nan, 2_700.5, accuracy: 1e-9)
+        XCTAssertEqual(model.calculateNetValue().amount, 2_700.5, accuracy: 1e-9)
+    }
+
+    func testAUserWithoutTrading212MakesNoRequestAndKeepsTheSkippedReason() async throws {
+        let account = try FakeTrading212Account(enabled: false)
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        XCTAssertEqual(result.skippedReason, "Trading 212 is not enabled.")
+        XCTAssertFalse(result.valuedAccountOnly)
+        XCTAssertEqual(account.requestedRoutes, [])
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+        XCTAssertEqual(model.displayValuationSource, .localCalculationFallback)
+    }
+
+    func testEnabledWithoutCredentialsMakesNoRequestAndFailsAsBefore() async throws {
+        let account = try FakeTrading212Account(storesCredentials: false)
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+
+        do {
+            _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+            XCTFail("Expected the missing credentials to be reported")
+        } catch {
+            XCTAssertEqual((error as? Trading212CredentialStoreError).map { "\($0)" }, "missingCredentials")
+        }
+        XCTAssertEqual(account.requestedRoutes, [])
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+    }
+
+    func testBesideHoldingsOfItsOwnNothingIsAskedAndTheLocalFiguresStand() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10"),
+                                FakeTrading212Account.row("BRVO", price: 60, units: "10")]
+        let netBefore = model.calculateNetValue()
+        let weightsBefore = model.realTimeTrades.map { model.calculatePositionWeight(for: $0, netValue: netBefore) }
+
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        XCTAssertEqual(result.skippedReason, DataModel.trading212NoLinkedHoldingsReason)
+        XCTAssertEqual(result.skippedReason,
+                       "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first.")
+        XCTAssertEqual(account.requestedRoutes, [])
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+        XCTAssertEqual(netBefore.amount, 1_000, accuracy: 1e-9)
+        XCTAssertEqual(weightsBefore.map { $0 ?? .nan }, [40, 60])
+    }
+
+    func testAnAccountOnlyValuationGivesWayToAHoldingAddedLater() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(model.calculateNetValue().amount, 2_500.5, accuracy: 1e-9)
+
+        // A holding entered by hand before the next sync: the account's cash no longer
+        // stands for the portfolio, so Holdings weighs the holding as it did before the fix.
+        model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10")]
+        let netValue = model.calculateNetValue()
+        XCTAssertEqual(netValue.amount, 400, accuracy: 1e-9)
+        XCTAssertEqual(model.calculatePositionWeight(for: model.realTimeTrades[0], netValue: netValue) ?? .nan,
+                       100, accuracy: 1e-9)
+        XCTAssertEqual(model.displayValuationSource, .localCalculationFallback)
+        XCTAssertEqual(model.netGainsSource, .averageCost)
+        XCTAssertEqual(model.holdingsWeightBasis().source, .local)
+    }
+
+    func testAnAccountWithLinkedPositionsSyncsAsBefore() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(
+            summary: """
+            { "cash": { "availableToTrade": 100, "inPies": 0, "reservedForOrders": 0 }, "currency": "GBP", "id": 42,
+              "investments": { "currentValue": 900, "realizedProfitLoss": 0, "totalCost": 800, "unrealizedProfitLoss": 100 },
+              "totalValue": 1000 }
+            """,
+            // No quantity or prices, so the sync has nothing to write to the holding: a test
+            // model must not save the portfolio. The broker's value still comes through.
+            positions: """
+            [{ "averagePricePaid": null, "currentPrice": null, "quantity": null, "quantityAvailableForTrading": null, "quantityInPies": null,
+               "instrument": { "currency": "GBP", "isin": "GB00ALFA0001", "name": "Alfa", "ticker": "ALFAl_EQ" },
+               "walletImpact": { "currency": "GBP", "currentValue": 900, "fxImpact": 0, "totalCost": 800, "unrealizedProfitLoss": 100 } }]
+            """
+        )
+        try await account.link(providerTicker: "ALFAl_EQ", manualSymbol: "ALFA")
+        let model = account.makeDataModel()
+        model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 85, units: "10")]
+
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        XCTAssertNil(result.skippedReason)
+        XCTAssertFalse(result.valuedAccountOnly)
+        // With nothing to write, the holding is reported missing, as before.
+        XCTAssertEqual(result.missingCount, 1)
+        XCTAssertEqual(result.updatedCount, 0)
+        XCTAssertEqual(result.userMessage, "Synced 0 linked holdings. Deleted 0. Missing 1. Broker-only 0.")
+        XCTAssertEqual(account.requestedRoutes.sorted(), ["/equity/account/summary", "/equity/positions"],
+                       "the summary and the positions, as before, and no metadata")
+        let snapshot = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        XCTAssertFalse(snapshot.isAccountOnly)
+        XCTAssertEqual(snapshot.accountValue, 1_000, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.cashValue ?? .nan, 100, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.position(for: "ALFA")?.brokerCurrentValue ?? .nan, 900, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.totalUnrealizedProfitLoss ?? .nan, 100, accuracy: 1e-9)
+        // Holdings weighs the linked holding by the broker's value against the account's.
+        let netValue = model.calculateNetValue()
+        XCTAssertEqual(netValue.amount, 1_000, accuracy: 1e-9)
+        XCTAssertEqual(model.calculatePositionWeight(for: model.realTimeTrades[0], netValue: netValue) ?? .nan,
+                       90, accuracy: 1e-9)
+        XCTAssertEqual(model.holdingsWeightBasis().source, .trading212)
+    }
+}
+
+// MARK: - A fake Trading 212 account
+
+/// Stands in for Trading 212's API: answers each route from memory and records the path
+/// of every request. Installed only on the ephemeral session `FakeTrading212Account` gives
+/// its provider, so nothing else is answered by it and no request leaves the process.
+final class Trading212BrokerStub: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var bodies: [String: String] = [:]
+    nonisolated(unsafe) private static var paths: [String] = []
+
+    static func reset(bodies newBodies: [String: String]) {
+        lock.lock(); defer { lock.unlock() }
+        bodies = newBodies
+        paths = []
+    }
+
+    static func setBody(_ body: String, for route: String) {
+        lock.lock(); defer { lock.unlock() }
+        bodies[route] = body
+    }
+
+    static var requestedPaths: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return paths
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let body: String? = {
+            Self.lock.lock(); defer { Self.lock.unlock() }
+            Self.paths.append(path)
+            return Self.bodies.first { path.hasSuffix($0.key) }?.value
+        }()
+        let status = body == nil ? 404 : 200
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data((body ?? "{}").utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// A Trading 212 account set up as the app sets one up, kept apart from the user's: its
+/// settings in a defaults suite of its own, its credentials (made up) in a Keychain service
+/// of its own, its links in a temporary file, and its broker `Trading212BrokerStub`.
+/// `cleanUp()` removes all of them.
+@MainActor
+final class FakeTrading212Account {
+    static let summaryRoute = "/equity/account/summary"
+    static let positionsRoute = "/equity/positions"
+
+    let settings: Trading212SettingsStore
+    let credentials: Trading212CredentialStore
+    let links: BrokerLinkStore
+    let coordinator: Trading212PreviewCoordinator
+    private let suite: String
+    private let service: String
+    private let storedPreferredCurrency = StockbarRuntimeStorage.userDefaults.object(forKey: "preferredCurrency")
+    private let directory: URL
+    private static let apiKey = "fake-key-for-tests"
+
+    init(enabled: Bool = true, storesCredentials: Bool = true) throws {
+        suite = "FakeTrading212Account.\(UUID().uuidString)"
+        settings = Trading212SettingsStore(defaults: UserDefaults(suiteName: suite)!)
+        var stored = settings.load()
+        stored.isEnabled = enabled
+        settings.save(stored)
+
+        service = "com.stockbar.tests.trading212.\(UUID().uuidString)"
+        credentials = Trading212CredentialStore(service: service)
+        if storesCredentials {
+            try credentials.save(Trading212AuthConfiguration(apiKey: Self.apiKey, apiSecret: "fake-secret"),
+                                 environment: stored.environment)
+        }
+
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FakeTrading212Account-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        links = BrokerLinkStore(fileURL: directory.appendingPathComponent("links.json"))
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [Trading212BrokerStub.self]
+        coordinator = Trading212PreviewCoordinator(provider: Trading212Provider(
+            session: URLSession(configuration: configuration),
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: true)
+        ))
+        Trading212BrokerStub.reset(bodies: [:])
+    }
+
+    /// What the broker answers from now on. Routes without an answer get a 404.
+    func answer(summary: String, positions: String? = nil) {
+        Trading212BrokerStub.setBody(summary, for: Self.summaryRoute)
+        if let positions { Trading212BrokerStub.setBody(positions, for: Self.positionsRoute) }
+    }
+
+    /// The route of each request so far, in order, without the API's base path.
+    var requestedRoutes: [String] {
+        Trading212BrokerStub.requestedPaths.map { path in
+            [Self.summaryRoute, Self.positionsRoute].first { path.hasSuffix($0) } ?? path
+        }
+    }
+
+    /// A model on this account, showing pounds. The display currency is the one setting the
+    /// model saves itself; `cleanUp()` puts back what was there.
+    func makeDataModel(converter: CurrencyConverter? = nil) -> DataModel {
+        let model = DataModel(
+            currencyConverter: converter ?? CurrencyConverter(exchangeRates: ["USD": 1.0, "GBP": 0.8],
+                                                              refreshOnInit: false, loadHistoryOnInit: false),
+            startRuntimeServices: false,
+            trading212SettingsStore: settings,
+            trading212CredentialStore: credentials,
+            trading212PreviewCoordinator: coordinator,
+            trading212BrokerLinkStore: links
+        )
+        model.preferredCurrency = "GBP"
+        return model
+    }
+
+    /// Links the broker's `providerTicker` to the holding `manualSymbol`, as Link Matched
+    /// Holdings saves it, under the key the next sync gives this account (id 42).
+    func link(providerTicker: String, manualSymbol: String) async throws {
+        let stored = settings.load()
+        let key = BrokerAccountIdentity.preview(
+            broker: "Trading212", environment: stored.environment, accountType: stored.accountType,
+            accountLabel: stored.accountLabel,
+            credentialFingerprint: Trading212AuthConfiguration(apiKey: Self.apiKey, apiSecret: "fake-secret")
+                .credentialFingerprint,
+            apiAccountId: 42
+        ).brokerAccountKey
+        let linkedAt = Date(timeIntervalSince1970: 1_000)
+        try await links.replaceSnapshot(BrokerLinkStoreSnapshot(
+            schemaVersion: 2,
+            updatedAt: linkedAt,
+            accounts: [BrokerLinkedAccount(
+                brokerAccountKey: key, broker: "Trading212", accountLabel: stored.accountLabel,
+                accountType: stored.accountType, taxWrapper: stored.accountType.taxWrapper,
+                environment: stored.environment, linkedAt: linkedAt, updatedAt: linkedAt)],
+            positions: [BrokerLinkedPosition(
+                brokerAccountKey: key, instrumentId: "LSE:\(manualSymbol)", displaySymbol: manualSymbol,
+                displayName: manualSymbol, providerTicker: providerTicker, manualSymbol: manualSymbol,
+                manualQuantityAtLink: 10, brokerQuantityAtLink: 10, manualAverageCostAtLink: 80,
+                manualCurrency: "GBP", linkedAt: linkedAt, updatedAt: linkedAt)]
+        ))
+    }
+
+    func cleanUp() {
+        StockbarRuntimeStorage.userDefaults.set(storedPreferredCurrency, forKey: "preferredCurrency")
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        for environment in [Trading212Environment.live, .demo] {
+            try? credentials.delete(environment: environment)
+        }
+        try? CredentialVault.named("\(service).combined").deleteItem()
+        try? FileManager.default.removeItem(at: directory)
+        Trading212BrokerStub.reset(bodies: [:])
+    }
+
+    /// A holding of the app's own, priced in pounds.
+    static func row(_ symbol: String, price: Double, units: String) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = price
+        info.currency = "GBP"
+        return RealTimeTrade(trade: Trade(name: symbol, position: Position(unitSize: units, positionAvgCost: "1", currency: "GBP")),
+                             realTimeInfo: info)
+    }
+
+    static func watchlistRow(_ symbol: String) -> RealTimeTrade {
+        let row = row(symbol, price: 5, units: "0")
+        row.trade.isWatchlistOnly = true
+        return row
+    }
+}

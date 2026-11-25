@@ -92,22 +92,42 @@ struct PortfolioAnalyticsView: View {
         /// A refresh that brings the same rates under a new time changes nothing here, so
         /// it does not start the calculation, and the correlation work, again.
         let loadedRates: [String: Double]?
+        /// The Trading 212 valuation the cash and total come from, nil without one. A sync
+        /// that brings only new cash changes no holding, so without this the page would keep
+        /// the old cash. Each sync stores a new valuation with its own time, so each one
+        /// recalculates; the same valuation read again does not.
+        let brokerValuation: BrokerValuationStamp?
+
+        struct BrokerValuationStamp: Hashable {
+            let updatedAt: Date
+            let accountValue: Double
+            let cashValue: Double?
+
+            init(_ snapshot: Trading212BrokerValuationSnapshot) {
+                updatedAt = snapshot.updatedAt
+                accountValue = snapshot.accountValue
+                cashValue = snapshot.cashValue
+            }
+        }
 
         @MainActor
-        init(range: TimeRange, currency: String, tick: Int, converter: CurrencyConverter) {
+        init(range: TimeRange, currency: String, tick: Int, converter: CurrencyConverter,
+             brokerValuation: Trading212BrokerValuationSnapshot? = nil) {
             self.range = range
             self.currency = currency
             self.tick = tick
             // The observed properties, so a change of either redraws the view and re-keys its task.
             let rates = converter.exchangeRates
             loadedRates = rates.isEmpty || converter.lastRefreshTime == .distantPast ? nil : rates
+            self.brokerValuation = brokerValuation.map(BrokerValuationStamp.init)
         }
     }
 
     /// The trigger the calculation task below is keyed on.
     var analyticsTrigger: AnalyticsTrigger {
         AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency,
-                         tick: portfolioUpdateTick, converter: dataModel.currencyConverter)
+                         tick: portfolioUpdateTick, converter: dataModel.currencyConverter,
+                         brokerValuation: dataModel.trading212BrokerValuationSnapshot)
     }
 
     /// Something to show: a holding to value, or cash on its own.

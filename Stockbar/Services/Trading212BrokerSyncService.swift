@@ -29,10 +29,16 @@ struct Trading212BrokerSyncResult: Equatable {
     let missingCount: Int
     let brokerOnlyCount: Int
     let skippedReason: String?
+    /// Nothing was linked, so the sync valued the account from its summary alone.
+    var valuedAccountOnly = false
 
     var userMessage: String {
         if let skippedReason {
             return skippedReason
+        }
+        if valuedAccountOnly {
+            return "No linked Trading 212 holdings, so the account is valued from its summary: its cash and anything not linked. "
+                + "To track holdings one by one, run Preview Import and Link Matched Holdings."
         }
         var message = "Synced \(updatedCount) linked holdings. Deleted \(deletedCount). Missing \(missingCount). Broker-only \(brokerOnlyCount)."
         if brokerOnlyCount > 0 {
@@ -406,7 +412,8 @@ struct Trading212BrokerSyncPlanner {
                 && quarantinedProviderKeys.contains($0.id)
         }
         let valuationSnapshot = hasQuarantinedAccountPosition ? nil : makeValuationSnapshot(
-            preview: preview,
+            account: preview.account,
+            accountSummary: preview.accountSummary,
             linkedPositions: linkedPositions,
             rowsByInstrumentLinkID: rowsByInstrumentLinkID,
             rowsByProviderTicker: rowsByProviderTicker,
@@ -423,14 +430,36 @@ struct Trading212BrokerSyncPlanner {
         )
     }
 
+    /// The valuation of an account none of whose positions is linked, from its summary
+    /// alone: the account's value and cash and no positions, worked out as a linked
+    /// account's are. Marked `isAccountOnly`, so it applies only while the app has no
+    /// holding of its own (`DataModel`). Nil when the summary has no currency or value.
+    func accountOnlyValuationSnapshot(
+        account: BrokerAccountIdentity,
+        accountSummary: Trading212AccountSummary,
+        syncedAt: Date
+    ) -> Trading212BrokerValuationSnapshot? {
+        makeValuationSnapshot(
+            account: account,
+            accountSummary: accountSummary,
+            linkedPositions: [],
+            rowsByInstrumentLinkID: [:],
+            rowsByProviderTicker: [:],
+            syncedAt: syncedAt,
+            isAccountOnly: true
+        )
+    }
+
     private func makeValuationSnapshot(
-        preview: Trading212ImportPreview,
+        account: BrokerAccountIdentity,
+        accountSummary: Trading212AccountSummary?,
         linkedPositions: [BrokerLinkedPosition],
         rowsByInstrumentLinkID: [String: Trading212ImportPreviewRow],
         rowsByProviderTicker: [String: [Trading212ImportPreviewRow]],
-        syncedAt: Date
+        syncedAt: Date,
+        isAccountOnly: Bool = false
     ) -> Trading212BrokerValuationSnapshot? {
-        guard let accountSummary = preview.accountSummary,
+        guard let accountSummary,
               let currency = Trading212BrokerValueNormalizer.normalizedCurrency(accountSummary.currency) else {
             return nil
         }
@@ -493,7 +522,7 @@ struct Trading212BrokerSyncPlanner {
         }
 
         return Trading212BrokerValuationSnapshot(
-            accountKey: preview.account.brokerAccountKey,
+            accountKey: account.brokerAccountKey,
             currency: currency,
             accountValue: accountValue,
             investmentsValue: investmentsValue,
@@ -503,7 +532,8 @@ struct Trading212BrokerSyncPlanner {
             totalCost: finite(accountSummary.investments?.totalCost)
                 ?? (hasLinkedTotalCost ? linkedTotalCost : nil),
             positionsByManualSymbol: positionsByManualSymbol,
-            updatedAt: syncedAt
+            updatedAt: syncedAt,
+            isAccountOnly: isAccountOnly
         )
     }
 

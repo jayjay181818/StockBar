@@ -289,6 +289,25 @@ struct Trading212PreviewCoordinator {
         )
     }
 
+    /// The account's summary alone, in one request, and the account it belongs to: for
+    /// valuing an account none of whose positions is linked, which needs no positions.
+    /// Never cached, as the ordinary sync's preview is not.
+    func accountSummary(
+        settings: Trading212StoredSettings,
+        credentials: Trading212AuthConfiguration
+    ) async throws -> (account: BrokerAccountIdentity, summary: Trading212AccountSummary) {
+        let summary = try await provider.accountSummary(credentials: credentials, environment: settings.environment)
+        let account = BrokerAccountIdentity.preview(
+            broker: "Trading212",
+            environment: settings.environment,
+            accountType: settings.accountType,
+            accountLabel: settings.accountLabel,
+            credentialFingerprint: credentials.credentialFingerprint,
+            apiAccountId: summary.id
+        )
+        return (account, summary)
+    }
+
     private func fetchSnapshot(
         settings: Trading212StoredSettings,
         credentials: Trading212AuthConfiguration,

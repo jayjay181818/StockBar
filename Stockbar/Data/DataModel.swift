@@ -33,9 +33,9 @@ class DataModel {
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
     @ObservationIgnored private var pendingPersistenceTask: Task<Void, Never>?
     private let trading212SettingsStore: Trading212SettingsStore
-    private let trading212CredentialStore = Trading212CredentialStore.shared
-    private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
-    private let trading212BrokerLinkStore = BrokerLinkStore.shared
+    private let trading212CredentialStore: Trading212CredentialStore
+    private let trading212PreviewCoordinator: Trading212PreviewCoordinator
+    private let trading212BrokerLinkStore: BrokerLinkStore
     private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
     private let trading212BrokerOnlyImportPlanner = Trading212BrokerOnlyImportPlanner()
     @ObservationIgnored private var trading212BrokerSyncTask: Task<Void, Never>?
@@ -232,10 +232,16 @@ class DataModel {
     init(
         currencyConverter: CurrencyConverter = .shared,
         startRuntimeServices: Bool = true,
-        trading212SettingsStore: Trading212SettingsStore = .shared
+        trading212SettingsStore: Trading212SettingsStore = .shared,
+        trading212CredentialStore: Trading212CredentialStore = .shared,
+        trading212PreviewCoordinator: Trading212PreviewCoordinator = Trading212PreviewCoordinator(),
+        trading212BrokerLinkStore: BrokerLinkStore = .shared
     ) {
         self.currencyConverter = currencyConverter
         self.trading212SettingsStore = trading212SettingsStore
+        self.trading212CredentialStore = trading212CredentialStore
+        self.trading212PreviewCoordinator = trading212PreviewCoordinator
+        self.trading212BrokerLinkStore = trading212BrokerLinkStore
         // Pure calculation service: create it up front so totals never fall
         // back to a placeholder $0.00 while runtime services start.
         self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
@@ -924,13 +930,19 @@ class DataModel {
         var links = try await trading212BrokerLinkStore.loadSnapshot()
         let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
         guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
-            return Trading212BrokerSyncResult(
-                updatedCount: 0,
-                deletedCount: 0,
-                missingCount: 0,
-                brokerOnlyCount: 0,
-                skippedReason: "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
-            )
+            // Nothing linked. With no holding of the app's own, the account (cash, say) is
+            // the whole portfolio: value it from its summary, one request. Beside holdings
+            // of the app's own it would replace their total, so it is left alone.
+            guard !hasOwnedHoldings else {
+                return Trading212BrokerSyncResult(
+                    updatedCount: 0,
+                    deletedCount: 0,
+                    missingCount: 0,
+                    brokerOnlyCount: 0,
+                    skippedReason: Self.trading212NoLinkedHoldingsReason
+                )
+            }
+            return try await valueUnlinkedTrading212Account(settings: settings, credentials: credentials, reason: reason)
         }
 
         let preview = try await trading212PreviewCoordinator.preview(
@@ -984,6 +996,50 @@ class DataModel {
             missingCount: plan.missingLinkedSymbols.count,
             brokerOnlyCount: plan.brokerOnlyCount,
             skippedReason: nil
+        )
+        await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    nonisolated static let trading212NoLinkedHoldingsReason =
+        "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
+
+    /// Holdings of the app's own: rows with a position that are not benchmarks.
+    private var hasOwnedHoldings: Bool {
+        realTimeTrades.contains { !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) }
+    }
+
+    /// The ordinary sync for a set-up account with nothing linked and no holding of the
+    /// app's own: the account's summary, one request, stored as a valuation with no
+    /// positions, so the account is valued as its cash (and any holdings not linked).
+    private func valueUnlinkedTrading212Account(
+        settings: Trading212StoredSettings,
+        credentials: Trading212AuthConfiguration,
+        reason: String
+    ) async throws -> Trading212BrokerSyncResult {
+        let fetched = try await trading212PreviewCoordinator.accountSummary(settings: settings, credentials: credentials)
+        // Folync may have taken over while the request was in flight.
+        guard !isFolyncPortfolioActive else {
+            return Trading212BrokerSyncResult(
+                updatedCount: 0,
+                deletedCount: 0,
+                missingCount: 0,
+                brokerOnlyCount: 0,
+                skippedReason: Self.trading212SkippedForFolyncReason
+            )
+        }
+        trading212BrokerValuationSnapshot = trading212BrokerSyncPlanner.accountOnlyValuationSnapshot(
+            account: fetched.account,
+            accountSummary: fetched.summary,
+            syncedAt: Date()
+        )
+        let result = Trading212BrokerSyncResult(
+            updatedCount: 0,
+            deletedCount: 0,
+            missingCount: 0,
+            brokerOnlyCount: 0,
+            skippedReason: nil,
+            valuedAccountOnly: true
         )
         await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
         return result
@@ -1747,6 +1803,11 @@ class DataModel {
 
         let expectedAccountPrefix = "Trading212|\(settings.environment.rawValue)|\(settings.accountType.rawValue)|"
         guard snapshot.accountKey.hasPrefix(expectedAccountPrefix) else {
+            return nil
+        }
+        // An account valued without linked positions stands for the portfolio only while the
+        // app has no holding of its own; beside one, the local figures apply as before.
+        if snapshot.isAccountOnly, hasOwnedHoldings {
             return nil
         }
 
