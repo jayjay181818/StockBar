@@ -932,8 +932,9 @@ class DataModel {
         guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
             // Nothing linked. With no holding of the app's own, the account (cash, say) is
             // the whole portfolio: value it from its summary, one request. Beside holdings
-            // of the app's own it would replace their total, so it is left alone.
-            guard !hasOwnedHoldings else {
+            // of the app's own, or ones not known, it would replace their total, so it is
+            // left alone.
+            guard !mayHaveOwnedHoldings else {
                 return Trading212BrokerSyncResult(
                     updatedCount: 0,
                     deletedCount: 0,
@@ -1004,9 +1005,12 @@ class DataModel {
     nonisolated static let trading212NoLinkedHoldingsReason =
         "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
 
-    /// Holdings of the app's own: rows with a position that are not benchmarks.
-    private var hasOwnedHoldings: Bool {
-        realTimeTrades.contains { !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) }
+    /// Whether the app may hold holdings of its own: rows with a position that are not
+    /// benchmarks, or a portfolio not read yet or that could not be read, whose holdings
+    /// are not known.
+    private var mayHaveOwnedHoldings: Bool {
+        if portfolioLoadFailed || (requiresInitialTradeLoad && !hasCompletedInitialTradeLoad) { return true }
+        return realTimeTrades.contains { !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) }
     }
 
     /// The ordinary sync for a set-up account with nothing linked and no holding of the
@@ -1807,7 +1811,7 @@ class DataModel {
         }
         // An account valued without linked positions stands for the portfolio only while the
         // app has no holding of its own; beside one, the local figures apply as before.
-        if snapshot.isAccountOnly, hasOwnedHoldings {
+        if snapshot.isAccountOnly, mayHaveOwnedHoldings {
             return nil
         }
 
