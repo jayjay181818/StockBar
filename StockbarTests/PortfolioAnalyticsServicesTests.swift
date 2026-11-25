@@ -2088,8 +2088,12 @@ final class AllocationCashTests: XCTestCase {
         let folync = folyncModel(try folyncSnapshot(total: "null"), trading212: store)
         folync.setTrading212BrokerValuationSnapshotForTesting(
             trading212Snapshot(store, accountValue: 5_000, cash: 700, positions: ["A": 4_300]))
-        XCTAssertEqual(folync.calculateNetValue().amount, 5_000,
-                       "Holdings' net value is then the Trading 212 account's, not a total of Folync's rows")
+        // No Trading 212 valuation applies while Folync is active: Holdings' net value is the
+        // sum of Folync's rows at their prices (two holdings of 10 units at £1), never the
+        // Trading 212 account's £5,000.
+        XCTAssertEqual(folync.calculateNetValue().amount, 20, accuracy: 1e-9)
+        XCTAssertNil(folync.freshTrading212BrokerValuationSnapshot())
+        XCTAssertEqual(folync.displayValuationSource, .localCalculationFallback)
 
         let basis = folync.holdingsWeightBasis()
         XCTAssertEqual(basis.source, .folync)
@@ -2314,15 +2318,34 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertEqual(valuation.cashOmission, .totalDiffers)
         XCTAssertFalse(P.hasContent(eligibleHoldings: valuation.eligible, cash: valuation.cash),
                        "nothing to draw, as before the sync")
+        // What the page then shows: the empty page's line, which says why, not only the
+        // request for a holding the page shows with nothing at all to allocate.
+        XCTAssertEqual(P.emptyStateMessage(valuation.cashOmission),
+                       "The cash does not add up to the portfolio's total value: part of it is in no holding shown here "
+                       + "(with Trading 212, investments not linked to a holding), so there is no allocation to show.")
+        XCTAssertEqual(P.emptyStateMessage(nil), "Add a holding to your portfolio to see how it is allocated")
+        // Holdings shows the account's £3,000.50 with no rows, and its empty table says whose figure it is.
+        XCTAssertTrue(broker.isValuedFromTrading212AccountAlone)
+        XCTAssertEqual(HoldingsText.emptyTableDescription(valuedFromTrading212Account: broker.isValuedFromTrading212AccountAlone),
+                       "The total is your Trading 212 account's value: its cash and any holdings not linked here. "
+                       + "Link or add holdings to list them.")
+        XCTAssertEqual(HoldingsText.emptyTableDescription(valuedFromTrading212Account: false),
+                       "Add a holding, or connect a portfolio in Settings → Connections.")
     }
 
     @MainActor
-    func testTheCalculationIsKeyedOnTheTrading212ValuationAndOnlyANewOne() async throws {
+    func testTheCalculationIsKeyedOnTheFreshTrading212ValuationsFigures() async throws {
         let account = try FakeTrading212Account()
         defer { account.cleanUp() }
         account.answer(summary: Self.cashOnlyTrading212Summary)
         let broker = account.makeDataModel(converter: converter)
-        func trigger() -> PortfolioAnalyticsView.AnalyticsTrigger { PortfolioAnalyticsView(dataModel: broker).analyticsTrigger }
+        var now = Date(timeIntervalSince1970: 2_000_000_000)
+        broker.trading212Clock = { now }
+        // The trigger as the page builds it, from the model's state now.
+        func trigger() -> PortfolioAnalyticsView.AnalyticsTrigger {
+            PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: broker.preferredCurrency, tick: 0,
+                                                    converter: broker.currencyConverter, dataModel: broker)
+        }
         let none = trigger()
         XCTAssertNil(none.brokerValuation)
 
@@ -2330,11 +2353,14 @@ final class AllocationCashTests: XCTestCase {
         let first = trigger()
         XCTAssertNotEqual(first, none, "a valuation arriving starts the calculation")
         XCTAssertEqual(first.brokerValuation?.cashValue ?? .nan, 2_500.5, accuracy: 1e-9)
-        XCTAssertEqual(trigger(), first, "the same valuation read again does not")
-        // An identical valuation, put in place again, changes nothing either.
-        let snapshot = try XCTUnwrap(broker.trading212BrokerValuationSnapshot)
-        broker.setTrading212BrokerValuationSnapshotForTesting(snapshot)
-        XCTAssertEqual(trigger(), first)
+        XCTAssertEqual(first.brokerValuation?.accountValue ?? .nan, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(first.brokerValuation?.currency, "GBP")
+
+        // A later sync that brings the same figures does not start it again.
+        now += 60
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertNotEqual(broker.trading212BrokerValuationSnapshot?.updatedAt, Date(timeIntervalSince1970: 2_000_000_000))
+        XCTAssertEqual(trigger(), first, "an unchanged sync does not recalculate")
 
         // A sync that brings only new cash: no holding changes, yet the page recalculates
         // and then finds the new cash.
@@ -2347,19 +2373,45 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertEqual(second.brokerValuation?.cashValue ?? .nan, 3_000.5, accuracy: 1e-9)
         XCTAssertEqual(AllocationValuation.make(from: broker).cash, .held(3_000.5))
 
-        // Every sync stores a valuation of its own time, so the same figures fetched again
-        // recalculate too: a valuation can go stale and come back with equal figures.
-        let later = try XCTUnwrap(broker.trading212BrokerValuationSnapshot)
-        broker.setTrading212BrokerValuationSnapshotForTesting(Trading212BrokerValuationSnapshot(
-            accountKey: later.accountKey, currency: later.currency, accountValue: later.accountValue,
-            investmentsValue: later.investmentsValue, cashValue: later.cashValue,
-            totalUnrealizedProfitLoss: later.totalUnrealizedProfitLoss, totalCost: later.totalCost,
-            positionsByManualSymbol: later.positionsByManualSymbol, updatedAt: later.updatedAt.addingTimeInterval(300),
-            isAccountOnly: true))
+        // The valuation goes stale (past four sync intervals): no valuation, so the page
+        // recalculates without it; the next sync brings the same figures back, and it
+        // recalculates again.
+        now += TimeInterval(account.settings.load().syncIntervalSeconds * 4) + 1
+        XCTAssertNil(trigger().brokerValuation)
         XCTAssertNotEqual(trigger(), second)
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(trigger(), second)
+
+        // A stored account-only valuation stops applying beside a holding of the app's own,
+        // and starts to again once it is removed.
+        broker.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10")]
+        XCTAssertNil(trigger().brokerValuation)
+        broker.realTimeTrades = []
+        XCTAssertEqual(trigger(), second)
 
         broker.setTrading212BrokerValuationSnapshotForTesting(nil)
         XCTAssertEqual(trigger(), none)
+    }
+
+    @MainActor
+    func testTheTriggerIsToldOfEveryStoredValuationEvenWhenNoneApplies() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlyTrading212Summary)
+        let broker = account.makeDataModel(converter: converter)
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        // Trading 212 turned off: the fresh valuation is decided without reading the stored one.
+        account.change { $0.isEnabled = false }
+        let told = expectation(description: "the trigger's reads changed")
+        withObservationTracking {
+            _ = PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: "GBP", tick: 0,
+                                                        converter: broker.currencyConverter, dataModel: broker)
+        } onChange: {
+            told.fulfill()
+        }
+        broker.trading212AccountDidChange()
+        // Observation calls `onChange` as the property is set, so this does not wait.
+        await fulfillment(of: [told], timeout: 5)
     }
 
     // Coverage, cash only and a single holding.

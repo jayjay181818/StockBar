@@ -1971,8 +1971,6 @@ final class Trading212UnlinkedAccountSyncTests: XCTestCase {
         let model = account.makeDataModel()
         model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10"),
                                 FakeTrading212Account.row("BRVO", price: 60, units: "10")]
-        let netBefore = model.calculateNetValue()
-        let weightsBefore = model.realTimeTrades.map { model.calculatePositionWeight(for: $0, netValue: netBefore) }
 
         let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
 
@@ -1981,8 +1979,12 @@ final class Trading212UnlinkedAccountSyncTests: XCTestCase {
                        "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first.")
         XCTAssertEqual(account.requestedRoutes, [])
         XCTAssertNil(model.trading212BrokerValuationSnapshot)
-        XCTAssertEqual(netBefore.amount, 1_000, accuracy: 1e-9)
-        XCTAssertEqual(weightsBefore.map { $0 ?? .nan }, [40, 60])
+        // Read after the sync: the local figures stand.
+        let netAfter = model.calculateNetValue()
+        XCTAssertEqual(netAfter.amount, 1_000, accuracy: 1e-9)
+        XCTAssertEqual(model.realTimeTrades.map { model.calculatePositionWeight(for: $0, netValue: netAfter) ?? .nan },
+                       [40, 60])
+        XCTAssertEqual(model.displayValuationSource, .localCalculationFallback)
     }
 
     func testAnAccountOnlyValuationGivesWayToAHoldingAddedLater() async throws {
@@ -2051,6 +2053,441 @@ final class Trading212UnlinkedAccountSyncTests: XCTestCase {
     }
 }
 
+// MARK: - Which account a valuation belongs to, and when it stops applying
+
+/// The stored Trading 212 valuation against the account it was made for: links of other
+/// accounts, Folync, a change of account or credentials, a request overtaken while in
+/// flight, and reconciliation. Driven through the app's own code against
+/// `FakeTrading212Account`; no request leaves the process.
+@MainActor
+final class Trading212ValuationAccountTests: XCTestCase {
+    private static let cashOnlySummary = """
+    { "cash": { "availableToTrade": 2400.5, "inPies": 0, "reservedForOrders": 100 }, "currency": "GBP", "id": 42,
+      "investments": { "currentValue": 0, "realizedProfitLoss": 0, "totalCost": 0, "unrealizedProfitLoss": 0 },
+      "totalValue": 2500.5 }
+    """
+
+    /// Two holdings of the app's own, £400 and £600.
+    private func holdOwnHoldings(_ model: DataModel) {
+        model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10"),
+                                FakeTrading212Account.row("BRVO", price: 60, units: "10")]
+    }
+
+    /// What Holdings, the menu bar and the Overview show for the two holdings when no
+    /// Trading 212 valuation applies, read now.
+    private func assertOwnFiguresStand(_ model: DataModel, file: StaticString = #filePath, line: UInt = #line) {
+        let net = model.calculateNetValue()
+        XCTAssertEqual(net.amount, 1_000, accuracy: 1e-9, file: file, line: line)
+        XCTAssertEqual(model.realTimeTrades.map { model.calculatePositionWeight(for: $0, netValue: net) ?? .nan },
+                       [40, 60], file: file, line: line)
+        XCTAssertEqual(model.displayValuationSource, .localCalculationFallback, file: file, line: line)
+        XCTAssertEqual(model.netGainsSource, .averageCost, file: file, line: line)
+        XCTAssertEqual(model.holdingsWeightBasis().source, .local, file: file, line: line)
+        let summary = model.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(summary.valuationSource, .localCalculationFallback, file: file, line: line)
+        XCTAssertEqual(summary.totalValue, 1_000, accuracy: 1e-9, file: file, line: line)
+        XCTAssertNil(model.freshTrading212BrokerValuationSnapshot(), file: file, line: line)
+    }
+
+    /// Runs the ordinary sync with the broker's answer to `route` held back, makes `change`
+    /// while it is in flight, then lets the answer through.
+    private func sync(_ model: DataModel, holding route: String = FakeTrading212Account.summaryRoute,
+                      during change: () throws -> Void) async throws -> Trading212BrokerSyncResult {
+        let arrived = expectation(description: "request in flight")
+        Trading212BrokerStub.hold(route) { arrived.fulfill() }
+        let sync = Task { try await model.syncLinkedTrading212Holdings(reason: "auto") }
+        await fulfillment(of: [arrived], timeout: 10)
+        try change()
+        Trading212BrokerStub.release()
+        return try await sync.value
+    }
+
+    private func folyncSnapshot() throws -> FolyncPortfolioSnapshot {
+        func metric(_ value: String) -> String {
+            "{ \"value\": \(value), \"currency\": \"GBP\", \"quality\": \"complete\", \"reasonCodes\": [], \"asOfDate\": \"2026-07-11\" }"
+        }
+        func holding(_ asset: String, price: Int) -> String {
+            let ticker = asset.uppercased()
+            return """
+            { "portfolioId": "pf_demo", "portfolioName": "Demo", "assetId": "\(asset)", "ticker": "\(ticker)",
+              "canonicalTicker": "\(ticker)", "displayTicker": "\(ticker)", "quoteSymbol": "\(ticker)",
+              "aliases": ["\(ticker)"], "name": "Fund \(asset)", "currency": "GBP", "valueCurrency": "GBP",
+              "shares": 10, "averageCost": 1, "currentPrice": \(price), "previousClose": \(price),
+              "marketValue": \(price * 10), "costValue": 10, "dayGain": 0, "dayGainPct": 0, "totalGain": 1, "totalGainPct": 1,
+              "allocationPct": null, "valuation": \(metric("\(price * 10)")) }
+            """
+        }
+        // Folync gives no total and no unrealised gain.
+        let json = """
+        {
+          "schemaVersion": 2, "sourceRevision": "revision-1", "generatedAt": "2026-07-12T12:00:00.000Z",
+          "scope": { "id": "all", "name": "All portfolios", "kind": "aggregate", "currency": "GBP" },
+          "freshness": {
+            "responseGeneratedAt": "2026-07-12T12:00:00.000Z", "asOf": "2026-07-11", "status": "current", "reasonCodes": [],
+            "sources": {
+              "snapshots": { "asOfDate": "2026-07-11", "status": "clean", "generation": 1, "dirtySince": null, "rebuildStartedAt": null, "failedAt": null, "completedAt": "2026-07-12T11:55:00.000Z" },
+              "prices": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "fx": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "provider": { "lastSuccessfulSyncAt": "2026-07-12T11:55:00.000Z", "ageSeconds": 300 }
+            }
+          },
+          "totalValue": \(metric("null")),
+          "cash": \(metric("null")),
+          "profitLoss": { "unrealized": \(metric("null")), "realized": \(metric("0")), "day": \(metric("null")) },
+          "holdings": [\(holding("a", price: 30)), \(holding("b", price: 7))]
+        }
+        """
+        return try FolyncPortfolioDecoder().decodeSnapshot(Data(json.utf8))
+    }
+
+    // MARK: 1. Links in another account
+
+    func testLinksInAnotherEnvironmentLeaveTheActiveAccountUnlinked() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        // Linked in Live; the account in use is the Demo one, with nothing linked.
+        try await account.link(providerTicker: "ALFAl_EQ", manualSymbol: "ALFA", environment: .live)
+
+        let owner = account.makeDataModel()
+        holdOwnHoldings(owner)
+        let skipped = try await owner.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(skipped.skippedReason, DataModel.trading212NoLinkedHoldingsReason)
+        XCTAssertEqual(account.requestedRoutes, [], "beside holdings of the app's own, nothing is asked")
+        XCTAssertNil(owner.trading212BrokerValuationSnapshot)
+        assertOwnFiguresStand(owner)
+
+        let cashOnly = account.makeDataModel()
+        let valued = try await cashOnly.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertTrue(valued.valuedAccountOnly)
+        XCTAssertEqual(account.requestedRoutes, ["/equity/account/summary"], "the summary alone, not the positions")
+        XCTAssertEqual(cashOnly.trading212BrokerValuationSnapshot?.isAccountOnly, true)
+        XCTAssertEqual(cashOnly.calculateNetValue().amount, 2_500.5, accuracy: 1e-9)
+    }
+
+    func testLinksUnderAnotherAccountOfTheSameTypeLeaveTheValuationAccountOnly() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary, positions: "[]")
+        // Same environment and account type, another account (id 7): its key is known only
+        // once the broker answers with this account's id (42).
+        try await account.link(providerTicker: "ALFAl_EQ", manualSymbol: "ALFA", apiAccountId: 7)
+        let model = account.makeDataModel()
+        holdOwnHoldings(model)
+
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        XCTAssertNil(result.skippedReason)
+        XCTAssertEqual(account.requestedRoutes.sorted(), ["/equity/account/summary", "/equity/positions"])
+        let snapshot = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        XCTAssertTrue(snapshot.isAccountOnly, "no position linked in this account")
+        XCTAssertTrue(snapshot.positionsByManualSymbol.isEmpty)
+        XCTAssertEqual(snapshot.accountValue, 2_500.5, accuracy: 1e-9)
+        // So the holdings' own figures stand, read after the sync.
+        assertOwnFiguresStand(model)
+        // Without them, the account is the portfolio.
+        model.realTimeTrades = []
+        XCTAssertEqual(model.calculateNetValue().amount, 2_500.5, accuracy: 1e-9)
+    }
+
+    func testReconcilingAnAccountWithNothingLinkedLeavesTheHoldingsFiguresAlone() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.change {
+            $0.autoReconcileHoldingsEnabled = true
+            $0.autoImportBrokerOnlyHoldings = false
+        }
+        account.answer(summary: Self.cashOnlySummary, positions: "[]")
+        try await account.link(providerTicker: "ALFAl_EQ", manualSymbol: "ALFA", environment: .live)
+        let model = account.makeDataModel()
+        holdOwnHoldings(model)
+
+        let result = try await model.reconcileTrading212Holdings(reason: "manual-reconcile")
+
+        XCTAssertNil(result.skippedReason)
+        XCTAssertTrue(account.requestedRoutes.contains("/equity/account/summary"))
+        XCTAssertTrue(account.requestedRoutes.contains("/equity/positions"))
+        let snapshot = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        XCTAssertTrue(snapshot.isAccountOnly, "Reconcile Holdings Now stores an account-only valuation too")
+        assertOwnFiguresStand(model)
+        model.realTimeTrades = []
+        XCTAssertEqual(model.calculateNetValue().amount, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(model.displayValuationSource, .brokerProvided)
+    }
+
+    // MARK: 2. Folync active
+
+    func testWhileFolyncIsActiveNoTrading212ValuationApplies() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: """
+        { "cash": { "availableToTrade": 2500.5 }, "currency": "GBP", "id": 42,
+          "investments": { "currentValue": 500, "realizedProfitLoss": 0, "totalCost": 450, "unrealizedProfitLoss": 50 },
+          "totalValue": 3000.5 }
+        """)
+        let model = account.makeDataModel()
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertNotNil(model.freshTrading212BrokerValuationSnapshot())
+
+        // Folync takes over, with no total and no unrealised gain; the valuation is left behind.
+        let folync = try folyncSnapshot()
+        model.folyncPortfolioSnapshot = folync
+        model.realTimeTrades = folync.makeDisplayTrades(overlays: [:])
+        XCTAssertNotNil(model.trading212BrokerValuationSnapshot)
+        XCTAssertNil(model.freshTrading212BrokerValuationSnapshot())
+
+        // Each reader gives Folync's holdings at their prices: £300 and £70, and no account's figure.
+        let net = model.calculateNetValue()
+        XCTAssertEqual(net.amount, 370, accuracy: 1e-9)
+        XCTAssertEqual(net.currency, "GBP")
+        XCTAssertEqual(model.netGainsSource, .averageCost)
+        let gains = model.calculateNetGains()
+        XCTAssertNotEqual(gains.amount, 50, "not the Trading 212 account's gain")
+        XCTAssertEqual(model.displayValuationSource, .localCalculationFallback)
+        let summary = model.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(summary.valuationSource, .localCalculationFallback)
+        XCTAssertEqual(summary.totalValue, 370, accuracy: 1e-9)
+        XCTAssertEqual(model.holdingsWeightBasis(),
+                       HoldingsWeightBasis(source: .folync, total: nil, cash: nil, mismatch: .folyncWithoutTotal))
+
+        // The same as with no Trading 212 valuation at all.
+        model.setTrading212BrokerValuationSnapshotForTesting(nil)
+        XCTAssertEqual(model.calculateNetValue().amount, net.amount, accuracy: 1e-9)
+        XCTAssertEqual(model.calculateNetGains().amount, gains.amount, accuracy: 1e-9)
+        XCTAssertEqual(model.calculateDisplayPortfolioSummary().totalGain, summary.totalGain, accuracy: 1e-9)
+        XCTAssertEqual(model.calculateDisplayPortfolioSummary().totalCost, summary.totalCost, accuracy: 1e-9)
+    }
+
+    // MARK: 3. The account changes
+
+    func testChangingTheAccountClearsTheValuationAtOnceAndTellsTheMenuBar() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        let saved = account.settings.load()
+
+        // Another sync interval is not another account: the valuation stands.
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        var interval = saved
+        interval.syncIntervalSeconds = saved.syncIntervalSeconds * 2
+        interval.accountLabel = "Renamed"
+        model.trading212SettingsDidChange(from: saved, to: interval)
+        XCTAssertNotNil(model.trading212BrokerValuationSnapshot)
+
+        var off = saved
+        off.isEnabled = false
+        var live = saved
+        live.environment = .live
+        var invest = saved
+        invest.accountType = saved.accountType == .invest ? .stocksAndSharesISA : .invest
+        let changes: [(String, () -> Void)] = [
+            ("turned off", { model.trading212SettingsDidChange(from: saved, to: off) }),
+            ("another environment", { model.trading212SettingsDidChange(from: saved, to: live) }),
+            ("another account type", { model.trading212SettingsDidChange(from: saved, to: invest) }),
+            ("credentials saved, replaced or cleared", { model.trading212AccountDidChange() })
+        ]
+        for (name, change) in changes {
+            _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+            XCTAssertEqual(model.calculateNetValue().amount, 2_500.5, accuracy: 1e-9, name)
+            let told = expectation(description: "content changed: \(name)")
+            told.assertForOverFulfill = false
+            let subscription = model.tradeContentPublisher.sink { told.fulfill() }
+
+            change()
+
+            XCTAssertNil(model.trading212BrokerValuationSnapshot, name)
+            XCTAssertEqual(model.calculateNetValue().amount, 0, accuracy: 1e-9, name)
+            XCTAssertEqual(model.displayValuationSource, .localCalculationFallback, name)
+            await fulfillment(of: [told], timeout: 5)
+            subscription.cancel()
+        }
+    }
+
+    // MARK: 4. A request overtaken while in flight
+
+    func testASummaryOvertakenInFlightStoresNothing() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let saved = account.settings.load()
+        let cases: [(name: String, reason: String, change: (DataModel) throws -> Void)] = [
+            ("Folync took over", DataModel.trading212SkippedForFolyncReason, { model in
+                model.folyncPortfolioSnapshot = try self.folyncSnapshot()
+            }),
+            ("Trading 212 turned off", DataModel.trading212AccountChangedReason, { _ in
+                account.change { $0.isEnabled = false }
+            }),
+            ("another environment", DataModel.trading212AccountChangedReason, { _ in
+                account.change { $0.environment = .live }
+            }),
+            ("another account type", DataModel.trading212AccountChangedReason, { _ in
+                account.change { $0.accountType = saved.accountType == .invest ? .stocksAndSharesISA : .invest }
+            }),
+            ("credentials removed", DataModel.trading212AccountChangedReason, { _ in
+                try account.credentials.delete(environment: saved.environment)
+            }),
+            ("credentials replaced", DataModel.trading212AccountChangedReason, { model in
+                model.trading212AccountDidChange()
+            })
+        ]
+        for testCase in cases {
+            account.settings.save(saved)
+            try account.credentials.save(Trading212AuthConfiguration(apiKey: "fake-key-for-tests", apiSecret: "fake-secret"),
+                                         environment: saved.environment)
+            Trading212BrokerStub.reset(bodies: [FakeTrading212Account.summaryRoute: Self.cashOnlySummary])
+            let model = account.makeDataModel()
+
+            let result = try await sync(model) { try testCase.change(model) }
+
+            XCTAssertEqual(result.skippedReason, testCase.reason, testCase.name)
+            XCTAssertFalse(result.valuedAccountOnly, testCase.name)
+            XCTAssertNil(model.trading212BrokerValuationSnapshot, testCase.name)
+            XCTAssertEqual(account.requestedRoutes, ["/equity/account/summary"], testCase.name)
+        }
+    }
+
+    func testACancelledSyncStoresNothing() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        let arrived = expectation(description: "request in flight")
+        Trading212BrokerStub.hold(FakeTrading212Account.summaryRoute) { arrived.fulfill() }
+        let sync = Task { try await model.syncLinkedTrading212Holdings(reason: "auto") }
+        await fulfillment(of: [arrived], timeout: 10)
+
+        sync.cancel()
+        Trading212BrokerStub.release()
+
+        do {
+            _ = try await sync.value
+            XCTFail("a cancelled sync reports its cancellation")
+        } catch {}
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+    }
+
+    func testALinkedSyncOvertakenInFlightStoresNothing() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(
+            summary: """
+            { "cash": { "availableToTrade": 100 }, "currency": "GBP", "id": 42,
+              "investments": { "currentValue": 900, "realizedProfitLoss": 0, "totalCost": 800, "unrealizedProfitLoss": 100 },
+              "totalValue": 1000 }
+            """,
+            positions: """
+            [{ "averagePricePaid": null, "currentPrice": null, "quantity": null, "quantityAvailableForTrading": null, "quantityInPies": null,
+               "instrument": { "currency": "GBP", "isin": "GB00ALFA0001", "name": "Alfa", "ticker": "ALFAl_EQ" },
+               "walletImpact": { "currency": "GBP", "currentValue": 900, "fxImpact": 0, "totalCost": 800, "unrealizedProfitLoss": 100 } }]
+            """
+        )
+        try await account.link(providerTicker: "ALFAl_EQ", manualSymbol: "ALFA")
+        for change in ["Folync", "turned off"] {
+            let model = account.makeDataModel()
+            model.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 85, units: "10")]
+
+            let result = try await sync(model, holding: FakeTrading212Account.positionsRoute) {
+                if change == "Folync" {
+                    model.folyncPortfolioSnapshot = try self.folyncSnapshot()
+                } else {
+                    account.change { $0.isEnabled = false }
+                }
+            }
+
+            XCTAssertEqual(result.skippedReason, change == "Folync"
+                           ? DataModel.trading212SkippedForFolyncReason : DataModel.trading212AccountChangedReason)
+            XCTAssertNil(model.trading212BrokerValuationSnapshot, change)
+            account.change { $0.isEnabled = true }
+        }
+    }
+
+    func testAReconciliationOvertakenInFlightStoresNothing() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.change {
+            $0.autoReconcileHoldingsEnabled = true
+            $0.autoImportBrokerOnlyHoldings = false
+        }
+        account.answer(summary: Self.cashOnlySummary, positions: "[]")
+        let model = account.makeDataModel()
+        let arrived = expectation(description: "request in flight")
+        Trading212BrokerStub.hold(FakeTrading212Account.positionsRoute) { arrived.fulfill() }
+        let reconcile = Task { try await model.reconcileTrading212Holdings(reason: "manual-reconcile") }
+        await fulfillment(of: [arrived], timeout: 10)
+
+        model.trading212AccountDidChange()
+        Trading212BrokerStub.release()
+
+        let result = try await reconcile.value
+        XCTAssertEqual(result.skippedReason, DataModel.trading212AccountChangedReason)
+        XCTAssertNil(model.trading212BrokerValuationSnapshot)
+    }
+
+    // MARK: Holdings not known yet
+
+    func testAPortfolioNotReadYetOrUnreadableCountsAsHoldings() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let states: [(name: String, requires: Bool, completed: Bool, failed: Bool)] = [
+            ("not read yet", true, false, false),
+            ("could not be read", true, true, true)
+        ]
+        for state in states {
+            // A valuation stored while the portfolio was known to be empty no longer applies.
+            let model = account.makeDataModel()
+            _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+            XCTAssertEqual(model.calculateNetValue().amount, 2_500.5, accuracy: 1e-9, state.name)
+            model.setPortfolioLoadStateForTesting(requiresInitialLoad: state.requires, completed: state.completed,
+                                                  failed: state.failed)
+            XCTAssertNil(model.freshTrading212BrokerValuationSnapshot(), state.name)
+            XCTAssertEqual(model.displayValuationSource, .localCalculationFallback, state.name)
+            XCTAssertFalse(model.isValuedFromTrading212AccountAlone, state.name)
+
+            // And the next sync asks nothing.
+            let before = account.requestedRoutes.count
+            let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+            XCTAssertEqual(result.skippedReason, DataModel.trading212NoLinkedHoldingsReason, state.name)
+            XCTAssertEqual(account.requestedRoutes.count, before, state.name)
+        }
+    }
+
+    // MARK: 7. Cost basis
+
+    func testAnAccountOnlyValuationWithoutInvestmentsHasNoCostBasisOrGain() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: """
+        { "cash": { "availableToTrade": 75.25 }, "currency": "GBP", "id": 42, "investments": null, "totalValue": 75.25 }
+        """)
+        let model = account.makeDataModel()
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        let summary = model.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(summary.valuationSource, .brokerProvided)
+        XCTAssertEqual(summary.totalValue, 75.25, accuracy: 1e-9)
+        XCTAssertTrue(summary.totalCost.isNaN, "not the cash passed off as a cost: \(summary.totalCost)")
+        XCTAssertTrue(summary.totalGain.isNaN, "\(summary.totalGain)")
+        XCTAssertTrue(summary.totalGainPct.isNaN, "\(summary.totalGainPct)")
+        // The Overview's Cost basis row, as it formats it: the unknown mark.
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(summary.totalCost, currency: summary.currency), "-")
+
+        // With an investments figure, the summary's own cost and gain.
+        account.answer(summary: """
+        { "cash": { "availableToTrade": 2500.5 }, "currency": "GBP", "id": 42,
+          "investments": { "currentValue": 500, "realizedProfitLoss": 0, "totalCost": 450, "unrealizedProfitLoss": 50 },
+          "totalValue": 3000.5 }
+        """)
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        let invested = model.calculateDisplayPortfolioSummary()
+        XCTAssertEqual(invested.totalCost, 450, accuracy: 1e-9)
+        XCTAssertEqual(invested.totalGain, 50, accuracy: 1e-9)
+        XCTAssertEqual(invested.totalGainPct, 50.0 / 450.0 * 100, accuracy: 1e-9)
+        XCTAssertEqual(HoldingsCurrencyFormatter.amount(invested.totalCost, currency: invested.currency), "£450.00")
+    }
+}
+
 // MARK: - A fake Trading 212 account
 
 /// Stands in for Trading 212's API: answers each route from memory and records the path
@@ -2060,11 +2497,38 @@ final class Trading212BrokerStub: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var bodies: [String: String] = [:]
     nonisolated(unsafe) private static var paths: [String] = []
+    nonisolated(unsafe) private static var heldRoute: String?
+    nonisolated(unsafe) private static var held: [Trading212BrokerStub] = []
+    nonisolated(unsafe) private static var onHeld: (@Sendable () -> Void)?
 
     static func reset(bodies newBodies: [String: String]) {
         lock.lock(); defer { lock.unlock() }
         bodies = newBodies
         paths = []
+        heldRoute = nil
+        held = []
+        onHeld = nil
+    }
+
+    /// Holds every request for `route` unanswered until `release()`, calling `arrived` as
+    /// each one comes in: a request in flight for as long as a test needs, with no waiting
+    /// on time.
+    static func hold(_ route: String, arrived: @escaping @Sendable () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        heldRoute = route
+        onHeld = arrived
+    }
+
+    /// Answers the held requests with what the broker answers now, and holds no more.
+    static func release() {
+        let waiting: [Trading212BrokerStub] = {
+            lock.lock(); defer { lock.unlock() }
+            heldRoute = nil
+            onHeld = nil
+            defer { held = [] }
+            return held
+        }()
+        for request in waiting { request.answer() }
     }
 
     static func setBody(_ body: String, for route: String) {
@@ -2082,9 +2546,24 @@ final class Trading212BrokerStub: URLProtocol {
 
     override func startLoading() {
         let path = request.url?.path ?? ""
-        let body: String? = {
+        let arrived: (@Sendable () -> Void)? = {
             Self.lock.lock(); defer { Self.lock.unlock() }
             Self.paths.append(path)
+            guard let route = Self.heldRoute, path.hasSuffix(route) else { return nil }
+            Self.held.append(self)
+            return Self.onHeld
+        }()
+        if let arrived {
+            arrived()
+            return
+        }
+        answer()
+    }
+
+    private func answer() {
+        let path = request.url?.path ?? ""
+        let body: String? = {
+            Self.lock.lock(); defer { Self.lock.unlock() }
             return Self.bodies.first { path.hasSuffix($0.key) }?.value
         }()
         let status = body == nil ? 404 : 200
@@ -2095,7 +2574,10 @@ final class Trading212BrokerStub: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        Self.lock.lock(); defer { Self.lock.unlock() }
+        Self.held.removeAll { $0 === self }
+    }
 }
 
 /// A Trading 212 account set up as the app sets one up, kept apart from the user's: its
@@ -2174,16 +2656,25 @@ final class FakeTrading212Account {
         return model
     }
 
+    /// Changes the account's stored settings, as saving them in Settings does.
+    func change(_ edit: (inout Trading212StoredSettings) -> Void) {
+        var stored = settings.load()
+        edit(&stored)
+        settings.save(stored)
+    }
+
     /// Links the broker's `providerTicker` to the holding `manualSymbol`, as Link Matched
-    /// Holdings saves it, under the key the next sync gives this account (id 42).
-    func link(providerTicker: String, manualSymbol: String) async throws {
+    /// Holdings saves it, under the key the next sync gives this account (id 42), or under
+    /// another account's key: another `environment`, or another account id.
+    func link(providerTicker: String, manualSymbol: String,
+              environment: Trading212Environment? = nil, apiAccountId: Int64 = 42) async throws {
         let stored = settings.load()
         let key = BrokerAccountIdentity.preview(
-            broker: "Trading212", environment: stored.environment, accountType: stored.accountType,
+            broker: "Trading212", environment: environment ?? stored.environment, accountType: stored.accountType,
             accountLabel: stored.accountLabel,
             credentialFingerprint: Trading212AuthConfiguration(apiKey: Self.apiKey, apiSecret: "fake-secret")
                 .credentialFingerprint,
-            apiAccountId: 42
+            apiAccountId: apiAccountId
         ).brokerAccountKey
         let linkedAt = Date(timeIntervalSince1970: 1_000)
         try await links.replaceSnapshot(BrokerLinkStoreSnapshot(
@@ -2192,7 +2683,7 @@ final class FakeTrading212Account {
             accounts: [BrokerLinkedAccount(
                 brokerAccountKey: key, broker: "Trading212", accountLabel: stored.accountLabel,
                 accountType: stored.accountType, taxWrapper: stored.accountType.taxWrapper,
-                environment: stored.environment, linkedAt: linkedAt, updatedAt: linkedAt)],
+                environment: environment ?? stored.environment, linkedAt: linkedAt, updatedAt: linkedAt)],
             positions: [BrokerLinkedPosition(
                 brokerAccountKey: key, instrumentId: "LSE:\(manualSymbol)", displaySymbol: manualSymbol,
                 displayName: manualSymbol, providerTicker: providerTicker, manualSymbol: manualSymbol,
