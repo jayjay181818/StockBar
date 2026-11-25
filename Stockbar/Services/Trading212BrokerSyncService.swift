@@ -417,7 +417,10 @@ struct Trading212BrokerSyncPlanner {
             linkedPositions: linkedPositions,
             rowsByInstrumentLinkID: rowsByInstrumentLinkID,
             rowsByProviderTicker: rowsByProviderTicker,
-            syncedAt: syncedAt
+            syncedAt: syncedAt,
+            // No position linked in this account (links of other accounts do not count):
+            // the summary values the account alone, as an unlinked account's does.
+            isAccountOnly: linkedPositions.isEmpty
         )
 
         return Trading212BrokerSyncPlan(

@@ -314,6 +314,25 @@ enum AllocationPresentation {
         }
     }
 
+    /// The line on the page when it has nothing to allocate: no holding and no Cash row.
+    /// When the source gives cash that is left out, it says why rather than only asking for a
+    /// holding; a Trading 212 account whose summary values investments not linked to a
+    /// holding (`.totalDiffers`) is the case that matters, as its cash alone is not its total.
+    static func emptyStateMessage(_ omission: AllocationCashOmission?) -> String {
+        let ask = "Add a holding to your portfolio to see how it is allocated"
+        switch omission {
+        case nil, .partialCoverage?, .holdingsOutsideBrokerAccount?:
+            return ask
+        case .totalDiffers?:
+            return "The cash does not add up to the portfolio's total value: part of it is in no holding shown here "
+                + "(with Trading 212, investments not linked to a holding), so there is no allocation to show."
+        case .noExchangeRate?:
+            return "There is no exchange rate for the cash yet, so there is no allocation to show."
+        case .folyncWithoutTotal?:
+            return "Folync gives no total value for this portfolio, so its cash has no share to show."
+        }
+    }
+
     /// The line under the chart when cash is below zero: there is no slice for it, so the
     /// shares are of the holdings alone. Nil in every other case.
     static func borrowingLine(_ cash: AllocationCash, currency: String) -> String? {

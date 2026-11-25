@@ -92,34 +92,47 @@ struct PortfolioAnalyticsView: View {
         /// A refresh that brings the same rates under a new time changes nothing here, so
         /// it does not start the calculation, and the correlation work, again.
         let loadedRates: [String: Double]?
-        /// The Trading 212 valuation the cash and total come from, nil without one. A sync
-        /// that brings only new cash changes no holding, so without this the page would keep
-        /// the old cash. Each sync stores a new valuation with its own time, so each one
-        /// recalculates; the same valuation read again does not.
+        /// The Trading 212 valuation the cash and total come from, as the page reads it (the
+        /// fresh one, `DataModel.freshTrading212BrokerValuationSnapshot()`), nil without one.
+        /// A sync that brings only new cash changes no holding, so without this the page would
+        /// keep the old cash. Keyed on the figures the page uses, not on the time they were
+        /// fetched: a sync that brings the same figures does not recalculate, while a
+        /// valuation that goes stale and comes back, or a stored one that starts to apply,
+        /// passes through nil and so does.
         let brokerValuation: BrokerValuationStamp?
 
         struct BrokerValuationStamp: Hashable {
-            let updatedAt: Date
+            let accountKey: String
+            let currency: String
             let accountValue: Double
             let cashValue: Double?
 
             init(_ snapshot: Trading212BrokerValuationSnapshot) {
-                updatedAt = snapshot.updatedAt
+                accountKey = snapshot.accountKey
+                currency = snapshot.currency
                 accountValue = snapshot.accountValue
                 cashValue = snapshot.cashValue
             }
         }
 
+        /// The trigger for `dataModel`'s state now. Without a model, no valuation.
         @MainActor
         init(range: TimeRange, currency: String, tick: Int, converter: CurrencyConverter,
-             brokerValuation: Trading212BrokerValuationSnapshot? = nil) {
+             dataModel: DataModel? = nil) {
             self.range = range
             self.currency = currency
             self.tick = tick
             // The observed properties, so a change of either redraws the view and re-keys its task.
             let rates = converter.exchangeRates
             loadedRates = rates.isEmpty || converter.lastRefreshTime == .distantPast ? nil : rates
-            self.brokerValuation = brokerValuation.map(BrokerValuationStamp.init)
+            if let dataModel {
+                // Read the stored valuation itself, so each one stored redraws the view: the
+                // fresh one can be decided without reading it (Folync active, Trading 212 off).
+                _ = dataModel.trading212BrokerValuationSnapshot
+                brokerValuation = dataModel.freshTrading212BrokerValuationSnapshot().map(BrokerValuationStamp.init)
+            } else {
+                brokerValuation = nil
+            }
         }
     }
 
@@ -127,7 +140,7 @@ struct PortfolioAnalyticsView: View {
     var analyticsTrigger: AnalyticsTrigger {
         AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency,
                          tick: portfolioUpdateTick, converter: dataModel.currencyConverter,
-                         brokerValuation: dataModel.trading212BrokerValuationSnapshot)
+                         dataModel: dataModel)
     }
 
     /// Something to show: a holding to value, or cash on its own.
@@ -600,10 +613,11 @@ struct PortfolioAnalyticsView: View {
             Text("Portfolio Analytics Unavailable")
                 .font(.headline)
 
-            Text("Add a holding to your portfolio to see how it is allocated")
+            Text(AllocationPresentation.emptyStateMessage(cashOmission))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 40)
         }
         .padding(.vertical, 60)

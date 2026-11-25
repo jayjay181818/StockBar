@@ -613,7 +613,13 @@ class PortfolioCalculationService {
             from: brokerValuationSnapshot.currency,
             to: preferredCurrency
         )
-        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss ?? localSummary.totalGain
+        // An account valued from its summary alone has no holdings of Stockbar's to fall back
+        // on: what the summary does not give (its investments' cost and gain) is not known,
+        // never the local sum over no holdings or the account's value less a gain, which
+        // would pass its cash off as a cost.
+        let isAccountOnly = brokerValuationSnapshot.isAccountOnly
+        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss
+            ?? (isAccountOnly ? .nan : localSummary.totalGain)
         let totalGain = convertBrokerAmount(
             totalGainSource,
             from: brokerValuationSnapshot.totalUnrealizedProfitLoss == nil ? preferredCurrency : brokerValuationSnapshot.currency,
@@ -625,11 +631,13 @@ class PortfolioCalculationService {
             })
         let totalCost = totalCostSource.map {
             convertBrokerAmount($0, from: brokerValuationSnapshot.currency, to: preferredCurrency)
-        } ?? max(totalValue - totalGain, 0)
+        } ?? (isAccountOnly ? .nan : max(totalValue - totalGain, 0))
         let totalGainPct: Double
         if let totalCostSource, totalCostSource > 0,
            let unrealized = brokerValuationSnapshot.totalUnrealizedProfitLoss {
             totalGainPct = (unrealized / totalCostSource) * 100.0
+        } else if isAccountOnly, totalCostSource == nil || brokerValuationSnapshot.totalUnrealizedProfitLoss == nil {
+            totalGainPct = .nan
         } else {
             totalGainPct = localSummary.totalGainPct
         }
