@@ -2088,8 +2088,12 @@ final class AllocationCashTests: XCTestCase {
         let folync = folyncModel(try folyncSnapshot(total: "null"), trading212: store)
         folync.setTrading212BrokerValuationSnapshotForTesting(
             trading212Snapshot(store, accountValue: 5_000, cash: 700, positions: ["A": 4_300]))
-        XCTAssertEqual(folync.calculateNetValue().amount, 5_000,
-                       "Holdings' net value is then the Trading 212 account's, not a total of Folync's rows")
+        // No Trading 212 valuation applies while Folync is active: Holdings' net value is the
+        // sum of Folync's rows at their prices (two holdings of 10 units at £1), never the
+        // Trading 212 account's £5,000.
+        XCTAssertEqual(folync.calculateNetValue().amount, 20, accuracy: 1e-9)
+        XCTAssertNil(folync.freshTrading212BrokerValuationSnapshot())
+        XCTAssertEqual(folync.displayValuationSource, .localCalculationFallback)
 
         let basis = folync.holdingsWeightBasis()
         XCTAssertEqual(basis.source, .folync)
@@ -2247,6 +2251,174 @@ final class AllocationCashTests: XCTestCase {
         // New rates do, under the same time or not.
         rates.exchangeRates = ["USD": 1.0, "GBP": 0.75]
         XCTAssertNotEqual(trigger(), loaded)
+    }
+
+    // A Trading 212 account with nothing linked, valued by the ordinary sync against a fake broker.
+
+    private static let cashOnlyTrading212Summary = """
+    { "cash": { "availableToTrade": 2400.5, "inPies": 0, "reservedForOrders": 100 }, "currency": "GBP", "id": 42,
+      "investments": { "currentValue": 0, "realizedProfitLoss": 0, "totalCost": 0, "unrealizedProfitLoss": 0 },
+      "totalValue": 2500.5 }
+    """
+
+    @MainActor
+    func testACashOnlyTrading212AccountIsAllCashAfterTheOrdinarySync() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlyTrading212Summary)
+        let broker = account.makeDataModel(converter: converter)
+        // Before the sync there is nothing to show: no holding and no cash.
+        let before = AllocationValuation.make(from: broker)
+        XCTAssertFalse(P.hasContent(eligibleHoldings: before.eligible, cash: before.cash))
+
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+
+        let basis = broker.holdingsWeightBasis()
+        XCTAssertEqual(basis, HoldingsWeightBasis(source: .trading212,
+                                                  total: HoldingsWeightBasis.Amount(value: 2_500.5, currency: "GBP"),
+                                                  cash: HoldingsWeightBasis.Amount(value: 2_500.5, currency: "GBP"),
+                                                  mismatch: nil))
+        let valuation = AllocationValuation.make(from: broker)
+        XCTAssertEqual(valuation.eligible, 0)
+        XCTAssertEqual(valuation.cash, .held(2_500.5))
+        XCTAssertEqual(valuation.sourceTotal ?? .nan, 2_500.5, accuracy: 1e-9)
+        XCTAssertNil(valuation.cashOmission)
+        XCTAssertTrue(P.hasContent(eligibleHoldings: valuation.eligible, cash: valuation.cash))
+        for grouping in AllocationGrouping.allCases {
+            let rows = P.displayed([], cash: valuation.cash, sourceTotal: valuation.sourceTotal)
+            XCTAssertEqual(rows.map { P.rowLabel($0, grouping: grouping) }, ["Cash"], grouping.rawValue)
+            XCTAssertEqual(rows.map { P.shareText($0.share) }, ["100.0%"], grouping.rawValue)
+        }
+        let centre = P.centreText(total: P.shareTotal(holdingsTotal: 0, cash: valuation.cash, sourceTotal: valuation.sourceTotal),
+                                  holdingCount: 0, currency: "GBP", includesCash: true)
+        XCTAssertEqual(centre.count, "Cash only")
+        XCTAssertEqual(P.shareTotal(holdingsTotal: 0, cash: valuation.cash, sourceTotal: valuation.sourceTotal),
+                       broker.calculateNetValue().amount, accuracy: 1e-9, "the centre total is Holdings' net value")
+        XCTAssertEqual(AllocationShareBasis(cash: valuation.cash, omission: valuation.cashOmission), .portfolioWithCash)
+    }
+
+    @MainActor
+    func testATrading212AccountWithHoldingsNotLinkedHasNoCashRowAndSaysWhy() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: """
+        { "cash": { "availableToTrade": 2500.5, "inPies": 0, "reservedForOrders": 0 }, "currency": "GBP", "id": 42,
+          "investments": { "currentValue": 500, "realizedProfitLoss": 0, "totalCost": 450, "unrealizedProfitLoss": 50 },
+          "totalValue": 3000.5 }
+        """)
+        let broker = account.makeDataModel(converter: converter)
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+
+        // Holdings' total is the whole account, the £500 it holds unlinked included.
+        XCTAssertEqual(broker.calculateNetValue().amount, 3_000.5, accuracy: 1e-9)
+        XCTAssertEqual(broker.calculateNetGains().amount, 50, accuracy: 1e-9)
+        // Allocation has no row for the unlinked £500, so £2,500.50 of cash is not the total.
+        let valuation = AllocationValuation.make(from: broker)
+        XCTAssertEqual(valuation.cash, .none)
+        XCTAssertEqual(valuation.cashOmission, .totalDiffers)
+        XCTAssertFalse(P.hasContent(eligibleHoldings: valuation.eligible, cash: valuation.cash),
+                       "nothing to draw, as before the sync")
+        // What the page then shows: the empty page's line, which says why, not only the
+        // request for a holding the page shows with nothing at all to allocate.
+        XCTAssertEqual(P.emptyStateMessage(valuation.cashOmission),
+                       "The cash does not add up to the portfolio's total value: part of it is in no holding shown here "
+                       + "(with Trading 212, investments not linked to a holding), so there is no allocation to show.")
+        XCTAssertEqual(P.emptyStateMessage(nil), "Add a holding to your portfolio to see how it is allocated")
+        for omission in [AllocationCashOmission.partialCoverage, .holdingsOutsideBrokerAccount] {
+            XCTAssertEqual(P.emptyStateMessage(omission), P.emptyStateMessage(nil), "\(omission): needs holdings, so only asks for one")
+        }
+        XCTAssertEqual(P.emptyStateMessage(.noExchangeRate),
+                       "There is no exchange rate for the cash yet, so there is no allocation to show.")
+        XCTAssertEqual(P.emptyStateMessage(.folyncWithoutTotal),
+                       "Folync gives no total value for this portfolio, so its cash has no share to show.")
+        // Holdings shows the account's £3,000.50 with no rows, and its empty table says whose figure it is.
+        XCTAssertTrue(broker.isValuedFromTrading212AccountAlone)
+        XCTAssertEqual(HoldingsText.emptyTableDescription(valuedFromTrading212Account: broker.isValuedFromTrading212AccountAlone),
+                       "The total is your Trading 212 account's value: its cash and any holdings not linked here. "
+                       + "Link or add holdings to list them.")
+        XCTAssertEqual(HoldingsText.emptyTableDescription(valuedFromTrading212Account: false),
+                       "Add a holding, or connect a portfolio in Settings → Connections.")
+    }
+
+    @MainActor
+    func testTheCalculationIsKeyedOnTheFreshTrading212ValuationsFigures() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlyTrading212Summary)
+        let broker = account.makeDataModel(converter: converter)
+        var now = Date(timeIntervalSince1970: 2_000_000_000)
+        broker.trading212Clock = { now }
+        // The trigger as the page builds it, from the model's state now.
+        func trigger() -> PortfolioAnalyticsView.AnalyticsTrigger {
+            PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: broker.preferredCurrency, tick: 0,
+                                                    converter: broker.currencyConverter, dataModel: broker)
+        }
+        let none = trigger()
+        XCTAssertNil(none.brokerValuation)
+
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        let first = trigger()
+        XCTAssertNotEqual(first, none, "a valuation arriving starts the calculation")
+        XCTAssertEqual(first.brokerValuation?.cashValue ?? .nan, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(first.brokerValuation?.accountValue ?? .nan, 2_500.5, accuracy: 1e-9)
+        XCTAssertEqual(first.brokerValuation?.currency, "GBP")
+
+        // A later sync that brings the same figures does not start it again.
+        now += 60
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertNotEqual(broker.trading212BrokerValuationSnapshot?.updatedAt, Date(timeIntervalSince1970: 2_000_000_000))
+        XCTAssertEqual(trigger(), first, "an unchanged sync does not recalculate")
+
+        // A sync that brings only new cash: no holding changes, yet the page recalculates
+        // and then finds the new cash.
+        account.answer(summary: Self.cashOnlyTrading212Summary.replacingOccurrences(of: "2400.5", with: "2900.5")
+            .replacingOccurrences(of: "2500.5", with: "3000.5"))
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        let second = trigger()
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(second.tick, first.tick, "no portfolio change: only the valuation moved")
+        XCTAssertEqual(second.brokerValuation?.cashValue ?? .nan, 3_000.5, accuracy: 1e-9)
+        XCTAssertEqual(AllocationValuation.make(from: broker).cash, .held(3_000.5))
+
+        // The valuation goes stale (past four sync intervals): no valuation, so the page
+        // recalculates without it; the next sync brings the same figures back, and it
+        // recalculates again.
+        now += TimeInterval(account.settings.load().syncIntervalSeconds * 4) + 1
+        XCTAssertNil(trigger().brokerValuation)
+        XCTAssertNotEqual(trigger(), second)
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertEqual(trigger(), second)
+
+        // A stored account-only valuation stops applying beside a holding of the app's own,
+        // and starts to again once it is removed.
+        broker.realTimeTrades = [FakeTrading212Account.row("ALFA", price: 40, units: "10")]
+        XCTAssertNil(trigger().brokerValuation)
+        broker.realTimeTrades = []
+        XCTAssertEqual(trigger(), second)
+
+        broker.setTrading212BrokerValuationSnapshotForTesting(nil)
+        XCTAssertEqual(trigger(), none)
+    }
+
+    @MainActor
+    func testTheTriggerIsToldOfEveryStoredValuationEvenWhenNoneApplies() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlyTrading212Summary)
+        let broker = account.makeDataModel(converter: converter)
+        _ = try await broker.syncLinkedTrading212Holdings(reason: "auto")
+        // Trading 212 turned off: the fresh valuation is decided without reading the stored one.
+        account.change { $0.isEnabled = false }
+        let told = expectation(description: "the trigger's reads changed")
+        withObservationTracking {
+            _ = PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: "GBP", tick: 0,
+                                                        converter: broker.currencyConverter, dataModel: broker)
+        } onChange: {
+            told.fulfill()
+        }
+        broker.trading212AccountDidChange()
+        // Observation calls `onChange` as the property is set, so this does not wait.
+        await fulfillment(of: [told], timeout: 5)
     }
 
     // Coverage, cash only and a single holding.

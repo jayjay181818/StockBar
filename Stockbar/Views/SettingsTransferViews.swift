@@ -222,6 +222,9 @@ final class SettingsTransferModel {
             return
         }
         self.prepared = nil
+        // The import may have brought other Trading 212 settings or credentials; the
+        // valuation stored for the old ones goes now rather than at the relaunch.
+        dataModel.trading212AccountDidChange()
         // Close the import sheet first, so its spinner is never left showing
         // behind the alert, then bring this menu-bar app forward: otherwise the
         // alert can open behind the main window and the import looks stuck.

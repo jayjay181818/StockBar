@@ -636,7 +636,10 @@ private struct StockbarHoldingsView: View {
                     Label(searchText.isEmpty ? "No holdings yet" : "No matching holdings",
                           systemImage: searchText.isEmpty ? "tablecells" : "magnifyingglass")
                 } description: {
-                    Text(searchText.isEmpty ? "Add a holding, or connect a portfolio in Settings → Connections." : "Try another symbol.")
+                    Text(searchText.isEmpty
+                         ? HoldingsText.emptyTableDescription(
+                            valuedFromTrading212Account: dataModel.isValuedFromTrading212AccountAlone)
+                         : "Try another symbol.")
                 } actions: {
                     if searchText.isEmpty && canEditPortfolio {
                         Button("Add Holding", action: addHolding)

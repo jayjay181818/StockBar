@@ -396,6 +396,16 @@ enum HoldingsText {
             : HoldingsCurrencyFormatter.amount(usdAmount, currency: "USD")
     }
 
+    /// The line in the empty table, before any search. With a Trading 212 account valued
+    /// from its summary alone, the total above is that account's value, though no row
+    /// makes it up, so the line says where the figure comes from.
+    static func emptyTableDescription(valuedFromTrading212Account: Bool) -> String {
+        valuedFromTrading212Account
+            ? "The total is your Trading 212 account's value: its cash and any holdings not linked here. "
+                + "Link or add holdings to list them."
+            : "Add a holding, or connect a portfolio in Settings → Connections."
+    }
+
     /// The line under the table: how many holdings and watchlist symbols there are,
     /// and, where the Weight column shows, what a weight is. Nil when there is nothing.
     static func footer(held: Int, watchlist: Int, weightIsFolyncs: Bool?) -> String? {

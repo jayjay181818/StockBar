@@ -417,6 +417,10 @@ struct Trading212BrokerValuationSnapshot: Equatable {
     let totalCost: Double?
     let positionsByManualSymbol: [String: Trading212BrokerPositionValuation]
     let updatedAt: Date
+    /// Made from the account summary alone because no position is linked: it values the
+    /// whole account (its cash, and any holdings not linked) and has no positions. It
+    /// stands for the portfolio only while the app has no holding of its own beside it.
+    var isAccountOnly = false
 
     func isFresh(now: Date = Date(), maxAge: TimeInterval) -> Bool {
         guard accountValue.isFinite, accountValue >= 0 else {

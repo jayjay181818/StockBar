@@ -511,7 +511,11 @@ struct Trading212DataSourceSection: View {
         restartScheduler: Bool = true,
         runImmediately: Bool = false
     ) {
-        settingsStore.save(settingsToSave ?? settings)
+        // What was stored, not the view's copy: a binding has already put the new value there.
+        let previous = settingsStore.load()
+        let saved = settingsToSave ?? settings
+        settingsStore.save(saved)
+        dataModel.trading212SettingsDidChange(from: previous, to: saved)
         if restartScheduler {
             dataModel.restartTrading212LinkedSyncScheduler(runImmediately: runImmediately)
         }
@@ -524,6 +528,7 @@ struct Trading212DataSourceSection: View {
             apiKey = ""
             apiSecret = ""
             refreshKeychainStatus()
+            dataModel.trading212AccountDidChange()
             dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             statusMessage = "Trading 212 credentials saved to Keychain. The fields were cleared intentionally."
         } catch {
@@ -537,6 +542,7 @@ struct Trading212DataSourceSection: View {
             apiKey = ""
             apiSecret = ""
             refreshKeychainStatus()
+            dataModel.trading212AccountDidChange()
             dataModel.restartTrading212LinkedSyncScheduler(runImmediately: false)
             statusMessage = "Trading 212 credentials cleared from Keychain."
         } catch {
@@ -561,6 +567,7 @@ struct Trading212DataSourceSection: View {
             apiKey = ""
             apiSecret = ""
             refreshKeychainStatus()
+            dataModel.trading212AccountDidChange()
         } catch {
             statusMessage = LogRedactor.redact(error.localizedDescription)
         }

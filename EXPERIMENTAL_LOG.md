@@ -418,6 +418,12 @@ after 136, 19 MB after 137 (the Glass surfaces), 19 MB after 138 and 22
 MB from 139. The results are in
 `build/bench/results/coreanimation-check-20261125-115919`.
 
+Pull request 155 was merged as `f925fae` (build 382.3.23). Pull request
+156 then valued a Trading 212 account that holds only cash, which no
+ordinary sync had done, and, after two more independent reviews, made
+Trading 212's figures belong only to the account in use and never to a
+Folync portfolio.
+
 ## Review of the refresh path, 2026-11-13
 
 A read-only review of the code the benchmark never runs: the price refresh
@@ -5954,8 +5960,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     total.
   - Holdings still converts with built-in fallback rates.
   - With cash below zero, the weights add up to more than 100%.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `f925fae`. The merge published
+  experimental build 382.3.23 as the prerelease `experimental-382.3.23`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches never open this page. The price helper's change adds no work
   when `info` succeeds.
@@ -6007,6 +6015,104 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     trade update before the page recalculates.
   - The worker's first two window reads also returned the acceptance
     copy's own menu bar, against the rule.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 156: Trading 212: value a cash-only account, and only the account in use
+
+- What: a Trading 212 account with no linked holdings never fetched its
+  account summary in the ordinary sync (`syncLinkedTrading212Holdings`
+  returned before asking the broker anything). With the hourly check off,
+  which is the default, such an account had no value: no net value, and no
+  cash for Allocation's Cash row (pull request 155).
+
+  Now, when Trading 212 is enabled with a supported account type and its
+  credentials load, and nothing is linked under the account in use, each
+  ordinary sync asks for the account's summary, one request. It stores a
+  valuation with no positions, marked account-only. Such a valuation
+  stands only while Stockbar holds no holdings of its own. Beside holdings
+  entered by hand, no request is made, the old "No linked Trading 212
+  holdings found" reason stays, and a valuation stored earlier stops
+  applying as soon as a holding is added. A test showed what this guards
+  against: without it, a manual holding's 100% weight fell to 16%.
+
+  For a cash-only account, Holdings' net value is the cash, the menu bar
+  and popover show it, and Allocation shows one Cash row at 100% ("Cash
+  only"). An account whose summary includes investments not linked here
+  is valued at the whole account. Holdings then says so above its empty
+  table, and Allocation gives the reason it draws nothing. Without an
+  investments figure, the Overview's cost basis and gain are unknown ("-"),
+  not worked out from the cash.
+
+  **Review.** Two independent reviews of the first version, by GLM 5.4 and
+  Gemini 4 Neon, found faults that a second round fixed. Several of them
+  predate this pull request and affected linked accounts too:
+  - links in another Trading 212 account counted as links in the one in
+    use (predated);
+  - the hourly check stored a valuation that overrode hand-entered
+    holdings' figures (predated);
+  - a leftover Trading 212 valuation showed through a Folync portfolio
+    whose total or gain was missing (predated);
+  - clearing or changing the credentials, turning Trading 212 off, or
+    choosing another environment or account type left the old account's
+    figures on screen for up to 20 minutes (predated);
+  - a request still in flight when any of that happened could store its
+    answer (partly predated).
+
+  Now only links under the account in use count, every valuation stored
+  without such links is account-only, a Folync portfolio never takes a
+  Trading 212 figure, and an account change clears the stored valuation
+  at once. Every broker answer is checked again before it is stored. It is
+  stored only if the task was not cancelled, Folync is not active, Trading
+  212 is still on with the same environment and account type, credentials
+  are present, and no account change happened meanwhile.
+
+  Allocation now recalculates when the valuation in force changes: its
+  account, currency, account value and cash. It no longer recalculates on
+  every sync, and it does after a valuation that went stale comes back.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches have no Trading 212 account.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is on
+  the current head of `experimental`: 1052 XCTest tests with 0 failures.
+  New tests:
+  - nine sync tests;
+  - a new `Trading212ValuationAccountTests` class of eleven;
+  - `AllocationCashTests`, now 33.
+
+  They use a fake broker, so no request leaves the process. They cover:
+  - the cash-only account, and no request without Trading 212 or without
+    credentials;
+  - holdings beside the account, and a holding added later;
+  - links in another account, and the reconcile path;
+  - Folync with a leftover valuation, and Folync taking over mid-request;
+  - an account change, and a request in flight across one;
+  - an unfinished and a failed portfolio load;
+  - the trigger, including a valuation that goes stale and comes back;
+  - the page's reason lines, and the cost basis.
+
+  Twenty-one temporary breakages were run: ten in the first round and
+  eleven in the second. All but one were caught. The uncaught one is
+  removing the re-check for a cancelled task: the request itself already
+  fails on cancellation, so no test can reach it. `checks`, `docs-check`,
+  `build-release` and `python-tests` pass, and so do 95 script tests. CI
+  does not run for this branch, so these were run locally.
+- Review: written by two Opus workers in turn from the session lead's
+  instructions, with independent reviews of the first round by GLM 5.4
+  (max) and Gemini 4 Neon. The session lead read the valuation's guard,
+  the account-change hooks and the record of each round. The second round
+  had no independent review.
+- Known issues:
+  - Never tried against a real Trading 212 account. The shape of a real
+    cash-only summary (whether `investments` is zero or missing) is not
+    known; both shapes are tested.
+  - Entering a first holding by hand beside a cash-only account makes the
+    net value drop from the cash to that holding.
+  - The hooks are tested, but not their calls from the settings view and
+    the settings import.
+  - The flag cleared when a reconciliation imports and links holdings is
+    not tested.
+  - Nothing here was looked at on screen.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
@@ -6290,6 +6396,7 @@ launch.
 | The Yahoo check and pull request 153 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
 | Pull request 154, Allocation's Cash row | Claude Opus 5.5 (session lead) for the specification, the review and the record; one Opus 5.5 worker in its own worktree | Worth it: thirteen tests, six breakages and before-and-after captures of every view. The lead checked the cash source against the net value's and the captures. The worker's accessibility reads twice returned its copy's menu bar, against the new rule, and its copy became the active app once. |
 | Pull request 155, the Cash row's fixes | Claude Opus 5.5 (session lead); GPT-6.2 Astra (extra high) and Gemini 4 Neon as independent reviewers, at the owner's suggestion; two Opus 5.5 workers in turn | Worth it. The two reviews of 153 and 154, made without each other, agreed on every main fault and found what the lead's reading had missed: another account's cash, a built-in exchange rate, and a Python bug that divided a pound price by 100. Astra's second review found five more in the first fix. Reviews cost little next to the workers, and are worth asking for on any change that works out money figures. |
+| Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
