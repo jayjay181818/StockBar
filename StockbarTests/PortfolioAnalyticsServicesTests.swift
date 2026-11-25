@@ -2015,13 +2015,20 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertEqual(valuation.sourceTotal, 1000)
         try await assertAgreement(folync)
 
-        // No value at all, or one below zero (no slice to draw), is still unvalued.
-        for missing in ["null", "-5"] {
-            let partial = AllocationValuation.make(from: folyncModel(try folyncSnapshot(
-                holdings: [("a", "523.45"), ("b", "376.55"), ("c", missing)])))
-            XCTAssertEqual(partial.covered, 2, missing)
-            XCTAssertEqual(partial.cashOmission, .partialCoverage, missing)
-        }
+        // No value at all is unvalued.
+        let partial = AllocationValuation.make(from: folyncModel(try folyncSnapshot(
+            holdings: [("a", "523.45"), ("b", "376.55"), ("c", "null")])))
+        XCTAssertEqual(partial.covered, 2)
+        XCTAssertEqual(partial.cashOmission, .partialCoverage)
+
+        // A value below zero is known, so valued, but has no slice to draw. Folync's £995
+        // total counts it; the slices do not, so they cannot be of that total: no Cash row.
+        let negative = AllocationValuation.make(from: folyncModel(try folyncSnapshot(
+            total: "995", holdings: [("a", "523.45"), ("b", "376.55"), ("c", "-5")])))
+        XCTAssertEqual(negative.covered, 3)
+        XCTAssertEqual(negative.positions, ["A": 523.45, "B": 376.55])
+        XCTAssertEqual(negative.cash, .none)
+        XCTAssertEqual(negative.cashOmission, .totalDiffers)
 
         // A local holding at a price of zero has no usable price, as Holdings has it.
         let local = model()

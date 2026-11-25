@@ -860,14 +860,15 @@ struct AllocationValuation {
         }
         result.eligible = owned.count
         for trade in owned {
-            // A holding with no value (none, or not finite) is unvalued. One below zero has
-            // no slice to draw, so it stays unvalued, as before.
+            // Only a holding with no value (none, or not finite) is unvalued.
             guard let value = dataModel.weighedPositionValue(for: trade, in: lookup),
-                  value.amount.isFinite, value.amount >= 0 else { continue }
+                  value.amount.isFinite else { continue }
             let change = dayChange(of: trade, lookup: lookup)
             guard value.amount > 0 else {
                 // Known to be worth nothing (written down, say): valued, adding nothing and
-                // with no slice. It needs no exchange rate, since nothing converts.
+                // with no slice. It needs no exchange rate, since nothing converts. A value
+                // below zero is known too but has no slice to draw; it is left out of the
+                // check against the source's total, which then fails, so there is no Cash row.
                 result.covered += 1
                 if change != nil { result.dayCovered += 1 }
                 continue
@@ -985,7 +986,7 @@ struct AllocationValuation {
     /// `reconciliationTolerance` of the total and half the currency's smallest unit for each
     /// figure summed, which is as far honest rounding can take them apart: two £4.99 parts
     /// of a £9.99 total are a penny short and still pass. So a small omission that cannot
-    /// change any displayed share may pass too; one that could does not.
+    /// change any displayed share may pass too.
     static func reconciles(_ figures: [Double], with total: Double, currency: String) -> Bool {
         let sum = figures.reduce(0, +)
         guard sum.isFinite, total.isFinite else { return false }

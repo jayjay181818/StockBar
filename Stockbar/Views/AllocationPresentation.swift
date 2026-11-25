@@ -63,7 +63,8 @@ enum AllocationCash: Equatable, Sendable {
 enum AllocationCashOmission: Equatable, Sendable {
     /// Some holdings have no value yet, so cash would take too large a share.
     case partialCoverage
-    /// No loaded exchange rate for the cash, or for the total it belongs to.
+    /// No loaded exchange rate for the cash, for the total it belongs to, or for a holding's
+    /// value into the total's currency, so the check against the total cannot be made.
     case noExchangeRate
     /// Folync gives the holdings but no total value.
     case folyncWithoutTotal
