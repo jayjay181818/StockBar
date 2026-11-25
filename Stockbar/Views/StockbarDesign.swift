@@ -66,6 +66,11 @@ enum StockbarPalette {
     ]
     /// The "Other" slice, and holdings with no known sector.
     static let allocationOther = Color.gray
+    /// The Cash slice: a neutral that is not the mid grey of "Other" and Unclassified, and
+    /// no hue the holdings use. Near-black ink on a light card, pale parchment on a dark one,
+    /// so it reads as "not an investment" against the coloured slices.
+    static let allocationCash = adaptive(light: NSColor(srgbRed: 0.30, green: 0.29, blue: 0.27, alpha: 1),
+                                         dark: NSColor(srgbRed: 0.88, green: 0.85, blue: 0.79, alpha: 1))
     /// Replaces the red and green two sectors had, which read as loss and gain.
     static let allocationLavender = adaptive(light: NSColor(srgbRed: 0.66, green: 0.58, blue: 0.92, alpha: 1),
                                              dark: NSColor(srgbRed: 0.70, green: 0.62, blue: 0.98, alpha: 1))

@@ -1547,3 +1547,327 @@ final class AllocationPresentationTests: XCTestCase {
         XCTAssertNil(P.pairsLine(top: [], bottom: []))
     }
 }
+
+/// Allocation's Cash row: present, named and sized in every view when cash is held, absent
+/// otherwise, and the page's shares agreeing with Holdings' weights. Invented figures only.
+@MainActor
+final class AllocationCashTests: XCTestCase {
+    private typealias P = AllocationPresentation
+    private let converter = CurrencyConverter(exchangeRates: ["USD": 1.0, "GBP": 0.8],
+                                              refreshOnInit: false, loadHistoryOnInit: false)
+
+    private func group(_ key: String, _ value: Double, share: Double) -> AllocationGroup {
+        AllocationGroup(key: key, label: key, value: value, share: share, dayChangePercent: nil, foldedCount: 0)
+    }
+
+    /// £900 of holdings in two sectors and two currencies.
+    private func sectors() async -> [SectorAnalysisService.SectorAllocation] {
+        await SectorAnalysisService().calculateSectorAllocations(
+            positions: ["AAPL": 540, "ZZQX": 360], dayChanges: ["AAPL": 5.4, "ZZQX": 3.6])
+    }
+
+    private let holdings = [AllocationHolding(symbol: "AAPL", value: 540, currency: "USD"),
+                            AllocationHolding(symbol: "ZZQX", value: 360, currency: "GBP")]
+
+    private func allViews(cash: AllocationCash) async -> [AllocationGrouping: [AllocationGroup]] {
+        let sectors = await sectors()
+        return [
+            .sector: P.displayed(P.sectorGroups(sectors, showsDayChange: true), cash: cash),
+            .holding: P.displayed(P.holdingGroups(sectors), cash: cash),
+            .currency: P.displayed(P.currencyGroups(holdings), cash: cash)
+        ]
+    }
+
+    // MARK: Present
+
+    func testACashRowIsInEveryViewNamedSizedLastAndEveryShareIsOfHoldingsPlusCash() async throws {
+        let views = await allViews(cash: AllocationCash(100))
+        for (grouping, groups) in views {
+            let cash = try XCTUnwrap(groups.last, grouping.rawValue)
+            XCTAssertTrue(cash.isCash, grouping.rawValue)
+            XCTAssertEqual(cash.label, "Cash")
+            XCTAssertEqual(P.rowLabel(cash, grouping: grouping), "Cash")
+            XCTAssertEqual(cash.value, 100)
+            XCTAssertEqual(cash.share, 10, accuracy: 1e-9, "£100 of £1,000")
+            XCTAssertEqual(P.shareText(cash.share), "10.0%")
+            XCTAssertNil(cash.dayChangePercent)
+            XCTAssertFalse(cash.isOther)
+            XCTAssertEqual(groups.filter(\.isCash).count, 1, "one Cash row, not folded into a currency")
+            XCTAssertEqual(groups.reduce(0) { $0 + $1.share }, 100, accuracy: 1e-9, grouping.rawValue)
+            XCTAssertEqual(groups.reduce(0) { $0 + $1.value }, 1000, accuracy: 1e-9, grouping.rawValue)
+        }
+        let byHolding = try XCTUnwrap(views[.holding])
+        XCTAssertEqual(byHolding.map(\.key), ["AAPL", "ZZQX", AllocationGroup.cashKey])
+        XCTAssertEqual(byHolding.map { P.shareText($0.share) }, ["54.0%", "36.0%", "10.0%"])
+        // A currency view's cash is its own row, never added to the pound's group.
+        let byCurrency = try XCTUnwrap(views[.currency])
+        XCTAssertEqual(byCurrency.map(\.key), ["USD", "GBP", AllocationGroup.cashKey])
+        XCTAssertEqual(byCurrency[1].value, 360)
+        // Sector rows keep their day's change; Cash has none and is not Unclassified.
+        let bySector = try XCTUnwrap(views[.sector])
+        XCTAssertEqual(bySector.map(\.label), ["Technology", "Unclassified", "Cash"])
+        XCTAssertNotNil(bySector[0].dayChangePercent)
+        XCTAssertEqual(P.dayChangeText(bySector[2]), "–")
+    }
+
+    func testACashKeyCannotBeTakenByATickerCalledCash() {
+        let groups = P.displayed([group("CASH", 50, share: 100)], cash: AllocationCash(50))
+        XCTAssertEqual(groups.map(\.isCash), [false, true])
+        XCTAssertEqual(groups.map(\.key), ["CASH", AllocationGroup.cashKey])
+    }
+
+    // MARK: Absent
+
+    func testNoCashRowWithNoCashZeroCashOrCashBelowZero() async {
+        let without = await allViews(cash: .none)
+        for cash in [AllocationCash(nil), AllocationCash(0), AllocationCash(-0.0), AllocationCash(.nan),
+                     AllocationCash(.infinity), AllocationCash(-250)] {
+            let views = await allViews(cash: cash)
+            for (grouping, groups) in views {
+                XCTAssertFalse(groups.contains(where: \.isCash), "\(cash) \(grouping)")
+                XCTAssertEqual(groups, without[grouping], "shares stay of the holdings' total")
+                XCTAssertEqual(groups.reduce(0) { $0 + $1.share }, 100, accuracy: 1e-9)
+            }
+        }
+        XCTAssertEqual(AllocationCash(nil), .none)
+        XCTAssertEqual(AllocationCash(0), .none)
+        XCTAssertEqual(AllocationCash(-250), .borrowing(-250))
+        XCTAssertEqual(AllocationCash(2_940.18), .held(2_940.18))
+        XCTAssertEqual(P.displayed([group("ALFA", 10, share: 100)], cash: .none), [group("ALFA", 10, share: 100)])
+    }
+
+    func testTheLineUnderTheChartWhenCashIsBelowZero() {
+        XCTAssertEqual(P.borrowingLine(AllocationCash(-1_250.5), currency: "GBP"),
+                       "Cash is below zero (-£1,250.50), so it has no slice and the percentages are of the holdings alone.")
+        XCTAssertNil(P.borrowingLine(.none, currency: "GBP"))
+        XCTAssertNil(P.borrowingLine(AllocationCash(0), currency: "GBP"))
+        XCTAssertNil(P.borrowingLine(AllocationCash(100), currency: "GBP"))
+    }
+
+    // MARK: Folding
+
+    func testCashIsNeverFoldedIntoOther() throws {
+        // Nine holdings fold to seven and "Other" as before; Cash, smaller than all of them, comes after.
+        let nine = (0..<9).map { group("H\($0)", Double(100 - $0), share: 0) }
+        let result = P.displayed(nine, cash: AllocationCash(1))
+        XCTAssertEqual(result.count, P.maximumSlices + 1)
+        let other = try XCTUnwrap(result.first(where: \.isOther))
+        XCTAssertEqual(other.foldedCount, 2)
+        XCTAssertEqual(other.value, 93 + 92, "Other holds the two smallest holdings and no cash")
+        XCTAssertTrue(try XCTUnwrap(result.last).isCash)
+        XCTAssertEqual(try XCTUnwrap(result.last).value, 1)
+        let total = nine.reduce(0) { $0 + $1.value } + 1
+        XCTAssertEqual(other.share, 185 / total * 100, accuracy: 1e-9)
+        XCTAssertEqual(result.reduce(0) { $0 + $1.share }, 100, accuracy: 1e-9)
+    }
+
+    // MARK: Text
+
+    func testCentreTotalAndCaption() {
+        let holdingsTotal = 81_370.29
+        let held = AllocationCash(2_940.18)
+        let total = P.shareTotal(holdingsTotal: holdingsTotal, cash: held)
+        XCTAssertEqual(total, 84_310.47, accuracy: 1e-6)
+        let centre = P.centreText(total: total, holdingCount: 9, currency: "GBP", includesCash: true)
+        XCTAssertEqual(centre.total, "£84,310")
+        XCTAssertEqual(centre.count, "9 holdings and cash")
+        XCTAssertEqual(P.centreText(total: 120, holdingCount: 1, currency: "GBP", includesCash: true).count,
+                       "1 holding and cash")
+        XCTAssertEqual(P.shareTotal(holdingsTotal: holdingsTotal, cash: .none), holdingsTotal)
+        XCTAssertEqual(P.shareTotal(holdingsTotal: holdingsTotal, cash: AllocationCash(-500)), holdingsTotal,
+                       "cash below zero has no slice, so the total is the holdings'")
+        XCTAssertEqual(P.centreText(total: holdingsTotal, holdingCount: 9, currency: "GBP").count, "9 holdings")
+    }
+
+    func testTheCashRowForVoiceOverAndItsTooltip() throws {
+        let rows = P.displayed([group("VUSA", 81_370.29, share: 100)], cash: AllocationCash(2_940.18))
+        let cash = try XCTUnwrap(rows.last)
+        for grouping in AllocationGrouping.allCases {
+            XCTAssertEqual(P.spokenRow(cash, grouping: grouping, currency: "GBP"), "Cash, £2,940.18, 3.5 percent",
+                           "no day change spoken, in the Sector view too")
+        }
+        XCTAssertEqual(P.cashTooltip(cash, currency: "GBP"),
+                       "Cash, £2,940.18, 3.5%. Cash has no sector and no day's change.")
+        // An ordinary sector row still says when its day change is not known.
+        XCTAssertEqual(P.spokenRow(group("Energy", 10, share: 5), grouping: .sector, currency: "GBP"),
+                       "Energy, £10.00, 5.0 percent, day change unavailable")
+        XCTAssertEqual(P.dayChangeText(group("Energy", 10, share: 5)), "—", "unchanged for other rows")
+    }
+
+    func testTheUnclassifiedNoteGivesTheRowsShareOfTheSameTotal() async throws {
+        let sectors = await sectors()   // £360 of £900 unclassified
+        XCTAssertEqual(try XCTUnwrap(P.unclassifiedShare(sectors, cash: .none)), 40, accuracy: 1e-9)
+        let withCash = try XCTUnwrap(P.unclassifiedShare(sectors, cash: AllocationCash(100)))
+        XCTAssertEqual(withCash, 36, accuracy: 1e-9)
+        let row = try XCTUnwrap(P.displayed(P.sectorGroups(sectors, showsDayChange: true), cash: AllocationCash(100))
+            .first { $0.key == SectorAnalysisService.Sector.unknown.rawValue })
+        XCTAssertEqual(row.share, withCash, accuracy: 1e-9, "the note and the row agree")
+        XCTAssertEqual(try XCTUnwrap(P.unclassifiedShare(sectors, cash: AllocationCash(-100))), 40, accuracy: 1e-9)
+        let classified = await SectorAnalysisService().calculateSectorAllocations(positions: ["AAPL": 10], dayChanges: [:])
+        XCTAssertNil(P.unclassifiedShare(classified, cash: AllocationCash(100)))
+
+        XCTAssertEqual(P.unclassifiedNote(share: 40, includesCash: false),
+                       "40.0% of the portfolio is in holdings with no known sector (shown as Unclassified).")
+        XCTAssertEqual(P.unclassifiedNote(share: 36, includesCash: true),
+                       "36.0% of the portfolio, cash included, is in holdings with no known sector (shown as Unclassified).")
+        XCTAssertEqual(P.diversificationUnclassifiedNote(share: 40, includesCash: false),
+                       "40.0% of the portfolio has no known sector and is excluded from this score.")
+        XCTAssertEqual(P.diversificationUnclassifiedNote(share: 40, includesCash: true),
+                       "40.0% of the holdings' value has no known sector and is excluded from this score.")
+        XCTAssertEqual(P.diversificationUnavailableNote(share: 62, includesCash: false),
+                       "Diversification unavailable: 62% of the portfolio has no known sector.")
+        XCTAssertEqual(P.diversificationUnavailableNote(share: 62, includesCash: true),
+                       "Diversification unavailable: 62% of the holdings' value has no known sector.")
+        XCTAssertTrue(P.holdingsOnlyCaption.hasPrefix("Holdings only: cash is left out"))
+    }
+
+    func testTheCashColourIsNeutralAndItsOwn() {
+        let cash = StockbarPalette.allocationCash
+        for other in [StockbarPalette.allocationOther, .red, .green, .pink, .mint, .gray] {
+            XCTAssertNotEqual(cash, other)
+        }
+        XCTAssertFalse(StockbarPalette.allocationSlices.contains(cash))
+        for sector in SectorAnalysisService.Sector.allCases {
+            XCTAssertNotEqual(PortfolioAnalyticsView.colorForSector(sector), cash, sector.rawValue)
+        }
+    }
+
+    // MARK: Where the cash comes from, and agreement with Holdings
+
+    private func trade(_ symbol: String, price: Double, units: String, currency: String,
+                       identity: String? = nil) -> RealTimeTrade {
+        var info = TradingInfo()
+        info.currentPrice = price
+        info.prevClosePrice = price
+        info.currency = currency
+        let position = Position(unitSize: units, positionAvgCost: "1", currency: currency)
+        return RealTimeTrade(trade: Trade(name: symbol, position: position), realTimeInfo: info, sourceIdentity: identity)
+    }
+
+    private func model(preferredCurrency: String = "GBP") -> DataModel {
+        let model = DataModel(currencyConverter: converter, startRuntimeServices: false)
+        let stored = StockbarRuntimeStorage.userDefaults.object(forKey: "preferredCurrency")
+        addTeardownBlock { @MainActor in StockbarRuntimeStorage.userDefaults.set(stored, forKey: "preferredCurrency") }
+        model.preferredCurrency = preferredCurrency
+        return model
+    }
+
+    /// Two invented Folync holdings worth £523.45 and £376.55 and £100 of cash, a total of
+    /// £1,000; Folync's weights are each holding's share of that total, as Folync gives them.
+    private func folyncSnapshot(cash: String = "100", cashCurrency: String? = "GBP") throws -> FolyncPortfolioSnapshot {
+        func metric(_ value: String, currency: String? = "GBP") -> String {
+            let code = currency.map { "\"\($0)\"" } ?? "null"
+            return "{ \"value\": \(value), \"currency\": \(code), \"quality\": \"complete\", \"reasonCodes\": [], \"asOfDate\": \"2026-07-11\" }"
+        }
+        func holding(_ asset: String, value: String, allocation: String) -> String {
+            """
+            { "portfolioId": "pf_demo", "assetId": "\(asset)", "ticker": "\(asset.uppercased())", "name": "Fund \(asset)",
+              "currency": "GBP", "shares": 10, "averageCost": 1, "currentPrice": 1, "previousClose": 1,
+              "marketValue": \(value), "costValue": 10, "dayGain": 1, "dayGainPct": 1, "totalGain": 1, "totalGainPct": 1,
+              "allocationPct": \(allocation), "valuation": \(metric(value)) }
+            """
+        }
+        let json = """
+        {
+          "schemaVersion": 2, "sourceRevision": "revision-1", "generatedAt": "2026-07-12T12:00:00.000Z",
+          "scope": { "id": "all", "name": "All portfolios", "kind": "aggregate", "currency": "GBP" },
+          "freshness": {
+            "responseGeneratedAt": "2026-07-12T12:00:00.000Z", "asOf": "2026-07-11", "status": "current", "reasonCodes": [],
+            "sources": {
+              "snapshots": { "asOfDate": "2026-07-11", "status": "clean", "generation": 1, "dirtySince": null, "rebuildStartedAt": null, "failedAt": null, "completedAt": "2026-07-12T11:55:00.000Z" },
+              "prices": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "fx": { "asOfDate": "2026-07-11", "ageSeconds": 60, "missingCount": 0 },
+              "provider": { "lastSuccessfulSyncAt": "2026-07-12T11:55:00.000Z", "ageSeconds": 300 }
+            }
+          },
+          "totalValue": \(metric("1000")),
+          "cash": \(metric(cash, currency: cashCurrency)),
+          "profitLoss": { "unrealized": \(metric("12.5")), "realized": \(metric("0")), "day": \(metric("2")) },
+          "holdings": [\(holding("a", value: "523.45", allocation: "52.345")), \(holding("b", value: "376.55", allocation: "37.655"))]
+        }
+        """
+        return try JSONDecoder().decode(FolyncPortfolioSnapshot.self, from: Data(json.utf8))
+    }
+
+    func testCashComesFromTheSourceOfHoldingsTotal() throws {
+        let local = model()
+        local.realTimeTrades = [trade("ALFA", price: 10, units: "5", currency: "GBP")]
+        XCTAssertNil(local.netValueCash(), "a local portfolio has no cash figure")
+
+        let folync = model()
+        folync.folyncPortfolioSnapshot = try folyncSnapshot()
+        let cash = try XCTUnwrap(folync.netValueCash())
+        XCTAssertEqual(cash.amount, 100)
+        XCTAssertEqual(cash.currency, "GBP")
+
+        folync.folyncPortfolioSnapshot = try folyncSnapshot(cashCurrency: nil)
+        XCTAssertNil(folync.netValueCash(), "no currency named for the cash: not known, none guessed")
+        folync.folyncPortfolioSnapshot = try folyncSnapshot(cash: "null")
+        XCTAssertNil(folync.netValueCash(), "Folync gives no cash figure")
+        folync.folyncPortfolioSnapshot = try folyncSnapshot(cash: "-40")
+        XCTAssertEqual(folync.netValueCash()?.amount, -40)
+        XCTAssertEqual(AllocationValuation.make(from: folync).cash, .borrowing(-40))
+        folync.folyncPortfolioSnapshot = try folyncSnapshot(cash: "0")
+        XCTAssertEqual(AllocationValuation.make(from: folync).cash, .none)
+    }
+
+    func testCashIsConvertedIntoTheDisplayCurrencyOrNotKnown() throws {
+        let dollars = model(preferredCurrency: "USD")
+        dollars.folyncPortfolioSnapshot = try folyncSnapshot()
+        XCTAssertEqual(AllocationValuation.make(from: dollars).cash, .held(125), "£100 at 0.8 a dollar")
+        let noRate = model(preferredCurrency: "GBP")
+        noRate.folyncPortfolioSnapshot = try folyncSnapshot(cashCurrency: "XQZ")
+        XCTAssertEqual(AllocationValuation.make(from: noRate).cash, .none, "no exchange rate: not known, not a guess")
+    }
+
+    /// Allocation's Holding view against Holdings' Weight column, to the shown precision.
+    private func assertAgreement(_ model: DataModel, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let valuation = AllocationValuation.make(from: model)
+        let sectors = await SectorAnalysisService().calculateSectorAllocations(
+            positions: valuation.positions, dayChanges: valuation.dayChanges)
+        let rows = P.displayed(P.holdingGroups(sectors), cash: valuation.cash)
+        let netValue = model.calculateNetValue()
+        XCTAssertFalse(rows.isEmpty, file: file, line: line)
+        for trade in model.realTimeTrades {
+            let row = try XCTUnwrap(rows.first { $0.key == trade.trade.name }, trade.trade.name, file: file, line: line)
+            XCTAssertEqual(P.shareText(row.share),
+                           HoldingsWeight.text(model.calculatePositionWeight(for: trade, netValue: netValue)),
+                           trade.trade.name, file: file, line: line)
+        }
+    }
+
+    func testAllocationAgreesWithHoldingsWithoutCash() async throws {
+        // £400 + $500 (£400 at 0.8) + £233.33: a local portfolio, whose weights Holdings works out itself.
+        let local = model()
+        local.realTimeTrades = [trade("ALFA", price: 40, units: "10", currency: "GBP"),
+                                trade("BRVO", price: 50, units: "10", currency: "USD"),
+                                trade("CHRL", price: 23.333, units: "10", currency: "GBP")]
+        XCTAssertEqual(AllocationValuation.make(from: local).cash, .none)
+        try await assertAgreement(local)
+        let valuation = AllocationValuation.make(from: local)
+        XCTAssertEqual(valuation.positions["BRVO"] ?? .nan, 400, accuracy: 1e-9)
+    }
+
+    func testAllocationAgreesWithHoldingsWithCash() async throws {
+        // Folync: Holdings shows Folync's own weight, here the share of a total that includes cash.
+        let folync = model()
+        folync.folyncPortfolioSnapshot = try folyncSnapshot()
+        folync.realTimeTrades = [trade("A", price: 52.345, units: "10", currency: "GBP", identity: "all|pf_demo|a"),
+                                 trade("B", price: 37.655, units: "10", currency: "GBP", identity: "all|pf_demo|b")]
+        XCTAssertEqual(AllocationValuation.make(from: folync).cash, .held(100))
+        try await assertAgreement(folync)
+
+        // Trading 212: Holdings works the weight out over the account value, holdings plus cash.
+        // The same figures in Allocation give the same shares.
+        let sectors = await SectorAnalysisService().calculateSectorAllocations(
+            positions: ["ALFA": 523.45, "BRVO": 376.55], dayChanges: [:])
+        let rows = P.displayed(P.holdingGroups(sectors), cash: AllocationCash(100))
+        for (symbol, value) in [("ALFA", 523.45), ("BRVO", 376.55)] {
+            let row = try XCTUnwrap(rows.first { $0.key == symbol })
+            XCTAssertEqual(P.shareText(row.share),
+                           HoldingsWeight.text(HoldingsWeight.share(value: value, currency: "GBP", of: 1000, currency: "GBP",
+                                                                    convert: { amount, _, _ in amount })))
+        }
+        XCTAssertEqual(rows.map { P.shareText($0.share) }, ["52.3%", "37.7%", "10.0%"])
+    }
+}
