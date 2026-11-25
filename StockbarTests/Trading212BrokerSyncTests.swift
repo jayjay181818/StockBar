@@ -2227,6 +2227,11 @@ final class Trading212ValuationAccountTests: XCTestCase {
         """)
         let model = account.makeDataModel()
         _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        // Left behind as a linked sync leaves one: not account-only, so nothing but Folync
+        // being active keeps it from standing beside Folync's rows.
+        var leftover = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        leftover.isAccountOnly = false
+        model.setTrading212BrokerValuationSnapshotForTesting(leftover)
         XCTAssertNotNil(model.freshTrading212BrokerValuationSnapshot())
 
         // Folync takes over, with no total and no unrealised gain; the valuation is left behind.
