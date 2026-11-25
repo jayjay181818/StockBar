@@ -2246,8 +2246,9 @@ final class Trading212ValuationAccountTests: XCTestCase {
         XCTAssertEqual(net.amount, 370, accuracy: 1e-9)
         XCTAssertEqual(net.currency, "GBP")
         XCTAssertEqual(model.netGainsSource, .averageCost)
+        // Folync's rows at their own prices against their average cost of £1: (30 - 1) × 10 + (7 - 1) × 10.
         let gains = model.calculateNetGains()
-        XCTAssertNotEqual(gains.amount, 50, "not the Trading 212 account's gain")
+        XCTAssertEqual(gains.amount, 350, accuracy: 1e-9, "not the Trading 212 account's £50")
         XCTAssertEqual(model.displayValuationSource, .localCalculationFallback)
         let summary = model.calculateDisplayPortfolioSummary()
         XCTAssertEqual(summary.valuationSource, .localCalculationFallback)

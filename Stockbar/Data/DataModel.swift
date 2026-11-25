@@ -1219,6 +1219,10 @@ class DataModel {
             includeMetadata: true,
             useCache: false
         )
+        // Before the links file is touched: an overtaken request rewrites nothing.
+        if let skipped = try trading212ReconciliationSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
+        }
         if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
             // The preview matched rows against the old keys; rebuild it so linked
             // holdings are not mistaken for broker-only ones and imported again.

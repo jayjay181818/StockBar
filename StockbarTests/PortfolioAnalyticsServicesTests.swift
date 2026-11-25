@@ -2324,6 +2324,13 @@ final class AllocationCashTests: XCTestCase {
                        "The cash does not add up to the portfolio's total value: part of it is in no holding shown here "
                        + "(with Trading 212, investments not linked to a holding), so there is no allocation to show.")
         XCTAssertEqual(P.emptyStateMessage(nil), "Add a holding to your portfolio to see how it is allocated")
+        for omission in [AllocationCashOmission.partialCoverage, .holdingsOutsideBrokerAccount] {
+            XCTAssertEqual(P.emptyStateMessage(omission), P.emptyStateMessage(nil), "\(omission): needs holdings, so only asks for one")
+        }
+        XCTAssertEqual(P.emptyStateMessage(.noExchangeRate),
+                       "There is no exchange rate for the cash yet, so there is no allocation to show.")
+        XCTAssertEqual(P.emptyStateMessage(.folyncWithoutTotal),
+                       "Folync gives no total value for this portfolio, so its cash has no share to show.")
         // Holdings shows the account's £3,000.50 with no rows, and its empty table says whose figure it is.
         XCTAssertTrue(broker.isValuedFromTrading212AccountAlone)
         XCTAssertEqual(HoldingsText.emptyTableDescription(valuedFromTrading212Account: broker.isValuedFromTrading212AccountAlone),
