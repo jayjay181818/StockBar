@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.25)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.25</link>
+      <pubDate>Wed, 25 Nov 2026 19:16:52 +0000</pubDate>
+      <sparkle:version>382.3.25</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.25 of Stockbar 3.8.2. Changes since experimental-382.3.24:
+
+- Glass cards: draw the top highlight without an extra copy of the window (#157)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.25/Stockbar-382.3.25.zip" length="8207828" type="application/octet-stream" sparkle:edSignature="WiBZ8Snzhx9Ya4b9c43ZWr5nSEnj3eAFozroWBD/m/2N7lkEohrq/0w72zd71SHQob0k1uA5D3p40SBLFwi6DQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.24)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.24</link>
       <pubDate>Wed, 25 Nov 2026 14:56:56 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Risk: each figure said once, with a chart of the falls (#147)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.16/Stockbar-382.3.16.zip" length="8145890" type="application/octet-stream" sparkle:edSignature="welB5KILcs/7PPQUCb8+UqVuOhLixmwXaXw9o9Owy7GXaE1LdRR7pXvh1mLHShhHzOsyijWj0dU506zz/EE5Dg=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.15)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.15</link>
-      <pubDate>Fri, 20 Nov 2026 19:02:55 +0000</pubDate>
-      <sparkle:version>382.3.15</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.15 of Stockbar 3.8.2. Changes since experimental-382.3.14:
-
-- Holdings: a Weight column and one switch for amounts or percentages (#146)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.15/Stockbar-382.3.15.zip" length="8132287" type="application/octet-stream" sparkle:edSignature="VqeS62vOD1xGKi4xhiLVOAyo4pYhSkpXoFAoKtvK+H6ZVH+myDECOs4F5sw0qrJp1535c7pxyOBq/SVGw7nMAw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: iTS+mLfe6TLSIcW5znM/r5h1WMh4hqW8vxJpMIAbalkkxT2azjTG5VaizIi9fTesjxTftSWV4ue5E5hIlpeWAA==
-length: 10332
+edSignature: cU7VpPIE1RAsjmKqsj+NuBjj/7LU8hqzgzff1PwOMv+AHEwRALjeItku6AHeDo3jG1yQU16DYAmQR8u+CTvYAQ==
+length: 10336
 -->
