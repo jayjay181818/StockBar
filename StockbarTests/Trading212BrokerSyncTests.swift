@@ -1877,6 +1877,62 @@ final class Trading212UnlinkedAccountSyncTests: XCTestCase {
         XCTAssertEqual(model.calculateNetValue().amount, 2_700.5, accuracy: 1e-9)
     }
 
+    func testASummaryWithoutAValueOrCurrencyValuesNothingAndSaysSo() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        let model = account.makeDataModel()
+        account.answer(summary: Self.cashOnlySummary)
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertNotNil(model.trading212BrokerValuationSnapshot)
+
+        for summary in [Self.cashOnlySummary.replacingOccurrences(of: "\"currency\": \"GBP\", ", with: ""),
+                        """
+                        { "cash": { "availableToTrade": 10 }, "currency": "GBP", "id": 42, "investments": null, "totalValue": null }
+                        """] {
+            account.answer(summary: summary)
+            let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+            XCTAssertEqual(result.skippedReason, DataModel.trading212AccountNotValuedReason)
+            XCTAssertFalse(result.valuedAccountOnly)
+            XCTAssertNil(model.trading212BrokerValuationSnapshot, "an earlier valuation does not stand in")
+        }
+        XCTAssertEqual(account.requestedRoutes, Array(repeating: "/equity/account/summary", count: 3))
+    }
+
+    func testASummaryWithoutInvestmentsIsValuedFromItsTotal() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: """
+        { "cash": { "availableToTrade": 75.25 }, "currency": "GBP", "id": 42, "investments": null, "totalValue": 75.25 }
+        """)
+        let model = account.makeDataModel()
+        let result = try await model.syncLinkedTrading212Holdings(reason: "auto")
+        XCTAssertTrue(result.valuedAccountOnly)
+        let snapshot = try XCTUnwrap(model.trading212BrokerValuationSnapshot)
+        XCTAssertEqual(snapshot.cashValue ?? .nan, 75.25, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.accountValue, 75.25, accuracy: 1e-9)
+        XCTAssertNil(snapshot.totalUnrealizedProfitLoss)
+        XCTAssertEqual(model.calculateNetValue().amount, 75.25, accuracy: 1e-9)
+        // With no gain from the broker, Holdings' gains are its own sum over no holdings.
+        XCTAssertEqual(model.netGainsSource, .averageCost)
+        XCTAssertEqual(model.calculateNetGains().amount, 0, accuracy: 1e-9)
+    }
+
+    func testANewAccountOnlyValuationTellsTheMenuBarAndPopover() async throws {
+        let account = try FakeTrading212Account()
+        defer { account.cleanUp() }
+        account.answer(summary: Self.cashOnlySummary)
+        let model = account.makeDataModel()
+        // What the menu bar's title, the popover's chart and the Overview redraw on.
+        let told = expectation(description: "content changed")
+        told.assertForOverFulfill = false
+        let subscription = model.tradeContentPublisher.sink { told.fulfill() }
+        defer { subscription.cancel() }
+
+        _ = try await model.syncLinkedTrading212Holdings(reason: "auto")
+
+        await fulfillment(of: [told], timeout: 5)
+    }
+
     func testAUserWithoutTrading212MakesNoRequestAndKeepsTheSkippedReason() async throws {
         let account = try FakeTrading212Account(enabled: false)
         defer { account.cleanUp() }

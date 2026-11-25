@@ -1002,6 +1002,9 @@ class DataModel {
         return result
     }
 
+    nonisolated static let trading212AccountNotValuedReason =
+        "No linked Trading 212 holdings, and Trading 212's account summary gave no value or currency, so the account is not valued."
+
     nonisolated static let trading212NoLinkedHoldingsReason =
         "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
 
@@ -1032,18 +1035,22 @@ class DataModel {
                 skippedReason: Self.trading212SkippedForFolyncReason
             )
         }
-        trading212BrokerValuationSnapshot = trading212BrokerSyncPlanner.accountOnlyValuationSnapshot(
+        let snapshot = trading212BrokerSyncPlanner.accountOnlyValuationSnapshot(
             account: fetched.account,
             accountSummary: fetched.summary,
             syncedAt: Date()
         )
+        trading212BrokerValuationSnapshot = snapshot
+        // No row changes, so nothing else tells the menu bar, the popover's chart or the
+        // Overview that the totals moved; a linked sync tells them by replacing the rows.
+        tradeContentDidChange.send()
         let result = Trading212BrokerSyncResult(
             updatedCount: 0,
             deletedCount: 0,
             missingCount: 0,
             brokerOnlyCount: 0,
-            skippedReason: nil,
-            valuedAccountOnly: true
+            skippedReason: snapshot == nil ? Self.trading212AccountNotValuedReason : nil,
+            valuedAccountOnly: snapshot != nil
         )
         await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
         return result
