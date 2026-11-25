@@ -1594,6 +1594,8 @@ final class StockbarLocalIncomeTests: XCTestCase {
                        + "at the units you hold today. They are not a record of what was paid to you.")
         XCTAssertEqual(LocalIncomeText.lastYearTitle, "Last 12 months, at today's units (estimate)")
         XCTAssertEqual(LocalIncomeText.nextYearTitle, "Next 12 months (estimate)")
+        XCTAssertEqual(LocalIncomeText.byHoldingLastYearColumn, "Last 12 months (estimate)")
+        XCTAssertEqual(LocalIncomeText.byHoldingNextYearColumn, "Next 12 months (estimate)")
 
         let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
                               [try events("ALPHA", dividends: quarterly, ex: "2027-02-10", pay: "2027-02-26")])
@@ -1695,8 +1697,20 @@ final class StockbarLocalIncomeTests: XCTestCase {
         empty.activate(holdings: [])
         XCTAssertEqual(empty.phase, .noHoldings)
         await drain()
-        let calls = await provider.calls
+        var calls = await provider.calls
         XCTAssertTrue(calls.isEmpty)
+        // Holdings added while the page shows "no holdings": asked for once,
+        // and editing them afterwards asks nothing more.
+        empty.holdingsAppeared(held)
+        await settle { empty.phase == .loaded }
+        empty.holdingsAppeared(held + [LocalIncomeHolding(symbol: "GAMMA", units: 1)])
+        await drain()
+        calls = await provider.calls
+        XCTAssertEqual(calls, [EventsProviderStandIn.Call(symbols: ["ALPHA", "BETA"], forceRefresh: false)])
+        off.holdingsAppeared(held)
+        await drain()
+        calls = await provider.calls
+        XCTAssertEqual(calls.count, 1, "never while Yahoo is not allowed")
         XCTAssertEqual(StockbarLocalIncomeModel.notAllowedReason, "Needs live market data, which is off")
     }
 

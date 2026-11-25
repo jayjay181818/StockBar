@@ -50,6 +50,7 @@ struct StockbarLocalIncomeView: View {
         .stockbarPage()
         .onAppear { model.activate(holdings: holdings) }
         .onDisappear { model.deactivate() }
+        .onChange(of: holdings.map(\.symbol)) { _, _ in model.holdingsAppeared(holdings) }
     }
 
     private func subtitle(_ estimate: LocalIncomeEstimate) -> String {
@@ -217,8 +218,8 @@ struct StockbarLocalIncomeView: View {
                 .padding(.bottom, 8)
             HStack {
                 Text("Holding").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Last 12 months").frame(width: 120, alignment: .trailing)
-                Text("Next 12 months (estimate)").frame(width: 170, alignment: .trailing)
+                Text(LocalIncomeText.byHoldingLastYearColumn).frame(width: 170, alignment: .trailing)
+                Text(LocalIncomeText.byHoldingNextYearColumn).frame(width: 170, alignment: .trailing)
                 Text("Next date (Yahoo)").frame(width: 170, alignment: .trailing)
             }
             .font(.caption.weight(.semibold))
@@ -335,7 +336,7 @@ private struct StockbarLocalIncomeHoldingRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(LocalIncomeText.holdingFigure(row, nextYear: false, currency: currency))
-                .frame(width: 120, alignment: .trailing)
+                .frame(width: 170, alignment: .trailing)
             Text(LocalIncomeText.holdingFigure(row, nextYear: true, currency: currency))
                 .frame(width: 170, alignment: .trailing)
             Text(LocalIncomeText.nextDate(row, today: today))

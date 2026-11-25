@@ -14,6 +14,8 @@ enum LocalIncomeText {
     static let headlineTitle = "Estimated for the next 12 months"
     static let lastYearTitle = "Last 12 months, at today's units (estimate)"
     static let nextYearTitle = "Next 12 months (estimate)"
+    static let byHoldingLastYearColumn = "Last 12 months (estimate)"
+    static let byHoldingNextYearColumn = "Next 12 months (estimate)"
     static let estimatePill = "Estimate"
     static let yahooDatePill = "Yahoo's date, amount estimated"
 

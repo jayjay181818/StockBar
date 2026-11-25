@@ -82,6 +82,14 @@ final class StockbarLocalIncomeModel {
         load(holdings: holdings, forceRefresh: true)
     }
 
+    /// The page is showing "no holdings" and holdings have since been added:
+    /// asks once for them, as opening the page would. Does nothing in any
+    /// other state, so editing holdings never asks Yahoo again by itself.
+    func holdingsAppeared(_ holdings: [LocalIncomeHolding]) {
+        guard isActive, phase == .noHoldings, !holdings.isEmpty else { return }
+        load(holdings: holdings, forceRefresh: false)
+    }
+
     private func load(holdings: [LocalIncomeHolding], forceRefresh: Bool) {
         cancelTask()
         today = FolyncLedgerDay(now(), in: timeZone)
