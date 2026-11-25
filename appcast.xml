@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.21)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.21</link>
+      <pubDate>Wed, 25 Nov 2026 09:13:51 +0000</pubDate>
+      <sparkle:version>382.3.21</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.21 of Stockbar 3.8.2. Changes since experimental-382.3.20:
+
+- Read Yahoo's chart details with the yfinance the app ships (#153)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.21/Stockbar-382.3.21.zip" length="8170015" type="application/octet-stream" sparkle:edSignature="4SlS6Ahr5CUe98057uBGoleN+PH2kdTkdubIGMRiXkaLJM+Ct9FZ1Acnoi6CS6lIGhF1CFoFOJM2jzI/Mwo3BA=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.20)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.20</link>
       <pubDate>Sat, 21 Nov 2026 00:43:24 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Add the Income page: dividends expected, received and by holding (#143)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.12/Stockbar-382.3.12.zip" length="8055145" type="application/octet-stream" sparkle:edSignature="DG6EomORQga4Oa31XrmObZDqDOxqKXOue8XN60a2tyx63HqlJYQ/zyV6JsCBShMnVvC/aXsGwlOjr9vkc4KmCw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.11)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.11</link>
-      <pubDate>Fri, 20 Nov 2026 17:58:27 +0000</pubDate>
-      <sparkle:version>382.3.11</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.11 of Stockbar 3.8.2. Changes since experimental-382.3.10:
-
-- Add the Trades page: every position opened, and how it did (#142)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.11/Stockbar-382.3.11.zip" length="7821914" type="application/octet-stream" sparkle:edSignature="oEKrVcp8OGtP1x5z5jlC/eLpvk6s4VPEyiZAOgCAKINvSDCw3SKGToVx9qkC2Qjh8CM4jdzNr3XARvW4M272Dw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: rzAULN+fN3L9UsRyWeLfUZKVgGGEEQ9ebcRRAy0QdqleUQwVL3VHcjxlFpqrcKiDnLXoZmsagrE5SG6XGTzPDQ==
+edSignature: ezGIxnhKQY084ICCpwthwkiZfuJSyqfUM2ZlQlb8K+0+DjspYA5hAS1vQwFmMpQcVqpEcHJ9muUYXI1u8HDeDQ==
 length: 10347
 -->
