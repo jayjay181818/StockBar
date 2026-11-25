@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.22)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.22</link>
+      <pubDate>Wed, 25 Nov 2026 09:36:12 +0000</pubDate>
+      <sparkle:version>382.3.22</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.22 of Stockbar 3.8.2. Changes since experimental-382.3.21:
+
+- Allocation: a Cash row, so its shares match Holdings' weights (#154)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.22/Stockbar-382.3.22.zip" length="8177104" type="application/octet-stream" sparkle:edSignature="7I6gNqpHP95iXmJlIw+9Ok2xUhVJnLUGcATL6f/jABO1Kidy1C+5ZY3UKys/XLjNGV/AK1EFQEtrI96MUKKACQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.21)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.21</link>
       <pubDate>Wed, 25 Nov 2026 09:13:51 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Allocation: a donut beside its list, three views and the correlations as a grid (#144)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.13/Stockbar-382.3.13.zip" length="8106729" type="application/octet-stream" sparkle:edSignature="L8p+ar5h2YcmMjjd/JmmYm745DunOE4zCa5KvbumNZEOZfSxo/3cilhfGUrDAASv4wXNa5Hj8EJo+FUEgpJYDw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.12)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.12</link>
-      <pubDate>Fri, 20 Nov 2026 18:06:08 +0000</pubDate>
-      <sparkle:version>382.3.12</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.12 of Stockbar 3.8.2. Changes since experimental-382.3.11:
-
-- Add the Income page: dividends expected, received and by holding (#143)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.12/Stockbar-382.3.12.zip" length="8055145" type="application/octet-stream" sparkle:edSignature="DG6EomORQga4Oa31XrmObZDqDOxqKXOue8XN60a2tyx63HqlJYQ/zyV6JsCBShMnVvC/aXsGwlOjr9vkc4KmCw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ezGIxnhKQY084ICCpwthwkiZfuJSyqfUM2ZlQlb8K+0+DjspYA5hAS1vQwFmMpQcVqpEcHJ9muUYXI1u8HDeDQ==
-length: 10347
+edSignature: b4AnmEbelCpMjXfzozUY8QCtS+hX5qowa7LENEt3Nx/rNa9iF4UhtQOlpp6aRkDmYYUhgXyWo1gXSpQHfYQ/Cw==
+length: 10344
 -->
