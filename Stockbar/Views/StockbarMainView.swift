@@ -101,10 +101,12 @@ struct StockbarMainView: View {
         )
     }
 
-    /// Pages whose data only a Folync portfolio has are dimmed for any other source.
+    /// Pages whose data only a Folync portfolio has are dimmed for any other
+    /// source; Income too when it cannot ask Yahoo. Nothing here asks anything.
     private var dimmedSections: [StockbarMainSection: String] {
-        guard !dataModel.isFolyncPortfolioActive else { return [:] }
-        return StockbarMainSection.folyncOnlySections.reduce(into: [:]) { $0[$1] = StockbarMainSection.needsFolyncReason }
+        StockbarMainSection.dimmedSections(isFolyncPortfolioActive: dataModel.isFolyncPortfolioActive,
+                                           isFolyncEnabled: dataModel.isFolyncEnabled,
+                                           localIncomeAvailable: InstrumentEventsService.canAnswer)
     }
 
     private var portfolioSourceTitle: String {
@@ -243,9 +245,27 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     static let newSections: Set<StockbarMainSection> = [.activity, .income, .trades]
 
     /// Sections whose data only a Folync portfolio has: dimmed, with this
-    /// reason, for any other source.
-    static let folyncOnlySections: Set<StockbarMainSection> = [.activity, .income, .trades]
+    /// reason, for any other source. Income is not one: a local or Trading 212
+    /// portfolio gets an estimate from Yahoo's record.
+    static let folyncOnlySections: Set<StockbarMainSection> = [.activity, .trades]
     static let needsFolyncReason = "Needs a Folync portfolio"
+
+    /// Which entries are dimmed, and why. A Folync portfolio dims nothing.
+    /// Otherwise the Folync-only pages are dimmed, and Income is dimmed while
+    /// Folync is enabled but its portfolio is not loaded yet (the page is
+    /// Folync's then), or when Yahoo cannot be asked (`localIncomeAvailable`
+    /// false: live market data off and no acceptance fixture).
+    static func dimmedSections(isFolyncPortfolioActive: Bool, isFolyncEnabled: Bool,
+                               localIncomeAvailable: Bool) -> [StockbarMainSection: String] {
+        guard !isFolyncPortfolioActive else { return [:] }
+        var dimmed = folyncOnlySections.reduce(into: [StockbarMainSection: String]()) { $0[$1] = needsFolyncReason }
+        if isFolyncEnabled {
+            dimmed[.income] = needsFolyncReason
+        } else if !localIncomeAvailable {
+            dimmed[.income] = StockbarLocalIncomeModel.notAllowedReason
+        }
+        return dimmed
+    }
 
     /// Every entry in sidebar order, top to bottom.
     static var sidebarOrder: [StockbarMainSection] {

@@ -627,6 +627,128 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
     }
 }
 
+/// The made-up instrument events for the acceptance copy: reachable only in
+/// an explicit acceptance run, from a checked owner-only copy in its root.
+final class StockbarAcceptanceEventsFixtureTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarAcceptanceEventsFixtureTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+        super.tearDown()
+    }
+
+    private let validJSON = """
+    {"version": 1, "holdings": [
+     {"symbol": "FAKEUS", "instrumentType": "EQUITY", "currency": "USD",
+      "dividends": [{"daysFromToday": -40, "amount": 0.25}], "exDividendInDays": 10, "payInDays": 20},
+     {"symbol": "FAKEFD.L", "instrumentType": "ETF", "currency": "GBP", "dividends": []}]}
+    """
+
+    private func write(_ text: String, name: String = "source.json", mode: Int = 0o600) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        return url
+    }
+
+    private func runtime(explicit: Bool) -> StockbarAcceptanceRuntime {
+        StockbarAcceptanceRuntime(root: directory, runID: "run-12345678",
+                                  folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+                                  liveProviderRequestsAllowed: false, loopbackFolyncAllowed: explicit)
+    }
+
+    func testTheOptionIsReadOnlyInAnExplicitAcceptanceRun() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.eventsKey: source.path]
+        XCTAssertTrue(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: true))
+            .usesInstrumentEventsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: false))
+            .usesInstrumentEventsFixture, "a root and run id without the explicit run's gate")
+        let normal = try StockbarAcceptanceRuntime.resolve(environment: environment)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: normal).usesInstrumentEventsFixture)
+        var testEnvironment = environment
+        testEnvironment["XCTestConfigurationFilePath"] = "/tmp/StockbarTests.xctestconfiguration"
+        let isolation = try StockbarAcceptanceRuntime.resolveCurrent(
+            environment: testEnvironment, processIdentifier: 4242, uniqueSuffix: "run-0003", isRunningUnderXCTest: true
+        )
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: testEnvironment, runtime: isolation)
+            .usesInstrumentEventsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.current.usesInstrumentEventsFixture)
+        XCTAssertNil(StockbarAcceptanceEventsFixture.current, "the test process itself never has a fixture")
+    }
+
+    func testTheBootstrapCopiesTheFixtureOwnerOnlyIntoTheRootAndTheAppReadsOnlyThatCopy() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.eventsKey: source.path]
+        let explicit = runtime(explicit: true)
+
+        XCTAssertTrue(try StockbarAcceptanceEventsFixture.installCopy(environment: environment, runtime: explicit))
+        let copy = try XCTUnwrap(StockbarAcceptanceEventsFixture.copyURL(runtime: explicit))
+        XCTAssertEqual(copy.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o777, 0o600)
+
+        try FileManager.default.removeItem(at: source)
+        let options = StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicit)
+        let fixture = try XCTUnwrap(try StockbarAcceptanceEventsFixture.load(options: options, runtime: explicit))
+        XCTAssertEqual(fixture.holdings.map(\.symbol), ["FAKEUS", "FAKEFD.L"])
+    }
+
+    func testOutsideAnExplicitRunNothingIsCopiedOrRead() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.eventsKey: source.path]
+        let other = runtime(explicit: false)
+        XCTAssertFalse(try StockbarAcceptanceEventsFixture.installCopy(environment: environment, runtime: other))
+        XCTAssertNil(StockbarAcceptanceEventsFixture.copyURL(runtime: other))
+        // Even with a valid copy in place and the option forced on.
+        _ = try write(validJSON, name: StockbarAcceptanceEventsFixture.fileName)
+        var forced = StockbarAcceptanceLaunchOptions.none
+        forced.usesInstrumentEventsFixture = true
+        XCTAssertNil(try StockbarAcceptanceEventsFixture.load(options: forced, runtime: other))
+        XCTAssertNil(try StockbarAcceptanceEventsFixture.load(options: .none, runtime: runtime(explicit: true)))
+    }
+
+    func testAFixtureMustBeARegularOwnerOnlyFileOfMadeUpSymbols() throws {
+        XCTAssertNoThrow(try StockbarAcceptanceEventsFixture.read(at: try write(validJSON)))
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.read(at: try write(validJSON, name: "shared.json", mode: 0o644))) {
+            XCTAssertEqual($0 as? StockbarAcceptanceEventsFixtureError, .notOwnerOnly)
+        }
+        let link = directory.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: try write(validJSON, name: "target.json"))
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.read(at: link)) {
+            XCTAssertEqual($0 as? StockbarAcceptanceEventsFixtureError, .notARegularFile)
+        }
+        let real = validJSON.replacingOccurrences(of: "FAKEUS", with: "AAPL")
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.read(at: try write(real, name: "real.json"))) {
+            XCTAssertEqual($0 as? StockbarAcceptanceEventsFixtureError, .notMadeUp("AAPL"))
+        }
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.read(at: try write("{\"version\": 2, \"holdings\": []}",
+                                                                                     name: "v2.json")))
+        XCTAssertTrue(StockbarAcceptanceEventsFixture.isMadeUp("FAKELN.L"))
+        for symbol in ["FAKE", "fakeus", "VOD.L", "FAKE US", "XFAKE"] {
+            XCTAssertFalse(StockbarAcceptanceEventsFixture.isMadeUp(symbol), symbol)
+        }
+
+        // The bootstrap refuses a bad source, so the run stops before the app starts.
+        let bad = try write(real, name: "bad.json")
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.installCopy(
+            environment: [StockbarAcceptanceLaunchOptions.eventsKey: bad.path], runtime: runtime(explicit: true)))
+        // And the app refuses a copy that is no longer owner-only.
+        let copy = try write(validJSON, name: StockbarAcceptanceEventsFixture.fileName, mode: 0o640)
+        var on = StockbarAcceptanceLaunchOptions.none
+        on.usesInstrumentEventsFixture = true
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.load(options: on, runtime: runtime(explicit: true)))
+        XCTAssertEqual(copy.lastPathComponent, "instrument-events-fixture.json")
+    }
+}
+
 // MARK: - Main window shell
 
 @MainActor

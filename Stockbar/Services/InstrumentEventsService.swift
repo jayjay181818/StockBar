@@ -216,6 +216,13 @@ struct InstrumentEventsResult: Sendable, Equatable {
 
 // MARK: - Service
 
+/// What asks for instrument events: `InstrumentEventsService`, or a stand-in in tests.
+protocol InstrumentEventsProviding: Sendable {
+    func events(for symbols: [String], forceRefresh: Bool) async -> [InstrumentEventsResult]
+}
+
+extension InstrumentEventsService: InstrumentEventsProviding {}
+
 /// Instrument events from Yahoo, saved for a day per symbol.
 ///
 /// Symbols that are missing or older than a day are fetched together in one
@@ -224,8 +231,19 @@ struct InstrumentEventsResult: Sendable, Equatable {
 /// rate-limit answer no run is made for an hour, forced or not. A symbol
 /// Yahoo has nothing for is not asked for again that day unless forced. The script
 /// runs only when `StockbarProviderAccessPolicy` allows the Python bridge.
+///
+/// In an explicit acceptance run started with the events fixture
+/// (`StockbarAcceptanceEventsFixture`), the fixture answers in place of the
+/// script, through the same reading, saving and pausing, and the script is
+/// never run.
 actor InstrumentEventsService {
-    static let shared = InstrumentEventsService()
+    static let shared = InstrumentEventsService(fixture: StockbarAcceptanceEventsFixture.current)
+
+    /// Whether events can be had in this run: live providers are on, or the
+    /// acceptance fixture answers. Read without asking anything.
+    static var canAnswer: Bool {
+        StockbarProviderAccessPolicy.current.liveRequestsAllowed || StockbarAcceptanceEventsFixture.current != nil
+    }
 
     static let scriptName = "get_instrument_events.py"
     static let freshnessInterval: TimeInterval = 24 * 60 * 60
@@ -255,6 +273,7 @@ actor InstrumentEventsService {
     private let directory: URL
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    private let fixture: StockbarAcceptanceEventsFixture?
 
     private var saved: [String: SavedEntry] = [:]
     private var lookedOnDisk: Set<String> = []
@@ -273,7 +292,8 @@ actor InstrumentEventsService {
         providerPolicy: StockbarProviderAccessPolicy = .current,
         directory: URL? = nil,
         fileManager: FileManager = .default,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        fixture: StockbarAcceptanceEventsFixture? = nil
     ) {
         self.scriptPath = scriptPath ?? Bundle.main.path(forResource: "get_instrument_events", ofType: "py")
         self.processRunner = processRunner ?? PythonProcessRunner()
@@ -283,6 +303,7 @@ actor InstrumentEventsService {
             .stockbarApplicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("InstrumentEvents", isDirectory: true)
         self.now = now
+        self.fixture = fixture
     }
 
     /// One result for each distinct symbol, in the order first asked.
@@ -361,6 +382,11 @@ actor InstrumentEventsService {
     // MARK: Running the script
 
     private func refusal() -> InstrumentEventsFailure? {
+        if fixture != nil {
+            // The acceptance fixture answers; no provider is asked.
+            if let pausedUntil, now() < pausedUntil { return .rateLimited(retryAfter: pausedUntil) }
+            return nil
+        }
         do {
             try providerPolicy.authorize(.python)
         } catch {
@@ -392,6 +418,9 @@ actor InstrumentEventsService {
     }
 
     private func runScript(_ symbols: [String]) async -> RunOutcome {
+        if let fixture {
+            return readAnswer(fixture.answer(for: symbols, now: now()), for: symbols)
+        }
         guard let scriptPath else {
             return RunOutcome(failures: Self.all(symbols, .scriptFailed("\(Self.scriptName) is missing from the app")))
         }

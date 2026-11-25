@@ -427,8 +427,15 @@ Folync portfolio. It was merged as `1dcde6f` (build 382.3.24).
 Pull request 157 then removed the idle memory the redesign added: the
 faint top highlight on dark cards, stroked with a gradient, cost about 18
 MB of drawing memory, and drawing it under a gradient mask instead keeps
-the look and brings that memory back to 3.6 MB. The timed comparison for
-pull requests 152 to 157 is owed.
+the look and brings that memory back to 3.6 MB. It was merged as
+`45cd139` (build 382.3.25). The timed comparison for pull requests 152
+to 157 was run that evening, twice: idle memory fell from about 118 MB to
+about 100 MB, peak memory at launch by 16 to 22 MB, and nothing else
+changed measurably. The tables are in pull request 158's entry.
+
+Pull request 158 gave a local or Trading 212 portfolio an Income page, as
+an estimate labelled as one: Yahoo's record of each holding's payments
+over the last year, at today's units, and the same a year on.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6161,8 +6168,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   Removing the highlight altogether saves the same memory but visibly
   dims the cards' top edges.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `45cd139`. The merge published
+  experimental build 382.3.25 as the prerelease `experimental-382.3.25`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
 - Benchmark: the one-launch readings above. The timed comparison is owed,
   on the rule of 2026-11-20, and is to cover pull requests 152 to 157
   together. The footprint as a whole moved by up to 9 MB between launches
@@ -6193,6 +6202,179 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - The two new tests sit in `SettingsTransferTests.swift`, an odd home
     for them.
 - Verdict: retained, with its timed benchmark owed.
+
+### 158: Income for a local or Trading 212 portfolio, as a labelled estimate
+
+- What: Income was dimmed with "Needs a Folync portfolio" for any portfolio
+  not on Folync. The plan the owner approved on 2026-11-19 says: "Local
+  and Trading 212: Income as a labelled estimate". Now, for a local or
+  Trading 212 portfolio, Income is built from Yahoo's record of each
+  holding's dividends over the last twelve months, times the units held
+  today. The events lookup of pull request 136, repaired in 153, supplies
+  that record.
+
+  The page has the Folync page's shape: an outlook, a history and a view
+  by holding. A notice at the top says the figures are an estimate from
+  Yahoo's record at today's units, not a record of what was paid. Nothing
+  is called "Received".
+  - **The last twelve months:** each payment Yahoo lists, at today's
+    units, marked "estimate".
+  - **The next twelve months:** the same payments a year on, each row
+    marked "Estimate". Where Yahoo gives a real upcoming ex-dividend date,
+    it replaces the nearest estimated date within 45 days, and the row
+    says "Yahoo's date, amount estimated".
+  - **Conversion:** loaded rates only. A holding with no loaded rate keeps
+    its own currency's figures, is left out of the totals, and is named
+    in a notice.
+  - **Yahoo is asked** once when the page is selected and once per press
+    of refresh, never on a timer and never from the popover or the
+    Overview.
+  - **The sidebar** dims Income only when live market data is off.
+  - **Unchanged:** Activity and Trades stay Folync-only. The Folync Income
+    page is the old view, renamed and otherwise unchanged.
+
+  A new acceptance-only launch option, `STOCKBAR_ACCEPTANCE_EVENTS`,
+  gives the events service a fixture file of made-up events instead of
+  Yahoo, so the page can be seen in the acceptance copy. It takes effect
+  only in an explicit acceptance run. The bootstrap checks the file and
+  copies it, owner-only, into the run's root, and the app checks that copy
+  again and stops at launch if any check fails. The checks: a regular
+  file, owned by the user and readable by no one else, at most 64 KB,
+  version 1, and only symbols starting `FAKE`.
+
+  This entry also records the timed comparison owed by pull requests 152
+  to 157, and the merge of 157.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: this pull request's own comparison is owed, on the rule of
+  2026-11-20. The benchmark's launches never open Income and make no Yahoo
+  request.
+
+  **The comparison owed by pull requests 152 to 157**, run at the owner's
+  request on 2026-11-25 instead of overnight: before `2d5d992` (the last
+  commit measured, record 151), after `45cd139` (pull request 157). Six
+  launches a side, in turns, on macOS 27.2.1 and an Apple M3 Pro with 18
+  GB, on mains power, with the lid open, the screen unlocked and no other
+  project's build present. Each run started after twenty quiet minutes and
+  stood under all three set-aside rules.
+
+  First run: turns from 20:53 to 21:27 UTC. The four busiest processes
+  together averaged 135% of a core on the before side and 126% on the
+  after side, a ratio of 1.08. No reading showed input, and no segment had
+  another build beside it.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 118.2 (113.0 to 122.3) MB | 100.1 (94.1 to 103.9) MB | -18.1 MB, -15.3% | lower (p = 0.002) |
+  | Idle memory the app holds allocated | 54.3 (51.5 to 54.9) MB | 52.8 (51.5 to 53.7) MB | (-1.5 MB, -2.8%) | no measurable change (p = 0.121) |
+  | Peak memory, launch and history load | 267.9 (262.9 to 277.9) MB | 251.5 (241.2 to 259.6) MB | -16.4 MB, -6.1% | lower (p = 0.002) |
+  | Idle memory growth across the window | 0.3 (-1.6 to 0.5) MB | 0.2 (0.2 to 0.4) MB | (-0.0 MB, -16.7%) | no measurable change (p = 0.955) |
+  | Idle CPU | 0.101 (0.091 to 0.109) s/min | 0.100 (0.092 to 0.111) s/min | (-0.001 s/min, -1.0%) | no measurable change (p = 0.970) |
+  | Idle CPU wake-ups | 26 (24 to 28) /min | 26 (23 to 29) /min | (+0 /min, +0.0%) | no measurable change (p = 0.855) |
+  | Idle CPU power | 4.32 (3.69 to 5.00) mW | 4.38 (4.20 to 4.85) mW | (+0.05 mW, +1.3%) | no measurable change (p = 0.732) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | (+0.000 MB/min) | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.53 to 0.96) s | 0.59 (0.45 to 1.02) s | (+0.01 s, +0.9%) | no measurable change (p = 0.699) |
+  | Launch to history loaded | 0.71 (0.62 to 0.95) s | 0.74 (0.60 to 0.98) s | (+0.02 s, +2.8%) | no measurable change (p = 0.974) |
+  | CPU from launch to the idle window | 1.96 (1.85 to 2.18) s | 1.96 (1.85 to 2.07) s | (+0.00 s, +0.0%) | no measurable change (p = 0.922) |
+  | CPU energy from launch to the idle window | 5.96 (5.72 to 6.43) J | 5.92 (5.78 to 6.11) J | (-0.04 J, -0.7%) | no measurable change (p = 0.729) |
+  | Python helper start to ready, no network | 0.29 (0.28 to 0.55) s | 0.28 (0.27 to 0.54) s | (-0.01 s, -5.1%) | no measurable change (p = 0.437) |
+  | Python helper start, CPU | 0.29 (0.28 to 0.34) s | 0.28 (0.27 to 0.35) s | (-0.01 s, -3.4%) | no measurable change (p = 0.682) |
+  | Python helper memory once started | 71.0 (71.0 to 71.1) MB | 71.1 (71.0 to 71.2) MB | (+0.0 MB, +0.1%) | no measurable change (p = 0.675) |
+
+  Repeat: turns from 21:48 to 22:20 UTC. The ratio was 1.23. One reading
+  showed input in the minute before, which is within the rule's limit of
+  two. No segment had another build beside it.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 117.5 (107.2 to 123.2) MB | 100.9 (99.3 to 102.6) MB | -16.5 MB, -14.1% | lower (p = 0.002) |
+  | Idle memory the app holds allocated | 54.0 (50.1 to 55.0) MB | 53.7 (52.1 to 53.9) MB | (-0.2 MB, -0.5%) | no measurable change (p = 0.519) |
+  | Peak memory, launch and history load | 268.9 (261.5 to 280.1) MB | 246.9 (243.4 to 254.1) MB | -21.9 MB, -8.2% | lower (p = 0.002) |
+  | Idle memory growth across the window | 0.4 (0.2 to 0.6) MB | 0.3 (0.2 to 0.4) MB | (-0.1 MB, -12.5%) | no measurable change (p = 0.232) |
+  | Idle CPU | 0.103 (0.086 to 0.114) s/min | 0.103 (0.099 to 0.107) s/min | (-0.001 s/min, -0.5%) | no measurable change (p = 1.000) |
+  | Idle CPU wake-ups | 26 (25 to 28) /min | 26 (25 to 28) /min | (+0 /min, +0.0%) | no measurable change (p = 1.000) |
+  | Idle CPU power | 4.12 (3.95 to 4.35) mW | 4.09 (3.62 to 4.35) mW | (-0.03 mW, -0.7%) | no measurable change (p = 0.461) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | (+0.000 MB/min) | no measurable change (p = 1.000) |
+  | Launch to first window | 0.52 (0.49 to 0.88) s | 0.52 (0.49 to 0.53) s | (-0.01 s, -1.0%) | no measurable change (p = 0.801) |
+  | Launch to history loaded | 0.64 (0.60 to 0.90) s | 0.62 (0.60 to 0.66) s | (-0.01 s, -1.6%) | no measurable change (p = 0.660) |
+  | CPU from launch to the idle window | 1.96 (1.83 to 1.99) s | 1.96 (1.82 to 1.99) s | (-0.00 s, -0.3%) | no measurable change (p = 0.983) |
+  | CPU energy from launch to the idle window | 5.99 (5.79 to 6.29) J | 5.94 (5.58 to 5.97) J | (-0.05 J, -0.9%) | no measurable change (p = 0.331) |
+  | Python helper start to ready, no network | 0.28 (0.27 to 0.54) s | 0.29 (0.28 to 0.53) s | (+0.01 s, +3.6%) | no measurable change (p = 0.446) |
+  | Python helper start, CPU | 0.28 (0.27 to 0.34) s | 0.29 (0.27 to 0.34) s | (+0.01 s, +3.6%) | no measurable change (p = 0.870) |
+  | Python helper memory once started | 71.0 (71.0 to 71.1) MB | 71.0 (71.0 to 71.3) MB | (+0.0 MB, +0.0%) | no measurable change (p = 0.708) |
+
+  Firm in both runs: idle memory fell by 18.1 and 16.5 MB, from about 118
+  MB to about 100 MB, and peak memory at launch fell by 16.4 and 21.9 MB.
+  The drawing memory (`CoreAnimation`) was 22 MB in every before launch
+  and 3.6 MB in every after launch, as pull request 157 predicted.
+  Nothing else changed measurably in either run, so pull requests 152 to
+  156 cost nothing the benchmark can see.
+
+  Idle memory is now about 100 MB, against 97 MB before the redesign. The
+  reports are `build/bench/results/compare-pr152-157-20261125-205340/report.md`
+  and `compare-pr152-157-repeat-20261125-214806/report.md`.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is
+  on the current head of `experimental`: 1075 XCTest tests with 0
+  failures. New tests:
+  - `StockbarLocalIncomeTests`, now 16, two added by the session lead
+    after review;
+  - `StockbarAcceptanceEventsFixtureTests`, 4;
+  - one in `InstrumentEventsServiceTests`.
+
+  They cover:
+  - the windows, the year-on repeat, Yahoo's dates replacing estimated
+    ones, and a payment Yahoo lists as coming not being counted twice;
+  - holdings with no payments, no answer, or no rate;
+  - every "estimate" label;
+  - the sidebar for Folync, local, Trading 212 and providers off;
+  - the acceptance option's gate.
+
+  Eleven temporary breakages were each caught and removed: nine by the
+  worker, and one for each of the session lead's two fixes. `checks`,
+  `docs-check`, `build-release` and `python-tests` pass, and 95 script
+  tests pass. CI does not run for this branch, so these were run locally.
+
+  On screen, in the acceptance copy made a local portfolio with the new
+  fixture (five made-up holdings in pounds, dollars and euros): the
+  outlook, history and by-holding views in dark and light, at the default
+  and the minimum size, nothing cut off. The sidebar shows Income no
+  longer dimmed, and the Folync portfolio's Income page is unchanged.
+  Captures are in `build/design/shots/C4/`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/C4-local-income.md`). GLM 5.4 (max)
+  reviewed it independently and found no bug. It confirmed that the
+  acceptance option cannot be reached outside an explicit run, that Yahoo
+  is asked only as intended, and that the Folync page is unchanged. Of
+  its findings, the session lead fixed two that change figures:
+  - a payment Yahoo lists as still to come was also counted as last
+    year's repeat, so twice (possible when the helper's day is ahead of
+    the user's);
+  - an estimated row already on Yahoo's exact ex-date was not given
+    Yahoo's pay date.
+
+  The session lead also fixed a test that rechecked a first result
+  instead of the second. A review by Gemini 4 Neon was stopped by the
+  owner before it reported.
+- Known issues:
+  - By holding's next date can be a pay date for a payment counted in the
+    last twelve months (ex-dividend past, payment still to come).
+  - A Yahoo date with no payment to attach to shows "–" beside its pill,
+    and a holding with no payments last year but an upcoming date reads
+    "None" beside that date.
+  - Selling everything while the page is open leaves it at £0.00, not "No
+    holdings to estimate". A holding added while the page is open shows
+    "–" as if Yahoo had not answered, until refresh.
+  - With no rate table loaded, a foreign holding keeps "no rate loaded"
+    until something else redraws the page.
+  - "Never on a timer" and "never from the popover or the Overview" are
+    tested by construction only. The positive half of the events
+    service's availability, the 64 KB cap and the owner check have no test.
+  - Never run with real Yahoo data or for a Trading 212 account. Exchange
+    rates were not loaded in the copy, so a converted foreign holding was
+    not seen.
+  - The worker's accessibility reads three times returned its copy's own
+    menu bar, against the rule.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
 
@@ -6477,6 +6659,7 @@ launch.
 | Pull request 155, the Cash row's fixes | Claude Opus 5.5 (session lead); GPT-6.2 Astra (extra high) and Gemini 4 Neon as independent reviewers, at the owner's suggestion; two Opus 5.5 workers in turn | Worth it. The two reviews of 153 and 154, made without each other, agreed on every main fault and found what the lead's reading had missed: another account's cash, a built-in exchange rate, and a Python bug that divided a pound price by 100. Astra's second review found five more in the first fix. Reviews cost little next to the workers, and are worth asking for on any change that works out money figures. |
 | Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
 | Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
+| Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

@@ -23,6 +23,12 @@ do {
         runtime: StockbarRuntimeStorage.acceptance,
         defaults: StockbarRuntimeStorage.userDefaults
     )
+    // The made-up instrument events, when asked for, must pass their checks
+    // before the app starts; otherwise the copy stops here.
+    _ = try StockbarAcceptanceEventsFixture.load(
+        options: StockbarAcceptanceLaunchOptions.current,
+        runtime: StockbarRuntimeStorage.acceptance
+    )
 } catch {
     FileHandle.standardError.write(Data("Stockbar acceptance launch failed: \(error.localizedDescription)\n".utf8))
     exit(2)
