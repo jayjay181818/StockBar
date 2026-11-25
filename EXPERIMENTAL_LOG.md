@@ -405,7 +405,18 @@ having no data. Pull request 153 fixes that and records what Yahoo gives;
 it was merged the same day as `6e7184d` (build 382.3.21).
 
 The owner also chose a Cash row for Allocation, so that its shares are of
-the same total as Holdings' weights. Pull request 154 adds it.
+the same total as Holdings' weights. Pull request 154 adds it. Two independent
+reviews (GPT-6.2 Astra and Gemini 4 Neon) then found it could still
+disagree with Holdings or show another account's cash, and pull request
+155 fixes that: one source decides holdings, total and cash, and the Cash
+row appears only when the figures add up to the source's total.
+
+The rise in idle memory was traced the same day, by one launch of each of
+pull requests 136 to 138 while another project's builds kept the Mac from
+a timed comparison: the system's drawing memory for the app is 3.2 MB
+after 136, 19 MB after 137 (the Glass surfaces), 19 MB after 138 and 22
+MB from 139. The results are in
+`build/bench/results/coreanimation-check-20261125-115919`.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -5797,8 +5808,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   note gives the Unclassified row's own share and adds "cash included".
   The valuation code moved unchanged from the view into
   `AllocationValuation`, so the agreement with Holdings could be tested.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `c361a5a`. The merge published
+  experimental build 382.3.22 as the prerelease `experimental-382.3.22`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches open the Overview and never this page.
 - Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 153 was
@@ -5863,6 +5876,137 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     bar, against the rule to read the window only, and the copy became
     the active app once, after its own sheet was confirmed. Nothing else
     was touched.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 155: Allocation's Cash row: one source for holdings, total and cash
+
+- What: two independent reviews of pull requests 153 and 154, by GPT-6.2
+  Astra and Gemini 4 Neon, found that Allocation's Cash row could still
+  disagree with Holdings, or show what it should not. The two reviews
+  agreed on every main point, and the session lead checked them against
+  the code. This pull request fixes them. It also fixes a fault the
+  reviews found next to pull request 153.
+
+  **One source.** A new `DataModel.holdingsWeightBasis()` decides once
+  where Holdings' total and cash come from: Folync whenever its snapshot
+  is there, then a fresh Trading 212 account, then the local portfolio.
+  With Folync's holdings, the cash is Folync's or not known. Before, a
+  Folync snapshot with no total took a leftover Trading 212 account's
+  cash. Each holding's value comes from `weighedPositionValue(for:)`, the
+  code behind Holdings' weight, moved out unchanged. Allocation uses both,
+  so a Trading 212 position is now valued at the broker's figure on both
+  pages.
+
+  **When there is no Cash row.** A Cash row is shown only when all four
+  hold:
+  - the source's holdings and total match;
+  - every holding is valued (a holding known to be worth nothing counts
+    as valued and has no slice);
+  - every figure has a loaded exchange rate into the total's currency
+    (pence go through pounds at a fixed 100);
+  - holdings plus cash, converted into the total's currency, come to the
+    source's total within the larger of 0.05% of it, or half the
+    currency's smallest unit for each figure summed.
+
+  The allowance is set so that every share shown to 0.1% agrees with
+  Holdings. A rounding penny cannot hide the cash, and a difference too
+  small to change any shown share may pass. When the check passes, every
+  share is of the source's own total.
+
+  Otherwise the shares are of the holdings, and a line under the chart
+  says why: Folync gives no total, holdings are kept outside the Trading
+  212 account, some holdings have no price, there is no rate for the
+  cash, or the figures do not add up.
+
+  **Also:**
+  - The allocation card now shows with one holding, or with cash alone
+    (100% Cash, "Cash only").
+  - Conversions on the page use a new
+    `CurrencyConverter.convertWithLoadedRates`, which never uses a built-in
+    fallback rate.
+  - The page recalculates when rates load.
+  - Cash that would display as zero counts as zero.
+  - With cash below zero or left out, every percentage note says "of the
+    holdings' value".
+  - The Cash row's change cell uses the page's own "—".
+  - The Currency view groups a Folync holding by the currency it is
+    priced in, not the one Folync values it in. In the made-up portfolio
+    that view was GBP 96.5% and Cash 3.5%; it is now GBP 59.8%, USD 36.7%
+    and Cash 3.5%.
+  - The Folync holdings are looked up once per recalculation instead of
+    once per row.
+  - The page recalculates when the loaded rates change, not on every
+    refresh that brings the same rates.
+
+  **Python.** When yfinance's `info` fails after the chart has loaded, both
+  the real-time and the previous-close paths of `get_stock_data.py` now
+  still read the chart's currency. Before, a London listing quoted in
+  pounds fell to the pence rule and was divided by 100. The remaining
+  `dict` checks on `info` and `calendar` accept any mapping.
+
+  Holdings itself is not changed. The worker reported these inconsistencies
+  in it, left for a later decision:
+  - Trading 212 with a manual holding beside it: the weights add up to
+    more than 100%.
+  - Folync with no total: the net value is not a total of its rows.
+  - Broker positions linked to no row are counted in the account's value.
+  - Folync holdings hidden for tiny share counts still count in Folync's
+    total.
+  - Holdings still converts with built-in fallback rates.
+  - With cash below zero, the weights add up to more than 100%.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches never open this page. The price helper's change adds no work
+  when `info` succeeds.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is
+  on the current head of `experimental`: 1028 XCTest tests with 0
+  failures, 29 of them in `AllocationCashTests`. The tests go through
+  `holdingsWeightBasis()`, `AllocationValuation.make(from:)` and Holdings'
+  own weight for each source. That covers Folync with and without a
+  total; Trading 212, alone and with a manual holding; local; EUR missing
+  from a loaded rate table; partial coverage; cash only; one holding; tiny
+  cash; borrowing; mixed currencies, pence against pounds, and the
+  allowance; a holding worth nothing or less; and the Currency view's
+  grouping. The Folync fixtures go through the production decoder, and the
+  rates test reads the trigger the page itself keys on. Python helper
+  tests: 108, four of them new.
+
+  Twenty-three temporary breakages were each caught and removed: fifteen
+  in the first round (eleven in Swift, four in Python) and eight in the
+  second. One of them, `info` checked as a `dict` again,
+  was caught by nothing until a test was added. `checks`, `docs-check`
+  and `build-release` pass, and so do 95 script tests. CI does not run for
+  this branch, so these were run locally.
+
+  On screen, in the acceptance copy: the three views of the made-up
+  Folync portfolio look as pull request 154 left them, except for the
+  Cash row's dash and the Currency view's new grouping. Captures are in
+  `build/design/shots/D3c/`, the second round's named `round2-*`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/D3c-allocation-cash-fixes.md`), which
+  was drawn from the two reviews. GPT-6.2 Astra then reviewed the first
+  round's five commits. It confirmed each earlier fault fixed and Holdings'
+  weights unchanged, and found five more faults in the new check and two
+  that predate it. A second Opus worker fixed them on the same branch. The
+  session lead read the source decision, the change to Holdings' weight
+  and the second round's check against the total. The second round had no
+  independent review.
+- Known issues:
+  - The cash-only, single-holding, partial-coverage and "left out" states
+    were never seen on screen, only in tests. The stand-in cannot give an
+    unvalued holding without its data being edited.
+  - Trading 212 with no cash figure, or zero cash, gives no line, so its
+    shares can differ from Holdings' without saying so.
+  - A Trading 212 account holding only cash never fetches its account
+    summary in ordinary sync while hourly reconciliation is off, so
+    Allocation has no cash to show for it. Found in review; not changed.
+  - That the page's task re-runs when rates change rests on a test of the
+    trigger value it keys on, not on a test of the task itself.
+  - A change to only the Trading 212 snapshot's cash waits for the next
+    trade update before the page recalculates.
+  - The worker's first two window reads also returned the acceptance
+    copy's own menu bar, against the rule.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
@@ -6145,6 +6289,7 @@ launch.
 | The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
 | The Yahoo check and pull request 153 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
 | Pull request 154, Allocation's Cash row | Claude Opus 5.5 (session lead) for the specification, the review and the record; one Opus 5.5 worker in its own worktree | Worth it: thirteen tests, six breakages and before-and-after captures of every view. The lead checked the cash source against the net value's and the captures. The worker's accessibility reads twice returned its copy's menu bar, against the new rule, and its copy became the active app once. |
+| Pull request 155, the Cash row's fixes | Claude Opus 5.5 (session lead); GPT-6.2 Astra (extra high) and Gemini 4 Neon as independent reviewers, at the owner's suggestion; two Opus 5.5 workers in turn | Worth it. The two reviews of 153 and 154, made without each other, agreed on every main fault and found what the lead's reading had missed: another account's cash, a built-in exchange rate, and a Python bug that divided a pound price by 100. Astra's second review found five more in the first fix. Reviews cost little next to the workers, and are worth asking for on any change that works out money figures. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
