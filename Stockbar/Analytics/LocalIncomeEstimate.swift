@@ -224,11 +224,25 @@ enum LocalIncomeFigures {
                 }
             }
 
+            // A payment Yahoo already lists as still to come is the one that last
+            // year's repeat stands for (the helper's day can be ahead of the
+            // user's), so the nearest repeat goes rather than counting it twice.
+            for listed in coming where listed.id.hasSuffix("#listed") {
+                let nearest = coming.indices
+                    .filter { coming[$0].dateSource == .estimated }
+                    .min { abs(days(from: coming[$0].date, to: listed.date)) < abs(days(from: coming[$1].date, to: listed.date)) }
+                if let nearest, abs(days(from: coming[nearest].date, to: listed.date)) <= matchingWindowDays {
+                    coming.remove(at: nearest)
+                }
+            }
+
             // Yahoo's own upcoming ex-dividend date takes the place of the
-            // nearest estimated date, within the matching window.
+            // nearest estimated date, within the matching window; an estimate
+            // already on that very day is matched too, and takes Yahoo's pay date.
             let exDay = events.exDividendDate.map(day)
             let payDay = events.dividendPayDate.map(day)
-            if let exDay, exDay > today, exDay <= nextEnd, !coming.contains(where: { $0.date == exDay }) {
+            if let exDay, exDay > today, exDay <= nextEnd,
+               !coming.contains(where: { $0.date == exDay && $0.dateSource == .yahooUpcoming }) {
                 let pays = payDay.flatMap { $0 >= exDay ? $0 : nil }
                 let nearest = coming.indices
                     .filter { coming[$0].dateSource == .estimated }

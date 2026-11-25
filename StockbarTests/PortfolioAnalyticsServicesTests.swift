@@ -1441,6 +1441,28 @@ final class StockbarLocalIncomeTests: XCTestCase {
 
     // MARK: The figures
 
+    func testAPaymentYahooListsAsComingIsNotCountedTwice() throws {
+        // Yahoo already lists the payment that last year's 25 November one stands for.
+        let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
+                              [try events("ALPHA", dividends: quarterly + [("2026-11-21", 0.24)])])
+
+        XCTAssertEqual(result.nextYear.map(\.date), [try day("2026-11-21"), try day("2027-02-05"),
+                                                     try day("2027-05-07"), try day("2027-08-06")])
+        XCTAssertEqual(result.nextYear.first?.dateSource, .yahooUpcoming)
+        XCTAssertEqual(try XCTUnwrap(result.nextYearTotal), 10.1, accuracy: 1e-9, "four payments, not five")
+    }
+
+    func testYahoosExDateOnAnEstimatedDayGivesItYahoosPayDate() throws {
+        let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
+                              [try events("ALPHA", dividends: quarterly, ex: "2026-11-25", pay: "2026-12-10")])
+
+        let first = try XCTUnwrap(result.nextYear.first)
+        XCTAssertEqual(first.date, try day("2026-11-25"))
+        XCTAssertEqual(first.dateSource, .yahooUpcoming)
+        XCTAssertEqual(first.payDay, try day("2026-12-10"))
+        XCTAssertEqual(result.nextYear.count, 4, "the estimate is matched, not joined by a second row")
+    }
+
     func testEachPaymentTimesTodaysUnitsAndTheSameAYearOn() throws {
         let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
                               [try events("ALPHA", dividends: quarterly)])

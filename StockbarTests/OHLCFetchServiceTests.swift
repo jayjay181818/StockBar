@@ -557,8 +557,9 @@ final class InstrumentEventsServiceTests: XCTestCase {
         XCTAssertNotNil(today)
         XCTAssertEqual(results.last?.outcome, .failed(.noData), "a symbol the fixture does not name has no data")
         // The answer is saved like Yahoo's: a second ask inside the day is answered from it.
-        _ = await service.events(for: ["FAKEUS"])
-        XCTAssertEqual(results.first?.isStale, false)
+        let again = await service.events(for: ["FAKEUS"])
+        XCTAssertEqual(again.first?.isStale, false)
+        XCTAssertEqual(again.first?.outcome, results.first?.outcome)
     }
 
     func testDecodesEveryFieldAndKeepsNullAsNil() async {
