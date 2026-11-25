@@ -349,13 +349,31 @@ private struct StockbarSurfaceModifier<S: InsettableShape>: ViewModifier {
                 }
             }
             .overlay {
-                // The faint top highlight: a brighter hairline that fades out by mid-card.
                 if let highlight = style.highlight {
-                    shape.strokeBorder(
-                        LinearGradient(colors: [highlight, .clear], startPoint: .top, endPoint: .init(x: 0.5, y: 0.35)),
-                        lineWidth: 1
-                    )
+                    StockbarSurfaceHighlight(shape: shape, color: highlight)
                 }
+            }
+    }
+}
+
+/// The faint top highlight on a surface: a brighter hairline that fades out by mid-card.
+///
+/// Drawn as a solid hairline under a gradient mask rather than as a hairline
+/// stroked with a gradient. The two look the same, but the gradient stroke
+/// cost about 18 MB more idle CoreAnimation memory with the dark Overview open
+/// (22 MB against 3.7 MB in `footprint`).
+struct StockbarSurfaceHighlight<S: InsettableShape>: View {
+    let shape: S
+    let color: Color
+
+    /// Where the fade starts (the full colour) and ends (nothing), in the surface's bounds.
+    static var fadeStart: UnitPoint { .top }
+    static var fadeEnd: UnitPoint { UnitPoint(x: 0.5, y: 0.35) }
+
+    var body: some View {
+        shape.strokeBorder(color, lineWidth: 1)
+            .mask {
+                LinearGradient(colors: [.white, .clear], startPoint: Self.fadeStart, endPoint: Self.fadeEnd)
             }
     }
 }

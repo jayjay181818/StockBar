@@ -422,7 +422,13 @@ Pull request 155 was merged as `f925fae` (build 382.3.23). Pull request
 156 then valued a Trading 212 account that holds only cash, which no
 ordinary sync had done, and, after two more independent reviews, made
 Trading 212's figures belong only to the account in use and never to a
-Folync portfolio.
+Folync portfolio. It was merged as `1dcde6f` (build 382.3.24).
+
+Pull request 157 then removed the idle memory the redesign added: the
+faint top highlight on dark cards, stroked with a gradient, cost about 18
+MB of drawing memory, and drawing it under a gradient mask instead keeps
+the look and brings that memory back to 3.6 MB. The timed comparison for
+pull requests 152 to 157 is owed.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6069,8 +6075,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   Allocation now recalculates when the valuation in force changes: its
   account, currency, account value and cash. It no longer recalculates on
   every sync, and it does after a valuation that went stale comes back.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `1dcde6f`. The merge published
+  experimental build 382.3.24 as the prerelease `experimental-382.3.24`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches have no Trading 212 account.
 - Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is on
@@ -6114,6 +6122,77 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     not tested.
   - Nothing here was looked at on screen.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 157: Glass cards: draw the top highlight without an extra copy of the window
+
+- What: the redesign raised the app's idle memory by about 21 MB. Pull
+  requests 137 to 139 were measured one launch at a time on 2026-11-25
+  (record 155), which placed almost all of it in the system's drawing
+  memory for the app, the `CoreAnimation` region of the footprint. It is
+  3.2 MB at pull request 136, 19 MB after 137 and 22 MB from 139. A trace
+  of the surface effects, one variant per launch, found the single cause:
+  the faint highlight along the top of each card in dark mode, drawn as a
+  hairline stroked with a gradient. Pull request 139 added the same
+  highlight to the Overview's new cards, hence its 3 MB.
+
+  | Variant, dark Overview | `CoreAnimation` |
+  | --- | --- |
+  | `experimental` at `1dcde6f` | 22 MB |
+  | the same, light (light cards have no highlight) | 3.6 MB |
+  | no shadow modifier, or a shadow only when it has a colour | 22 MB |
+  | no card fill | 22 MB |
+  | no highlight | 3.6 MB |
+  | the highlight drawn on a `Canvas` | 3.7 MB |
+  | the highlight in a `drawingGroup()` | 3.7 MB |
+  | **the highlight as a plain hairline under a gradient mask** | **3.6 MB** |
+
+  Shadows and fills cost nothing. Why a gradient-stroked hairline costs a
+  window's worth of memory is not known; three other ways of drawing the
+  same highlight avoid it. This pull request draws it as a plain hairline
+  under a gradient mask, in a small view `StockbarSurfaceHighlight`.
+
+  The owner chose this option on 2026-11-25, from screenshots that put
+  the current look, this option and no highlight side by side. The look
+  is the same. Compared by pixel at the default size:
+  - Holdings and Allocation in dark mode differ by at most 6/255;
+  - in light mode they are identical;
+  - the Overview's cards differ only at their rounded top corners, by at
+    most 5/255, which an eight-times zoom does not show.
+
+  Removing the highlight altogether saves the same memory but visibly
+  dims the cards' top edges.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: the one-launch readings above. The timed comparison is owed,
+  on the rule of 2026-11-20, and is to cover pull requests 152 to 157
+  together. The footprint as a whole moved by up to 9 MB between launches
+  with the same `CoreAnimation` figure, so the saving is quoted for that
+  region only until the timed comparison is made.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the worker's last commit,
+  which is on the current head of `experimental`: 1054 XCTest tests with 0
+  failures. Two are new, in `SettingsTransferTests.swift`:
+  - one renders the new highlight beside the old gradient stroke and
+    checks that no pixel differs by more than 2/255;
+  - one checks that the highlight fades out by a third of the way down.
+
+  One temporary breakage failed both. `checks`, `docs-check`,
+  `build-release` and `python-tests` pass, and so do 95 script tests.
+- Review: traced and written by an Opus worker from the session lead's
+  instructions. The session lead read the change and looked at the
+  screenshots. No independent review, for a change of one view that is
+  pinned by a pixel test.
+- Known issues:
+  - Memory was measured with the benchmark's page open, the dark
+    Overview. Other pages were not measured.
+  - About 0.4 MB of today's 3.6 MB against 3.2 MB at pull request 136 is
+    not explained.
+  - Whether the pixel test holds on another Mac's renderer, and whether
+    the saving holds on other macOS versions, is not known.
+  - Other gradients drawn elsewhere, such as the chart's area fill, were
+    not checked for a similar cost.
+  - The two new tests sit in `SettingsTransferTests.swift`, an odd home
+    for them.
+- Verdict: retained, with its timed benchmark owed.
 
 ## Rust evaluation, 2026-11-12
 
@@ -6397,6 +6476,7 @@ launch.
 | Pull request 154, Allocation's Cash row | Claude Opus 5.5 (session lead) for the specification, the review and the record; one Opus 5.5 worker in its own worktree | Worth it: thirteen tests, six breakages and before-and-after captures of every view. The lead checked the cash source against the net value's and the captures. The worker's accessibility reads twice returned its copy's menu bar, against the new rule, and its copy became the active app once. |
 | Pull request 155, the Cash row's fixes | Claude Opus 5.5 (session lead); GPT-6.2 Astra (extra high) and Gemini 4 Neon as independent reviewers, at the owner's suggestion; two Opus 5.5 workers in turn | Worth it. The two reviews of 153 and 154, made without each other, agreed on every main fault and found what the lead's reading had missed: another account's cash, a built-in exchange rate, and a Python bug that divided a pound price by 100. Astra's second review found five more in the first fix. Reviews cost little next to the workers, and are worth asking for on any change that works out money figures. |
 | Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
+| Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

@@ -1050,6 +1050,50 @@ final class StockbarSurfaceTests: XCTestCase {
         XCTAssertNotEqual(light, dark)
     }
 
+    func testTheMaskedHighlightDrawsWhatTheGradientStrokeDrew() throws {
+        // The highlight is a solid hairline under a gradient mask because a
+        // gradient stroke cost about 18 MB of drawing memory on the dark
+        // Overview. It must still draw what the gradient stroke drew.
+        let highlight = try XCTUnwrap(StockbarSurfaceStyle.resolve(.card, scheme: .dark).highlight)
+        let shape = RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
+        let masked = try pixels(StockbarSurfaceHighlight(shape: shape, color: highlight))
+        let stroked = try pixels(shape.strokeBorder(
+            LinearGradient(colors: [highlight, .clear], startPoint: StockbarSurfaceHighlight<RoundedRectangle>.fadeStart,
+                           endPoint: StockbarSurfaceHighlight<RoundedRectangle>.fadeEnd),
+            lineWidth: 1
+        ))
+        XCTAssertEqual(masked.count, stroked.count)
+        let largest = zip(masked, stroked).map { abs(Int($0) - Int($1)) }.max() ?? 0
+        XCTAssertLessThanOrEqual(largest, 2, "no channel of any pixel differs by more than 2 of 255")
+        XCTAssertGreaterThan(masked.max() ?? 0, 20, "the hairline is drawn at all")
+    }
+
+    func testTheHighlightFadesOutByMidCard() throws {
+        let shape = Rectangle()
+        let image = try pixels(StockbarSurfaceHighlight(shape: shape, color: .white), width: 100, height: 100, scale: 1)
+        // Alpha of the left edge's hairline (column 0), top to bottom.
+        let alpha = { (row: Int) in image[(row * 100) * 4 + 3] }
+        XCTAssertGreaterThan(alpha(1), 200, "full strength at the top")
+        XCTAssertLessThan(alpha(18), alpha(5), "fading on the way down")
+        XCTAssertEqual(alpha(40), 0, "gone by a third of the way down")
+        XCTAssertEqual(alpha(90), 0)
+    }
+
+    /// RGBA bytes of `view` drawn on its own, at `scale`.
+    private func pixels(_ view: some View, width: CGFloat = 160, height: CGFloat = 90, scale: CGFloat = 2) throws -> [UInt8] {
+        let renderer = ImageRenderer(content: view.frame(width: width, height: height))
+        renderer.scale = scale
+        let image = try XCTUnwrap(renderer.cgImage)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+            space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let data = try XCTUnwrap(context.data)
+        return Array(UnsafeRawBufferPointer(start: data, count: image.width * image.height * 4))
+    }
+
     func testACardHonoursTheSettingsItIsDrawnUnder() {
         XCTAssertEqual(drawnSurface(scheme: .dark, accessibility: .init()),
                        StockbarSurfaceStyle.resolve(.card, scheme: .dark))
