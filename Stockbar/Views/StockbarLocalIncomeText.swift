@@ -20,7 +20,7 @@ enum LocalIncomeText {
     static let yahooDatePill = "Yahoo's date, amount estimated"
 
     /// The chart's two parts.
-    static let chartLastYear = "Last 12 months, at today's units"
+    static let chartLastYear = "Last 12 months at today's units, estimate"
     static let chartNextYear = "Next 12 months, estimate"
 
     /// "3 of 5 holdings paid dividends in the last year, by Yahoo's record".
@@ -136,17 +136,23 @@ enum LocalIncomeText {
         return next.kind == .exDividend ? "Ex-dividend \(day)" : "Pays \(day)"
     }
 
+    /// Under a holding left out of the totals: why.
+    static func leftOutCaption(_ row: LocalIncomeHoldingRow) -> String? {
+        guard row.isLeftOut else { return nil }
+        return row.ownCurrency.isEmpty ? "Not in the totals: Yahoo names no currency" : "Not in the totals: no rate loaded"
+    }
+
     static func pill(_ payment: LocalIncomePayment) -> String {
         payment.dateSource == .yahooUpcoming ? yahooDatePill : estimatePill
     }
 
     // MARK: What VoiceOver reads
 
-    /// "November 2026: £12.40 in the last 12 months at today's units and £8.10 estimated for the next 12 months."
+    /// "November 2026: £12.40 estimated in the last 12 months at today's units and £8.10 estimated for the next 12 months."
     static func accessibilitySentence(_ month: LocalIncomeChartMonth, currency: String, locale: Locale = .current) -> String {
         var clauses: [String] = []
         if month.lastYear > 0 {
-            clauses.append("\(IncomeText.amount(month.lastYear, currency: currency)) in the last 12 months at today's units")
+            clauses.append("\(IncomeText.amount(month.lastYear, currency: currency)) estimated in the last 12 months at today's units")
         }
         if month.nextYear > 0 {
             clauses.append("\(IncomeText.amount(month.nextYear, currency: currency)) estimated for the next 12 months")
@@ -176,15 +182,15 @@ enum LocalIncomeText {
         return parts.joined(separator: ", ") + "."
     }
 
-    /// "FAKEUS: £20.80 in the last 12 months and £20.80 estimated for the next 12 months; next date Ex-dividend Tue 1 Dec."
+    /// "FAKEUS: £20.80 estimated in the last 12 months at today's units and £20.80 for the next 12 months; next date Ex-dividend Tue 1 Dec."
     static func accessibilitySentence(_ row: LocalIncomeHoldingRow, currency: String, today: FolyncLedgerDay,
                                       locale: Locale = .current) -> String {
         switch row.state {
         case .unknown:
             return "\(row.symbol): not known, Yahoo had no answer."
         case .none, .paying:
-            var sentence = "\(row.symbol): \(holdingFigure(row, nextYear: false, currency: currency)) in the last 12 months and "
-                + "\(holdingFigure(row, nextYear: true, currency: currency)) estimated for the next 12 months"
+            var sentence = "\(row.symbol): \(holdingFigure(row, nextYear: false, currency: currency)) estimated in the last 12 months "
+                + "at today's units and \(holdingFigure(row, nextYear: true, currency: currency)) for the next 12 months"
             if row.isLeftOut { sentence += ", not in the totals" }
             if row.nextDate != nil { sentence += "; next date \(nextDate(row, today: today, locale: locale))" }
             return sentence + "."

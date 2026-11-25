@@ -330,8 +330,8 @@ private struct StockbarLocalIncomeHoldingRowView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.symbol).fontWeight(.semibold)
-                if row.isLeftOut {
-                    Text("Not in the totals: no rate loaded").font(.caption).foregroundStyle(.secondary)
+                if let caption = LocalIncomeText.leftOutCaption(row) {
+                    Text(caption).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

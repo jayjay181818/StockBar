@@ -1534,6 +1534,9 @@ final class StockbarLocalIncomeTests: XCTestCase {
         XCTAssertEqual(LocalIncomeText.holdingFigure(euro, nextYear: true, currency: "GBP"),
                        HoldingsCurrencyFormatter.amount(10, currency: "EUR"))
         XCTAssertTrue(try XCTUnwrap(rows["NOCUR"]).isLeftOut)
+        XCTAssertEqual(LocalIncomeText.leftOutCaption(try XCTUnwrap(rows["NOCUR"])), "Not in the totals: Yahoo names no currency")
+        XCTAssertEqual(LocalIncomeText.leftOutCaption(euro), "Not in the totals: no rate loaded")
+        XCTAssertNil(LocalIncomeText.leftOutCaption(try XCTUnwrap(rows["GAMMA"])))
         XCTAssertNil(result.lastYear.first { $0.holding == "NOCUR" }?.amount, "no currency is ever guessed")
         XCTAssertEqual(result.leftOut, [LocalIncomeLeftOut(symbol: "EURO", currency: "EUR"),
                                         LocalIncomeLeftOut(symbol: "NOCUR", currency: "")])
@@ -1585,6 +1588,8 @@ final class StockbarLocalIncomeTests: XCTestCase {
 
     func testEveryLabelSaysEstimateAndNothingSaysReceived() throws {
         for label in [LocalIncomeText.headlineTitle, LocalIncomeText.lastYearTitle, LocalIncomeText.nextYearTitle,
+                      LocalIncomeText.chartLastYear, LocalIncomeText.byHoldingLastYearColumn,
+                      LocalIncomeText.byHoldingNextYearColumn,
                       LocalIncomeText.estimatePill, LocalIncomeText.yahooDatePill, LocalIncomeText.chartNextYear,
                       LocalIncomeText.estimateNotice] {
             XCTAssertTrue(label.lowercased().contains("estimate"), label)
@@ -1615,9 +1620,12 @@ final class StockbarLocalIncomeTests: XCTestCase {
         let month = try XCTUnwrap(result.chart.months.first { $0.month == IncomeMonth(year: 2026, month: 11) })
         XCTAssertEqual(LocalIncomeText.accessibilitySentence(month, currency: "GBP", locale: F.britishEnglish),
                        "November 2026: £2.40 estimated for the next 12 months.")
+        let june = try XCTUnwrap(result.chart.months.first { $0.month == IncomeMonth(year: 2026, month: 5) })
+        XCTAssertEqual(LocalIncomeText.accessibilitySentence(june, currency: "GBP", locale: F.britishEnglish),
+                       "May 2026: £2.60 estimated in the last 12 months at today's units.")
         let row = try XCTUnwrap(result.holdings.first)
         XCTAssertEqual(LocalIncomeText.accessibilitySentence(row, currency: "GBP", today: F.today, locale: F.britishEnglish),
-                       "ALPHA: £10.10 in the last 12 months and £10.10 estimated for the next 12 months; "
+                       "ALPHA: £10.10 estimated in the last 12 months at today's units and £10.10 for the next 12 months; "
                        + "next date Ex-dividend Wed 10 Feb.")
         for text in [LocalIncomeText.lastYearCaption, LocalIncomeText.nextYearCaption, LocalIncomeText.chartCaption(result.chart)]
             + lines.map(\.title) {
