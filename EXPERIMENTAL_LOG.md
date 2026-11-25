@@ -382,9 +382,26 @@ CPU from launch to the idle window by 0.09 to 0.11 s. The memory the app
 holds allocated did not hold its rise in the repeat, so the extra memory
 is most likely what the system holds for the app, such as what it draws
 the window with, rather than the app's own objects. Pull request 140, the
-Glass shell, is the likeliest cause, unproven, and is to be measured on
-its own next. Both tables are in
-[pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date).
+Glass shell, was named the likeliest cause; measured on its own that
+night, it is not: the rise is already there before it. Both tables are in
+[pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date),
+which was merged on 2026-11-21 as `381fad1` (build 382.3.20).
+
+Pull request 140's own comparison, `c9453fd` against `92145d7`, was run at
+01:01 UTC on 2026-11-21. Idle memory did not move (114.9 MB before, 116.4
+MB after), and peak memory at launch rose by 19.5 MB. In every launch the
+system's drawing memory for the app (the `CoreAnimation` region of the
+footprint) is 3.2 MB at `5fa923b` and 22 MB from pull request 139 onwards,
+so the idle rise is in pull requests 135 to 139; 135 and 136 change no
+view, which leaves 137 (Glass surfaces), 138 (the popover) and 139 (the
+Overview). They are measured one at a time next. The table is in
+[pull request 152's entry](#152-read-yahoos-chart-details-with-the-yfinance-the-app-ships).
+
+On 2026-11-25 the owner allowed one supervised live run of the Yahoo
+events lookup (pull request 136) before Calendar, a local Income estimate
+and a Funds group are built on it. It found that the lookup had never
+answered: with the yfinance the app ships, every symbol was thrown away as
+having no data. Pull request 152 fixes that and records what Yahoo gives.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -5495,8 +5512,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   request 141; and rows in "Who did what" for pull requests 144 to 150,
   the disk that filled during pull request 150 included, and for this
   one. Only this file changes.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-21, squash commit `381fad1`. The merge published
+  experimental build 382.3.20 as the prerelease `experimental-382.3.20`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
 - Benchmark: no before/after run for this pull request. No file that goes
   into the app changes (nothing under `Stockbar/`, `StockbarTests/` or
   `Stockbar.xcodeproj`), so before, `2d5d992`, and after build the same
@@ -5532,8 +5551,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   measured segments, six launches and two helper measurements a side,
   had another project's `xcodebuild` beside it. The highest load average
   at the ten-second samples was 8.9, once, during the after side's second
-  launch; everywhere else it stayed at or below 4.4. Three rows are
-  higher, and two are marked possibly higher.
+  launch; everywhere else it stayed at or below 4.4. Four rows are
+  higher, and two are marked possibly higher. (This sentence said "three"
+  until pull request 152 corrected it.)
 
   | Metric | Before: median (range) | After: median (range) | Change | Verdict |
   | --- | --- | --- | --- | --- |
@@ -5595,8 +5615,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   physical footprint rose by 21 to 22 MB, so the extra memory is most likely not the app's
   own objects but memory the system holds for it, such as what it draws
   the window with. Pull request 140, which gave the main window the Glass
-  shell with a floating sidebar, is the likeliest cause; that is unproven
-  until it is measured. Under the rule of 2026-11-20 a row that moves and
+  shell with a floating sidebar, was named here as the likeliest cause.
+  Measured on its own that night it is not; see pull request 152's entry.
+  Under the rule of 2026-11-20 a row that moves and
   holds is followed by measuring the phase's pull requests one by one, so
   pull request 140 is measured on its own next, against pull request 139
   (`c9453fd` against `92145d7`). Whether about 21 MB more is acceptable is
@@ -5617,6 +5638,123 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   peak memory and 0.09 to 0.11 s in CPU from launch to the idle window
   across pull requests 135 to 150 is not yet put down to any one pull
   request. Pull request 140 is to be measured on its own next.
+- Verdict: retained.
+
+### 152: Read Yahoo's chart details with the yfinance the app ships
+
+- What: the Yahoo events lookup of pull request 136,
+  `Stockbar/Resources/get_instrument_events.py`, read the chart details
+  that yfinance gives (`history_metadata`) only when they were a `dict`.
+  yfinance 1.8.0, the version in `requirements.lock`, gives them as its own
+  read-only mapping (`HistoryMetadata`), which is not a `dict`. So the
+  instrument type was never found and every symbol was thrown away as
+  having no data. The lookup had never answered since it was merged. Nothing
+  shows its results yet, so nothing on screen was wrong. The offline tests
+  passed because their stand-in for yfinance gave plain dicts.
+
+  Both helpers that read those details now accept any mapping. The price
+  helper, `get_stock_data.py`, had the same check in `trading_currency()`,
+  in the fallback used when Yahoo's quote gives no currency. There it
+  returned no currency where the chart had one, and the London suffix rule
+  or nothing was used instead.
+
+  Found in the one supervised live run the owner allowed on 2026-11-25 ("run
+  the yahoo check"), before Calendar, a local Income estimate and a Funds
+  group are built on the lookup. It used twelve public symbols from no
+  portfolio, the helper from `381fad1`, and a throwaway environment made
+  from `requirements.lock` (yfinance 1.8.0), at 08:58 UTC. Every symbol
+  came back "no data", Apple's included. At 08:59 UTC, with the one-line
+  fix, the same symbols gave:
+
+  | Symbol | Type | Ex-dividend | Pay date | Earnings | Payments, last 12 months |
+  | --- | --- | --- | --- | --- | --- |
+  | AAPL | EQUITY | 2026-11-12 | 2026-11-16 | 2027-01-28 | 4, USD |
+  | MSFT | EQUITY | 2026-11-19 | 2026-12-10 | 2027-01-27 | 4, USD |
+  | KO | EQUITY | 2026-12-01 | 2026-12-15 | 2027-02-09 | 4, USD |
+  | SPY | ETF | none | none | none | 4, USD |
+  | VOD.L | EQUITY | 2026-11-19 | none | 2026-11-10 | 2, GBP |
+  | ULVR.L | EQUITY | 2026-11-12 | none | 2027-02-11 | 4, GBP |
+  | HSBA.L | EQUITY | 2026-11-05 | none | 2027-02-23 | 4, GBP |
+  | BP.L | EQUITY | 2026-11-12 | none | 2027-02-09 | 4, GBP |
+  | VUSA.L | ETF | none | none | none | 4, GBP |
+  | VWRL.L | ETF | none | none | none | 4, GBP |
+  | CTY.L | EQUITY | none | none | none | 4, GBP |
+  | SMT.L | EQUITY | none | none | none | 2, GBP |
+
+  So US shares have every date, London shares have the ex-dividend and
+  earnings dates but never a pay date, and ETFs and investment trusts have
+  no dates at all, only their last year's payments. Investment trusts come
+  back as EQUITY. The ex-dividend date is the latest one Yahoo knows and is
+  often past. No rate limit was met. The finding is kept in
+  `build/design/findings/yahoo-events-check-2026-11-25.md`.
+
+  This entry also records pull request 140's own comparison, owed by
+  [pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date),
+  and corrects two of that entry's sentences.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches make no Yahoo request. The price helper, whose start it
+  measures, gains one standard-library import.
+
+  **Pull request 140's comparison**, run at 01:01 UTC on 2026-11-21 by the
+  same script as the redesign's, after twenty quiet minutes on mains
+  power: before `c9453fd` (pull request 139), after `92145d7` (pull
+  request 140), six launches a side in turns, on macOS 27.2.1 and an Apple
+  M3 Pro with 18 GB, the lid open and the screen unlocked. No reading inside
+  the turns showed input. The four busiest processes together averaged
+  105% of a core over the before side's 16 readings and 97% over the after
+  side's, a ratio of 1.08. No measured segment had another project's
+  build beside it. The run stands; it was not repeated.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 114.9 (111.4 to 120.6) MB | 116.4 (107.5 to 117.7) MB | +1.5 MB, +1.3% | no measurable change (p = 0.937) |
+  | Idle memory the app holds allocated | 53.7 (52.8 to 54.3) MB | 50.3 (50.0 to 51.8) MB | -3.4 MB, -6.3% | lower (p = 0.002) |
+  | Peak memory, launch and history load | 253.8 (252.3 to 255.5) MB | 273.3 (264.3 to 277.6) MB | +19.5 MB, +7.7% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.3) MB | 0.3 (0.0 to 0.6) MB | +0.3 MB | possibly higher (p = 0.045) |
+  | Idle CPU | 0.084 (0.070 to 0.106) s/min | 0.103 (0.092 to 0.105) s/min | +0.020 s/min, +24.0% | no measurable change (p = 0.058) |
+  | Idle CPU wake-ups | 26 (23 to 28) /min | 26 (25 to 28) /min | +0 /min, +2.0% | no measurable change (p = 0.675) |
+  | Idle CPU power | 3.71 (3.48 to 3.97) mW | 3.85 (3.58 to 4.04) mW | +0.13 mW, +3.5% | no measurable change (p = 0.180) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.47 (0.45 to 0.52) s | 0.44 (0.42 to 0.51) s | -0.03 s, -7.4% | possibly lower (p = 0.043) |
+  | Launch to history loaded | 0.58 (0.55 to 0.64) s | 0.58 (0.55 to 0.61) s | -0.01 s, -0.9% | no measurable change (p = 0.874) |
+  | CPU from launch to the idle window | 1.72 (1.68 to 1.74) s | 1.74 (1.68 to 1.76) s | +0.02 s, +1.2% | no measurable change (p = 0.297) |
+  | CPU energy from launch to the idle window | 5.45 (5.34 to 5.55) J | 5.24 (5.15 to 5.40) J | -0.21 J, -3.8% | lower (p = 0.009) |
+  | Python helper start to ready, no network | 0.26 (0.25 to 0.99) s | 0.42 (0.25 to 0.71) s | +0.16 s, +61.5% | no measurable change (p = 0.576) |
+  | Python helper start, CPU | 0.26 (0.25 to 0.37) s | 0.32 (0.25 to 0.47) s | +0.06 s, +23.1% | no measurable change (p = 0.450) |
+  | Python helper memory once started | 71.2 (71.1 to 71.3) MB | 71.1 (70.6 to 71.3) MB | -0.1 MB, -0.1% | no measurable change (p = 0.426) |
+
+  Pull request 140 accounts for most of the rise in peak memory at launch,
+  but not for the rise in idle memory or in CPU from launch to idle:
+  before it, `c9453fd` already idles at about 115 MB against about 97 MB at
+  `5fa923b`. The rows marked lower and possibly were not named and are not
+  repeated, so they do not count. The saved footprint of every launch
+  shows where the idle rise is: the `CoreAnimation` region, the system's
+  drawing memory for the app, is 3.2 MB in every launch of `5fa923b` and
+  22 MB in every launch of `c9453fd`, `92145d7` and `2d5d992`. Pull
+  requests 135 and 136 change no view, so the rise is in 137, 138 or 139.
+  They are to be measured one at a time next. The report is
+  `build/bench/results/compare-pr140-20261121-005920/report.md`, with its
+  readings under `conditions`, and the log is
+  `build/bench/chain/compare-pr140.log`.
+- Testing, on macOS 27.2.1: `python-tests` passes, 104 tests. Two of them
+  are new or extended. In `PythonTests/test_get_instrument_events.py`, every
+  stand-in ticker now gives its chart details as a read-only mapping that
+  is not a dict, the way yfinance 1.8 does, and a new test checks that a
+  symbol is answered from one. In `PythonTests/test_get_stock_data.py`,
+  `trading_currency()` is given one too. With either helper's old dict-only
+  check put back, the tests fail: 20 for the events helper (10 failures, 10
+  errors) and 1 for the price helper. `checks`, `docs-check` and
+  `build-release` pass, 999 XCTest tests pass with 0 failures, and the 95
+  script tests pass. CI does not run for this branch, so these were run
+  locally.
+- Review: by its author. The live result is the evidence; no independent
+  review, for a one-line change to each helper.
+- Known issues:
+  - The events lookup's results are not shown on any screen yet, so the
+    fix is checked by the live run and the tests, not on screen.
+  - The rise in idle memory is still not put down to one pull request.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -5897,6 +6035,7 @@ launch.
 | The second batch, pull requests 144 to 147: Allocation, the Settings switches, Holdings and Risk | Fable 5.2 (session lead) for the specifications, the review, the merges and the records; four Opus 5.5 workers in parallel, each in its own worktree | Worth it for the building. During 145 the lead traced why the acceptance copy could not change a setting seeded before it started: its defaults suite is named by a path, and on macOS 27.2.1 a process never reads back its own change to a key already in such a file. That became pull request 148. In 146 the lead restored the editing table's column widths, which the worker had narrowed without seeing them, and in 147 corrected "trading days" to "days" for the worst fall's length, which is counted in calendar days. Neither the filled Risk page nor Allocation's grid of correlations was seen in the running acceptance copy, only in drawings made off screen, and the owner was asked to look at both in the real build |
 | Pull requests 148 to 150: the acceptance copy's seeded settings, the Charts and Data Health tidy, and the Holdings editing table | Fable 5.2 (session lead), with three Opus 5.5 workers, each in its own worktree | Worth it, with one cut-off. During pull request 150 the Mac's disk filled to 119 MB free with this work's own leftovers: the build folder every acceptance launch left in the temporary directory, and the build caches of every worktree. It stopped the D1b worker part-way through showing its tests fail. The lead removed about 45 GB of those leftovers, keeping the logs, captures and benchmark results, removed the breakage left in the worker's tree, and finished the breakages and checks. Two workers' accessibility reads returned the system's Apple menu, Recent Items included; neither saved or repeated it, and the owner was told. The D4 worker scrolled once without a capture id of the same window. Later specifications are to say: read a window's tree with a query and never the menu bar, give no pointer or scroll input without a capture of the same window, and clear build folders after each batch |
 | The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
+| The Yahoo check and pull request 152 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

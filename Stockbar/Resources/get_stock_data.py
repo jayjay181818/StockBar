@@ -1,3 +1,4 @@
+import collections.abc
 import time
 from datetime import datetime, timedelta, timezone
 import sys
@@ -566,7 +567,8 @@ def trading_currency(ticker, info):
         return currency
     try:
         metadata = ticker.history_metadata
-        if isinstance(metadata, dict):
+        # A dict in older yfinance, a read-only HistoryMetadata mapping in 1.8.
+        if isinstance(metadata, collections.abc.Mapping):
             return metadata.get('currency')
     except Exception:
         pass

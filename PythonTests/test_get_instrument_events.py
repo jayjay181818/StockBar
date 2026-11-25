@@ -10,6 +10,7 @@ import sys
 import time
 import unittest
 from unittest import mock
+from collections.abc import Mapping
 
 
 SCRIPT_PATH = os.path.abspath(
@@ -79,6 +80,23 @@ class YFRateLimitError(Exception):
         super().__init__("Too Many Requests. Rate limited. Try after a while.")
 
 
+class _Metadata(Mapping):
+    """The chart metadata the way yfinance 1.8 gives it: a read-only mapping
+    (its HistoryMetadata), not a dict. Every fake ticker answers with one."""
+
+    def __init__(self, values):
+        self._values = dict(values)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+
 class _FakeTicker:
     def __init__(self, symbol, spec, log):
         self.symbol = symbol
@@ -95,7 +113,8 @@ class _FakeTicker:
 
     @property
     def history_metadata(self):
-        return self._spec.get("metadata", {})
+        metadata = self._spec.get("metadata", {})
+        return _Metadata(metadata) if isinstance(metadata, dict) else metadata
 
     @property
     def calendar(self):
@@ -189,6 +208,19 @@ class ShapeTests(InstrumentEventsTestCase):
         self.assertEqual(events["fetchedAt"], NOW.timestamp())
         # A bounded history request, never the whole of it.
         self.assertIn(("ALPHA", "dividends", "2y"), fake.log)
+
+    def test_metadata_is_read_from_yfinances_own_mapping_not_only_a_dict(self):
+        # yfinance 1.8 returns HistoryMetadata, a Mapping that is not a dict.
+        # Reading only dicts threw away every symbol as "no data" (found by the
+        # live check of 2026-11-25).
+        metadata = _Metadata({"instrumentType": "ETF", "currency": "USD"})
+        self.assertNotIsInstance(metadata, dict)
+        spec = dict(US_SHARE, metadata=metadata)
+        (envelope,), _ = self.run_symbols({"ALPHA": spec}, ["ALPHA"])
+
+        self.assertTrue(envelope["success"], envelope)
+        self.assertEqual(envelope["events"]["instrumentType"], "ETF")
+        self.assertEqual(envelope["events"]["dividendCurrency"], "USD")
 
     def test_london_share_keeps_past_date_leaves_pay_date_null_and_converts_pence(self):
         (envelope,), _ = self.run_symbols({"BETA.L": LONDON_SHARE}, ["BETA.L"])

@@ -27,6 +27,7 @@ Diagnostics go to stderr only.
 """
 
 import argparse
+import collections.abc
 import contextlib
 import datetime
 import json
@@ -250,7 +251,9 @@ def recent_dividends(symbol, dividends, reported_currency, today):
 
 
 def metadata_value(metadata, key):
-    if not isinstance(metadata, dict):
+    # yfinance 1.8 gives the chart metadata as its own read-only mapping
+    # (HistoryMetadata), not a dict; an older one gave a dict. Both are read.
+    if not isinstance(metadata, collections.abc.Mapping):
         return None
     value = metadata.get(key)
     if isinstance(value, str) and value.strip():
