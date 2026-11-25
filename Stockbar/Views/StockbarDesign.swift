@@ -359,9 +359,9 @@ private struct StockbarSurfaceModifier<S: InsettableShape>: ViewModifier {
 /// The faint top highlight on a surface: a brighter hairline that fades out by mid-card.
 ///
 /// Drawn as a solid hairline under a gradient mask rather than as a hairline
-/// stroked with a gradient. The two look the same, but a gradient-stroked shape
-/// made the system keep a full-size drawing buffer for every card: about
-/// 18 MB more idle memory with the dark Overview open.
+/// stroked with a gradient. The two look the same, but the gradient stroke
+/// cost about 18 MB more idle CoreAnimation memory with the dark Overview open
+/// (22 MB against 3.7 MB in `footprint`).
 struct StockbarSurfaceHighlight<S: InsettableShape>: View {
     let shape: S
     let color: Color

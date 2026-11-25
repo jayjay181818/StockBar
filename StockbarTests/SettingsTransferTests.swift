@@ -1052,8 +1052,8 @@ final class StockbarSurfaceTests: XCTestCase {
 
     func testTheMaskedHighlightDrawsWhatTheGradientStrokeDrew() throws {
         // The highlight is a solid hairline under a gradient mask because a
-        // gradient-stroked shape cost a full-size drawing buffer per card. It
-        // must still draw what the gradient stroke drew.
+        // gradient stroke cost about 18 MB of drawing memory on the dark
+        // Overview. It must still draw what the gradient stroke drew.
         let highlight = try XCTUnwrap(StockbarSurfaceStyle.resolve(.card, scheme: .dark).highlight)
         let shape = RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
         let masked = try pixels(StockbarSurfaceHighlight(shape: shape, color: highlight))
