@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from contextlib import ExitStack
 from unittest import mock
 
@@ -428,7 +429,22 @@ class ProviderHousekeepingTests(unittest.TestCase):
             def history_metadata(self):
                 raise RuntimeError("no chart")
 
+        class ReadOnlyMetadata(Mapping):
+            # yfinance 1.8's HistoryMetadata: a Mapping, not a dict.
+            def __getitem__(self, key):
+                return {"currency": "GBp"}[key]
+
+            def __iter__(self):
+                return iter(("currency",))
+
+            def __len__(self):
+                return 1
+
+        class MappingTicker:
+            history_metadata = ReadOnlyMetadata()
+
         currency = self.module.trading_currency
+        self.assertEqual(currency(MappingTicker(), {"financialCurrency": "USD"}), "GBp")
         self.assertEqual(currency(Ticker(), {"currency": "EUR", "financialCurrency": "USD"}), "EUR")
         self.assertEqual(currency(Ticker(), {"financialCurrency": "USD"}), "GBp")
         self.assertIsNone(currency(NoMetadata(), {"financialCurrency": "USD"}))
