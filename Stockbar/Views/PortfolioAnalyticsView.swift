@@ -826,6 +826,8 @@ struct AllocationValuation {
     var sourceTotal: Double?
     /// Why cash the source gives is left out, when it is.
     var cashOmission: AllocationCashOmission?
+    /// The currencies the valued holdings' values come in, before conversion.
+    var valueCurrencies: Set<String> = []
 
     /// How far the holdings plus cash may be from Holdings' total, as a fraction of it, for
     /// a Cash row: half the 0.1% the page shows shares to.
@@ -856,6 +858,7 @@ struct AllocationValuation {
             result.holdings.append(AllocationHolding(symbol: symbol, value: converted,
                                                      currency: pricedIn.trimmingCharacters(in: .whitespacesAndNewlines)))
             result.covered += 1
+            result.valueCurrencies.insert(value.currency.trimmingCharacters(in: .whitespacesAndNewlines))
             if let change = dayChange(of: trade, in: dataModel, isFolync: isFolync), let converted = convert(change.amount, change.currency) {
                 result.dayChanges[symbol, default: 0] += converted
                 result.dayCovered += 1
@@ -904,9 +907,22 @@ struct AllocationValuation {
         guard covered == eligible else { cashOmission = .partialCoverage; return }
         guard let converted else { cashOmission = .noExchangeRate; return }
         guard converted > 0 else { cash = .borrowing(converted); return }
-        guard let total = basis.total else { cashOmission = .totalDiffers; return }
+        holdCash(converted, from: sourceCash.currency, total: basis.total, convert: convert)
+    }
+
+    /// Cash above zero, with every holding valued: a Cash row when the holdings and cash
+    /// come to the source's total. That check is made only when every figure is already in
+    /// the total's currency; across currencies the figures differ from it by the exchange
+    /// rates used, not by anything missing, so the shares are then of holdings plus cash.
+    private mutating func holdCash(_ converted: Double, from cashCurrency: String,
+                                   total: HoldingsWeightBasis.Amount?, convert: (Double, String) -> Double?) {
+        guard let total else { cashOmission = .totalDiffers; return }
         guard let convertedTotal = convert(total.value, total.currency), convertedTotal > 0 else {
             cashOmission = .noExchangeRate
+            return
+        }
+        guard valueCurrencies.union([cashCurrency]) == [total.currency] else {
+            cash = .held(converted)
             return
         }
         let holdingsTotal = positions.values.reduce(0, +)
