@@ -1,9 +1,28 @@
 import SwiftUI
 
-/// The Income page: Folync's dividends for a Folync portfolio, in three views.
-/// Read-only; it asks Folync only through `StockbarIncomeModel`.
+/// The Income page. With Folync enabled it shows Folync's dividends
+/// (`StockbarFolyncIncomeView`), as before, including while the Folync
+/// portfolio is still loading. For a local or Trading 212 portfolio it shows
+/// an estimate from Yahoo's record (`StockbarLocalIncomeView`).
 @MainActor
 struct StockbarIncomeView: View {
+    let dataModel: DataModel
+    var router: any StockbarIncomeRouting = FolyncSupplementalCoordinator.shared
+    var eventsProvider: any InstrumentEventsProviding = InstrumentEventsService.shared
+
+    var body: some View {
+        if dataModel.isFolyncEnabled {
+            StockbarFolyncIncomeView(dataModel: dataModel, router: router)
+        } else {
+            StockbarLocalIncomeView(dataModel: dataModel, provider: eventsProvider)
+        }
+    }
+}
+
+/// The Income page for Folync: Folync's dividends for a Folync portfolio, in
+/// three views. Read-only; it asks Folync only through `StockbarIncomeModel`.
+@MainActor
+struct StockbarFolyncIncomeView: View {
     let dataModel: DataModel
     @State private var model: StockbarIncomeModel
 
@@ -594,7 +613,7 @@ private struct StockbarIncomeBarPart: View {
 }
 
 /// Diagonal lines across a rectangle.
-private struct StockbarHatch: Shape {
+struct StockbarHatch: Shape {
     var gap: CGFloat = 6
 
     func path(in rect: CGRect) -> Path {

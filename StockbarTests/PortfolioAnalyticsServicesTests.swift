@@ -1349,8 +1349,434 @@ final class StockbarIncomePageTests: XCTestCase {
         XCTAssertEqual(income.accessibilityValue, "New, Dimmed. Needs a Folync portfolio, \(place) of \(order.count)")
         // The main window marks and dims its entries from these two sets.
         XCTAssertTrue(StockbarMainSection.newSections.contains(.income))
-        XCTAssertTrue(StockbarMainSection.folyncOnlySections.contains(.income))
+        // Income is no longer Folync-only: a local or Trading 212 portfolio gets an estimate.
+        XCTAssertFalse(StockbarMainSection.folyncOnlySections.contains(.income))
         XCTAssertEqual(StockbarMainSection.needsFolyncReason, StockbarIncomeModel.needsFolyncReason)
+    }
+}
+
+// MARK: - Income estimate for a local or Trading 212 portfolio (invented figures)
+
+/// Stands in for `InstrumentEventsService`: records every call and answers
+/// with the results given, or "no data". With `holds` on, each call waits
+/// until `release()`.
+private actor EventsProviderStandIn: InstrumentEventsProviding {
+    struct Call: Equatable {
+        let symbols: [String]
+        let forceRefresh: Bool
+    }
+
+    private(set) var calls: [Call] = []
+    private var answers: [[InstrumentEventsResult]] = []
+    private var holds = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func answer(_ results: [InstrumentEventsResult]...) { answers += results }
+    func hold(_ on: Bool) { holds = on }
+    func release() {
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+    var waitingCount: Int { waiting.count }
+
+    func events(for symbols: [String], forceRefresh: Bool) async -> [InstrumentEventsResult] {
+        calls.append(Call(symbols: symbols, forceRefresh: forceRefresh))
+        let answer = answers.isEmpty
+            ? symbols.map { InstrumentEventsResult(symbol: $0, source: .yahoo, outcome: .failed(.noData)) }
+            : answers.removeFirst()
+        if holds { await withCheckedContinuation { waiting.append($0) } }
+        return answer
+    }
+}
+
+@MainActor
+final class StockbarLocalIncomeTests: XCTestCase {
+    private typealias F = IncomeFixture
+    private let fetchedAt = Date(timeIntervalSince1970: 1_795_100_000)
+
+    /// Invented Yahoo answers, read the way the service reads the helper's.
+    private func events(_ symbol: String, currency: String? = "GBP", dividends: [(String, Double)]? = [],
+                        ex: String? = nil, pay: String? = nil) throws -> InstrumentEvents {
+        let object: [String: Any] = [
+            "symbol": symbol, "instrumentType": "EQUITY",
+            "exDividendDate": ex ?? NSNull(), "dividendPayDate": pay ?? NSNull(),
+            "earningsDate": NSNull(), "earningsDateEnd": NSNull(),
+            "dividends": dividends.map { $0.map { ["date": $0.0, "amount": $0.1] as [String: Any] } } ?? NSNull(),
+            "dividendCurrency": currency ?? NSNull(), "fetchedAt": fetchedAt.timeIntervalSince1970
+        ]
+        return try InstrumentEventsService.decoder.decode(InstrumentEvents.self,
+                                                          from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func day(_ text: String) throws -> FolyncLedgerDay {
+        try XCTUnwrap(FolyncLedgerDay(string: text))
+    }
+
+    /// Pounds pass as they are, US dollars at an invented 0.8; nothing else has a rate.
+    private func convert(_ amount: Double, _ currency: String) -> Double? {
+        switch currency {
+        case "GBP": amount
+        case "USD": amount * 0.8
+        default: nil
+        }
+    }
+
+    private func estimate(_ holdings: [LocalIncomeHolding], _ answers: [InstrumentEvents]) -> LocalIncomeEstimate {
+        LocalIncomeFigures.estimate(holdings: holdings,
+                                    answers: Dictionary(uniqueKeysWithValues: answers.map { ($0.symbol, $0) }),
+                                    currency: "GBP", today: F.today, convert: convert)
+    }
+
+    private func assertAmounts(_ actual: [Double?], _ expected: [Double], file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        for (value, want) in zip(actual, expected) {
+            XCTAssertEqual(value ?? .nan, want, accuracy: 1e-9, file: file, line: line)
+        }
+    }
+
+    private let quarterly: [(String, Double)] = [
+        ("2025-11-06", 0.24), // a year and two weeks ago: outside the last twelve months
+        ("2025-11-25", 0.24), ("2026-02-05", 0.25), ("2026-05-07", 0.26), ("2026-08-06", 0.26)
+    ]
+
+    // MARK: The figures
+
+    func testEachPaymentTimesTodaysUnitsAndTheSameAYearOn() throws {
+        let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
+                              [try events("ALPHA", dividends: quarterly)])
+
+        XCTAssertEqual(result.lastYear.map(\.date), [try day("2026-08-06"), try day("2026-05-07"),
+                                                     try day("2026-02-05"), try day("2025-11-25")], "newest first")
+        assertAmounts(result.lastYear.map(\.amount), [2.6, 2.6, 2.5, 2.4])
+        XCTAssertTrue(result.lastYear.allSatisfy { $0.dateSource == .yahooRecord && $0.units == 10 })
+        XCTAssertEqual(result.nextYear.map(\.date), [try day("2026-11-25"), try day("2027-02-05"),
+                                                     try day("2027-05-07"), try day("2027-08-06")], "soonest first")
+        assertAmounts(result.nextYear.map(\.amount), [2.4, 2.5, 2.6, 2.6])
+        XCTAssertTrue(result.nextYear.allSatisfy { $0.dateSource == .estimated })
+        XCTAssertEqual(try XCTUnwrap(result.lastYearTotal), 10.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(result.nextYearTotal), 10.1, accuracy: 1e-9)
+
+        // Twenty-five months, from November 2025 to November 2027.
+        XCTAssertEqual(result.chart.months.count, 25)
+        XCTAssertEqual(result.chart.months.first?.month, IncomeMonth(year: 2025, month: 11))
+        XCTAssertEqual(result.chart.months.last?.month, IncomeMonth(year: 2027, month: 11))
+        let november = try XCTUnwrap(result.chart.months.first { $0.month == IncomeMonth(year: 2026, month: 11) })
+        XCTAssertEqual(november.lastYear, 0, accuracy: 1e-9)
+        XCTAssertEqual(november.nextYear, 2.4, accuracy: 1e-9, "the repeat of last November's payment")
+        XCTAssertEqual(result.chart.months.first?.lastYear ?? 0, 2.4, accuracy: 1e-9)
+
+        let row = try XCTUnwrap(result.holdings.first)
+        XCTAssertEqual(row.state, .paying)
+        XCTAssertEqual(try XCTUnwrap(row.lastYear), 10.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(row.nextYear), 10.1, accuracy: 1e-9)
+        XCTAssertNil(row.nextDate, "no date from Yahoo")
+    }
+
+    func testYahoosUpcomingDateReplacesTheNearestEstimatedDate() throws {
+        let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
+                              [try events("ALPHA", dividends: quarterly, ex: "2027-02-10", pay: "2027-02-26")])
+
+        let replaced = try XCTUnwrap(result.nextYear.first { $0.date == (try? day("2027-02-10")) })
+        XCTAssertEqual(replaced.dateSource, .yahooUpcoming)
+        XCTAssertEqual(replaced.payDay, try day("2027-02-26"))
+        XCTAssertEqual(try XCTUnwrap(replaced.amount), 2.5, accuracy: 1e-9, "the amount is still last year's, an estimate")
+        XCTAssertFalse(result.nextYear.contains { $0.date == (try? day("2027-02-05")) }, "the estimated date gives way")
+        XCTAssertEqual(result.nextYear.count, 4)
+        XCTAssertEqual(result.holdings.first?.nextDate?.day, try day("2027-02-10"))
+        XCTAssertEqual(result.holdings.first?.nextDate?.kind, .exDividend)
+    }
+
+    func testAnUpcomingDateFarFromAnyEstimateGetsARowOfItsOwnAndAPastOneIsIgnored() throws {
+        let august: [(String, Double)] = [("2026-08-06", 0.5)]
+        let far = estimate([LocalIncomeHolding(symbol: "BETA", units: 4)],
+                           [try events("BETA", dividends: august, ex: "2027-01-15")])
+        XCTAssertEqual(far.nextYear.map(\.date), [try day("2027-01-15"), try day("2027-08-06")])
+        XCTAssertNil(far.nextYear.first?.amount, "no payment of last year is that one: its amount is not known")
+        XCTAssertNil(far.nextYear.first?.ownAmount)
+        XCTAssertEqual(far.nextYear.first?.dateSource, .yahooUpcoming)
+        XCTAssertEqual(try XCTUnwrap(far.nextYearTotal), 2, accuracy: 1e-9)
+
+        // An ex-dividend date already past changes nothing; a pay date still to come is the next date.
+        let past = estimate([LocalIncomeHolding(symbol: "BETA", units: 4)],
+                            [try events("BETA", dividends: august, ex: "2026-11-12", pay: "2026-11-26")])
+        XCTAssertEqual(past.nextYear.map(\.dateSource), [.estimated])
+        XCTAssertEqual(past.holdings.first?.nextDate?.day, try day("2026-11-26"))
+        XCTAssertEqual(past.holdings.first?.nextDate?.kind, .payment)
+    }
+
+    func testAHoldingWithNoneUnknownOrNoRate() throws {
+        let holdings = ["GAMMA", "NONE", "GONE", "BLANK", "DOLLAR", "EURO", "NOCUR"]
+            .map { LocalIncomeHolding(symbol: $0, units: 10) }
+        let result = estimate(holdings, [
+            try events("GAMMA", dividends: [("2026-06-01", 1)]),
+            try events("NONE", currency: nil, dividends: []),
+            try events("BLANK", dividends: nil), // Yahoo gave no dividend answer
+            try events("DOLLAR", currency: "USD", dividends: [("2026-06-01", 1)]),
+            try events("EURO", currency: "EUR", dividends: [("2026-06-01", 1)]),
+            try events("NOCUR", currency: nil, dividends: [("2026-06-01", 1)])
+        ])
+        let rows = Dictionary(uniqueKeysWithValues: result.holdings.map { ($0.symbol, $0) })
+
+        XCTAssertEqual(rows["NONE"]?.state, LocalIncomeHoldingRow.State.none)
+        XCTAssertEqual(LocalIncomeText.holdingFigure(try XCTUnwrap(rows["NONE"]), nextYear: false, currency: "GBP"), "None")
+        for symbol in ["GONE", "BLANK"] {
+            XCTAssertEqual(rows[symbol]?.state, .unknown, symbol)
+            XCTAssertEqual(LocalIncomeText.holdingFigure(try XCTUnwrap(rows[symbol]), nextYear: true, currency: "GBP"), "–")
+        }
+        XCTAssertEqual(result.unknown, ["GONE", "BLANK"])
+        XCTAssertEqual(try XCTUnwrap(rows["DOLLAR"]?.nextYear), 8, accuracy: 1e-9, "converted with the loaded rate")
+        XCTAssertFalse(rows["DOLLAR"]?.isLeftOut ?? true)
+
+        // No rate for euros, and no currency at all: own figures, not in the totals.
+        let euro = try XCTUnwrap(rows["EURO"])
+        XCTAssertTrue(euro.isLeftOut)
+        XCTAssertNil(euro.nextYear)
+        XCTAssertEqual(LocalIncomeText.holdingFigure(euro, nextYear: true, currency: "GBP"),
+                       HoldingsCurrencyFormatter.amount(10, currency: "EUR"))
+        XCTAssertTrue(try XCTUnwrap(rows["NOCUR"]).isLeftOut)
+        XCTAssertNil(result.lastYear.first { $0.holding == "NOCUR" }?.amount, "no currency is ever guessed")
+        XCTAssertEqual(result.leftOut, [LocalIncomeLeftOut(symbol: "EURO", currency: "EUR"),
+                                        LocalIncomeLeftOut(symbol: "NOCUR", currency: "")])
+        XCTAssertEqual(try XCTUnwrap(result.nextYearTotal), 18, accuracy: 1e-9, "GAMMA's 10 and DOLLAR's 8 only")
+        XCTAssertEqual(result.holdings.map(\.symbol), ["GAMMA", "DOLLAR", "EURO", "NOCUR", "NONE", "BLANK", "GONE"],
+                       "converted payers first, then those left out, then none, then unknown")
+    }
+
+    func testTheTotalsLeaveOutAnUnconvertedHoldingAndSaySo() throws {
+        let result = estimate([LocalIncomeHolding(symbol: "GAMMA", units: 2), LocalIncomeHolding(symbol: "EURO", units: 2),
+                               LocalIncomeHolding(symbol: "NOCUR", units: 1), LocalIncomeHolding(symbol: "GONE", units: 1)], [
+            try events("GAMMA", dividends: [("2026-06-01", 1)]),
+            try events("EURO", currency: "EUR", dividends: [("2026-06-01", 3)]),
+            try events("NOCUR", currency: nil, dividends: [("2026-06-01", 1)])
+        ])
+        XCTAssertEqual(try XCTUnwrap(result.lastYearTotal), 2, accuracy: 1e-9)
+        XCTAssertEqual(LocalIncomeText.leftOutNotice(result),
+                       "The totals leave out EURO (EUR): no exchange rate to GBP is loaded; NOCUR: Yahoo names no currency. "
+                       + "Their own figures are shown on their rows.")
+        XCTAssertEqual(LocalIncomeText.unknownNotice(result),
+                       "Yahoo had no answer for GONE, so it shows as – and is not in the totals.")
+        XCTAssertEqual(result.chart.months.first { $0.month == IncomeMonth(year: 2026, month: 6) }?.lastYear ?? 0, 2,
+                       accuracy: 1e-9, "the chart leaves it out too")
+
+        // When nothing is known, the totals are unknown, not zero.
+        let nothing = estimate([LocalIncomeHolding(symbol: "EURO", units: 1), LocalIncomeHolding(symbol: "GONE", units: 1)],
+                               [try events("EURO", currency: "EUR", dividends: [("2026-06-01", 3)])])
+        XCTAssertNil(nothing.lastYearTotal)
+        XCTAssertNil(nothing.nextYearTotal)
+        XCTAssertEqual(IncomeText.amount(nothing.nextYearTotal, currency: "GBP"), "–")
+        XCTAssertNil(LocalIncomeText.leftOutNotice(estimate([], [])))
+        XCTAssertNil(LocalIncomeText.unknownNotice(estimate([], [])))
+        XCTAssertEqual(try XCTUnwrap(estimate([], []).nextYearTotal), 0, accuracy: 1e-9)
+    }
+
+    func testTheHoldingsAreTodaysUnitsWithoutWatchlistOrBenchmarkRows() {
+        func row(_ symbol: String, _ units: String, watchlist: Bool = false) -> RealTimeTrade {
+            RealTimeTrade(trade: Trade(name: symbol, position: Position(unitSize: units, positionAvgCost: "1"),
+                                       isWatchlistOnly: watchlist), realTimeInfo: TradingInfo())
+        }
+        let holdings = LocalIncomeFigures.holdings(from: [
+            row("alpha", "10"), row("BETA", "5", watchlist: true), row("^GSPC", "1"), row("ALPHA", "2.5"),
+            row("ZERO", "0"), row("GAMMA.L", "7")
+        ])
+        XCTAssertEqual(holdings, [LocalIncomeHolding(symbol: "ALPHA", units: 12.5), LocalIncomeHolding(symbol: "GAMMA.L", units: 7)])
+    }
+
+    // MARK: The labels
+
+    func testEveryLabelSaysEstimateAndNothingSaysReceived() throws {
+        for label in [LocalIncomeText.headlineTitle, LocalIncomeText.lastYearTitle, LocalIncomeText.nextYearTitle,
+                      LocalIncomeText.estimatePill, LocalIncomeText.yahooDatePill, LocalIncomeText.chartNextYear,
+                      LocalIncomeText.estimateNotice] {
+            XCTAssertTrue(label.lowercased().contains("estimate"), label)
+        }
+        XCTAssertEqual(LocalIncomeText.estimateNotice,
+                       "These figures are an estimate from Yahoo's record of each holding's payments over the last year, "
+                       + "at the units you hold today. They are not a record of what was paid to you.")
+        XCTAssertEqual(LocalIncomeText.lastYearTitle, "Last 12 months, at today's units (estimate)")
+        XCTAssertEqual(LocalIncomeText.nextYearTitle, "Next 12 months (estimate)")
+
+        let result = estimate([LocalIncomeHolding(symbol: "ALPHA", units: 10)],
+                              [try events("ALPHA", dividends: quarterly, ex: "2027-02-10", pay: "2027-02-26")])
+        let lines = LocalIncomeText.figureLines(result)
+        XCTAssertEqual(lines.map(\.title), ["Last 12 months, at today's units (estimate)"])
+        XCTAssertEqual(lines.first?.value, HoldingsCurrencyFormatter.amount(10.1, currency: "GBP"))
+        XCTAssertEqual(result.nextYear.map(LocalIncomeText.pill),
+                       ["Estimate", "Yahoo's date, amount estimated", "Estimate", "Estimate"])
+
+        let next = try XCTUnwrap(result.nextYear.first { $0.dateSource == .yahooUpcoming })
+        XCTAssertEqual(LocalIncomeText.accessibilitySentence(nextYear: next, currency: "GBP", today: F.today,
+                                                             locale: F.britishEnglish),
+                       "Wed 10 Feb, ALPHA, ex-dividend, pays 26 Feb, £2.50, Yahoo's date, amount estimated.")
+        let last = try XCTUnwrap(result.lastYear.first)
+        XCTAssertEqual(LocalIncomeText.accessibilitySentence(lastYear: last, currency: "GBP", locale: F.britishEnglish),
+                       "Thu 6 Aug 2026, ALPHA, ex-dividend, £2.60, estimate at today's units.")
+        let month = try XCTUnwrap(result.chart.months.first { $0.month == IncomeMonth(year: 2026, month: 11) })
+        XCTAssertEqual(LocalIncomeText.accessibilitySentence(month, currency: "GBP", locale: F.britishEnglish),
+                       "November 2026: £2.40 estimated for the next 12 months.")
+        let row = try XCTUnwrap(result.holdings.first)
+        XCTAssertEqual(LocalIncomeText.accessibilitySentence(row, currency: "GBP", today: F.today, locale: F.britishEnglish),
+                       "ALPHA: £10.10 in the last 12 months and £10.10 estimated for the next 12 months; "
+                       + "next date Ex-dividend Wed 10 Feb.")
+        for text in [LocalIncomeText.lastYearCaption, LocalIncomeText.nextYearCaption, LocalIncomeText.chartCaption(result.chart)]
+            + lines.map(\.title) {
+            XCTAssertFalse(text.contains("Received"), text)
+        }
+    }
+
+    func testTheStateNoticesSayWhatTheyAre() {
+        XCTAssertEqual(LocalIncomeText.rateLimitNotice(until: F.now, locale: F.britishEnglish, timeZone: F.utc),
+                       "Yahoo is limiting requests, so Stockbar won't ask it again until 12:00.")
+        XCTAssertEqual(LocalIncomeText.staleNotice(count: 2, oldest: Date(timeIntervalSince1970: 1_795_169_400), now: F.now,
+                                                   locale: F.britishEnglish, timeZone: F.utc),
+                       "Couldn't get new figures from Yahoo for 2 holdings. Showing the copy saved at 10:10.")
+        XCTAssertNil(LocalIncomeText.staleNotice(count: 0, oldest: nil))
+        XCTAssertEqual(LocalIncomeText.failedNotice(count: 1),
+                       "Couldn't reach Yahoo for 1 holding, and nothing is saved for it yet.")
+        XCTAssertNil(LocalIncomeText.failedNotice(count: 0))
+    }
+
+    // MARK: When it asks
+
+    private func makeModel(_ provider: EventsProviderStandIn, allowed: Bool = true) -> StockbarLocalIncomeModel {
+        StockbarLocalIncomeModel(provider: provider, isAllowed: { allowed }, now: { F.now }, timeZone: F.utc)
+    }
+
+    private let held = [LocalIncomeHolding(symbol: "ALPHA", units: 10), LocalIncomeHolding(symbol: "BETA", units: 2)]
+
+    private func settle(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if await condition() { return }
+            await Task.yield()
+        }
+        XCTFail("condition never held", file: file, line: line)
+    }
+
+    private func drain() async {
+        for _ in 0..<200 { await Task.yield() }
+    }
+
+    func testNothingIsAskedUntilThePageIsSelectedThenOnceAndNeverOnATimer() async throws {
+        let provider = EventsProviderStandIn()
+        let model = makeModel(provider)
+        await drain()
+        var calls = await provider.calls
+        XCTAssertTrue(calls.isEmpty, "making the model, as the popover or Overview never do, asks nothing")
+        XCTAssertEqual(model.phase, .idle)
+
+        model.activate(holdings: held)
+        model.activate(holdings: held)
+        await settle { model.phase == .loaded }
+        for view in [StockbarIncomeModel.View.history, .byHolding, .outlook] { model.view = view }
+        _ = model.estimate(holdings: held, currency: "GBP") { amount, _ in amount }
+        await drain()
+        calls = await provider.calls
+        XCTAssertEqual(calls, [EventsProviderStandIn.Call(symbols: ["ALPHA", "BETA"], forceRefresh: false)],
+                       "one helper run for every symbol, letting the day-long copies answer")
+
+        model.refresh(holdings: held)
+        await settle { await provider.calls.count == 2 }
+        calls = await provider.calls
+        XCTAssertEqual(calls.last?.forceRefresh, true, "the refresh control asks afresh")
+
+        model.deactivate()
+        model.refresh(holdings: held)
+        await drain()
+        let count = await provider.calls.count
+        XCTAssertEqual(count, 2, "a page no longer selected asks nothing")
+    }
+
+    func testNothingIsAskedWhenYahooIsNotAllowedOrThereAreNoHoldings() async {
+        let provider = EventsProviderStandIn()
+        let off = makeModel(provider, allowed: false)
+        off.activate(holdings: held)
+        off.refresh(holdings: held)
+        XCTAssertEqual(off.phase, .notAllowed)
+        let empty = makeModel(provider)
+        empty.activate(holdings: [])
+        XCTAssertEqual(empty.phase, .noHoldings)
+        await drain()
+        let calls = await provider.calls
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(StockbarLocalIncomeModel.notAllowedReason, "Needs live market data, which is off")
+    }
+
+    func testLoadingRateLimitAndSavedCopiesAreShownForWhatTheyAre() async throws {
+        let provider = EventsProviderStandIn()
+        let until = F.now.addingTimeInterval(3_600)
+        let alpha = try events("ALPHA", dividends: quarterly)
+        await provider.answer([
+            InstrumentEventsResult(symbol: "ALPHA", source: .yahoo, outcome: .events(alpha, .stale(.rateLimited(retryAfter: until)))),
+            InstrumentEventsResult(symbol: "BETA", source: .yahoo, outcome: .failed(.timedOut))
+        ])
+        await provider.hold(true)
+        let model = makeModel(provider)
+        model.activate(holdings: held)
+        XCTAssertEqual(model.phase, .loading)
+        XCTAssertTrue(model.isLoading)
+        await settle { await provider.waitingCount == 1 }
+        await provider.release()
+        await settle { model.phase == .loaded }
+
+        XCTAssertEqual(model.rateLimitedUntil, until)
+        XCTAssertEqual(model.staleCopies.count, 1)
+        XCTAssertEqual(model.staleCopies.oldest, fetchedAt)
+        XCTAssertEqual(model.failedWithoutCopy, 1)
+        let result = model.estimate(holdings: held, currency: "GBP") { amount, _ in amount }
+        XCTAssertEqual(try XCTUnwrap(result.nextYearTotal), 10.1, accuracy: 1e-9, "the saved copy still counts")
+        XCTAssertEqual(result.unknown, ["BETA"])
+
+        // Live providers refused for every symbol: the page says Yahoo can't be asked.
+        let refused = EventsProviderStandIn()
+        await refused.answer(held.map { InstrumentEventsResult(symbol: $0.symbol, source: .yahoo, outcome: .failed(.providerDisabled)) })
+        let off = makeModel(refused)
+        off.activate(holdings: held)
+        await settle { off.phase != .loading }
+        XCTAssertEqual(off.phase, .notAllowed)
+    }
+
+    func testAResultForAPageNoLongerSelectedIsNeverApplied() async {
+        let provider = EventsProviderStandIn()
+        await provider.hold(true)
+        let model = makeModel(provider)
+        model.activate(holdings: held)
+        await settle { await provider.waitingCount == 1 }
+        model.deactivate()
+        await provider.release()
+        await drain()
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertNotEqual(model.phase, .loaded)
+    }
+
+    // MARK: The sidebar
+
+    func testTheSidebarDimsIncomeOnlyWhenYahooCannotBeAskedOrFolyncIsStillLoading() {
+        typealias S = StockbarMainSection
+        // A local portfolio and a Trading 212 account: Folync is neither active nor enabled.
+        let local = S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: false, localIncomeAvailable: true)
+        XCTAssertNil(local[.income], "Income is no longer dimmed")
+        XCTAssertEqual(local[.activity], S.needsFolyncReason)
+        XCTAssertEqual(local[.trades], S.needsFolyncReason)
+
+        let off = S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: false, localIncomeAvailable: false)
+        XCTAssertEqual(off[.income], "Needs live market data, which is off")
+        XCTAssertEqual(off[.activity], S.needsFolyncReason)
+
+        XCTAssertEqual(S.dimmedSections(isFolyncPortfolioActive: true, isFolyncEnabled: true, localIncomeAvailable: false), [:],
+                       "a Folync portfolio dims nothing, as before")
+        let connecting = S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: true, localIncomeAvailable: true)
+        XCTAssertEqual(connecting[.income], S.needsFolyncReason, "Folync's page, waiting for its portfolio")
+
+        let entries = StockbarSidebarModel.groups(dimmed: off, new: S.newSections).flatMap(\.entries)
+        XCTAssertEqual(entries.first { $0.section == .income }?.dimmedReason, "Needs live market data, which is off")
+        XCTAssertNil(StockbarSidebarModel.groups(dimmed: local, new: S.newSections).flatMap(\.entries)
+            .first { $0.section == .income }?.dimmedReason)
+    }
+
+    func testTheEventsServiceAnswersOnlyWhenLiveDataIsOnOrAFixtureAnswers() {
+        // The test process has live providers off and no fixture.
+        XCTAssertFalse(StockbarProviderAccessPolicy.current.liveRequestsAllowed)
+        XCTAssertNil(StockbarAcceptanceEventsFixture.current)
+        XCTAssertFalse(InstrumentEventsService.canAnswer)
     }
 }
 

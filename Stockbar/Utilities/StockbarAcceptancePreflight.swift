@@ -167,6 +167,10 @@ enum StockbarAcceptancePreflight {
             fileManager: fileManager
         )
         try FolyncCredentialStore(service: runtime.folyncKeychainService).save(token: token, for: manifest.baseURL)
+        // `STOCKBAR_ACCEPTANCE_EVENTS`: the made-up instrument events, checked
+        // and copied owner-only into the root, where the app reads them.
+        try StockbarAcceptanceEventsFixture.installCopy(environment: environment, runtime: runtime,
+                                                        fileManager: fileManager)
 
         let report = StockbarAcceptanceBootstrapReport(
             runID: runID,

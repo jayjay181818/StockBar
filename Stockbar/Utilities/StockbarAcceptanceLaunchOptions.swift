@@ -17,6 +17,10 @@ import Foundation
 /// - `STOCKBAR_ACCEPTANCE_POPOVER`: `portfolio` opens the portfolio popover
 ///   once, a few seconds after launch, as a click on its menu-bar item would.
 ///   It can then be looked at without anything clicking in the menu bar.
+/// - `STOCKBAR_ACCEPTANCE_EVENTS`: the path of a fixture of made-up dividend
+///   and date answers (`StockbarAcceptanceEventsFixture`). The bootstrap checks
+///   it and copies it into the run's root; the app reads only that copy and
+///   answers instrument events from it instead of asking Yahoo.
 struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     enum Appearance: String, Codable, Sendable {
         case light
@@ -28,6 +32,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     static let currencyKey = "STOCKBAR_ACCEPTANCE_CURRENCY"
     static let windowKey = "STOCKBAR_ACCEPTANCE_WINDOW"
     static let popoverKey = "STOCKBAR_ACCEPTANCE_POPOVER"
+    static let eventsKey = "STOCKBAR_ACCEPTANCE_EVENTS"
     /// How long after launch the portfolio popover opens, so the first
     /// figures and the graph have arrived.
     static let popoverDelay: TimeInterval = 6
@@ -38,6 +43,8 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     var currency: String?
     var opensAtMinimumSize = false
     var opensPortfolioPopover = false
+    /// Instrument events come from the run's copy of the fixture, not Yahoo.
+    var usesInstrumentEventsFixture = false
 
     static let none = Self()
 
@@ -65,6 +72,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
             .flatMap { DataModel.supportedCurrencies.contains($0) ? $0 : nil }
         options.opensAtMinimumSize = value(windowKey)?.lowercased() == "min"
         options.opensPortfolioPopover = value(popoverKey)?.lowercased() == "portfolio"
+        options.usesInstrumentEventsFixture = value(eventsKey) != nil
         return options
     }
 

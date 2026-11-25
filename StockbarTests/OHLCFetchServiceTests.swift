@@ -528,6 +528,39 @@ final class InstrumentEventsServiceTests: XCTestCase {
         .output("[" + entries.joined(separator: ",") + "]")
     }
 
+    func testTheAcceptanceFixtureAnswersInsteadOfTheHelperAndYahoo() async throws {
+        let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [{"symbol": "FAKEUS", "instrumentType": "EQUITY", "currency": "USD",
+          "dividends": [{"daysFromToday": -40, "amount": 0.25}], "exDividendInDays": 10, "payInDays": 20}]}
+        """.utf8))
+        let runner = InstrumentEventsRunnerStub(responses: [.output("[]")])
+        let clock = self.clock!
+        let service = InstrumentEventsService(
+            scriptPath: nil, processRunner: runner,
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+            directory: directory, now: { clock.withLock { $0 } }, fixture: fixture
+        )
+
+        let results = await service.events(for: ["FAKEUS", "FAKENA"])
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 0, "the helper never runs, and Yahoo is never asked")
+        let events = try XCTUnwrap(results.first?.events)
+        let today = try XCTUnwrap(InstrumentEventDay.on(start))
+        func offset(_ days: Int) -> InstrumentEventDay? {
+            InstrumentEventDay.on(start.addingTimeInterval(Double(days) * day))
+        }
+        XCTAssertEqual(events.dividends, [InstrumentDividend(date: try XCTUnwrap(offset(-40)), amount: 0.25)])
+        XCTAssertEqual(events.exDividendDate, offset(10))
+        XCTAssertEqual(events.dividendPayDate, offset(20))
+        XCTAssertEqual(events.dividendCurrency, "USD")
+        XCTAssertEqual(events.instrumentType, .equity)
+        XCTAssertNotNil(today)
+        XCTAssertEqual(results.last?.outcome, .failed(.noData), "a symbol the fixture does not name has no data")
+        // The answer is saved like Yahoo's: a second ask inside the day is answered from it.
+        _ = await service.events(for: ["FAKEUS"])
+        XCTAssertEqual(results.first?.isStale, false)
+    }
+
     func testDecodesEveryFieldAndKeepsNullAsNil() async {
         let full = """
         [{"symbol": "ALPHA", "success": true, "events": {"symbol": "ALPHA", "instrumentType": "EQUITY",
