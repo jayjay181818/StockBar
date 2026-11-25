@@ -1512,9 +1512,10 @@ class DataModel {
     }
 
     /// The cash inside the total that `calculateNetValue()` gives, taken from the same
-    /// source: Folync's own `cash` figure, or the cash in the Trading 212 account. Nil for
-    /// a local portfolio, when the source gives no cash figure, or gives it in no named
-    /// currency. It can be zero or below zero (borrowing).
+    /// source: Folync's own `cash` figure, or the cash in the Trading 212 account, each in
+    /// the currency the source names for it. Nil for a local portfolio, when the source gives
+    /// no cash figure, or names no currency for it (none is guessed). It can be zero or below
+    /// zero (borrowing).
     func netValueCash() -> (amount: Double, currency: String)? {
         func named(_ currency: String?) -> String? {
             let trimmed = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1524,8 +1525,7 @@ class DataModel {
            let total = snapshot.totalValue.value,
            total.isFinite {
             guard let cash = snapshot.cash.value, cash.isFinite,
-                  let currency = named(snapshot.cash.currency) ?? named(snapshot.totalValue.currency)
-                      ?? named(snapshot.scope.currency)
+                  let currency = named(snapshot.cash.currency)
             else { return nil }
             return (cash, currency)
         }

@@ -1801,7 +1801,7 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertEqual(cash.currency, "GBP")
 
         folync.folyncPortfolioSnapshot = try folyncSnapshot(cashCurrency: nil)
-        XCTAssertEqual(folync.netValueCash()?.currency, "GBP", "the currency of the total it is part of")
+        XCTAssertNil(folync.netValueCash(), "no currency named for the cash: not known, none guessed")
         folync.folyncPortfolioSnapshot = try folyncSnapshot(cash: "null")
         XCTAssertNil(folync.netValueCash(), "Folync gives no cash figure")
         folync.folyncPortfolioSnapshot = try folyncSnapshot(cash: "-40")

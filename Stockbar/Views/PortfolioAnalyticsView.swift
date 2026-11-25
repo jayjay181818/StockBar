@@ -276,8 +276,8 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
                 .padding(.vertical, 5)
-                .contentShape(Rectangle())
-                .help(group.isCash ? AllocationPresentation.cashTooltip(group, currency: analyticsCurrency) : "")
+                .modifier(AllocationRowTooltip(text: group.isCash
+                    ? AllocationPresentation.cashTooltip(group, currency: analyticsCurrency) : nil))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(AllocationPresentation.spokenRow(group, grouping: grouping, currency: analyticsCurrency))
             }
@@ -756,6 +756,19 @@ struct PortfolioAnalyticsView: View {
             Text("Includes top contributors, sector attribution, and time-weighted against money-weighted return.")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+/// A tooltip over the whole row, for the rows that have one (only Cash); other rows are left as they were.
+private struct AllocationRowTooltip: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text {
+            content.contentShape(Rectangle()).help(text)
+        } else {
+            content
         }
     }
 }
