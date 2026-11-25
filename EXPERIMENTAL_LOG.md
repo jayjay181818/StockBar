@@ -401,7 +401,11 @@ On 2026-11-25 the owner allowed one supervised live run of the Yahoo
 events lookup (pull request 136) before Calendar, a local Income estimate
 and a Funds group are built on it. It found that the lookup had never
 answered: with the yfinance the app ships, every symbol was thrown away as
-having no data. Pull request 153 fixes that and records what Yahoo gives.
+having no data. Pull request 153 fixes that and records what Yahoo gives;
+it was merged the same day as `6e7184d` (build 382.3.21).
+
+The owner also chose a Cash row for Allocation, so that its shares are of
+the same total as Holdings' weights. Pull request 154 adds it.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -5691,8 +5695,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   This entry also records pull request 140's own comparison, owed by
   [pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date),
   and corrects two of that entry's sentences.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `6e7184d`. The merge published
+  experimental build 382.3.21 as the prerelease `experimental-382.3.21`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
 - Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
   launches make no Yahoo request. The price helper, whose start it
   measures, gains one standard-library import.
@@ -5756,6 +5762,108 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     fix is checked by the live run and the tests, not on screen.
   - The rise in idle memory is still not put down to one pull request.
 - Verdict: retained.
+
+### 154: Allocation: a Cash row, so its shares match Holdings' weights
+
+- What: Allocation gave each group's share of the holdings' total, while
+  Holdings' Weight column gives each holding's share of the net value,
+  cash included, or Folync's own figure. The same holding showed two
+  percentages on two pages: in the made-up portfolio VUSA was 26.4% on
+  Allocation and 25.5% on Holdings. The owner chose on 2026-11-25 to add a
+  Cash row.
+
+  When the portfolio's source gives cash above zero, each of the three
+  views (Sector, Holding, Currency) has a row and a slice named "Cash",
+  shown last and never folded into "Other". Every share on the page is
+  then of holdings plus cash. The donut's centre gives that total, with
+  "9 holdings and cash" under it. Cash comes from a new
+  `DataModel.netValueCash()`, which picks its source exactly as
+  `calculateNetValue()` does: Folync's `cash` figure, or the cash in a
+  fresh Trading 212 account snapshot. It is taken only in the currency
+  the source names and converted at a current rate. Without either, cash
+  counts as not known and nothing is worked out from totals. A local
+  portfolio has none, so its page is as before.
+
+  Cash at zero has no row. Cash below zero has no slice, the shares stay
+  of the holdings alone, and a line under the chart gives the figure and
+  says so. Cash has no sector and no day's change: its change cell is
+  "–", and VoiceOver reads "Cash, £2,940.18, 3.5 percent". It has the only
+  tooltip on the page. Its colour is a new token, `allocationCash`: dark
+  ink on a light card and pale parchment on a dark one, neither red nor
+  green nor the grey of "Other" and Unclassified.
+
+  Diversification and the correlation grid stay holdings-only. A caption
+  says so, and their notes say "of the holdings' value". The Unclassified
+  note gives the Unclassified row's own share and adds "cash included".
+  The valuation code moved unchanged from the view into
+  `AllocationValuation`, so the agreement with Holdings could be tested.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches open the Overview and never this page.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 153 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 1012 XCTest tests with 0 failures.
+  Thirteen are new, in `AllocationCashTests` in
+  `PortfolioAnalyticsServicesTests.swift`. They cover:
+  - the row in each view, its size and its place;
+  - no row with no cash, with zero cash, or with cash below zero, and
+    that line's text;
+  - shares adding up to 100%;
+  - the centre and its caption, the VoiceOver text, and the tooltip;
+  - Cash never folded into "Other";
+  - the colour token and where the cash comes from;
+  - each holding's share equal to its Holdings weight, for a local
+    portfolio and for a Folync one with cash.
+
+  Six temporary breakages were each caught and removed:
+  - cash folded into "Other";
+  - shares not taken again over holdings plus cash;
+  - cash taken from the total value instead of the cash figure;
+  - cash below zero treated as held;
+  - the Cash row speaking a day's change;
+  - the caption without "and cash".
+
+  `checks`, `docs-check` and `build-release` pass, PY1012 Python helper
+  tests and 95 script tests pass. CI does not run for this branch, so
+  these were run locally.
+
+  On screen, in the acceptance copy with the stand-in's made-up portfolio
+  (£2,940.18 of cash): each view in dark and light, at the default and the
+  minimum size, before and after, with nothing cut off. The seven holdings
+  shown in the Holding view match their Holdings weights to the shown
+  0.1% (VUSA 25.5%, NVDA 15.4%, MSFT 11.7%). The largest unrounded
+  difference is 0.000035 points, from Folync's weight being rounded to
+  four places. Made a local portfolio, the page has no Cash row. Captures
+  are in `build/design/shots/D3b/`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/D3b-allocation-cash.md`). The session
+  lead read the cash sourcing against `calculateNetValue()`, the
+  presentation code and the colour token, and looked at the captures of
+  the Holding view in dark and the Sector view in light at the minimum
+  size. It did not read every test. No independent second review.
+- Known issues:
+  - **Trading 212 agreement is not established.** Holdings values a
+    Trading 212 position at the broker's figure; Allocation values it at
+    price times units. Where those differ, the two pages' percentages
+    differ too, as before this change. With cash below zero they differ
+    for Trading 212 even without that: Holdings divides by the account
+    value and Allocation by the holdings.
+  - A Folync holding that Stockbar does not show or cannot value still
+    counts in Folync's total, so Folync's weights could then differ from
+    Allocation's.
+  - Cash's change cell is "–", the app's usual mark for an unknown figure,
+    while this page's other unknown day changes keep "—".
+  - The Currency view puts every Folync holding under the currency Folync
+    values it in (GBP in the made-up portfolio), as before.
+  - The local portfolio capture shows no rows at all, because the copy
+    fetches no prices; it shows that there is no Cash row and no more.
+  - The tooltip was not seen on screen.
+  - The worker's accessibility reads twice returned the copy's own menu
+    bar, against the rule to read the window only, and the copy became
+    the active app once, after its own sheet was confirmed. Nothing else
+    was touched.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
 
 ## Rust evaluation, 2026-11-12
 
@@ -6036,6 +6144,7 @@ launch.
 | Pull requests 148 to 150: the acceptance copy's seeded settings, the Charts and Data Health tidy, and the Holdings editing table | Fable 5.2 (session lead), with three Opus 5.5 workers, each in its own worktree | Worth it, with one cut-off. During pull request 150 the Mac's disk filled to 119 MB free with this work's own leftovers: the build folder every acceptance launch left in the temporary directory, and the build caches of every worktree. It stopped the D1b worker part-way through showing its tests fail. The lead removed about 45 GB of those leftovers, keeping the logs, captures and benchmark results, removed the breakage left in the worker's tree, and finished the breakages and checks. Two workers' accessibility reads returned the system's Apple menu, Recent Items included; neither saved or repeated it, and the owner was told. The D4 worker scrolled once without a capture id of the same window. Later specifications are to say: read a window's tree with a query and never the menu bar, give no pointer or scroll input without a capture of the same window, and clear build folders after each batch |
 | The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
 | The Yahoo check and pull request 153 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
+| Pull request 154, Allocation's Cash row | Claude Opus 5.5 (session lead) for the specification, the review and the record; one Opus 5.5 worker in its own worktree | Worth it: thirteen tests, six breakages and before-and-after captures of every view. The lead checked the cash source against the net value's and the captures. The worker's accessibility reads twice returned its copy's menu bar, against the new rule, and its copy became the active app once. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
