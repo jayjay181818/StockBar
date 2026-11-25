@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.24)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.24</link>
+      <pubDate>Wed, 25 Nov 2026 14:56:56 +0000</pubDate>
+      <sparkle:version>382.3.24</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.24 of Stockbar 3.8.2. Changes since experimental-382.3.23:
+
+- Trading 212: value a cash-only account, and only the account in use (#156)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.24/Stockbar-382.3.24.zip" length="8207029" type="application/octet-stream" sparkle:edSignature="8q8UWHPODAvzhVHaf+Z9bPBRghOPjAeliMwBf3n3q0GnuYg6t6wyMaeTsciqX5KEcezoD57zaFJDHlLd2zR0Bw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.23)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.23</link>
       <pubDate>Wed, 25 Nov 2026 13:14:25 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Holdings: a Weight column and one switch for amounts or percentages (#146)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.15/Stockbar-382.3.15.zip" length="8132287" type="application/octet-stream" sparkle:edSignature="VqeS62vOD1xGKi4xhiLVOAyo4pYhSkpXoFAoKtvK+H6ZVH+myDECOs4F5sw0qrJp1535c7pxyOBq/SVGw7nMAw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.14)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.14</link>
-      <pubDate>Fri, 20 Nov 2026 18:58:02 +0000</pubDate>
-      <sparkle:version>382.3.14</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.14 of Stockbar 3.8.2. Changes since experimental-382.3.13:
-
-- Switches in Settings for the Income, Trades and Activity pages (#145)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.14/Stockbar-382.3.14.zip" length="8115956" type="application/octet-stream" sparkle:edSignature="7l1ky4hPxiqFHCIuxzRO2vO6/OwMJQTbYBlb6su1R5Y73IOIpt096QiN6bEDeWEqA72V21skBuE1pbYX6dSNBw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: XWemn4mCBwBtJZH8msA+O/UbvyAr9xmf2JRQt0Rk2lnNocZWdIld0eXNXHvuGvy/VBLpJkE8tpph/3EKVdCDBQ==
-length: 10327
+edSignature: iTS+mLfe6TLSIcW5znM/r5h1WMh4hqW8vxJpMIAbalkkxT2azjTG5VaizIi9fTesjxTftSWV4ue5E5hIlpeWAA==
+length: 10332
 -->
