@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.23)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.23</link>
+      <pubDate>Wed, 25 Nov 2026 13:14:25 +0000</pubDate>
+      <sparkle:version>382.3.23</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.23 of Stockbar 3.8.2. Changes since experimental-382.3.22:
+
+- Allocation's Cash row: one source for holdings, total and cash (#155)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.23/Stockbar-382.3.23.zip" length="8192773" type="application/octet-stream" sparkle:edSignature="6+M9ekxHlnNVSc90jLRM0Hsk6lDGUXjN/segzBar1b/TAf96R40uAQXmif9NbP5qJQjlaucIb35uzgmldJb5CA=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.22)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.22</link>
       <pubDate>Wed, 25 Nov 2026 09:36:12 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Switches in Settings for the Income, Trades and Activity pages (#145)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.14/Stockbar-382.3.14.zip" length="8115956" type="application/octet-stream" sparkle:edSignature="7l1ky4hPxiqFHCIuxzRO2vO6/OwMJQTbYBlb6su1R5Y73IOIpt096QiN6bEDeWEqA72V21skBuE1pbYX6dSNBw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.13)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.13</link>
-      <pubDate>Fri, 20 Nov 2026 18:53:19 +0000</pubDate>
-      <sparkle:version>382.3.13</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.13 of Stockbar 3.8.2. Changes since experimental-382.3.12:
-
-- Allocation: a donut beside its list, three views and the correlations as a grid (#144)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.13/Stockbar-382.3.13.zip" length="8106729" type="application/octet-stream" sparkle:edSignature="L8p+ar5h2YcmMjjd/JmmYm745DunOE4zCa5KvbumNZEOZfSxo/3cilhfGUrDAASv4wXNa5Hj8EJo+FUEgpJYDw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: b4AnmEbelCpMjXfzozUY8QCtS+hX5qowa7LENEt3Nx/rNa9iF4UhtQOlpp6aRkDmYYUhgXyWo1gXSpQHfYQ/Cw==
-length: 10344
+edSignature: XWemn4mCBwBtJZH8msA+O/UbvyAr9xmf2JRQt0Rk2lnNocZWdIld0eXNXHvuGvy/VBLpJkE8tpph/3EKVdCDBQ==
+length: 10327
 -->
