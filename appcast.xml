@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.3.26)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.26</link>
+      <pubDate>Wed, 25 Nov 2026 23:28:30 +0000</pubDate>
+      <sparkle:version>382.3.26</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.3.26 of Stockbar 3.8.2. Changes since experimental-382.3.25:
+
+- Income for a local or Trading 212 portfolio, as a labelled estimate (#158)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.26/Stockbar-382.3.26.zip" length="8394427" type="application/octet-stream" sparkle:edSignature="g2qQOmoVvUi6D1+kb7KnYVgiSx/ONLT15a2YMEmtB3lUAse8gYmJwSCfzljcBcmPGWiizFVuXmXML1nxfBaICw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3.25)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.25</link>
       <pubDate>Wed, 25 Nov 2026 19:16:52 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Let the acceptance copy change the settings it was started with (#148)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.17/Stockbar-382.3.17.zip" length="8149675" type="application/octet-stream" sparkle:edSignature="se0g4vrlZFScJuHHwHeXPeF9buS4VLjnie0S9mGxZQpsD/Yak8wvhfuQbNU/zBN9ytUF9Ln8IuXy+WmvNJbLAA=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.16)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.16</link>
-      <pubDate>Fri, 20 Nov 2026 19:09:30 +0000</pubDate>
-      <sparkle:version>382.3.16</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.16 of Stockbar 3.8.2. Changes since experimental-382.3.15:
-
-- Risk: each figure said once, with a chart of the falls (#147)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.16/Stockbar-382.3.16.zip" length="8145890" type="application/octet-stream" sparkle:edSignature="welB5KILcs/7PPQUCb8+UqVuOhLixmwXaXw9o9Owy7GXaE1LdRR7pXvh1mLHShhHzOsyijWj0dU506zz/EE5Dg=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: cU7VpPIE1RAsjmKqsj+NuBjj/7LU8hqzgzff1PwOMv+AHEwRALjeItku6AHeDo3jG1yQU16DYAmQR8u+CTvYAQ==
-length: 10336
+edSignature: fYYnTpv8fVkle8aT3LfWl7T/d8fHCt5seBf/Sgz4NRdkP2Ngq6J1tNf8OMLNqKMyk6Q4NRyB2Wv9/KDqEdlCCw==
+length: 10349
 -->
