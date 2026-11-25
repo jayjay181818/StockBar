@@ -1792,23 +1792,34 @@ final class AllocationCashTests: XCTestCase {
         )
     }
 
-    /// An invented Folync portfolio. By default two holdings worth £523.45 and £376.55 and £100
-    /// of cash, a total of £1,000; Folync's weights are each holding's share of that total.
-    /// A holding's value may be "null" (not valued); `total` may be "null" (Folync gives none).
-    private func folyncSnapshot(total: String = "1000", cash: String = "100", cashCurrency: String? = "GBP",
+    /// An invented Folync portfolio, read through the production decoder as the app reads
+    /// Folync's answer (schema 2, with every identity field it requires). By default two
+    /// holdings worth £523.45 and £376.55 and £100 of cash, a total of £1,000; Folync's
+    /// weights are each holding's share of that total. A holding's value may be "null" (not
+    /// valued); `total` may be "null" (Folync gives none). A holding is valued in
+    /// `valueCurrencies[asset]` (default pounds) and priced in `pricingCurrencies[asset]`
+    /// (default its value's currency); `allocations[asset]` overrides Folync's weight.
+    private func folyncSnapshot(total: String = "1000", totalCurrency: String = "GBP", cash: String = "100",
+                                cashCurrency: String? = "GBP",
                                 holdings: [(asset: String, value: String)] = [("a", "523.45"), ("b", "376.55")],
-                                valueCurrencies: [String: String] = [:])
+                                valueCurrencies: [String: String] = [:], pricingCurrencies: [String: String] = [:],
+                                allocations: [String: String] = [:])
         throws -> FolyncPortfolioSnapshot {
         func metric(_ value: String, currency: String? = "GBP") -> String {
             let code = currency.map { "\"\($0)\"" } ?? "null"
             return "{ \"value\": \(value), \"currency\": \(code), \"quality\": \"complete\", \"reasonCodes\": [], \"asOfDate\": \"2026-07-11\" }"
         }
         func holding(_ asset: String, value: String) -> String {
-            let allocation = Double(value).map { String($0 / 10) } ?? "null"
+            let allocation = allocations[asset] ?? Double(value).map { String($0 / 10) } ?? "null"
             let valueCurrency = valueCurrencies[asset] ?? "GBP"
+            let pricingCurrency = pricingCurrencies[asset] ?? valueCurrency
+            let ticker = asset.uppercased()
             return """
-            { "portfolioId": "pf_demo", "assetId": "\(asset)", "ticker": "\(asset.uppercased())", "name": "Fund \(asset)",
-              "currency": "\(valueCurrency)", "shares": 10, "averageCost": 1, "currentPrice": 1, "previousClose": 1,
+            { "portfolioId": "pf_demo", "portfolioName": "Demo", "assetId": "\(asset)", "ticker": "\(ticker)",
+              "canonicalTicker": "\(ticker)", "displayTicker": "\(ticker)", "quoteSymbol": "\(ticker)",
+              "aliases": ["\(ticker)"], "name": "Fund \(asset)",
+              "currency": "\(pricingCurrency)", "valueCurrency": "\(valueCurrency)", "shares": 10, "averageCost": 1,
+              "currentPrice": 1, "previousClose": 1,
               "marketValue": \(value), "costValue": 10, "dayGain": 1, "dayGainPct": 1, "totalGain": 1, "totalGainPct": 1,
               "allocationPct": \(allocation), "valuation": \(metric(value, currency: valueCurrency)) }
             """
@@ -1826,13 +1837,13 @@ final class AllocationCashTests: XCTestCase {
               "provider": { "lastSuccessfulSyncAt": "2026-07-12T11:55:00.000Z", "ageSeconds": 300 }
             }
           },
-          "totalValue": \(metric(total)),
+          "totalValue": \(metric(total, currency: totalCurrency)),
           "cash": \(metric(cash, currency: cashCurrency)),
           "profitLoss": { "unrealized": \(metric("12.5")), "realized": \(metric("0")), "day": \(metric("2")) },
           "holdings": [\(holdings.map { holding($0.asset, value: $0.value) }.joined(separator: ", "))]
         }
         """
-        return try JSONDecoder().decode(FolyncPortfolioSnapshot.self, from: Data(json.utf8))
+        return try FolyncPortfolioDecoder().decodeSnapshot(Data(json.utf8))
     }
 
     /// A model showing `snapshot` the way the app does: Folync's holdings as its rows.
@@ -1855,10 +1866,10 @@ final class AllocationCashTests: XCTestCase {
         let netValue = model.calculateNetValue()
         XCTAssertFalse(rows.isEmpty, file: file, line: line)
         for trade in model.realTimeTrades where !trade.trade.isWatchlistOnly {
-            let row = try XCTUnwrap(rows.first { $0.key == trade.trade.name }, trade.trade.name, file: file, line: line)
-            XCTAssertEqual(P.shareText(row.share),
-                           HoldingsWeight.text(model.calculatePositionWeight(for: trade, netValue: netValue)),
-                           trade.trade.name, file: file, line: line)
+            let weight = HoldingsWeight.text(model.calculatePositionWeight(for: trade, netValue: netValue))
+            // A holding known to be worth nothing has no row; Holdings gives it nothing too.
+            let share = rows.first { $0.key == trade.trade.name }?.share ?? 0
+            XCTAssertEqual(P.shareText(share), weight, trade.trade.name, file: file, line: line)
         }
         XCTAssertEqual(rows.reduce(0) { $0 + $1.share }, 100, accuracy: 0.05, "the shares make up the whole",
                        file: file, line: line)
@@ -1904,23 +1915,163 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertEqual(valuation.sourceTotal ?? .nan, 1250, accuracy: 1e-9)
     }
 
-    func testAcrossCurrenciesExchangeRateDifferencesDoNotHideTheCashRow() throws {
+    func testAcrossCurrenciesTheFiguresAreCheckedAgainstTheSourcesTotalInItsCurrency() async throws {
         // Folync values B at $475 and counts it as £376.55 in its £1,000 total; at Stockbar's
-        // 0.8 it is £380. The £3.45 is a difference of exchange rates, not a missing holding.
-        let mixed = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "475")],
-                                                   valueCurrencies: ["b": "USD"]))
-        let valuation = AllocationValuation.make(from: mixed)
+        // 0.8 it is £380, so holdings and cash come to £1,003.45. Shares of that would put
+        // A's £523.45 at 52.2% against Holdings' 52.3%: no Cash row, and the line says why.
+        let apart = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "475")],
+                                                   valueCurrencies: ["b": "USD"], allocations: ["b": "37.655"]))
+        let valuation = AllocationValuation.make(from: apart)
         XCTAssertEqual(valuation.positions["B"] ?? .nan, 380, accuracy: 1e-9)
+        XCTAssertEqual(valuation.cash, .none)
+        XCTAssertNil(valuation.sourceTotal)
+        XCTAssertEqual(valuation.cashOmission, .totalDiffers)
+
+        // When Stockbar's rate gives Folync's figure, they reconcile, and every share is of
+        // Folync's total: the same as Holdings' weights.
+        let together = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "470.6875")],
+                                                      valueCurrencies: ["b": "USD"], allocations: ["b": "37.655"]))
+        let reconciled = AllocationValuation.make(from: together)
+        XCTAssertEqual(reconciled.cash, .held(100))
+        XCTAssertEqual(reconciled.sourceTotal ?? .nan, 1000, accuracy: 1e-9)
+        try await assertAgreement(together)
+
+        // The same in dollars: checked in pounds, where Folync added them up, then shown in dollars.
+        let dollars = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "470.6875")],
+                                                     valueCurrencies: ["b": "USD"], allocations: ["b": "37.655"]),
+                                  preferredCurrency: "USD")
+        XCTAssertEqual(AllocationValuation.make(from: dollars).sourceTotal ?? .nan, 1250, accuracy: 1e-9)
+    }
+
+    func testPenceAreCheckedAgainstAPoundTotalWithoutAnExchangeRate() async throws {
+        // £376.55 given in pence converts at a fixed 100, so even with no rate table loaded
+        // the figures are checked, and a gap in pence is a gap.
+        let noRates = CurrencyConverter(exchangeRates: [:], refreshOnInit: false, loadHistoryOnInit: false)
+        let pence = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "37655")],
+                                                   valueCurrencies: ["b": "GBp"], allocations: ["b": "37.655"]),
+                                converter: noRates)
+        let valuation = AllocationValuation.make(from: pence)
+        XCTAssertEqual(valuation.positions["B"] ?? .nan, 376.55, accuracy: 1e-9)
+        XCTAssertEqual(valuation.cash, .held(100))
+        XCTAssertEqual(valuation.sourceTotal ?? .nan, 1000, accuracy: 1e-9)
+        try await assertAgreement(pence)
+
+        let short = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "38000")],
+                                                   valueCurrencies: ["b": "GBp"]), converter: noRates)
+        XCTAssertEqual(AllocationValuation.make(from: short).cashOmission, .totalDiffers)
+    }
+
+    func testAFigureWithNoRateIntoTheTotalsCurrencyLeavesCashOut() throws {
+        // Everything converts into pounds for the page, but the total is in euros, which the
+        // loaded table lacks: the check cannot be made, so no Cash row and the rate line.
+        let euros = folyncModel(try folyncSnapshot(total: "1150", totalCurrency: "EUR"))
+        let valuation = AllocationValuation.make(from: euros)
+        XCTAssertEqual(valuation.covered, 2)
+        XCTAssertEqual(valuation.cash, .none)
+        XCTAssertNil(valuation.sourceTotal)
+        XCTAssertEqual(valuation.cashOmission, .noExchangeRate)
+        XCTAssertEqual(P.omissionLine(valuation.cashOmission),
+                       "There is no exchange rate for the cash yet, so these percentages are of the holdings alone, without cash.")
+    }
+
+    // The tolerance.
+
+    func testTheCheckAllowsHonestRoundingAndNoMore() throws {
+        // Half a penny for each figure summed: two £4.99 parts of a £9.99 total pass...
+        XCTAssertTrue(AllocationValuation.reconciles([4.99, 4.99], with: 9.99, currency: "GBP"))
+        XCTAssertFalse(AllocationValuation.reconciles([4.99, 4.98], with: 9.99, currency: "GBP"), "two pence is more")
+        // ...or 0.05% of the total, whichever is larger.
+        XCTAssertTrue(AllocationValuation.reconciles([900, 100], with: 1_000.5, currency: "GBP"))
+        XCTAssertFalse(AllocationValuation.reconciles([900, 100], with: 1_000.6, currency: "GBP"))
+        // The smallest unit is the currency's own.
+        XCTAssertEqual(AllocationValuation.smallestUnit(of: "GBP"), 0.01, accuracy: 1e-12)
+        XCTAssertEqual(AllocationValuation.smallestUnit(of: "JPY"), 1, accuracy: 1e-12)
+        XCTAssertEqual(AllocationValuation.smallestUnit(of: "GBX"), 1, accuracy: 1e-12)
+        XCTAssertEqual(AllocationValuation.smallestUnit(of: "GBp"), 1, accuracy: 1e-12)
+        XCTAssertTrue(AllocationValuation.reconciles([499, 499], with: 999, currency: "JPY"))
+        XCTAssertFalse(AllocationValuation.reconciles([499, 498], with: 999, currency: "JPY"))
+
+        // Through the page's own path: a £4.99 holding and £4.99 of cash in a £9.99 total.
+        let small = folyncModel(try folyncSnapshot(total: "9.99", cash: "4.99", holdings: [("a", "4.99")]))
+        let valuation = AllocationValuation.make(from: small)
+        XCTAssertEqual(valuation.cash, .held(4.99))
+        XCTAssertEqual(valuation.sourceTotal ?? .nan, 9.99, accuracy: 1e-12)
+        let short = folyncModel(try folyncSnapshot(total: "9.99", cash: "4.98", holdings: [("a", "4.99")]))
+        XCTAssertEqual(AllocationValuation.make(from: short).cashOmission, .totalDiffers)
+    }
+
+    // A holding known to be worth nothing.
+
+    func testAHoldingWorthZeroIsValuedAddsNothingAndLeavesTheCashRow() async throws {
+        let folync = folyncModel(try folyncSnapshot(holdings: [("a", "523.45"), ("b", "376.55"), ("c", "0")]))
+        let valuation = AllocationValuation.make(from: folync)
+        XCTAssertEqual(valuation.eligible, 3)
+        XCTAssertEqual(valuation.covered, 3, "a known zero is a value")
+        XCTAssertEqual(valuation.dayCovered, 3)
+        XCTAssertEqual(valuation.positions, ["A": 523.45, "B": 376.55], "and gets no slice")
+        XCTAssertEqual(valuation.holdings.map(\.symbol), ["A", "B"])
         XCTAssertEqual(valuation.cash, .held(100))
         XCTAssertNil(valuation.cashOmission)
-        XCTAssertNil(valuation.sourceTotal, "the shares are then of holdings plus cash, as before")
-        let rows = P.displayed([group("A", 523.45, share: 0), group("B", 380, share: 0)], cash: valuation.cash,
-                               sourceTotal: valuation.sourceTotal)
-        XCTAssertEqual(rows.reduce(0) { $0 + $1.share }, 100, accuracy: 1e-9)
+        XCTAssertEqual(valuation.sourceTotal, 1000)
+        try await assertAgreement(folync)
 
-        // In one currency, the same gap means something is missing.
-        let missing = folyncModel(try folyncSnapshot(total: "1003.45"))
-        XCTAssertEqual(AllocationValuation.make(from: missing).cashOmission, .totalDiffers)
+        // No value at all, or one below zero (no slice to draw), is still unvalued.
+        for missing in ["null", "-5"] {
+            let partial = AllocationValuation.make(from: folyncModel(try folyncSnapshot(
+                holdings: [("a", "523.45"), ("b", "376.55"), ("c", missing)])))
+            XCTAssertEqual(partial.covered, 2, missing)
+            XCTAssertEqual(partial.cashOmission, .partialCoverage, missing)
+        }
+
+        // A local holding at a price of zero has no usable price, as Holdings has it.
+        let local = model()
+        local.realTimeTrades = [trade("ALFA", price: 40, units: "10", currency: "GBP"),
+                                trade("ZERO", price: 0, units: "10", currency: "GBP")]
+        XCTAssertEqual(AllocationValuation.make(from: local).covered, 1)
+    }
+
+    // The currency view.
+
+    func testTheCurrencyViewGroupsAFolyncHoldingByTheCurrencyItIsPricedIn() async throws {
+        // B is a dollar share that Folync values in pounds, as `FolyncPortfolioSourceTests` has it.
+        let folync = folyncModel(try folyncSnapshot(pricingCurrencies: ["b": "USD"]))
+        let valuation = AllocationValuation.make(from: folync)
+        XCTAssertEqual(valuation.holdings, [AllocationHolding(symbol: "A", value: 523.45, currency: "GBP"),
+                                            AllocationHolding(symbol: "B", value: 376.55, currency: "USD")])
+        let rows = P.displayed(P.currencyGroups(valuation.holdings), cash: valuation.cash,
+                               sourceTotal: valuation.sourceTotal)
+        XCTAssertEqual(rows.map(\.label), ["GBP", "USD", "Cash"])
+        XCTAssertEqual(rows.map { P.shareText($0.share) }, ["52.3%", "37.7%", "10.0%"])
+
+        // Its slice is its value in the display currency, converted at the loaded rate.
+        let dollars = AllocationValuation.make(from: folyncModel(try folyncSnapshot(pricingCurrencies: ["b": "USD"]),
+                                                                 preferredCurrency: "USD"))
+        let usd = try XCTUnwrap(P.currencyGroups(dollars.holdings).first { $0.key == "USD" })
+        XCTAssertEqual(usd.value, 470.6875, accuracy: 1e-9)
+
+        // With no pricing currency named, the value's currency stands in, as before.
+        let unnamed = AllocationValuation.make(from: folyncModel(try folyncSnapshot(pricingCurrencies: ["b": " "])))
+        XCTAssertEqual(unnamed.holdings.map(\.currency), ["GBP", "GBP"])
+    }
+
+    // One look at Folync's holdings per calculation.
+
+    func testTheLookupFindsTheHoldingAScanWouldFind() throws {
+        let snapshot = try folyncSnapshot()
+        let folync = folyncModel(snapshot)
+        // Two holdings under one key: the first, as `holdings.first(where:)` finds it.
+        let doubled = try folyncSnapshot(holdings: [("a", "523.45"), ("a", "1"), ("b", "376.55")])
+        folync.folyncPortfolioSnapshot = doubled
+        let lookup = folync.holdingsValuationLookup()
+        XCTAssertNil(lookup.broker)
+        XCTAssertEqual(lookup.folyncHoldings?.count, 2)
+        let rowA = try XCTUnwrap(folync.realTimeTrades.first { $0.trade.name == "A" })
+        XCTAssertEqual(lookup.folyncHolding(for: rowA)?.marketValue, 523.45)
+        XCTAssertEqual(folync.weighedPositionValue(for: rowA, in: lookup)?.amount, 523.45)
+        XCTAssertEqual(folync.calculatePositionValue(for: rowA).amount, 523.45, "the same as Holdings' own lookup")
+        let unmatched = trade("NONE", price: 1, units: "1", currency: "GBP", identity: "all|pf_demo|none")
+        XCTAssertNil(folync.weighedPositionValue(for: unmatched, in: lookup))
+        XCTAssertNil(model().holdingsValuationLookup().folyncHoldings, "no Folync snapshot, no Folync holdings")
     }
 
     // Folync without a total, beside a fresh Trading 212 account.
@@ -2061,26 +2212,34 @@ final class AllocationCashTests: XCTestCase {
         XCTAssertNil(partial.positions["EURO"])
     }
 
-    func testTheValuationIsWorkedOutAgainWhenRatesArrive() throws {
+    func testTheCalculationIsKeyedOnTheLoadedRatesAndNothingElseAboutThem() throws {
         let rates = CurrencyConverter(exchangeRates: [:], refreshOnInit: false, loadHistoryOnInit: false)
         let dollars = folyncModel(try folyncSnapshot(), preferredCurrency: "USD", converter: rates)
-        let before = PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: "USD", tick: 0, converter: rates)
-        let waiting = AllocationValuation.make(from: dollars)
-        XCTAssertEqual(waiting.covered, 0, "no rates loaded: nothing is valued at a guessed rate")
-        XCTAssertEqual(waiting.cash, .none)
+        // The value the page's calculation task is keyed on, read from the page itself.
+        func trigger() -> PortfolioAnalyticsView.AnalyticsTrigger { PortfolioAnalyticsView(dataModel: dollars).analyticsTrigger }
+        let waiting = trigger()
+        XCTAssertNil(waiting.loadedRates)
+        XCTAssertEqual(AllocationValuation.make(from: dollars).covered, 0, "no rates loaded: nothing valued at a guessed rate")
 
+        // A table without a load time is not used for conversion, so it changes nothing here.
         rates.exchangeRates = ["USD": 1.0, "GBP": 0.8]
-        rates.lastRefreshTime = Date()
-        let after = PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: "USD", tick: 0, converter: rates)
-        XCTAssertNotEqual(before, after, "the rates arriving start the calculation again")
-        let loaded = AllocationValuation.make(from: dollars)
-        XCTAssertEqual(loaded.covered, 2)
-        XCTAssertEqual(loaded.cash, .held(125))
+        XCTAssertEqual(trigger(), waiting)
+        XCTAssertNil(rates.convertWithLoadedRates(amount: 1, from: "GBP", to: "USD"))
 
+        // The rates arriving start the calculation again, and it then finds them.
+        rates.lastRefreshTime = Date(timeIntervalSince1970: 1_000)
+        let loaded = trigger()
+        XCTAssertNotEqual(loaded, waiting)
+        XCTAssertEqual(loaded.loadedRates, ["USD": 1.0, "GBP": 0.8])
+        XCTAssertEqual(AllocationValuation.make(from: dollars).cash, .held(125))
+
+        // A refresh with the same rates at a later time does not.
+        rates.lastRefreshTime = Date(timeIntervalSince1970: 2_000)
+        XCTAssertEqual(trigger(), loaded)
+
+        // New rates do, under the same time or not.
         rates.exchangeRates = ["USD": 1.0, "GBP": 0.75]
-        XCTAssertNotEqual(after, PortfolioAnalyticsView.AnalyticsTrigger(range: .threeMonths, currency: "USD", tick: 0,
-                                                                         converter: rates),
-                          "new rates under the same timestamp count too")
+        XCTAssertNotEqual(trigger(), loaded)
     }
 
     // Coverage, cash only and a single holding.

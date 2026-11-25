@@ -87,17 +87,27 @@ struct PortfolioAnalyticsView: View {
         let range: TimeRange
         let currency: String
         let tick: Int
-        let ratesLoadedAt: Date
-        let rates: [String: Double]
+        /// The rate table Allocation converts with, nil until one has loaded: what
+        /// `CurrencyConverter.convertWithLoadedRates(amount:from:to:)` reads, and no more.
+        /// A refresh that brings the same rates under a new time changes nothing here, so
+        /// it does not start the calculation, and the correlation work, again.
+        let loadedRates: [String: Double]?
 
         @MainActor
         init(range: TimeRange, currency: String, tick: Int, converter: CurrencyConverter) {
             self.range = range
             self.currency = currency
             self.tick = tick
-            ratesLoadedAt = converter.lastRefreshTime
-            rates = converter.exchangeRates
+            // The observed properties, so a change of either redraws the view and re-keys its task.
+            let rates = converter.exchangeRates
+            loadedRates = rates.isEmpty || converter.lastRefreshTime == .distantPast ? nil : rates
         }
+    }
+
+    /// The trigger the calculation task below is keyed on.
+    var analyticsTrigger: AnalyticsTrigger {
+        AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency,
+                         tick: portfolioUpdateTick, converter: dataModel.currencyConverter)
     }
 
     /// Something to show: a holding to value, or cash on its own.
@@ -137,8 +147,7 @@ struct PortfolioAnalyticsView: View {
         // sleep debounces bursts of price updates. The first calculation runs immediately, and
         // earlier results stay on screen while a recalculation is in flight. The donut's view
         // switch is not a trigger: it only regroups figures already worked out.
-        .task(id: AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency,
-                                   tick: portfolioUpdateTick, converter: dataModel.currencyConverter)) {
+        .task(id: analyticsTrigger) {
             if hasLoadedOnce {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
@@ -809,7 +818,7 @@ private struct AllocationRowTooltip: ViewModifier {
 /// value in the display currency, its day's change, the currency it is priced in, how many
 /// holdings could be valued, and the cash and total from the source that gives Holdings
 /// its weights. Each holding's value is the one Holdings weighs
-/// (`DataModel.weighedPositionValue(for:)`) and the total and cash come from
+/// (`DataModel.weighedPositionValue(for:in:)`) and the total and cash come from
 /// `DataModel.holdingsWeightBasis()`, so the two pages cannot drift apart.
 struct AllocationValuation {
     let currency: String
@@ -817,6 +826,7 @@ struct AllocationValuation {
     var dayChanges: [String: Double] = [:]
     /// The same values as `positions`, kept per holding with the currency it is priced in.
     var holdings: [AllocationHolding] = []
+    /// Holdings with a known value, a known zero included.
     var covered = 0
     var dayCovered = 0
     /// Holdings that should have been valued; more than `covered` when a price or rate is missing.
@@ -826,8 +836,9 @@ struct AllocationValuation {
     var sourceTotal: Double?
     /// Why cash the source gives is left out, when it is.
     var cashOmission: AllocationCashOmission?
-    /// The currencies the valued holdings' values come in, before conversion.
-    var valueCurrencies: Set<String> = []
+    /// Each valued holding's value above zero as its source gives it, before any conversion,
+    /// for the check against the source's total.
+    var sourceValues: [HoldingsWeightBasis.Amount] = []
 
     /// How far the holdings plus cash may be from Holdings' total, as a fraction of it, for
     /// a Cash row: half the 0.1% the page shows shares to.
@@ -837,46 +848,74 @@ struct AllocationValuation {
     static func make(from dataModel: DataModel) -> AllocationValuation {
         let preferredCurrency = dataModel.preferredCurrency
         var result = AllocationValuation(currency: preferredCurrency)
-        let convert = { (amount: Double, from: String) in
-            convertAnalyticsAmount(amount, from: from, to: preferredCurrency, converter: dataModel.currencyConverter)
+        let converter = dataModel.currencyConverter
+        let convertTo = { (amount: Double, from: String, to: String) in
+            convertAnalyticsAmount(amount, from: from, to: to, converter: converter)
         }
-        let isFolync = dataModel.folyncPortfolioSnapshot != nil
+        let convert = { (amount: Double, from: String) in convertTo(amount, from, preferredCurrency) }
+        // One look at the source for the whole pass, for every row's value and day's change.
+        let lookup = dataModel.holdingsValuationLookup()
         let owned = dataModel.realTimeTrades.filter {
             !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
         }
         result.eligible = owned.count
         for trade in owned {
-            guard let value = dataModel.weighedPositionValue(for: trade), value.amount.isFinite, value.amount > 0,
-                  let converted = convert(value.amount, value.currency), converted > 0 else { continue }
+            // A holding with no value (none, or not finite) is unvalued. One below zero has
+            // no slice to draw, so it stays unvalued, as before.
+            guard let value = dataModel.weighedPositionValue(for: trade, in: lookup),
+                  value.amount.isFinite, value.amount >= 0 else { continue }
+            let change = dayChange(of: trade, lookup: lookup)
+            guard value.amount > 0 else {
+                // Known to be worth nothing (written down, say): valued, adding nothing and
+                // with no slice. It needs no exchange rate, since nothing converts.
+                result.covered += 1
+                if change != nil { result.dayCovered += 1 }
+                continue
+            }
+            guard let converted = convert(value.amount, value.currency), converted > 0 else { continue }
             let symbol = trade.trade.name
-            // The currency view groups by the currency a holding is priced in. A Folync
-            // holding's value is already in it; a broker's value is in the account's currency.
-            let pricedIn = isFolync
-                ? value.currency
-                : (trade.realTimeInfo.currency ?? trade.trade.position.currency ?? value.currency)
             result.positions[symbol, default: 0] += converted
             result.holdings.append(AllocationHolding(symbol: symbol, value: converted,
-                                                     currency: pricedIn.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                                     currency: pricingCurrency(of: trade, value: value, lookup: lookup)))
+            result.sourceValues.append(HoldingsWeightBasis.Amount(value: value.amount, currency: value.currency))
             result.covered += 1
-            result.valueCurrencies.insert(value.currency.trimmingCharacters(in: .whitespacesAndNewlines))
-            if let change = dayChange(of: trade, in: dataModel, isFolync: isFolync), let converted = convert(change.amount, change.currency) {
-                result.dayChanges[symbol, default: 0] += converted
+            if let change, let convertedChange = convert(change.amount, change.currency) {
+                result.dayChanges[symbol, default: 0] += convertedChange
                 result.dayCovered += 1
             }
         }
-        result.decideCash(dataModel.holdingsWeightBasis(), convert: convert)
+        result.decideCash(dataModel.holdingsWeightBasis(), convertTo: convertTo)
         return result
+    }
+
+    /// The currency a holding is priced in, for the currency view. A Folync holding names
+    /// it (`currency`), whatever currency Folync values it in; when that is blank, its
+    /// value's currency stands in, as before. A broker's or local holding's price currency
+    /// comes from its quote, else its position, else its value's currency.
+    @MainActor
+    private static func pricingCurrency(of trade: RealTimeTrade, value: (amount: Double, currency: String),
+                                        lookup: HoldingsValuationLookup) -> String {
+        func named(_ code: String?) -> String? {
+            let trimmed = code?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if lookup.folyncHoldings != nil {
+            return named(lookup.folyncHolding(for: trade)?.currency) ?? named(value.currency) ?? ""
+        }
+        return (trade.realTimeInfo.currency ?? trade.trade.position.currency ?? value.currency)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Today's change in the holding's value: Folync's own figure for a Folync holding,
     /// otherwise the price's move since the previous close times the units.
     @MainActor
-    private static func dayChange(of trade: RealTimeTrade, in dataModel: DataModel,
-                                  isFolync: Bool) -> (amount: Double, currency: String)? {
-        if isFolync {
-            let summary = dataModel.calculatePositionProfitLoss(for: trade)
-            guard summary.dayAmount.isFinite else { return nil }
-            return (summary.dayAmount, summary.currency)
+    private static func dayChange(of trade: RealTimeTrade,
+                                  lookup: HoldingsValuationLookup) -> (amount: Double, currency: String)? {
+        if lookup.folyncHoldings != nil {
+            // The figure Holdings shows (`DataModel.calculatePositionProfitLoss(for:)`).
+            guard let holding = lookup.folyncHolding(for: trade),
+                  let dayGain = holding.dayGain, dayGain.isFinite else { return nil }
+            return (dayGain, holding.resolvedValueCurrency)
         }
         let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
         let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
@@ -892,7 +931,7 @@ struct AllocationValuation {
     /// Holdings' weights: Holdings' total covers its holdings, every holding is valued, the
     /// cash converts at a loaded rate, and holdings plus cash come to that total. Otherwise
     /// the shares are of the holdings and `cashOmission` says why.
-    private mutating func decideCash(_ basis: HoldingsWeightBasis, convert: (Double, String) -> Double?) {
+    private mutating func decideCash(_ basis: HoldingsWeightBasis, convertTo: (Double, String, String) -> Double?) {
         cash = .none
         sourceTotal = nil
         cashOmission = nil
@@ -901,37 +940,69 @@ struct AllocationValuation {
             return
         }
         guard let sourceCash = basis.cash, sourceCash.value != 0 else { return }
-        let converted = convert(sourceCash.value, sourceCash.currency)
+        let converted = convertTo(sourceCash.value, sourceCash.currency, currency)
         // Cash that shows as zero in the display currency is zero: no row, no line.
         if let converted, HoldingsCurrencyFormatter.displayedSign(of: converted, currency: currency) == 0 { return }
         guard covered == eligible else { cashOmission = .partialCoverage; return }
         guard let converted else { cashOmission = .noExchangeRate; return }
         guard converted > 0 else { cash = .borrowing(converted); return }
-        holdCash(converted, from: sourceCash.currency, total: basis.total, convert: convert)
+        holdCash(converted, cash: sourceCash, total: basis.total, convertTo: convertTo)
     }
 
     /// Cash above zero, with every holding valued: a Cash row when the holdings and cash
-    /// come to the source's total. That check is made only when every figure is already in
-    /// the total's currency; across currencies the figures differ from it by the exchange
-    /// rates used, not by anything missing, so the shares are then of holdings plus cash.
-    private mutating func holdCash(_ converted: Double, from cashCurrency: String,
-                                   total: HoldingsWeightBasis.Amount?, convert: (Double, String) -> Double?) {
-        guard let total else { cashOmission = .totalDiffers; return }
-        guard let convertedTotal = convert(total.value, total.currency), convertedTotal > 0 else {
+    /// come to the source's total. The check is made in the total's own currency, every
+    /// figure converted into it at loaded rates only (pence through pounds, at 100), since
+    /// that is where the source added them up. A figure with no such rate means no Cash
+    /// row, as cash without one has none. When the check passes, every share is of the
+    /// source's total.
+    private mutating func holdCash(_ converted: Double, cash sourceCash: HoldingsWeightBasis.Amount,
+                                   total: HoldingsWeightBasis.Amount?,
+                                   convertTo: (Double, String, String) -> Double?) {
+        guard let total, total.value > 0 else { cashOmission = .totalDiffers; return }
+        var figures: [Double] = []
+        for figure in sourceValues + [sourceCash] {
+            guard let inTotalCurrency = convertTo(figure.value, figure.currency, total.currency) else {
+                cashOmission = .noExchangeRate
+                return
+            }
+            figures.append(inTotalCurrency)
+        }
+        guard let convertedTotal = convertTo(total.value, total.currency, currency), convertedTotal > 0 else {
             cashOmission = .noExchangeRate
             return
         }
-        guard valueCurrencies.union([cashCurrency]) == [total.currency] else {
-            cash = .held(converted)
-            return
-        }
-        let holdingsTotal = positions.values.reduce(0, +)
-        guard abs(holdingsTotal + converted - convertedTotal) <= Self.reconciliationTolerance * convertedTotal else {
+        guard Self.reconciles(figures, with: total.value, currency: total.currency) else {
             cashOmission = .totalDiffers
             return
         }
         cash = .held(converted)
         sourceTotal = convertedTotal
+    }
+
+    /// Whether `figures` (each holding's value and the cash, in the total's currency) add up
+    /// to the source's `total`. The check exists so that every share the page shows, to
+    /// 0.1%, agrees with Holdings' weight. The gap allowed is the larger of
+    /// `reconciliationTolerance` of the total and half the currency's smallest unit for each
+    /// figure summed, which is as far honest rounding can take them apart: two £4.99 parts
+    /// of a £9.99 total are a penny short and still pass. So a small omission that cannot
+    /// change any displayed share may pass too; one that could does not.
+    static func reconciles(_ figures: [Double], with total: Double, currency: String) -> Bool {
+        let sum = figures.reduce(0, +)
+        guard sum.isFinite, total.isFinite else { return false }
+        let allowance = max(reconciliationTolerance * abs(total),
+                            0.5 * smallestUnit(of: currency) * Double(figures.count))
+        // A hair over the allowance for binary floating point: £4.99 + £4.99 is not exactly £9.98.
+        return abs(sum - total) <= allowance * (1 + 1e-9)
+    }
+
+    /// The currency's smallest unit in its own terms: a penny, 0.01, for pounds; 1 for yen;
+    /// 1 for a minor-unit code (pence, GBX), whose figures are already in that unit.
+    static func smallestUnit(of currency: String) -> Double {
+        if CurrencyConverter.minorUnitMajorCurrency(currency) != nil { return 1 }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return pow(10, -Double(formatter.maximumFractionDigits))
     }
 
     /// Convert only with a rate from the loaded rate table; a hard-coded fallback rate is
