@@ -395,13 +395,13 @@ footprint) is 3.2 MB at `5fa923b` and 22 MB from pull request 139 onwards,
 so the idle rise is in pull requests 135 to 139; 135 and 136 change no
 view, which leaves 137 (Glass surfaces), 138 (the popover) and 139 (the
 Overview). They are measured one at a time next. The table is in
-[pull request 152's entry](#152-read-yahoos-chart-details-with-the-yfinance-the-app-ships).
+[pull request 153's entry](#153-read-yahoos-chart-details-with-the-yfinance-the-app-ships).
 
 On 2026-11-25 the owner allowed one supervised live run of the Yahoo
 events lookup (pull request 136) before Calendar, a local Income estimate
 and a Funds group are built on it. It found that the lookup had never
 answered: with the yfinance the app ships, every symbol was thrown away as
-having no data. Pull request 152 fixes that and records what Yahoo gives.
+having no data. Pull request 153 fixes that and records what Yahoo gives.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -5553,7 +5553,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   at the ten-second samples was 8.9, once, during the after side's second
   launch; everywhere else it stayed at or below 4.4. Four rows are
   higher, and two are marked possibly higher. (This sentence said "three"
-  until pull request 152 corrected it.)
+  until pull request 153 corrected it.)
 
   | Metric | Before: median (range) | After: median (range) | Change | Verdict |
   | --- | --- | --- | --- | --- |
@@ -5616,7 +5616,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   own objects but memory the system holds for it, such as what it draws
   the window with. Pull request 140, which gave the main window the Glass
   shell with a floating sidebar, was named here as the likeliest cause.
-  Measured on its own that night it is not; see pull request 152's entry.
+  Measured on its own that night it is not; see pull request 153's entry.
   Under the rule of 2026-11-20 a row that moves and
   holds is followed by measuring the phase's pull requests one by one, so
   pull request 140 is measured on its own next, against pull request 139
@@ -5640,7 +5640,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   request. Pull request 140 is to be measured on its own next.
 - Verdict: retained.
 
-### 152: Read Yahoo's chart details with the yfinance the app ships
+### 153: Read Yahoo's chart details with the yfinance the app ships
 
 - What: the Yahoo events lookup of pull request 136,
   `Stockbar/Resources/get_instrument_events.py`, read the chart details
@@ -6035,7 +6035,7 @@ launch.
 | The second batch, pull requests 144 to 147: Allocation, the Settings switches, Holdings and Risk | Fable 5.2 (session lead) for the specifications, the review, the merges and the records; four Opus 5.5 workers in parallel, each in its own worktree | Worth it for the building. During 145 the lead traced why the acceptance copy could not change a setting seeded before it started: its defaults suite is named by a path, and on macOS 27.2.1 a process never reads back its own change to a key already in such a file. That became pull request 148. In 146 the lead restored the editing table's column widths, which the worker had narrowed without seeing them, and in 147 corrected "trading days" to "days" for the worst fall's length, which is counted in calendar days. Neither the filled Risk page nor Allocation's grid of correlations was seen in the running acceptance copy, only in drawings made off screen, and the owner was asked to look at both in the real build |
 | Pull requests 148 to 150: the acceptance copy's seeded settings, the Charts and Data Health tidy, and the Holdings editing table | Fable 5.2 (session lead), with three Opus 5.5 workers, each in its own worktree | Worth it, with one cut-off. During pull request 150 the Mac's disk filled to 119 MB free with this work's own leftovers: the build folder every acceptance launch left in the temporary directory, and the build caches of every worktree. It stopped the D1b worker part-way through showing its tests fail. The lead removed about 45 GB of those leftovers, keeping the logs, captures and benchmark results, removed the breakage left in the worker's tree, and finished the breakages and checks. Two workers' accessibility reads returned the system's Apple menu, Recent Items included; neither saved or repeated it, and the owner was told. The D4 worker scrolled once without a capture id of the same window. Later specifications are to say: read a window's tree with a query and never the menu bar, give no pointer or scroll input without a capture of the same window, and clear build folders after each batch |
 | The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
-| The Yahoo check and pull request 152 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
+| The Yahoo check and pull request 153 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
