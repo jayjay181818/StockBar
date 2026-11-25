@@ -263,6 +263,17 @@ class ShapeTests(InstrumentEventsTestCase):
             self.assertIsNone(events[key], key)
         self.assertEqual(len(events["dividends"]), 2)
 
+    def test_a_calendar_that_is_a_mapping_but_not_a_dict_is_still_read(self):
+        # The chart metadata became a read-only mapping once; the calendar may too.
+        spec = dict(US_SHARE, calendar=_Metadata(US_SHARE["calendar"]))
+        (envelope,), _ = self.run_symbols({"ALPHA": spec}, ["ALPHA"])
+
+        self.assertTrue(envelope["success"])
+        events = envelope["events"]
+        self.assertEqual(events["exDividendDate"], "2026-11-28")
+        self.assertEqual(events["dividendPayDate"], "2026-12-10")
+        self.assertEqual(events["earningsDate"], "2027-01-28")
+
     def test_share_without_dividends_has_an_empty_list_and_no_currency(self):
         spec = {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "calendar": {}}
         (envelope,), _ = self.run_symbols({"DELTA": spec}, ["DELTA"])

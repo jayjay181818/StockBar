@@ -307,7 +307,8 @@ def fetch_events(symbol, today, now_seconds):
 
     instrument_type = metadata_value(metadata, "instrumentType")
     reported_currency = metadata_value(metadata, "currency")
-    calendar = calendar if isinstance(calendar, dict) else {}
+    # A dict in yfinance 1.8; history_metadata has already become a read-only mapping once.
+    calendar = calendar if isinstance(calendar, collections.abc.Mapping) else {}
     # yfinance swallows a failed chart request and leaves its metadata empty.
     # Without the chart there is no instrument type and no trustworthy
     # dividend list, so the symbol is not answered rather than saved as nulls.

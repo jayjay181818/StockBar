@@ -322,6 +322,140 @@ class PreviousCloseTests(unittest.TestCase):
         self.assertTrue(needs("AAPL", 1.0, float("nan"), "USD"))
 
 
+class _DailyColumn:
+    def __init__(self, values):
+        self._values = values
+
+    def tolist(self):
+        return list(self._values)
+
+
+class _DailyIndex:
+    """`index.to_series().dt.date < day`, as the quote paths filter completed days."""
+    tz = None
+
+    def __init__(self, dates):
+        self._dates = dates
+
+    def to_series(self):
+        return self
+
+    @property
+    def dt(self):
+        return self
+
+    @property
+    def date(self):
+        return self
+
+    def __lt__(self, other):
+        return [day < other for day in self._dates]
+
+
+class _DailyFrame:
+    """The few parts of a yfinance daily history the quote paths read."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.empty = not self._rows
+        self.index = _DailyIndex([day for day, _ in self._rows])
+
+    def __len__(self):
+        return len(self._rows)
+
+    def sort_index(self):
+        return _DailyFrame(sorted(self._rows))
+
+    def __getitem__(self, key):
+        if key == "Close":
+            return _DailyColumn([close for _, close in self._rows])
+        return _DailyFrame([row for row, keep in zip(self._rows, key) if keep])
+
+    @property
+    def iloc(self):
+        rows = self._rows
+
+        class _Rows:
+            def __getitem__(self, position):
+                return {"Close": rows[position][1]}
+
+        return _Rows()
+
+
+class _ReadOnlyMetadata(Mapping):
+    def __init__(self, values):
+        self._values = dict(values)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+
+class _InfoFailsTicker:
+    """The chart history answers and names its currency, but `info` raises."""
+
+    def __init__(self, currency):
+        from datetime import date
+
+        self._rows = [(date(2026, 1, 5), 1000.0), (date(2026, 1, 6), 1010.0)]
+        self.history_metadata = _ReadOnlyMetadata({"currency": currency})
+        self.fast_info = {"last_price": 1010.0}
+
+    @property
+    def info(self):
+        raise RuntimeError("quoteSummary request failed")
+
+    def history(self, interval="1d", **_kwargs):
+        return _DailyFrame(self._rows if interval == "1d" else [])
+
+
+class InfoFailureCurrencyTests(unittest.TestCase):
+    """When `ticker.info` fails after the chart succeeded, the chart's currency
+    still decides whether prices are in pence."""
+
+    def setUp(self):
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.module = load_module(os.path.join(self.temp_directory.name, "cache.json"))
+
+    def tearDown(self):
+        self.temp_directory.cleanup()
+
+    def call(self, function, symbol, currency):
+        fake_yf = mock.Mock()
+        fake_yf.Ticker.side_effect = lambda _symbol: _InfoFailsTicker(currency)
+        with mock.patch.object(self.module, "YFINANCE_AVAILABLE", True), \
+                mock.patch.object(self.module, "yf", fake_yf, create=True), \
+                mock.patch.object(self.module, "log_error"):
+            return function(symbol)
+
+    def test_previous_close_of_a_pound_quoted_london_listing_is_not_divided(self):
+        self.assertEqual(self.call(self.module.fetch_previous_close_yfinance, "III.L", "GBP"), 1010.0)
+        self.assertEqual(self.call(self.module.fetch_previous_close_yfinance, "VOD.L", "GBp"), 10.1)
+
+    def test_info_that_is_a_mapping_but_not_a_dict_still_gives_the_currency(self):
+        class NoChart:
+            @property
+            def history_metadata(self):
+                raise RuntimeError("no chart")
+
+        info = _ReadOnlyMetadata({"currency": "GBP", "financialCurrency": "USD"})
+        self.assertEqual(self.module.trading_currency(NoChart(), info), "GBP")
+
+    def test_real_time_quote_of_a_pound_quoted_london_listing_is_not_divided(self):
+        quote = self.call(self.module.fetch_real_time_quote_yfinance, "III.L", "GBP")
+        self.assertEqual(quote["currency"], "GBP")
+        self.assertEqual(quote["regularMarketPrice"], 1010.0)
+        self.assertEqual(quote["previousClose"], 1000.0, "the close before the last completed one")
+        pence = self.call(self.module.fetch_real_time_quote_yfinance, "VOD.L", "GBp")
+        self.assertEqual(pence["currency"], "GBP")
+        self.assertEqual(pence["regularMarketPrice"], 10.1)
+
+
 class QuoteBatchTests(unittest.TestCase):
     def setUp(self):
         self.temp_directory = tempfile.TemporaryDirectory()

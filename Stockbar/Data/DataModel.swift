@@ -32,7 +32,7 @@ class DataModel {
     private let migrationService = DataMigrationService.shared
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
     @ObservationIgnored private var pendingPersistenceTask: Task<Void, Never>?
-    private let trading212SettingsStore = Trading212SettingsStore.shared
+    private let trading212SettingsStore: Trading212SettingsStore
     private let trading212CredentialStore = Trading212CredentialStore.shared
     private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
     private let trading212BrokerLinkStore = BrokerLinkStore.shared
@@ -231,9 +231,11 @@ class DataModel {
 
     init(
         currencyConverter: CurrencyConverter = .shared,
-        startRuntimeServices: Bool = true
+        startRuntimeServices: Bool = true,
+        trading212SettingsStore: Trading212SettingsStore = .shared
     ) {
         self.currencyConverter = currencyConverter
+        self.trading212SettingsStore = trading212SettingsStore
         // Pure calculation service: create it up front so totals never fall
         // back to a placeholder $0.00 while runtime services start.
         self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
@@ -1480,17 +1482,50 @@ class DataModel {
             else { return nil }
             return HoldingsWeight.given(holding.allocationPct)
         }
-        if freshTrading212BrokerValuationSnapshot()?.position(for: trade.trade.name) == nil {
-            // The net value leaves out a holding with no usable price, so it has no share of it.
-            let price = trade.realTimeInfo.getCurrentDisplayPrice()
-            guard price.isFinite, price > 0 else { return nil }
-        }
-        let value = calculatePositionValue(for: trade)
+        // No Folync snapshot here, so the lookup is only the fresh Trading 212 valuation.
+        guard let value = weighedPositionValue(for: trade, in: holdingsValuationLookup()) else { return nil }
         return HoldingsWeight.share(
             value: value.amount, currency: value.currency,
             of: netValue.amount, currency: netValue.currency,
             convert: currencyConverter.convert(amount:from:to:)
         )
+    }
+
+    /// What a valuation pass reads from its source, looked up once for the whole pass:
+    /// Folync's holdings by overlay identity, or else the fresh Trading 212 valuation.
+    /// Allocation builds one per calculation rather than scanning Folync's holdings once
+    /// per row for its value and again for its day's change.
+    func holdingsValuationLookup() -> HoldingsValuationLookup {
+        guard let snapshot = folyncPortfolioSnapshot else {
+            return HoldingsValuationLookup(folyncHoldings: nil, broker: freshTrading212BrokerValuationSnapshot())
+        }
+        // The first holding with a key wins, as `holdings.first(where:)` finds it.
+        let holdings = Dictionary(snapshot.holdings.map { ($0.overlayKey(scopeID: snapshot.scope.id), $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        return HoldingsValuationLookup(folyncHoldings: holdings, broker: nil)
+    }
+
+    /// The value behind a holding's weight, in the currency it is in, as Holdings and
+    /// Allocation both take it: Folync's market value for a Folync holding (Holdings shows
+    /// Folync's own weight for it), the broker's current value for a Trading 212 position,
+    /// otherwise price times units. Nil for a watchlist row, a Folync row that matches no
+    /// Folync holding, and a holding with no usable price outside a Trading 212 account
+    /// (the net value leaves it out, so it has no share of it). The same figures as
+    /// `calculatePositionValue(for:)` gives, read from `lookup`.
+    func weighedPositionValue(for trade: RealTimeTrade,
+                              in lookup: HoldingsValuationLookup) -> (amount: Double, currency: String)? {
+        guard !trade.trade.isWatchlistOnly else { return nil }
+        if lookup.folyncHoldings != nil {
+            guard let holding = lookup.folyncHolding(for: trade) else { return nil }
+            return (holding.marketValue ?? .nan, holding.resolvedValueCurrency)
+        }
+        if let valuation = lookup.broker?.position(for: trade.trade.name) {
+            return (valuation.brokerCurrentValue, valuation.currency)
+        }
+        let price = trade.realTimeInfo.getCurrentDisplayPrice()
+        guard price.isFinite, price > 0 else { return nil }
+        let amount = price * trade.trade.position.unitSize
+        return (amount.isFinite ? amount : .nan, trade.realTimeInfo.currency ?? "")
     }
 
     /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
@@ -1511,30 +1546,54 @@ class DataModel {
         )
     }
 
-    /// The cash inside the total that `calculateNetValue()` gives, taken from the same
-    /// source: Folync's own `cash` figure, or the cash in the Trading 212 account, each in
-    /// the currency the source names for it. Nil for a local portfolio, when the source gives
-    /// no cash figure, or names no currency for it (none is guessed). It can be zero or below
-    /// zero (borrowing).
-    func netValueCash() -> (amount: Double, currency: String)? {
+    /// Where Holdings' total and its cash come from, decided once, here, for both. Allocation
+    /// takes its total and cash from this and each holding's value from
+    /// `weighedPositionValue(for:in:)`, so the two pages weigh the same holdings against the
+    /// same total. The choice of source is the one `calculatePositionValue(for:)` and
+    /// `calculatePositionWeight(for:netValue:)` make: Folync whenever its snapshot is there,
+    /// then a fresh Trading 212 account, then the local portfolio. With Folync's holdings,
+    /// the cash is Folync's or not known, never another account's.
+    func holdingsWeightBasis() -> HoldingsWeightBasis {
         func named(_ currency: String?) -> String? {
             let trimmed = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return trimmed.isEmpty ? nil : trimmed
         }
-        if let snapshot = folyncPortfolioSnapshot,
-           let total = snapshot.totalValue.value,
-           total.isFinite {
-            guard let cash = snapshot.cash.value, cash.isFinite,
-                  let currency = named(snapshot.cash.currency)
-            else { return nil }
-            return (cash, currency)
+        func amount(_ value: Double?, _ currency: String?) -> HoldingsWeightBasis.Amount? {
+            guard let value, value.isFinite, let currency = named(currency) else { return nil }
+            return HoldingsWeightBasis.Amount(value: value, currency: currency)
         }
-        guard portfolioCalculationService != nil,
-              let broker = freshTrading212BrokerValuationSnapshot(),
-              let cash = broker.cashValue, cash.isFinite,
-              let currency = named(broker.currency)
-        else { return nil }
-        return (cash, currency)
+        if let snapshot = folyncPortfolioSnapshot {
+            guard let total = snapshot.totalValue.value, total.isFinite else {
+                // Holdings' rows are Folync's, but its net value then comes from Trading 212
+                // or the local holdings (`calculateNetValue()`): not a total of those rows.
+                return HoldingsWeightBasis(source: .folync, total: nil, cash: nil, mismatch: .folyncWithoutTotal)
+            }
+            return HoldingsWeightBasis(
+                source: .folync,
+                total: amount(total, snapshot.totalValue.currency ?? snapshot.scope.currency),
+                cash: amount(snapshot.cash.value, snapshot.cash.currency),
+                mismatch: nil
+            )
+        }
+        guard portfolioCalculationService != nil, let broker = freshTrading212BrokerValuationSnapshot() else {
+            return HoldingsWeightBasis(source: .local, total: nil, cash: nil, mismatch: nil)
+        }
+        // Holdings weighs a holding kept outside the account against the account's value,
+        // which leaves it out.
+        let outside = realTimeTrades.contains {
+            !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) && broker.position(for: $0.trade.name) == nil
+        }
+        return HoldingsWeightBasis(
+            source: .trading212,
+            total: amount(broker.accountValue, broker.currency),
+            cash: amount(broker.cashValue, broker.currency),
+            mismatch: outside ? .holdingsOutsideBrokerAccount : nil
+        )
+    }
+
+    /// Puts a Trading 212 valuation in place as a sync does, for tests of what reads it.
+    func setTrading212BrokerValuationSnapshotForTesting(_ snapshot: Trading212BrokerValuationSnapshot?) {
+        trading212BrokerValuationSnapshot = snapshot
     }
 
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
@@ -2080,6 +2139,54 @@ enum PortfolioRestoreError: LocalizedError {
             return "Folync is providing the portfolio. Switch to the local portfolio in Settings → Connections before restoring a backup."
         }
     }
+}
+
+/// One valuation pass's view of its source, from `DataModel.holdingsValuationLookup()`.
+struct HoldingsValuationLookup {
+    /// Folync's holdings keyed by overlay identity; nil without a Folync snapshot.
+    let folyncHoldings: [String: FolyncHolding]?
+    /// The fresh Trading 212 valuation; nil with a Folync snapshot, or without a fresh one.
+    let broker: Trading212BrokerValuationSnapshot?
+
+    /// The Folync holding a Folync row shows, or nil.
+    func folyncHolding(for trade: RealTimeTrade) -> FolyncHolding? {
+        guard let identity = trade.sourceIdentity else { return nil }
+        return folyncHoldings?[identity]
+    }
+}
+
+/// What Holdings' weights are of, from `DataModel.holdingsWeightBasis()`.
+struct HoldingsWeightBasis: Equatable, Sendable {
+    enum Source: Equatable, Sendable {
+        case folync
+        case trading212
+        case local
+    }
+
+    /// A figure in the currency its source names for it.
+    struct Amount: Equatable, Sendable {
+        let value: Double
+        let currency: String
+    }
+
+    /// Where Holdings' total does not cover the holdings it weighs.
+    enum Mismatch: Equatable, Sendable {
+        /// Folync gives the holdings but no total, so the net value comes from elsewhere.
+        case folyncWithoutTotal
+        /// Holdings kept outside the Trading 212 account are weighed against its value.
+        case holdingsOutsideBrokerAccount
+    }
+
+    let source: Source
+    /// The source's own total (Folync's total value, the Trading 212 account's value),
+    /// which Holdings shows as its net value. Nil for a local portfolio, whose total is
+    /// its holdings' sum, and when the source gives none or names no currency for it.
+    let total: Amount?
+    /// The cash inside `total`, from the same source. Nil when not known; it can be zero
+    /// or below zero (borrowing).
+    let cash: Amount?
+    /// Nil when Holdings' total covers exactly the holdings it weighs.
+    let mismatch: Mismatch?
 }
 
 // MARK: - RealTimeTrade Extension
