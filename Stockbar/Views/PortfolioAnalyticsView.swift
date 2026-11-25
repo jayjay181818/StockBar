@@ -38,6 +38,8 @@ struct PortfolioAnalyticsView: View {
     @State private var grouping: AllocationGrouping = .sector
     /// Each valued holding with the currency it is priced in, for the currency view.
     @State private var valuedHoldings: [AllocationHolding] = []
+    /// The cash in Holdings' total, in the display currency, from the same calculation run.
+    @State private var cash: AllocationCash = .none
     /// Slice colours for holdings and currencies, kept while the page is open.
     @State private var holdingColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
     @State private var currencyColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
@@ -137,7 +139,7 @@ struct PortfolioAnalyticsView: View {
 
     // MARK: - Allocation donut and list
 
-    /// The groups for the chosen view, at most eight.
+    /// The groups for the chosen view: at most eight, then a Cash row when cash is held.
     private var displayedGroups: [AllocationGroup] {
         let groups: [AllocationGroup]
         switch grouping {
@@ -148,7 +150,7 @@ struct PortfolioAnalyticsView: View {
         case .currency:
             groups = AllocationPresentation.currencyGroups(valuedHoldings)
         }
-        return AllocationPresentation.folded(groups)
+        return AllocationPresentation.displayed(groups, cash: cash)
     }
 
     private var allocationSection: some View {
@@ -186,11 +188,21 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
 
-                if grouping == .sector,
-                   let unclassified = diversificationAnalysis?.unclassifiedPercentage, unclassified > 0 {
-                    Text("\(unclassified, specifier: "%.1f")% of the portfolio is in holdings with no known sector (shown as Unclassified).")
+                if let line = AllocationPresentation.borrowingLine(cash, currency: analyticsCurrency) {
+                    Text(line)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Shown when the holdings were all valued, as before; its figure is the
+                // Unclassified row's share of the same total as the rows.
+                if grouping == .sector, diversificationAnalysis != nil,
+                   let unclassified = AllocationPresentation.unclassifiedShare(sectorAllocations, cash: cash) {
+                    Text(AllocationPresentation.unclassifiedNote(share: unclassified, includesCash: cash.heldAmount > 0))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -198,8 +210,10 @@ struct PortfolioAnalyticsView: View {
 
     private func donut(_ groups: [AllocationGroup]) -> some View {
         let holdingCount = sectorAllocations.reduce(0) { $0 + $1.positions.count }
-        let total = sectorAllocations.reduce(0) { $0 + $1.totalValue }
-        let centre = AllocationPresentation.centreText(total: total, holdingCount: holdingCount, currency: analyticsCurrency)
+        let holdingsTotal = sectorAllocations.reduce(0) { $0 + $1.totalValue }
+        let total = AllocationPresentation.shareTotal(holdingsTotal: holdingsTotal, cash: cash)
+        let centre = AllocationPresentation.centreText(total: total, holdingCount: holdingCount,
+                                                       currency: analyticsCurrency, includesCash: cash.heldAmount > 0)
         return ZStack {
             Chart(groups) { group in
                 SectorMark(
@@ -262,6 +276,8 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
                 .padding(.vertical, 5)
+                .contentShape(Rectangle())
+                .help(group.isCash ? AllocationPresentation.cashTooltip(group, currency: analyticsCurrency) : "")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(AllocationPresentation.spokenRow(group, grouping: grouping, currency: analyticsCurrency))
             }
@@ -270,6 +286,7 @@ struct PortfolioAnalyticsView: View {
     }
 
     private func colour(for group: AllocationGroup) -> Color {
+        if group.isCash { return StockbarPalette.allocationCash }
         if group.isOther { return StockbarPalette.allocationOther }
         switch grouping {
         case .sector:
@@ -294,6 +311,13 @@ struct PortfolioAnalyticsView: View {
             Text("Diversification")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
+
+            if cash.heldAmount > 0 {
+                Text(AllocationPresentation.holdingsOnlyCaption)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let analysis = diversificationAnalysis, analysis.isAvailable {
                 HStack(alignment: .top, spacing: 20) {
@@ -327,7 +351,8 @@ struct PortfolioAnalyticsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
                 if analysis.unclassifiedPercentage > 0 {
-                    Text("\(analysis.unclassifiedPercentage, specifier: "%.1f")% of the portfolio has no known sector and is excluded from this score.")
+                    Text(AllocationPresentation.diversificationUnclassifiedNote(
+                        share: analysis.unclassifiedPercentage, includesCash: cash.heldAmount > 0))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -344,7 +369,8 @@ struct PortfolioAnalyticsView: View {
                     }
                 }
             } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
-                Text("Diversification unavailable: \(analysis.unclassifiedPercentage, specifier: "%.0f")% of the portfolio has no known sector.")
+                Text(AllocationPresentation.diversificationUnavailableNote(
+                    share: analysis.unclassifiedPercentage, includesCash: cash.heldAmount > 0))
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -597,73 +623,23 @@ struct PortfolioAnalyticsView: View {
         isLoading = true
         defer { if analyticsRevision == revision { isLoading = false } }
 
-        // Calculate sector allocations
-        var positions: [String: Double] = [:]
-        var dayChanges: [String: Double] = [:]
-        // The same values as `positions`, kept per holding with the currency it is priced in.
-        var valuedHoldings: [AllocationHolding] = []
-
-        let preferredCurrency = dataModel.preferredCurrency
-        var covered = 0
-        var dayCovered = 0
-        let eligibleCount: Int
-        if let snapshot = dataModel.folyncPortfolioSnapshot {
-            eligibleCount = snapshot.displayHoldings.count
-        } else {
-            eligibleCount = dataModel.realTimeTrades.filter {
-                !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
-            }.count
-        }
-        if let snapshot = dataModel.folyncPortfolioSnapshot {
-            for holding in snapshot.displayHoldings {
-                guard let value = holding.marketValue, value.isFinite, value > 0 else { continue }
-                let sourceCurrency = holding.resolvedValueCurrency.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !sourceCurrency.isEmpty,
-                      let converted = convertAnalyticsAmount(value, from: sourceCurrency, to: preferredCurrency), converted > 0 else { continue }
-                positions[holding.resolvedDisplayTicker, default: 0] += converted
-                valuedHoldings.append(AllocationHolding(symbol: holding.resolvedDisplayTicker, value: converted, currency: sourceCurrency))
-                if let dayGain = holding.dayGain,
-                   let convertedDayGain = convertAnalyticsAmount(dayGain, from: sourceCurrency, to: preferredCurrency) {
-                    dayChanges[holding.resolvedDisplayTicker, default: 0] += convertedDayGain
-                    dayCovered += 1
-                }
-                covered += 1
-            }
-        } else {
-          for trade in dataModel.realTimeTrades {
-            guard !trade.trade.isWatchlistOnly,
-                  !SymbolMetadata.isBenchmarkSymbol(trade.trade.name) else { continue }
-            let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
-            let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
-            let units = trade.trade.position.unitSize
-            guard currentPrice.isFinite, currentPrice > 0, units.isFinite, units > 0 else { continue }
-            guard let rawCurrency = trade.realTimeInfo.currency ?? trade.trade.position.currency,
-                  let sourceCurrency = SymbolMetadata.normalizeCurrency(rawCurrency),
-                  !sourceCurrency.isEmpty else { continue }
-            guard let currentValue = convertAnalyticsAmount(currentPrice * units, from: sourceCurrency, to: preferredCurrency), currentValue > 0 else { continue }
-            positions[trade.trade.name, default: 0] += currentValue
-            valuedHoldings.append(AllocationHolding(symbol: trade.trade.name, value: currentValue, currency: sourceCurrency))
-            if previousClose.isFinite, previousClose > 0 {
-                let rawChange = (currentPrice - previousClose) * units
-                if let convertedChange = convertAnalyticsAmount(rawChange, from: sourceCurrency, to: preferredCurrency) {
-                    dayChanges[trade.trade.name, default: 0] += convertedChange
-                    dayCovered += 1
-                }
-            }
-            covered += 1
-          }
-        }
+        let valuation = AllocationValuation.make(from: dataModel)
+        let positions = valuation.positions
+        let preferredCurrency = valuation.currency
 
         let sectors = await sectorService.calculateSectorAllocations(
             positions: positions,
-            dayChanges: dayChanges
+            dayChanges: valuation.dayChanges
         )
 
         let diversification = await sectorService.analyzeDiversification(
             sectorAllocations: sectors
         )
+        let eligibleCount = valuation.eligible
+        let covered = valuation.covered
         let completeCoverage = eligibleCount > 0 && covered == eligibleCount
-        let completeDay = eligibleCount > 0 && dayCovered == eligibleCount
+        let completeDay = eligibleCount > 0 && valuation.dayCovered == eligibleCount
+        let valuedHoldings = valuation.holdings
 
         await MainActor.run {
             guard self.analyticsRevision == revision else { return }
@@ -677,6 +653,7 @@ struct PortfolioAnalyticsView: View {
             self.analyticsEligible = eligibleCount
             self.diversificationAnalysis = completeCoverage ? diversification : nil
             self.analyticsCurrency = preferredCurrency
+            self.cash = valuation.cash
             self.analyticsCoverage = covered
             self.completeDayCoverage = completeCoverage && completeDay
             self.hasLoadedOnce = true
@@ -747,15 +724,6 @@ struct PortfolioAnalyticsView: View {
         return history
     }
 
-    /// Convert only with a current, known FX rate; fallback constants are not suitable for allocation claims.
-    private func convertAnalyticsAmount(_ amount: Double, from: String, to: String) -> Double? {
-        guard amount.isFinite else { return nil }
-        let info = dataModel.currencyConverter.getExchangeRateInfo(from: from, to: to)
-        guard info.rate.isFinite, !info.isFallback else { return nil }
-        let converted = dataModel.currencyConverter.convert(amount: amount, from: from, to: to)
-        return converted.isFinite ? converted : nil
-    }
-
     // MARK: - Attribution Analysis Section (v2.3.1)
 
     private var attributionAnalysisSection: some View {
@@ -789,6 +757,89 @@ struct PortfolioAnalyticsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+}
+
+/// What the Allocation page values, worked out once from the data model: each holding's
+/// value in the display currency, its day's change, the currency it is priced in, how many
+/// holdings could be valued, and the cash from the source that gives Holdings its total.
+struct AllocationValuation {
+    let currency: String
+    var positions: [String: Double] = [:]
+    var dayChanges: [String: Double] = [:]
+    /// The same values as `positions`, kept per holding with the currency it is priced in.
+    var holdings: [AllocationHolding] = []
+    var covered = 0
+    var dayCovered = 0
+    /// Holdings that should have been valued; more than `covered` when a price or rate is missing.
+    var eligible = 0
+    var cash: AllocationCash = .none
+
+    @MainActor
+    static func make(from dataModel: DataModel) -> AllocationValuation {
+        let preferredCurrency = dataModel.preferredCurrency
+        var result = AllocationValuation(currency: preferredCurrency)
+        let convert = { (amount: Double, from: String) in
+            convertAnalyticsAmount(amount, from: from, to: preferredCurrency, converter: dataModel.currencyConverter)
+        }
+        if let snapshot = dataModel.folyncPortfolioSnapshot {
+            result.eligible = snapshot.displayHoldings.count
+            for holding in snapshot.displayHoldings {
+                guard let value = holding.marketValue, value.isFinite, value > 0 else { continue }
+                let sourceCurrency = holding.resolvedValueCurrency.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !sourceCurrency.isEmpty,
+                      let converted = convert(value, sourceCurrency), converted > 0 else { continue }
+                result.positions[holding.resolvedDisplayTicker, default: 0] += converted
+                result.holdings.append(AllocationHolding(symbol: holding.resolvedDisplayTicker, value: converted,
+                                                         currency: sourceCurrency))
+                if let dayGain = holding.dayGain, let convertedDayGain = convert(dayGain, sourceCurrency) {
+                    result.dayChanges[holding.resolvedDisplayTicker, default: 0] += convertedDayGain
+                    result.dayCovered += 1
+                }
+                result.covered += 1
+            }
+        } else {
+            let owned = dataModel.realTimeTrades.filter {
+                !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
+            }
+            result.eligible = owned.count
+            for trade in owned {
+                let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
+                let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
+                let units = trade.trade.position.unitSize
+                guard currentPrice.isFinite, currentPrice > 0, units.isFinite, units > 0 else { continue }
+                guard let rawCurrency = trade.realTimeInfo.currency ?? trade.trade.position.currency,
+                      let sourceCurrency = SymbolMetadata.normalizeCurrency(rawCurrency),
+                      !sourceCurrency.isEmpty else { continue }
+                guard let currentValue = convert(currentPrice * units, sourceCurrency), currentValue > 0 else { continue }
+                result.positions[trade.trade.name, default: 0] += currentValue
+                result.holdings.append(AllocationHolding(symbol: trade.trade.name, value: currentValue,
+                                                         currency: sourceCurrency))
+                if previousClose.isFinite, previousClose > 0 {
+                    let rawChange = (currentPrice - previousClose) * units
+                    if let convertedChange = convert(rawChange, sourceCurrency) {
+                        result.dayChanges[trade.trade.name, default: 0] += convertedChange
+                        result.dayCovered += 1
+                    }
+                }
+                result.covered += 1
+            }
+        }
+        // The cash in Holdings' total, in the display currency. With no current exchange rate
+        // for it, it is not known here, and the page is about the holdings alone.
+        result.cash = AllocationCash(dataModel.netValueCash().flatMap { convert($0.amount, $0.currency) })
+        return result
+    }
+
+    /// Convert only with a current, known FX rate; fallback constants are not suitable for allocation claims.
+    @MainActor
+    static func convertAnalyticsAmount(_ amount: Double, from: String, to: String,
+                                       converter: CurrencyConverter) -> Double? {
+        guard amount.isFinite else { return nil }
+        let info = converter.getExchangeRateInfo(from: from, to: to)
+        guard info.rate.isFinite, !info.isFallback else { return nil }
+        let converted = converter.convert(amount: amount, from: from, to: to)
+        return converted.isFinite ? converted : nil
     }
 }
 

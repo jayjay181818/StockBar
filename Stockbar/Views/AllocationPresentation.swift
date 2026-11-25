@@ -33,9 +33,34 @@ struct AllocationHolding: Equatable, Sendable {
     let currency: String
 }
 
+/// The cash beside the holdings, in the display currency. It comes from the source
+/// that gives Holdings its total (`DataModel.netValueCash()`), never worked out here.
+enum AllocationCash: Equatable, Sendable {
+    /// Not known (a local portfolio, a source that gives none, or no exchange rate
+    /// for it), or exactly zero: no Cash row, and the page is about the holdings alone.
+    case none
+    /// Above zero: a row and a slice of its own, and every share is of holdings plus cash.
+    case held(Double)
+    /// Below zero (borrowing): no slice, shares stay of the holdings, and a line says so.
+    case borrowing(Double)
+
+    /// Sorts a known figure into one of the three; nil or a figure that is not finite is `.none`.
+    init(_ amount: Double?) {
+        guard let amount, amount.isFinite, amount != 0 else { self = .none; return }
+        self = amount > 0 ? .held(amount) : .borrowing(amount)
+    }
+
+    /// The figure that a Cash slice adds to the total; zero unless cash is held.
+    var heldAmount: Double {
+        if case .held(let amount) = self { return amount }
+        return 0
+    }
+}
+
 /// One slice of the donut and its row.
 struct AllocationGroup: Equatable, Identifiable, Sendable {
-    /// Stable identity: the sector's raw value, the symbol or the currency code; "Other" for the fold.
+    /// Stable identity: the sector's raw value, the symbol or the currency code; "Other" for the
+    /// fold and "Cash" for cash, both with a leading NUL so no ticker or code can take them.
     let key: String
     let label: String
     let value: Double
@@ -48,12 +73,14 @@ struct AllocationGroup: Equatable, Identifiable, Sendable {
 
     var id: String { key }
     var isOther: Bool { foldedCount > 0 }
+    var isCash: Bool { key == Self.cashKey }
 
     static let otherKey = "\u{0}Other"
+    static let cashKey = "\u{0}Cash"
 }
 
 enum AllocationPresentation {
-    /// The donut never has more slices than this.
+    /// The holdings' groups never make more slices than this; a Cash slice comes on top.
     static let maximumSlices = 8
 
     // MARK: Groups
@@ -113,6 +140,38 @@ enum AllocationPresentation {
         return kept + [other]
     }
 
+    /// What the donut and its list show: the groups folded as `folded(_:)` does, then, when
+    /// cash is held, every share taken again as a share of holdings plus cash and a Cash row
+    /// last. Cash is never folded into "Other". Without held cash the groups are as given.
+    static func displayed(_ groups: [AllocationGroup], cash: AllocationCash) -> [AllocationGroup] {
+        guard case .held(let amount) = cash else { return folded(groups) }
+        let total = groups.reduce(0) { $0 + $1.value } + amount
+        guard total.isFinite, total > 0 else { return folded(groups) }
+        let rescaled = groups.map {
+            AllocationGroup(key: $0.key, label: $0.label, value: $0.value, share: $0.value / total * 100,
+                            dayChangePercent: $0.dayChangePercent, foldedCount: $0.foldedCount)
+        }
+        let cashRow = AllocationGroup(key: AllocationGroup.cashKey, label: "Cash", value: amount,
+                                      share: amount / total * 100, dayChangePercent: nil, foldedCount: 0)
+        return folded(rescaled) + [cashRow]
+    }
+
+    /// The total every share on the page is of: the holdings' values, plus cash when it is held.
+    static func shareTotal(holdingsTotal: Double, cash: AllocationCash) -> Double {
+        holdingsTotal + cash.heldAmount
+    }
+
+    /// The Unclassified sector's share of the same total as the rows, so the note under the
+    /// chart gives the figure its row shows. Nil when no holding is unclassified.
+    static func unclassifiedShare(_ allocations: [SectorAnalysisService.SectorAllocation],
+                                  cash: AllocationCash) -> Double? {
+        let holdingsTotal = allocations.reduce(0) { $0 + $1.totalValue }
+        let unclassified = allocations.filter { $0.sector == .unknown }.reduce(0) { $0 + $1.totalValue }
+        let total = shareTotal(holdingsTotal: holdingsTotal, cash: cash)
+        guard unclassified > 0, total.isFinite, total > 0 else { return nil }
+        return unclassified / total * 100
+    }
+
     private static func largestFirst(_ lhs: AllocationGroup, _ rhs: AllocationGroup) -> Bool {
         lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
     }
@@ -132,28 +191,77 @@ enum AllocationPresentation {
         String(format: "%.1f%%", share)
     }
 
-    /// The day-change cell: signed percent, or a dash when unknown.
+    /// The day-change cell: signed percent, or a dash when unknown. Cash has no day's
+    /// change, so its cell is the dash every other page uses for a figure it does not have.
     static func dayChangeText(_ group: AllocationGroup) -> String {
-        group.dayChangePercent.map(AttributionFormat.signedPercent) ?? "—"
+        if group.isCash { return HoldingsWeight.unknownText }
+        return group.dayChangePercent.map(AttributionFormat.signedPercent) ?? "—"
     }
 
-    /// The row as VoiceOver reads it.
+    /// The row as VoiceOver reads it. Cash has no day's change to speak of, so its row
+    /// never says "day change unavailable".
     static func spokenRow(_ group: AllocationGroup, grouping: AllocationGrouping, currency: String) -> String {
         var parts = [rowLabel(group, grouping: grouping),
                      HoldingsCurrencyFormatter.amount(group.value, currency: currency),
                      String(format: "%.1f percent", group.share)]
-        if grouping == .sector {
+        if grouping == .sector, !group.isCash {
             parts.append(group.dayChangePercent
                 .map { "day change \(AttributionFormat.spokenPercent($0))" } ?? "day change unavailable")
         }
         return parts.joined(separator: ", ")
     }
 
-    /// The donut's centre: the total and how many holdings make it up.
-    static func centreText(total: Double, holdingCount: Int, currency: String) -> (total: String, count: String) {
-        (HoldingsCurrencyFormatter.compactAmount(total, currency: currency),
-         "\(holdingCount) \(holdingCount == 1 ? "holding" : "holdings")")
+    /// The Cash row's tooltip: what the figure is and why it has no sector or day's change.
+    static func cashTooltip(_ group: AllocationGroup, currency: String) -> String {
+        "Cash, \(HoldingsCurrencyFormatter.amount(group.value, currency: currency)), \(shareText(group.share)). "
+            + "Cash has no sector and no day's change."
     }
+
+    /// The donut's centre: the total and how many holdings make it up, "and cash" when cash is in it.
+    static func centreText(total: Double, holdingCount: Int, currency: String,
+                           includesCash: Bool = false) -> (total: String, count: String) {
+        let holdings = "\(holdingCount) \(holdingCount == 1 ? "holding" : "holdings")"
+        return (HoldingsCurrencyFormatter.compactAmount(total, currency: currency),
+                includesCash ? holdings + " and cash" : holdings)
+    }
+
+    /// The line under the chart when cash is below zero: there is no slice for it, so the
+    /// shares are of the holdings alone. Nil in every other case.
+    static func borrowingLine(_ cash: AllocationCash, currency: String) -> String? {
+        guard case .borrowing(let amount) = cash else { return nil }
+        return "Cash is below zero (\(HoldingsCurrencyFormatter.amount(amount, currency: currency))), so it has no slice "
+            + "and the percentages are of the holdings alone."
+    }
+
+    /// The note under the Sector view: the Unclassified row's share of the same total as the
+    /// rows. With cash in that total, the note says so.
+    static func unclassifiedNote(share: Double, includesCash: Bool) -> String {
+        let figure = String(format: "%.1f", share)
+        return includesCash
+            ? "\(figure)% of the portfolio, cash included, is in holdings with no known sector (shown as Unclassified)."
+            : "\(figure)% of the portfolio is in holdings with no known sector (shown as Unclassified)."
+    }
+
+    /// Diversification's note on holdings with no known sector. The score is of the holdings
+    /// alone, so with cash on the page the share is said to be of the holdings.
+    static func diversificationUnclassifiedNote(share: Double, includesCash: Bool) -> String {
+        let figure = String(format: "%.1f", share)
+        return includesCash
+            ? "\(figure)% of the holdings' value has no known sector and is excluded from this score."
+            : "\(figure)% of the portfolio has no known sector and is excluded from this score."
+    }
+
+    /// Diversification when most of it is unclassified.
+    static func diversificationUnavailableNote(share: Double, includesCash: Bool) -> String {
+        let figure = String(format: "%.0f", share)
+        return includesCash
+            ? "Diversification unavailable: \(figure)% of the holdings' value has no known sector."
+            : "Diversification unavailable: \(figure)% of the portfolio has no known sector."
+    }
+
+    /// Said under Diversification's heading when the donut has a Cash slice.
+    static let holdingsOnlyCaption =
+        "Holdings only: cash is left out of this score and of the correlation below, as it does not move with anything."
 
     // MARK: Diversification
 

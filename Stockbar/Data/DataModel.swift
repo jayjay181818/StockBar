@@ -1511,6 +1511,32 @@ class DataModel {
         )
     }
 
+    /// The cash inside the total that `calculateNetValue()` gives, taken from the same
+    /// source: Folync's own `cash` figure, or the cash in the Trading 212 account. Nil for
+    /// a local portfolio, when the source gives no cash figure, or gives it in no named
+    /// currency. It can be zero or below zero (borrowing).
+    func netValueCash() -> (amount: Double, currency: String)? {
+        func named(_ currency: String?) -> String? {
+            let trimmed = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let snapshot = folyncPortfolioSnapshot,
+           let total = snapshot.totalValue.value,
+           total.isFinite {
+            guard let cash = snapshot.cash.value, cash.isFinite,
+                  let currency = named(snapshot.cash.currency) ?? named(snapshot.totalValue.currency)
+                      ?? named(snapshot.scope.currency)
+            else { return nil }
+            return (cash, currency)
+        }
+        guard portfolioCalculationService != nil,
+              let broker = freshTrading212BrokerValuationSnapshot(),
+              let cash = broker.cashValue, cash.isFinite,
+              let currency = named(broker.currency)
+        else { return nil }
+        return (cash, currency)
+    }
+
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
     /// Where the displayed totals come from, decided the same way as
     /// `calculateDisplayPortfolioSummary` but without valuing every holding.
