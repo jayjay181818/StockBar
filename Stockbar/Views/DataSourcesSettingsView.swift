@@ -181,7 +181,7 @@ struct DataSourcesSettingsView: View {
                 help()
             }
             .gridColumnAlignment(.leading)
-            statusIndicator(for: status)
+            statusIndicator(for: status, hasKey: hasStoredKey || !key.wrappedValue.isEmpty)
             HStack(spacing: 6) {
                 Button {
                     isShown.wrappedValue.toggle()
@@ -268,8 +268,9 @@ struct DataSourcesSettingsView: View {
         showingAlert = true
     }
     
-    private func statusIndicator(for status: VerificationStatus) -> some View {
-        Group {
+    private func statusIndicator(for status: VerificationStatus, hasKey: Bool) -> some View {
+        let words = Self.statusDescription(status, hasKey: hasKey)
+        return Group {
             switch status {
             case .none:
                 Circle()
@@ -290,11 +291,11 @@ struct DataSourcesSettingsView: View {
             }
         }
         .frame(width: 16, height: 16)
-        .help(Self.statusDescription(status))
-        .modifier(StatusWords(text: Self.statusDescription(status)))
+        .help(words)
+        .modifier(StatusWords(text: words))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("API key status")
-        .accessibilityValue(Self.statusDescription(status))
+        .accessibilityValue(words)
     }
     
     /// The status's words beside its symbol, read as one element.
@@ -312,9 +313,11 @@ struct DataSourcesSettingsView: View {
         }
     }
 
-    static func statusDescription(_ status: VerificationStatus) -> String {
+    /// With no key entered or stored there is nothing to verify, so the row
+    /// says "Not set" rather than "Not verified".
+    static func statusDescription(_ status: VerificationStatus, hasKey: Bool = true) -> String {
         switch status {
-        case .none: return "Not verified"
+        case .none: return hasKey ? "Not verified" : "Not set"
         case .verifying: return "Verifying"
         case .success: return "Verified"
         case .failure: return "Verification failed"

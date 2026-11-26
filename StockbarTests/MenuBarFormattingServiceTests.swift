@@ -1109,6 +1109,7 @@ final class HoldingsAndStatusViewHelperTests: XCTestCase {
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.success), "Verified")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.failure), "Verification failed")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.none), "Not verified")
+        XCTAssertEqual(DataSourcesSettingsView.statusDescription(.none, hasKey: false), "Not set")
         XCTAssertEqual(DataSourcesSettingsView.statusDescription(.verifying), "Verifying")
     }
 }
