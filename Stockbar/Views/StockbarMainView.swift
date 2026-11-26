@@ -1393,8 +1393,10 @@ private struct StockbarDiagnosticsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
             StockbarPageHeader("Diagnostics", subtitle: "Recent Stockbar logs. Credentials and API keys are redacted.")
+            // The same padding as every other card, so the controls and the
+            // log line up with the page's other edges.
             DebugLogView()
-                .stockbarCard(padding: 6)
+                .stockbarCard()
         }
         .padding(StockbarLayout.pageInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

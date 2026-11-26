@@ -117,9 +117,24 @@ struct PriceAlert: Codable, Identifiable {
 @MainActor
 @Observable
 class PriceAlertService {
-    static let shared = PriceAlertService()
+    static let shared = PriceAlertService(fixture: StockbarAcceptanceAlertsFixture.current)
 
     private(set) var alerts: [PriceAlert] = []
+
+    /// True when the alerts come from the acceptance copy's alerts fixture
+    /// (`StockbarAcceptanceAlertsFixture`). They are shown only: every change,
+    /// every price check and every notification call is skipped, so nothing
+    /// is stored, nothing fires and macOS is never asked for permission.
+    let isShowingFixture: Bool
+
+    /// Where the service reaches the notification centre and the store. Tests
+    /// pass counting closures to prove the fixture never reaches either.
+    struct Dependencies {
+        var notificationCenter: @MainActor () -> UNUserNotificationCenter = { UNUserNotificationCenter.current() }
+        var coreDataStack: @MainActor () -> CoreDataStack = { CoreDataStack.shared }
+    }
+
+    @ObservationIgnored private let dependencies: Dependencies
 
     /// True when macOS will not show this app's notifications, so an alert
     /// whose condition is met reaches nobody. The Alerts page says so.
@@ -128,11 +143,12 @@ class PriceAlertService {
     /// Re-reads the notification permission; it can change in System Settings
     /// at any time.
     func refreshNotificationPermission() async {
-        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        guard !isShowingFixture else { return }
+        let status = await dependencies.notificationCenter().notificationSettings().authorizationStatus
         notificationsDenied = status == .denied
     }
 
-    private let coreDataStack = CoreDataStack.shared
+    private var coreDataStack: CoreDataStack { dependencies.coreDataStack() }
 
     /// Read-only view context. All **writes** go through `performBackgroundWrite`
     /// so they never block the main thread — `checkAlerts` evaluates every
@@ -145,6 +161,7 @@ class PriceAlertService {
         _ description: String,
         _ block: @escaping @Sendable (NSManagedObjectContext) throws -> Void
     ) {
+        guard !isShowingFixture else { return }
         let context = coreDataStack.newBackgroundContext()
         context.perform {
             do {
@@ -200,16 +217,27 @@ class PriceAlertService {
         StockbarRuntimeStorage.userDefaults.set(lastKnownPrices, forKey: Self.lastKnownPricesKey)
     }
 
-    private init() {
+    /// With a fixture, shows its alerts and never touches the store; without
+    /// one, loads the stored alerts.
+    init(fixture: StockbarAcceptanceAlertsFixture?, now: Date = Date(), dependencies: Dependencies = Dependencies()) {
+        self.dependencies = dependencies
+        if let fixture {
+            isShowingFixture = true
+            alerts = fixture.priceAlerts(now: now)
+            Task { await Logger.shared.info("Showing \(fixture.alerts.count) alerts from the acceptance fixture; they are never stored or checked") }
+            return
+        }
+        isShowingFixture = false
         // Migrate from UserDefaults to Core Data if needed
         migrateLegacyAlerts()
-        
+
         loadAlerts()
     }
 
     // MARK: - Alert Management
 
     func addAlert(_ alert: PriceAlert) {
+        guard !isShowingFixture else { return }
         // Save to Core Data on a background context
         let snapshot = alert
         performBackgroundWrite("addAlert") { context in
@@ -234,6 +262,7 @@ class PriceAlertService {
     }
 
     func removeAlert(id: UUID) {
+        guard !isShowingFixture else { return }
         // Remove from Core Data on a background context
         performBackgroundWrite("removeAlert") { context in
             let fetchRequest: NSFetchRequest<AlertEntity> = AlertEntity.fetchRequest()
@@ -253,7 +282,7 @@ class PriceAlertService {
     /// creation date and paused state. The last-fired time is cleared: it
     /// belonged to the old condition.
     func updateAlert(id: UUID, condition: AlertCondition, threshold: Double) {
-        guard let index = alerts.firstIndex(where: { $0.id == id }) else { return }
+        guard !isShowingFixture, let index = alerts.firstIndex(where: { $0.id == id }) else { return }
         let existing = alerts[index]
 
         performBackgroundWrite("updateAlert") { context in
@@ -279,7 +308,7 @@ class PriceAlertService {
     }
 
     func toggleAlert(id: UUID) {
-        guard let index = alerts.firstIndex(where: { $0.id == id }) else { return }
+        guard !isShowingFixture, let index = alerts.firstIndex(where: { $0.id == id }) else { return }
 
         let alert = alerts[index]
         let newEnabledState = !alert.isEnabled
@@ -322,6 +351,8 @@ class PriceAlertService {
     /// saved once for the batch: saving after every symbol rewrote the whole
     /// record once per alerted symbol whose price moved.
     func checkAlerts(_ checks: [PriceCheck]) {
+        // Fixture alerts are never checked against prices.
+        guard !isShowingFixture else { return }
         var rememberedPricesChanged = false
         for check in checks where evaluateAlerts(for: check) {
             rememberedPricesChanged = true
@@ -363,7 +394,8 @@ class PriceAlertService {
     // MARK: - Notifications
 
     private func ensureNotificationAuthorizationIfNeeded() {
-        let center = UNUserNotificationCenter.current()
+        guard !isShowingFixture else { return }
+        let center = dependencies.notificationCenter()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .notDetermined else {
                 let denied = settings.authorizationStatus == .denied
@@ -422,7 +454,8 @@ class PriceAlertService {
             trigger: nil  // Send immediately
         )
 
-        UNUserNotificationCenter.current().add(request) { error in
+        guard !isShowingFixture else { return }
+        dependencies.notificationCenter().add(request) { error in
             if let error = error {
                 Task {
                     await Logger.shared.error("Failed to send notification: \(error.localizedDescription)")

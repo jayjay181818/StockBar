@@ -25,23 +25,22 @@ struct FolyncDataSourceSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Folync Portfolio Source").font(.headline)
+                    Text("Folync Portfolio Source")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
                     Text("Read-only authoritative holdings, valuation, cash, P/L, and freshness.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if dataModel.isFolyncPortfolioActive {
-                    Label("Active", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                } else if dataModel.isFolyncEnabled {
-                    Label("Enabled", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                }
+                statusPill
             }
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("HTTPS URL:")
+                        .foregroundStyle(.secondary)
                     TextField("https://folync.example.com", text: $endpoint)
                         .textFieldStyle(.roundedBorder)
                         // Otherwise VoiceOver reads the example address as the field's name.
@@ -49,6 +48,7 @@ struct FolyncDataSourceSection: View {
                 }
                 GridRow {
                     Text("Client token:")
+                        .foregroundStyle(.secondary)
                     SecureField(tokenPlaceholder, text: $token)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Folync client token")
@@ -56,6 +56,7 @@ struct FolyncDataSourceSection: View {
                 if !portfolios.isEmpty {
                     GridRow {
                         Text("Portfolio:")
+                            .foregroundStyle(.secondary)
                         Picker("Portfolio", selection: $selectedScope) {
                             ForEach(portfolios) { portfolio in
                                 Text(portfolio.name).tag(portfolio.id)
@@ -66,7 +67,8 @@ struct FolyncDataSourceSection: View {
                 }
             }
 
-            HStack {
+            // One row that wraps at the minimum window size.
+            StockbarWrappingRow(spacing: 6) {
                 Button("Test Connection") { testConnection() }
                     .disabled(isWorking || !canSubmitConnectionRequest)
                 Button("Preview") { loadPreview() }
@@ -125,25 +127,29 @@ struct FolyncDataSourceSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text(displayedStatusMessage)
-                .font(.caption)
-                .foregroundStyle(statusColor)
-                .accessibilityLabel("Folync status")
-                .accessibilityValue(Text(displayedStatusMessage))
-                .accessibilityAddTraits(.updatesFrequently)
-                .accessibilityIdentifier("folync-connection-status")
+            if dataModel.isFolyncEnabled,
+               let schedule = FolyncScheduleText.line(lastChecked: dataModel.folyncLastCheckedAt,
+                                                      next: dataModel.folyncNextCheckAt) {
+                Text(schedule)
+                    .font(.callout)
+                    .monospacedDigit()
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayedStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+                    .accessibilityLabel("Folync status")
+                    .accessibilityValue(Text(displayedStatusMessage))
+                    .accessibilityAddTraits(.updatesFrequently)
+                    .accessibilityIdentifier("folync-connection-status")
+                if dataModel.isFolyncEnabled {
+                    Text("Checks five seconds after each minute, with one follow-up if the broker sync is still pending.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
 
             if dataModel.isFolyncEnabled {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Checks five seconds after each minute, with one follow-up if the broker sync is still pending.")
-                    if let checked = dataModel.folyncLastCheckedAt {
-                        Text("Last checked: \(checked.formatted(date: .omitted, time: .standard))")
-                    }
-                    if let next = dataModel.folyncNextCheckAt {
-                        Text("Next check: \(next.formatted(date: .omitted, time: .standard))")
-                    }
-                }
-                .font(.caption).foregroundStyle(.secondary)
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -181,6 +187,7 @@ struct FolyncDataSourceSection: View {
                     }
                     Toggle("Allow legacy local-provider fallback", isOn: supplementalBinding(\.allowLegacyFallback))
                         .toggleStyle(.checkbox)
+                        .padding(.top, 6)
 
                     Text("Stockbar-only watchlist symbols remain on the local provider. Folync responses are cached separately and never replace Core Data chart history.")
                         .font(.caption)
@@ -226,6 +233,30 @@ struct FolyncDataSourceSection: View {
                   dataModel.isFolyncEnabled,
                   let message = announcementPolicy.announcement(for: newState) else { return }
             accessibilityAnnouncer.announce(message)
+        }
+    }
+
+    /// Where a checkbox's title starts, so a detail line sits under the name.
+    private static let checkboxLabelInset: CGFloat = 20
+
+    /// Active, or enabled but not showing Folync's portfolio, as a pill at
+    /// the card's top right.
+    @ViewBuilder
+    private var statusPill: some View {
+        if dataModel.isFolyncPortfolioActive {
+            Label("Active", systemImage: "checkmark")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .stockbarPill(tint: .green)
+        } else if dataModel.isFolyncEnabled {
+            Label("Enabled", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .stockbarPill(tint: .orange)
         }
     }
 
@@ -424,21 +455,23 @@ struct FolyncDataSourceSection: View {
         route: FolyncSupplementalRoute,
         value: Binding<Bool>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(alignment: .firstTextBaseline) {
                 Toggle(title, isOn: value)
                     .toggleStyle(.checkbox)
                     // A lost capability must not trap an already-enabled route.
                     .disabled(!FolyncRouteSettingsStatus.canChange(isOn: value.wrappedValue, capability: capability(for: route)))
-                Spacer()
+                Spacer(minLength: 8)
                 Text(capabilityLabel(for: route))
-                    .font(.caption2)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             if let coverage = capabilityCoverageLabel(for: route) {
+                // Under the name, past the checkbox.
                 Text(coverage)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, Self.checkboxLabelInset)
             }
         }
     }
@@ -465,7 +498,7 @@ struct FolyncDataSourceSection: View {
     private func ledgerToggle(_ route: FolyncLedgerRoute) -> some View {
         let capability = FolyncRouteSettingsStatus.capability(for: route, in: dataModel.folyncCapabilities)
         let value = supplementalBinding(ledgerKeyPath(route))
-        return HStack {
+        return HStack(alignment: .firstTextBaseline) {
             Toggle(isOn: value) {
                 HStack(spacing: 6) {
                     Text(route.settingsTitle)
@@ -480,9 +513,9 @@ struct FolyncDataSourceSection: View {
             .toggleStyle(.checkbox)
             .disabled(!FolyncRouteSettingsStatus.canChange(isOn: value.wrappedValue, capability: capability))
             .accessibilityLabel(route.settingsAccessibilityLabel)
-            Spacer()
+            Spacer(minLength: 8)
             Text(FolyncRouteSettingsStatus.label(for: capability))
-                .font(.caption2)
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
@@ -536,5 +569,19 @@ struct FolyncDataSourceSection: View {
     private func formatted(_ metric: FolyncFinancialMetric) -> String {
         guard let value = metric.value else { return "Unavailable" }
         return "\(metric.currency ?? "") \(value.formatted(.number.precision(.fractionLength(2))))"
+    }
+}
+
+/// The Folync schedule in one line: "Last checked 15:42, next 15:43".
+enum FolyncScheduleText {
+    static func line(lastChecked: Date?, next: Date?, locale: Locale = .current,
+                     timeZone: TimeZone = .current) -> String? {
+        let style = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: timeZone)
+        switch (lastChecked, next) {
+        case let (last?, next?): return "Last checked \(last.formatted(style)), next \(next.formatted(style))"
+        case let (last?, nil): return "Last checked \(last.formatted(style))"
+        case let (nil, next?): return "Next check \(next.formatted(style))"
+        case (nil, nil): return nil
+        }
     }
 }

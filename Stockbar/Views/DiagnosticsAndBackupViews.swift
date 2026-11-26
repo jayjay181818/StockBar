@@ -94,7 +94,7 @@ struct DebugLogView: View {
                         ForEach(Array(logEntries.reversed().enumerated()), id: \.offset) { index, entry in
                             Text(entry)
                                 .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(colorForLogEntry(entry))
+                                .foregroundColor(Self.color(forLogLine: entry))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 6)
@@ -122,8 +122,6 @@ struct DebugLogView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
         .onAppear {
             refreshLogs()
             Task {
@@ -222,15 +220,15 @@ struct DebugLogView: View {
         }
     }
     
-    private func colorForLogEntry(_ entry: String) -> Color {
+    /// Errors and warnings stand out in red and orange (their level is also
+    /// written in the line); everything else reads as ordinary text.
+    static func color(forLogLine entry: String) -> Color {
         if entry.contains("[ERROR]") {
             return .red
         } else if entry.contains("[WARNING]") {
             return .orange
-        } else if entry.contains("[INFO]") {
-            return .blue
         } else if entry.contains("[DEBUG]") {
-            return .gray
+            return .secondary
         } else {
             return .primary
         }
