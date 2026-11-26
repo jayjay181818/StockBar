@@ -2498,6 +2498,8 @@ final class StockbarCalendarTests: XCTestCase {
                        ["ULVR.L"], "a Folync holding is listed by its quote symbol, the one Calendar asks about")
         XCTAssertEqual(CalendarFigures.earningsFigureSymbols([]), [])
         XCTAssertEqual(EarningsFiguresSettingsSection.noHoldings, "No holdings yet. Each holding you add is listed here.")
+        XCTAssertEqual(EarningsFiguresSettingsSection.pickerLabel("ULVR.L"), "ULVR.L earnings figures",
+                       "VoiceOver hears the symbol once, from the row, then what the pop-up sets")
     }
 
     func testPastEarningsAreAskedForOnlyWhilePastIsShown() async throws {

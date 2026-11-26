@@ -15,6 +15,9 @@ struct EarningsFiguresSettingsSection: View {
     static let asGivenTitle = "As Given"
     static let hiddenTitle = "Hide Figures"
 
+    /// "FAKEUS earnings figures", what VoiceOver names the pop-up.
+    static func pickerLabel(_ symbol: String) -> String { "\(symbol) earnings figures" }
+
     init(dataModel: DataModel, settings: EarningsFiguresSettings = .shared) {
         self.dataModel = dataModel
         self.settings = settings
@@ -34,7 +37,9 @@ struct EarningsFiguresSettingsSection: View {
             } else {
                 ForEach(symbols, id: \.self) { symbol in
                     StockbarSettingsRow(symbol) {
-                        Picker(symbol, selection: choice(for: symbol)) {
+                        // The row's title is the symbol; the pop-up's own
+                        // (hidden) label says what it sets, for VoiceOver.
+                        Picker(Self.pickerLabel(symbol), selection: choice(for: symbol)) {
                             Text(Self.asGivenTitle).tag(EarningsFiguresChoice.asGiven)
                             Text(Self.hiddenTitle).tag(EarningsFiguresChoice.hidden)
                             Divider()
@@ -44,7 +49,6 @@ struct EarningsFiguresSettingsSection: View {
                                 if code == DataModel.supportedCurrencies.last { Divider() }
                             }
                         }
-                        .accessibilityLabel("\(symbol) earnings figures")
                     }
                 }
             }
