@@ -66,9 +66,17 @@ enum RiskText {
         sharpeReading(sharpe).map { "\($0), return for the risk taken" }
     }
 
-    /// A plain description, or why there is no ratio.
+    /// The reading of the Sortino ratio, on the Sharpe ratio's thresholds: the
+    /// page has always banded the two ratios alike. Nil when the ratio is not defined.
+    static func sortinoReading(_ sortino: Double?) -> String? {
+        sharpeReading(sortino)
+    }
+
+    /// "Good, counting only the falls" under the Sortino ratio, or why there is no ratio.
     static func sortinoDetail(_ sortino: Double?) -> String {
-        sortino == nil ? "No falling days" : "Counts only the falls"
+        guard let sortino else { return "No falling days" }
+        guard let reading = sortinoReading(sortino) else { return "Counts only the falls" }
+        return "\(reading), counting only the falls"
     }
 
     /// "55 days, peak to low" under the worst fall; "Never below its peak"
