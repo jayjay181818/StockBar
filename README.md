@@ -6,7 +6,7 @@
 
 **Your portfolio, live in the macOS menu bar.**
 
-Holdings, gains, charts, alerts and analytics in a native Mac app, with manual portfolios, Trading 212 and Folync.
+Holdings, gains, dividends, earnings dates, charts, alerts and analytics in a native Mac app, with manual portfolios, Trading 212 and Folync.
 
 [![Latest release](https://img.shields.io/github/v/release/jayjay181818/StockBar?label=release&color=2ea44f)](https://github.com/jayjay181818/StockBar/releases/latest)
 ![macOS 15.4+](https://img.shields.io/badge/macOS-15.4%2B-000000?logo=apple&logoColor=white)
@@ -19,18 +19,19 @@ Holdings, gains, charts, alerts and analytics in a native Mac app, with manual p
 </div>
 
 <p align="center">
-  <img src="Docs/images/overview.jpg" alt="Stockbar's Overview screen: total value, today's and one-month change, a portfolio value chart, a summary and the selected position" width="900">
+  <img src="Docs/images/overview.jpg" alt="Stockbar's Overview in dark mode: the sidebar, the total value with today's and one-week change, a portfolio value chart, a card showing what the total is made of, and the selected position" width="900">
   <br>
-  <sub>Overview, showing a fictional demo portfolio.</sub>
+  <sub>Overview, showing a made-up demo portfolio.</sub>
 </p>
 
 ## ✨ Highlights
 
 |  |  |
 |---|---|
-| 📈 **Menu bar first** | Portfolio total and per-stock items in the menu bar, each with a chart popover. |
-| 🗂️ **One window for everything** | Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics and Settings in one sidebar. |
-| 🏦 **Bring your own source** | Manual holdings and watchlists, read-only Trading 212 broker sync, or a self-hosted Folync portfolio. |
+| 📈 **Menu bar first** | Portfolio total and per-stock items in the menu bar, each with a chart popover. The portfolio popover shows today's movers and what is next up. |
+| 🗂️ **One window for everything** | Overview, Holdings, Activity, Alerts, Charts, Income, Calendar, Trades, Risk, Allocation, Data Health, Backups, Diagnostics and Settings in one see-through window with a floating sidebar. |
+| 💷 **Income and dates** | Dividends expected and received, and a calendar of dividend and earnings dates. |
+| 🏦 **Bring your own source** | Manual holdings and watchlists, read-only Trading 212 broker sync, or a self-hosted Folync portfolio, which Stockbar only reads. |
 | 🌍 **Multi-currency** | USD, GBP, EUR, JPY, CAD and AUD totals, with UK pence (GBX) handled once and correctly. |
 | 🔔 **Alerts** | Price above or below a level, or a percentage move, delivered as macOS notifications. |
 | 🧮 **Analytics** | Value at risk, Sharpe and Sortino, drawdowns, correlation, sector allocation and attribution. |
@@ -90,18 +91,24 @@ Stockbar looks for a new version about once a day and offers it with its release
 ## 🧭 Features
 
 ### 💼 Portfolio and holdings
-- Grouped sidebar in a floating panel: **Portfolio** (Overview, Holdings, Alerts), **Analysis** (Charts, Risk, Allocation) and **System** (Data Health, Backups, Diagnostics, Settings). The footer shows the portfolio source, the last update and a Refresh button.
+- A see-through window with a grouped sidebar in a floating panel: **Portfolio** (Overview, Holdings, Activity, Alerts), **Analysis** (Charts, Income, Calendar, Trades, Risk, Allocation) and **System** (Data Health, Backups, Diagnostics, Settings). The footer shows the portfolio source, the last update and a Refresh button. Reduce Transparency makes the window solid.
+- The Overview shows the total, today's and the period's change over 1D to All, and with Folync what the total is made of: net deposits, unrealised and realised gains, and income, interest and fees.
 - The Holdings table has search, summary tiles, a Weight column and an Edit mode. The **Amounts / Percent** switch beside the search field shows **Today** and **Total gain** as amounts or percentages.
 - Manual holdings, watchlist-only symbols and broker-linked holdings can coexist.
 
+### 💷 Income, Calendar, Activity and Trades
+- **Income:** with Folync, Folync's own dividend figures: expected, received and by holding. With a local or Trading 212 portfolio, an estimate from Yahoo's record of each holding's dividends, labelled as one.
+- **Calendar:** dividend and earnings dates as a month grid and a list, for the year ahead and the year past, with past earnings per share as Yahoo gives them. Dividends are Folync's, or the Income estimate's; earnings dates are Yahoo's. **Next up** in the popover and on the Overview lists the next three dates within 14 days.
+- **Activity** and **Trades** (Folync only): every transaction Folync holds, by month, and every position opened, with how it did.
+
 ### 📊 Menu bar
-- The portfolio item shows total value and today's change, with a popover chart (Today, 1 Week, 1 Month). With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
+- The portfolio item shows total value and today's change, with a popover chart (Today, 1 week, 1 month), today's movers and Next up. With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
 - Per-stock items have their own display modes or a custom template (`{symbol} {price} {arrow}{changePct}`), plus a popover with an optional S&P 500 or FTSE 100 benchmark line.
 - Stock items can be limited to times when an external display is connected.
 
 ### 🏦 Trading 212 and Folync
 - **Trading 212:** read-only API Key + Secret in the Keychain. Test Connection and Preview Import run before anything is linked. Auto-sync runs every 5 minutes by default. Trading is never supported or needed.
-- **Folync:** a self-hosted, authoritative read-only portfolio source with optional supplemental history, candles, benchmarks and FX. Local holdings are kept aside and restored when you switch back.
+- **Folync:** a self-hosted, authoritative portfolio source, read-only in Stockbar: transactions are added and changed in Folync itself. Optional history, candles, benchmarks and FX, and the Income, Trades and Activity pages, each with its own switch. Local holdings are kept aside and restored when you switch back.
 
 ### 📈 Market data and charts
 - yfinance is the primary market-data provider. Financial Modeling Prep and Twelve Data are fallbacks.
@@ -116,7 +123,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 <summary><b>📖 Full feature reference</b></summary>
 
 #### Portfolio And Holdings
-- Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Alerts), Analysis (Charts, Risk, Allocation) and System (Data Health, Backups, Diagnostics, Settings). The sidebar footer shows the active portfolio source, the last update and a Refresh button.
+- Stockbar window with a grouped sidebar: Portfolio (Overview, Holdings, Activity, Alerts), Analysis (Charts, Income, Calendar, Trades, Risk, Allocation) and System (Data Health, Backups, Diagnostics, Settings). The sidebar footer shows the active portfolio source, the last update and a Refresh button. View → Hide Sidebar (⌃⌘S) gives the page the whole width.
 - Holdings table with search, summary tiles and an Edit mode for visibility, symbol, units, average cost, currency and row actions, plus Price, Value, Weight, Today and Total gain columns.
 - One Amounts / Percent switch sets both the Today and the Total gain columns, and is remembered.
 - Net value, Total gains and Tracked symbols summary cards show currency symbols and thousands separators, with the USD equivalent on a second line when USD is not the primary display currency.
@@ -144,8 +151,9 @@ Stockbar looks for a new version about once a day and offers it with its release
 - Folync tokens are stored in macOS Keychain. Plain HTTP is accepted only for `localhost` and `127.0.0.1` development endpoints.
 - Stockbar polls Folync conditionally every 60 seconds, keeps the last valid snapshot visible when Folync is offline, and surfaces stale, dirty, rebuilding, or unavailable states.
 - Existing local holdings, Trading 212 credentials, broker links, history, and backups remain untouched and can be restored by switching back to the local portfolio.
-- Folync-backed financial fields are read-only. Local watchlists, alerts, menu-bar visibility, and UI preferences remain owned by Stockbar.
-- An optional Folync Supplemental Data section independently controls historical line charts, candlestick/OHLCV charts, benchmark market data, exchange rates, and whole-series legacy fallback.
+- Folync-backed financial fields are read-only, and Stockbar changes nothing in Folync. Local watchlists, alerts, menu-bar visibility, and UI preferences remain owned by Stockbar.
+- Folync's dividends, trade analysis and transactions feed the Income, Calendar, Trades and Activity pages. Each page asks Folync only when it is opened or refreshed, and each has its own switch under **What Stockbar reads from Folync**, on by default.
+- The same section independently controls historical line charts, candlestick/OHLCV charts, benchmark market data, exchange rates, and whole-series legacy fallback.
 - New connections enable only categories that Folync reports supported and ready. Existing Folync configurations migrate with every new category off and never become enabled merely because server readiness changes later.
 - Each active series uses current Folync data, then the last valid Folync cache marked stale/partial, then one complete legacy-provider series only when fallback is enabled, otherwise an explicit unavailable state. Folync and legacy points are never spliced into one series.
 - Stockbar-only watchlist symbols remain local. Folync-held assets, configured benchmarks, and Folync-allowlisted symbols may use Folync and display their own source, freshness, and coverage status.
@@ -153,11 +161,12 @@ Stockbar looks for a new version about once a day and offers it with its release
 #### Market Data And Charts
 - yfinance remains the primary general market-data provider.
 - Financial Modeling Prep and Twelve Data remain fallback providers for watchlists, manual holdings, historical data, and provider failures.
-- Historical fetch priority is configurable from Settings → Connections; live quotes use a fixed provider order.
+- The historical **Fetch order** is configurable from Settings → Connections; live quotes use a fixed provider order.
 - Historical charts use the existing market-data system unless their independent Folync line-history or OHLCV route is enabled and usable.
 - Interactive Swift Charts views cover portfolio value, portfolio gains, and individual symbol performance.
 - Individual stock charts combine stored price snapshots with memory-only live samples. Same-day historical backfills are merged by timestamp, so earlier intraday points are kept even when the symbol already has a current-day sample.
 - Benchmark support includes symbols such as `^GSPC` and `^FTSE`.
+- Earnings dates and past earnings, and for a local or Trading 212 portfolio dividend dates and past dividends, come from Yahoo through the same Python helper. They are asked for only when Income or Calendar is opened or refreshed, and kept for a day.
 
 #### Menu Bar Experience
 - Portfolio total can be shown in the macOS menu bar with configurable formatting.
@@ -169,12 +178,13 @@ Stockbar looks for a new version about once a day and offers it with its release
 - Stock items can be limited to times when an external display is connected (Settings → Menu Bar → Menu Bar Visibility).
 
 #### Settings
-- Embedded Settings section in the main Stockbar window with tabs: General, Menu Bar, Appearance, Connections, Refresh, and Advanced.
+- Embedded Settings section in the main Stockbar window with tabs: General, Menu Bar, Appearance, Connections, Refresh, and Advanced, each a set of cards at the page's full width.
 - App menu Settings, `Cmd+,`, sidebar Settings, and menu popover Preferences all route to the embedded Settings section.
-- Connections includes API key fields for FMP and Twelve Data (with Save & Test and Remove), the Folync portfolio source, fetch priority/fallback order, and Trading 212 broker configuration.
+- Connections includes **Market-data keys** for FMP and Twelve Data (with Save & Test, Remove and each key's status), the Folync portfolio source, Trading 212 broker configuration, and the **Fetch order** of fallback providers.
 - Trading 212 settings include enable/disable, environment, account type, account label, credential status, Test Connection, Preview Import, Link Matched Holdings, auto-sync settings, and missing-position deletion behavior.
 - Sensitive credential fields stay empty after save by design; stored status is shown instead.
 - Advanced → Memory has **Quit Python Helper When Idle** (on by default: the idle helper quits after about 90 seconds; off, it is kept for 15 minutes) and **Roll Digits When Figures Change** (on by default; off saves the 6 to 10 MB macOS keeps for the rolling digits).
+- Advanced → **Earnings Figures** sets, per holding, the currency of the past EPS figures Calendar shows (Yahoo gives them without one), or hides them.
 
 #### Reliability, Backups, And Diagnostics
 - Backups view for creating, inspecting, and restoring portfolio backups.
@@ -193,16 +203,16 @@ Stockbar looks for a new version about once a day and offers it with its release
 
 | Source | Provides | Credentials |
 |---|---|---|
-| **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider | None |
+| **yfinance** (Yahoo Finance) | Quotes, history and OHLC; the primary provider. Dividend and earnings dates, and dividends for a local or Trading 212 portfolio's Income estimate | None |
 | **Financial Modeling Prep**, **Twelve Data** | Fallback quotes and history | API key in the Keychain |
 | **Trading 212** | Read-only linked broker positions, value and P/L | API Key + Secret in the Keychain |
-| **Folync** (self-hosted) | Authoritative portfolio, plus optional history, candles, benchmarks and FX | Client token in the Keychain |
+| **Folync** (self-hosted) | Authoritative portfolio, read-only; optional history, candles, benchmarks and FX; dividends, transactions and trade analysis | Client token in the Keychain |
 
 Market-data providers run in Stockbar's own Python. Trading 212 and Folync work without it.
 
 ## 🔒 Privacy and security
 
-- Portfolio data is stored locally (Core Data and Application Support). Market-data requests send ticker symbols (with an API key where the provider needs one) to the providers you configure.
+- Portfolio data is stored locally (Core Data and Application Support). Market-data requests send ticker symbols (with an API key where the provider needs one) to the providers you configure. With a Folync portfolio, Calendar sends the holdings' ticker symbols to Yahoo for earnings dates, never amounts or units.
 - Trading 212 and Folync credentials and the FMP and Twelve Data API keys live in the macOS Keychain. The Python helper is handed the two API keys through its environment for each run; keys an earlier version left in the settings file are moved to the Keychain the first time they are needed. Trading 212 and Folync credential fields stay empty after saving, and logs redact keys, tokens, auth headers and account identifiers.
 - Trading 212 access is read-only. Stockbar never places orders, so don't enable *Orders - Execute*.
 - The `uv` download Stockbar's Python setup uses is pinned and checked against a built-in SHA-256.
@@ -258,8 +268,8 @@ python3 -m pip install -r Stockbar/Resources/requirements.txt
 2. Open the main Stockbar window from the menu bar or app menu.
 3. Go to Holdings.
 4. Use Add Holding to add or edit manual positions.
-5. Use Settings → Connections to configure market-data API keys and provider priority if needed.
-6. Use Overview, Holdings, Alerts, Charts, Risk, Allocation, Data Health, Backups, Diagnostics, and Settings from the sidebar as needed.
+5. Use Settings → Connections to configure market-data keys and the fetch order if needed.
+6. Use the pages in the sidebar as needed. Activity and Trades need a Folync portfolio.
 
 #### Trading 212 Setup
 1. Open Settings → Connections.
@@ -299,7 +309,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - Portfolio dropdown `1D` charts value the current displayed holdings across the last 24 hours using available per-symbol snapshots/live samples, skip low-coverage timestamps, and request missing held-symbol history in the background when needed.
 - The live chart samples are memory-only and do not increase historical snapshot writes.
 - Risk and Allocation views use stored portfolio and historical data.
-- Allocation, attribution and risk convert every position into one currency with current exchange rates. Until every position can be valued that way (for example before the first rate refresh), Allocation shows no sector data rather than a mixed or estimated split.
+- Allocation, attribution and risk convert every position into one currency with the exchange rates Stockbar has loaded, never an estimated rate. A position that cannot be valued that way yet (for example before the first rate refresh) is left out, and Allocation says how many holdings its shares are based on; with none valued it shows no sector data.
 - Holdings with no known sector appear as **Unclassified** and are left out of the diversification score.
 
 #### Backups And Data Health
@@ -310,16 +320,16 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 #### Data Sources
 - **Market data**: Yahoo Finance/yfinance, FMP, Twelve Data.
 - **Broker data**: Trading 212 for linked broker positions.
-- **Folync supplemental data**: independent toggles for line history, OHLCV, benchmarks, and exchange rates, plus an explicit legacy fallback toggle. These controls require the Folync portfolio source to be active.
+- **Folync data**: independent switches for line history, OHLCV, benchmarks, exchange rates, Income, Trades and Activity, plus an explicit legacy fallback switch. These controls require the Folync portfolio source to be active.
 - **FMP/Twelve Data keys**: configured in Settings → Connections.
 - **Trading 212 credentials**: stored in Keychain only.
-- **Fetch priority**: configurable for market-data fallbacks.
+- **Fetch order**: configurable for market-data fallbacks.
 
 #### Refresh Behavior
 - Trading 212 linked holdings: one bulk broker sync every 5 minutes by default when enabled.
 - General market-data fallback refreshes retain the slower app/provider cadence.
 - Folync portfolio snapshots are checked every 60 seconds, five seconds after each minute. Folync chart history loads on demand. All Folync requests use ETags, so an unchanged response costs little.
-- Benchmarks and exchange rates depend on Folync's supplemental switches (Settings → Connections → Folync → Supplemental market data). With **Benchmark market data** or **Exchange rates** on, that data comes from Folync and is checked on the same 60-second cycle. With it off, benchmark data such as the S&P 500 and FTSE 100 comes from the market-data providers like any other symbol, and exchange rates come from exchangerate-api.com at launch and then about once an hour. A new connection turns on each switch the server reports as ready.
+- Benchmarks and exchange rates depend on Folync's supplemental switches (Settings → Connections → Folync → What Stockbar reads from Folync). With **Benchmark market data** or **Exchange rates** on, that data comes from Folync and is checked on the same 60-second cycle. With it off, benchmark data such as the S&P 500 and FTSE 100 comes from the market-data providers like any other symbol, and exchange rates come from exchangerate-api.com at launch and then about once an hour. A new connection turns on each switch the server reports as ready.
 - Folync checks back off after failures: a rejected token is not retried for 15 minutes, a rate limit waits as long as the server asks, and repeated failures slow the checks to every 2 and then 5 minutes.
 - An enabled, usable Folync category suppresses its corresponding Python/yfinance/FMP/Twelve Data or direct exchange-rate request. Disabling it resumes the existing local pipeline.
 - Freshness, partial coverage, stale cache, local fallback, and unavailable states are shown rather than represented as a valid zero.
@@ -364,7 +374,7 @@ Trading 212 setup is read-only until you explicitly link matched holdings. Previ
 - If no market data arrives, check **Settings → Advanced → Python**; "Not set up" means Stockbar's own Python needs **Set Up**.
 
 #### Folync Is "Waiting For Keychain Access" After An Update Or Rebuild
-- macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation stays empty.
+- macOS asks for permission before a rebuilt or re-signed app reads its saved Keychain items. Until you answer the Keychain prompt, the Folync token and API keys can't be read: Folync shows **Waiting for Keychain access**, the token field shows **Checking Keychain…**, exchange rates don't refresh and Allocation may leave out holdings that need a rate.
 - Choose **Always Allow** in the prompt; everything recovers within a minute.
 - This happens once after every update: each released build has a new signature, and macOS only remembers the answer for apps signed with an Apple-issued certificate.
 - `bash script/develop.sh run` signs local builds with your Apple Development certificate when one is installed, so the answer is remembered across rebuilds. Without one, builds are signed ad hoc and macOS asks after every rebuild.
@@ -408,7 +418,7 @@ See [Docs/Development.md](./Docs/Development.md) for test filters, isolation rul
 <details>
 <summary><b>🧪 Test coverage</b></summary>
 
-- More than 700 XCTest tests plus offline Python tests run in CI.
+- More than 1,100 XCTest tests plus offline Python tests run in CI.
 - Portfolio, currency and UK pence/pound tests cover P/L, minor units, missing rates and the UK price-scale repair.
 - Settings transfer tests cover encrypted round trips, wrong passwords, tampering, truncation and rollback.
 - Persistence tests cover ordered and atomic saves, history loading and bounding, backups and restores (including real backup files), annotations and migrations.

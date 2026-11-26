@@ -6,7 +6,7 @@ For a walkthrough of every screen, see the [User Guide](UserGuide.md).
 
 ### What is Stockbar?
 
-A macOS portfolio tracker that lives in the menu bar and the Dock. It shows live prices and gains in the menu bar, and a main window with holdings, charts, risk and allocation analysis, alerts and settings.
+A macOS portfolio tracker that lives in the menu bar and the Dock. It shows live prices and gains in the menu bar, and a main window with holdings, dividend income, a calendar of dividend and earnings dates, charts, risk and allocation analysis, alerts and settings. With a Folync portfolio it also lists every transaction (Activity) and every position opened (Trades).
 
 ### What do I need?
 
@@ -78,6 +78,32 @@ Stockbar stores one row per symbol. A duplicate is flagged in red; combine the u
 
 Holdings from a linked Trading 212 account or from Folync are authoritative and read-only. You can still change their menu-bar visibility and alerts.
 
+### Why is Folync read-only in Stockbar?
+
+Folync keeps the record of your transactions and works out the portfolio's figures from it. Stockbar shows those figures as Folync gives them and changes nothing in Folync, so the two never disagree and Stockbar cannot alter the record. Add or change transactions in Folync itself; Stockbar picks them up at its next check, or when you refresh the page. Your own holdings are kept aside while Folync is active and come back when you switch to the local portfolio.
+
+## Income and Calendar
+
+### Where do the Income and Calendar dates and amounts come from?
+
+- **With a Folync portfolio**, dividends are Folync's: the payments it expects and has received, with their ex-dividend and pay dates, marked **Declared** or **Estimated** as Folync dates them, or **Upcoming** when Folync doesn't say. Income and Calendar share one answer from Folync.
+- **With a local or Trading 212 portfolio**, Income is an estimate, and says so: each holding's dividends over the last year as Yahoo records them, times the units you hold today, repeated a year on. Where Yahoo gives a real upcoming ex-dividend date, that date is used; the amount is still an estimate. Funds and investment trusts usually have no dates from Yahoo, so theirs are estimated from last year's payments and marked **Estimated**.
+- **Earnings dates** come from Yahoo for every portfolio. A range of dates is marked **Estimated**.
+
+Both pages ask only when you open them and when you click their refresh button, never on their own. **Next up** in the popover and on the Overview reads only what those pages have saved, and asks nothing.
+
+### Why do past earnings figures have no currency?
+
+Calendar's **Past** view shows each earnings date with Yahoo's reported and expected earnings per share and the surprise, exactly as Yahoo gives them. Yahoo gives the figures in the currency of the company's accounts, which it does not name and which can differ from the currency the share is priced in: a London bank may report in dollars, a London-listed airline in euros. So Stockbar shows them without a currency rather than guess one. If you know a company's reporting currency, choose it in **Settings → Advanced → Earnings Figures**, or choose **Hide Figures** to keep only the date and the surprise. The choice changes only how the figures are shown.
+
+### What does Stockbar send to Yahoo for a Folync portfolio?
+
+Ticker symbols only, never amounts, units or account details. Calendar asks Yahoo for the holdings' earnings dates when you open it or click its refresh button, and for past earnings only while **Past** is shown. The Income page and Next up ask Yahoo nothing for a Folync portfolio. Chart history, candles and benchmarks also come from Yahoo when their Folync switch is off (Settings → Connections → Folync → **What Stockbar reads from Folync**), again by ticker symbol only.
+
+### Why are Activity and Trades dimmed?
+
+They need a Folync portfolio, because only Folync knows each transaction and when you bought and sold. With a local or Trading 212 portfolio their sidebar entries are dimmed with **Needs a Folync portfolio**.
+
 ### How do I reorder holdings?
 
 Use the arrows on each row in Edit mode. The read-only table and menu bar follow that order until you sort by a column.
@@ -126,7 +152,7 @@ It is off until you turn on Settings → Menu Bar → **Show portfolio total in 
 
 ### After an update, Folync says it is waiting for Keychain access.
 
-macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation has no sector data. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. This happens once after every update, because each released build has a new signature. (The first update to a version that keeps all credentials in one Keychain item asks once more for each credential the version before had saved, to move it across.) Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
+macOS asks before a rebuilt or re-signed app reads its saved Keychain items. Until you answer, Stockbar can't read the Folync token or API keys, so Folync shows **Waiting for Keychain access**, exchange rates don't refresh and Allocation may leave out holdings that need a rate. Choose **Always Allow** in the Keychain prompt; everything recovers within a minute. This happens once after every update, because each released build has a new signature. (The first update to a version that keeps all credentials in one Keychain item asks once more for each credential the version before had saved, to move it across.) Local builds signed with an Apple Development certificate keep that answer across rebuilds; ad-hoc-signed builds ask every time.
 
 ### Colours aren't showing.
 
@@ -170,7 +196,7 @@ No. There is no account, telemetry or analytics. Holdings stay on your Mac.
 
 ### What network connections does it make?
 
-- **Market data** through the Python script: Yahoo Finance (yfinance), plus FMP and Twelve Data if configured. Only ticker symbols (and your API key for FMP/Twelve Data) are sent.
+- **Market data** through the Python script: Yahoo Finance (yfinance), plus FMP and Twelve Data if configured. Only ticker symbols (and your API key for FMP/Twelve Data) are sent. This includes the dividend and earnings dates for Income and Calendar; with a Folync portfolio, Calendar sends the holdings' ticker symbols to Yahoo for earnings dates.
 - **Exchange rates** from exchangerate-api.com.
 - **Trading 212** (read-only) and **your Folync instance**, only if you connect them.
 - **Updates** from GitHub: a list of available versions about once a day, and the download when you install one. Nothing about you or your portfolio is sent.

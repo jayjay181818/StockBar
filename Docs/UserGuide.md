@@ -220,4 +220,4 @@ The **Help** menu opens Data Health and Diagnostics and shows the log files in F
 
 ## Privacy
 
-Portfolio data is stored locally on your Mac (Application Support and Core Data). Market-data requests send ticker symbols to the configured providers. Broker and Folync credentials stay in your Keychain and are never written to logs. Update checks fetch a file from GitHub and send nothing about you or your Mac beyond what any web request shows (your IP address and the Stockbar version).
+Portfolio data is stored locally on your Mac (Application Support and Core Data). Market-data requests send ticker symbols to the configured providers. With a Folync portfolio, Calendar sends the holdings' ticker symbols to Yahoo for earnings dates, never amounts or units; Income and Next up ask Yahoo nothing. Broker and Folync credentials stay in your Keychain and are never written to logs. Update checks fetch a file from GitHub and send nothing about you or your Mac beyond what any web request shows (your IP address and the Stockbar version).
