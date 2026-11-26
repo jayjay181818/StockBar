@@ -171,6 +171,8 @@ struct StockbarSettingsView: View {
                         prompt: Text("{symbol} {price} {arrow}{changePct}")
                     )
                     .textFieldStyle(.roundedBorder)
+                    // With its label hidden, VoiceOver would read the prompt as its name.
+                    .accessibilityLabel("Custom Template")
                 } detail: {
                     templateValidation
                 }
