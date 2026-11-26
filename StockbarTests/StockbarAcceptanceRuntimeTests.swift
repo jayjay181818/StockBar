@@ -749,6 +749,146 @@ final class StockbarAcceptanceEventsFixtureTests: XCTestCase {
     }
 }
 
+/// The made-up price alerts for the acceptance copy: reachable only in an
+/// explicit acceptance run, from a checked owner-only copy in its root.
+final class StockbarAcceptanceAlertsFixtureTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarAcceptanceAlertsFixtureTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+        super.tearDown()
+    }
+
+    private let validJSON = """
+    {"version": 1, "alerts": [
+     {"symbol": "FAKEUP", "condition": "above", "threshold": 150},
+     {"symbol": "FAKEPC.L", "condition": "percentChange", "threshold": 3, "triggeredHoursAgo": 72},
+     {"symbol": "HELD", "condition": "below", "threshold": 105, "paused": true}]}
+    """
+
+    private func write(_ text: String, name: String = "source.json", mode: Int = 0o600) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        return url
+    }
+
+    private func runtime(explicit: Bool) -> StockbarAcceptanceRuntime {
+        StockbarAcceptanceRuntime(root: directory, runID: "run-12345678",
+                                  folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+                                  liveProviderRequestsAllowed: false, loopbackFolyncAllowed: explicit)
+    }
+
+    func testTheOptionIsReadOnlyInAnExplicitAcceptanceRun() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.alertsKey: source.path]
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.alertsKey, "STOCKBAR_ACCEPTANCE_ALERTS")
+        XCTAssertTrue(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: true))
+            .usesAlertsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: false))
+            .usesAlertsFixture, "a root and run id without the explicit run's gate")
+        let normal = try StockbarAcceptanceRuntime.resolve(environment: environment)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: normal).usesAlertsFixture)
+        var testEnvironment = environment
+        testEnvironment["XCTestConfigurationFilePath"] = "/tmp/StockbarTests.xctestconfiguration"
+        let isolation = try StockbarAcceptanceRuntime.resolveCurrent(
+            environment: testEnvironment, processIdentifier: 4242, uniqueSuffix: "run-0004", isRunningUnderXCTest: true
+        )
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: testEnvironment, runtime: isolation)
+            .usesAlertsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.current.usesAlertsFixture)
+        XCTAssertNil(StockbarAcceptanceAlertsFixture.current, "the test process itself never has a fixture")
+    }
+
+    func testTheBootstrapCopiesTheFixtureOwnerOnlyIntoTheRootAndTheAppReadsOnlyThatCopy() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.alertsKey: source.path]
+        let explicit = runtime(explicit: true)
+
+        XCTAssertTrue(try StockbarAcceptanceAlertsFixture.installCopy(environment: environment, runtime: explicit))
+        let copy = try XCTUnwrap(StockbarAcceptanceAlertsFixture.copyURL(runtime: explicit))
+        XCTAssertEqual(copy.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
+        XCTAssertEqual(copy.lastPathComponent, "alerts-fixture.json")
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o777, 0o600)
+
+        try FileManager.default.removeItem(at: source)
+        let options = StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicit)
+        let fixture = try XCTUnwrap(try StockbarAcceptanceAlertsFixture.load(options: options, runtime: explicit))
+        XCTAssertEqual(fixture.alerts.map(\.symbol), ["FAKEUP", "FAKEPC.L", "HELD"])
+    }
+
+    func testOutsideAnExplicitRunNothingIsCopiedOrRead() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.alertsKey: source.path]
+        let other = runtime(explicit: false)
+        XCTAssertFalse(try StockbarAcceptanceAlertsFixture.installCopy(environment: environment, runtime: other))
+        XCTAssertNil(StockbarAcceptanceAlertsFixture.copyURL(runtime: other))
+        _ = try write(validJSON, name: StockbarAcceptanceAlertsFixture.fileName)
+        var forced = StockbarAcceptanceLaunchOptions.none
+        forced.usesAlertsFixture = true
+        XCTAssertNil(try StockbarAcceptanceAlertsFixture.load(options: forced, runtime: other))
+        XCTAssertNil(try StockbarAcceptanceAlertsFixture.load(options: .none, runtime: runtime(explicit: true)))
+    }
+
+    func testAFixtureMustBeARegularOwnerOnlyFileOfAcceptedSymbols() throws {
+        XCTAssertNoThrow(try StockbarAcceptanceAlertsFixture.read(at: try write(validJSON)))
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.read(at: try write(validJSON, name: "shared.json", mode: 0o644))) {
+            XCTAssertEqual($0 as? StockbarAcceptanceAlertsFixtureError, .notOwnerOnly)
+        }
+        let link = directory.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: try write(validJSON, name: "target.json"))
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.read(at: link)) {
+            XCTAssertEqual($0 as? StockbarAcceptanceAlertsFixtureError, .notARegularFile)
+        }
+        let bad = validJSON.replacingOccurrences(of: "FAKEUP", with: "fake up")
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.read(at: try write(bad, name: "bad.json"))) {
+            XCTAssertEqual($0 as? StockbarAcceptanceAlertsFixtureError, .notMadeUp("fake up"))
+        }
+        let negative = validJSON.replacingOccurrences(of: "\"threshold\": 150", with: "\"threshold\": -1")
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.read(at: try write(negative, name: "negative.json")))
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.read(at: try write("{\"version\": 2, \"alerts\": []}",
+                                                                                     name: "v2.json")))
+
+        // A made-up symbol is always shown; any other only while the portfolio holds it.
+        XCTAssertTrue(StockbarAcceptanceAlertsFixture.isShowable("FAKEOLD", held: []))
+        XCTAssertTrue(StockbarAcceptanceAlertsFixture.isShowable("NVDA", held: ["NVDA"]))
+        XCTAssertFalse(StockbarAcceptanceAlertsFixture.isShowable("NVDA", held: ["SHEL"]))
+        XCTAssertFalse(StockbarAcceptanceAlertsFixture.isShowable(nil, held: ["NVDA"]))
+        for symbol in ["FAKE", "fakeus", "XFAKE"] {
+            XCTAssertFalse(StockbarAcceptanceAlertsFixture.isMadeUp(symbol), symbol)
+        }
+
+        // The bootstrap refuses a bad source, so the run stops before the app starts.
+        let badSource = try write(bad, name: "bad-source.json")
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.installCopy(
+            environment: [StockbarAcceptanceLaunchOptions.alertsKey: badSource.path], runtime: runtime(explicit: true)))
+        // And the app refuses a copy that is no longer owner-only.
+        _ = try write(validJSON, name: StockbarAcceptanceAlertsFixture.fileName, mode: 0o640)
+        var on = StockbarAcceptanceLaunchOptions.none
+        on.usesAlertsFixture = true
+        XCTAssertThrowsError(try StockbarAcceptanceAlertsFixture.load(options: on, runtime: runtime(explicit: true)))
+    }
+
+    func testTheFixtureBecomesAlertsTimedFromNow() throws {
+        let fixture = try StockbarAcceptanceAlertsFixture.decode(Data(validJSON.utf8))
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let alerts = fixture.priceAlerts(now: now)
+        XCTAssertEqual(alerts.map(\.condition), [.above, .percentChange, .below])
+        XCTAssertEqual(alerts.map(\.isEnabled), [true, true, false])
+        XCTAssertNil(alerts[0].lastTriggered)
+        XCTAssertEqual(alerts[1].lastTriggered, now.addingTimeInterval(-72 * 3_600))
+        XCTAssertEqual(alerts[2].threshold, 105)
+    }
+}
+
 // MARK: - Main window shell
 
 @MainActor

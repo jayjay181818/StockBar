@@ -21,6 +21,9 @@ import Foundation
 ///   and date answers (`StockbarAcceptanceEventsFixture`). The bootstrap checks
 ///   it and copies it into the run's root; the app reads only that copy and
 ///   answers instrument events from it instead of asking Yahoo.
+/// - `STOCKBAR_ACCEPTANCE_ALERTS`: the path of a fixture of made-up price
+///   alerts (`StockbarAcceptanceAlertsFixture`), checked and copied the same
+///   way. The Alerts page shows them; they are never stored and never fire.
 struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     enum Appearance: String, Codable, Sendable {
         case light
@@ -33,6 +36,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     static let windowKey = "STOCKBAR_ACCEPTANCE_WINDOW"
     static let popoverKey = "STOCKBAR_ACCEPTANCE_POPOVER"
     static let eventsKey = "STOCKBAR_ACCEPTANCE_EVENTS"
+    static let alertsKey = "STOCKBAR_ACCEPTANCE_ALERTS"
     /// How long after launch the portfolio popover opens, so the first
     /// figures and the graph have arrived.
     static let popoverDelay: TimeInterval = 6
@@ -45,6 +49,8 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     var opensPortfolioPopover = false
     /// Instrument events come from the run's copy of the fixture, not Yahoo.
     var usesInstrumentEventsFixture = false
+    /// The Alerts page shows the run's copy of the alerts fixture, for looking only.
+    var usesAlertsFixture = false
 
     static let none = Self()
 
@@ -73,6 +79,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
         options.opensAtMinimumSize = value(windowKey)?.lowercased() == "min"
         options.opensPortfolioPopover = value(popoverKey)?.lowercased() == "portfolio"
         options.usesInstrumentEventsFixture = value(eventsKey) != nil
+        options.usesAlertsFixture = value(alertsKey) != nil
         return options
     }
 

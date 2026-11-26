@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UserNotifications
 import XCTest
 @testable import Stockbar
 
@@ -2486,6 +2487,78 @@ final class PriceAlertBatchTests: XCTestCase {
 
         service.checkAlerts(checks)
         XCTAssertEqual(writes.count, 1, "Unchanged prices are not saved again")
+    }
+}
+
+/// The acceptance copy's alerts fixture is shown only: nothing it does is
+/// stored, checked against a price, or reaches the notification centre.
+@MainActor
+final class PriceAlertFixtureServiceTests: XCTestCase {
+    private var notificationCenterCalls = 0
+    private var storeCalls = 0
+
+    private func makeService() throws -> PriceAlertService {
+        let fixture = try StockbarAcceptanceAlertsFixture.decode(Data("""
+        {"version": 1, "alerts": [
+         {"symbol": "FAKEUP", "condition": "above", "threshold": 150},
+         {"symbol": "FAKEDN", "condition": "below", "threshold": 25, "paused": true},
+         {"symbol": "FAKEPC", "condition": "percentChange", "threshold": 3, "triggeredHoursAgo": 72}]}
+        """.utf8))
+        var dependencies = PriceAlertService.Dependencies()
+        dependencies.notificationCenter = { [unowned self] in
+            notificationCenterCalls += 1
+            return UNUserNotificationCenter.current()
+        }
+        dependencies.coreDataStack = { [unowned self] in
+            storeCalls += 1
+            return CoreDataStack.shared
+        }
+        return PriceAlertService(fixture: fixture, now: Date(timeIntervalSince1970: 2_000_000_000),
+                                 dependencies: dependencies)
+    }
+
+    func testFixtureAlertsAreShownButNeverStoredCheckedOrNotified() async throws {
+        let service = try makeService()
+        XCTAssertTrue(service.isShowingFixture)
+        XCTAssertEqual(service.alerts.map(\.symbol), ["FAKEUP", "FAKEDN", "FAKEPC"])
+        let before = service.alerts.map(\.id)
+        let paused = try XCTUnwrap(service.alerts.first { !$0.isEnabled })
+
+        // Every way the page or a refresh could change or fire an alert.
+        service.toggleAlert(id: paused.id)  // Resuming would ask for permission.
+        service.addAlert(PriceAlert(symbol: "FAKENEW", condition: .above, threshold: 1))
+        service.updateAlert(id: before[0], condition: .below, threshold: 2)
+        service.removeAlert(id: before[0])
+        service.checkAlerts([
+            PriceAlertService.PriceCheck(symbol: "FAKEUP", currentPrice: 151, previousPrice: 149, currency: "USD"),
+            PriceAlertService.PriceCheck(symbol: "FAKEPC", currentPrice: 110, previousPrice: 100, currency: "USD")
+        ])
+        await service.refreshNotificationPermission()
+
+        XCTAssertEqual(service.alerts.map(\.id), before, "nothing added, removed or changed")
+        XCTAssertFalse(try XCTUnwrap(service.alerts.first { $0.id == paused.id }).isEnabled, "still paused")
+        XCTAssertNil(service.alerts[0].lastTriggered, "never fired")
+        XCTAssertEqual(service.alerts[0].condition, .above)
+        XCTAssertEqual(notificationCenterCalls, 0, "no notification-centre call of any kind")
+        XCTAssertEqual(storeCalls, 0, "Core Data is never touched")
+        XCTAssertFalse(service.notificationsDenied)
+    }
+
+    func testTheSharedServiceInATestRunHasNoFixture() {
+        XCTAssertFalse(PriceAlertService.shared.isShowingFixture)
+    }
+
+    /// The counting seams are the ones the service really uses, so the zero
+    /// counts above mean something.
+    func testWithoutAFixtureTheServiceReadsTheStoreThroughItsSeam() {
+        var dependencies = PriceAlertService.Dependencies()
+        dependencies.coreDataStack = { [unowned self] in
+            storeCalls += 1
+            return CoreDataStack.shared
+        }
+        let service = PriceAlertService(fixture: nil, dependencies: dependencies)
+        XCTAssertFalse(service.isShowingFixture)
+        XCTAssertGreaterThan(storeCalls, 0)
     }
 }
 

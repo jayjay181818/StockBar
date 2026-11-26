@@ -52,7 +52,7 @@ struct PriceAlertManagementView: View {
                 .accessibilityElement(children: .contain)
             }
 
-            if alertService.alerts.isEmpty {
+            if shownAlerts.isEmpty {
                 ContentUnavailableView {
                     Label("No alerts yet", systemImage: "bell.badge")
                 } description: {
@@ -68,17 +68,17 @@ struct PriceAlertManagementView: View {
                 .stockbarEmptyState(minHeight: 260)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(alertService.alerts.enumerated()), id: \.element.id) { index, alert in
+                    ForEach(Array(shownAlerts.enumerated()), id: \.element.id) { index, alert in
                         PriceAlertRow(alert: alert, dataModel: dataModel)
                             .transition(.opacity.combined(with: .move(edge: .top)))
-                        if index < alertService.alerts.count - 1 {
+                        if index < shownAlerts.count - 1 {
                             Divider().padding(.leading, 52)
                         }
                     }
                 }
                 .stockbarCard(padding: 6)
                 .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion),
-                           value: alertService.alerts.map(\.id))
+                           value: shownAlerts.map(\.id))
             }
 
             Label("Alerts are delivered as macOS notifications. Each alert triggers at most once every 15 minutes.",
@@ -98,6 +98,14 @@ struct PriceAlertManagementView: View {
                 isPresented: $showingAddAlert
             )
         }
+    }
+
+    /// The alerts to list. The acceptance fixture's alerts are listed only
+    /// for made-up symbols or ones the copy's portfolio holds.
+    private var shownAlerts: [PriceAlert] {
+        guard alertService.isShowingFixture else { return alertService.alerts }
+        let held = Set(dataModel.realTimeTrades.map(\.trade.name))
+        return alertService.alerts.filter { StockbarAcceptanceAlertsFixture.isShowable($0.symbol, held: held) }
     }
 
     private var alertableSymbols: [String] {

@@ -23,9 +23,13 @@ do {
         runtime: StockbarRuntimeStorage.acceptance,
         defaults: StockbarRuntimeStorage.userDefaults
     )
-    // The made-up instrument events, when asked for, must pass their checks
+    // The made-up instrument events and alerts, when asked for, must pass their checks
     // before the app starts; otherwise the copy stops here.
     _ = try StockbarAcceptanceEventsFixture.load(
+        options: StockbarAcceptanceLaunchOptions.current,
+        runtime: StockbarRuntimeStorage.acceptance
+    )
+    _ = try StockbarAcceptanceAlertsFixture.load(
         options: StockbarAcceptanceLaunchOptions.current,
         runtime: StockbarRuntimeStorage.acceptance
     )
