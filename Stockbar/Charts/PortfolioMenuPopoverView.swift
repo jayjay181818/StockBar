@@ -675,12 +675,12 @@ struct PortfolioMenuPopoverView: View {
         .onAppear {
             viewModel.activate()
             refreshChartModel()
-            reloadNextUp()
+            reloadNextUp(always: true)
         }
         .onDisappear { viewModel.deactivate() }
         .onReceive(dataModel.tradeContentPublisher) { _ in
             refreshChartModel()
-            reloadNextUp()
+            reloadNextUp(always: false)
         }
         .onChange(of: dataModel.portfolioMenuBarDisplaySettings) { _, _ in
             refreshChartModel()
@@ -722,12 +722,18 @@ struct PortfolioMenuPopoverView: View {
         }
     }
 
-    /// Reads "Next up" again from what is saved. Makes no request.
-    private func reloadNextUp() {
+    /// Reads "Next up" again from what is saved. Makes no request. On appearing
+    /// it always reads; after a quote or trade update only if the holdings changed.
+    private func reloadNextUp(always: Bool) {
         let target = dataModel.preferredCurrency
         let converter = dataModel.currencyConverter
-        nextUp.reload(.current(dataModel), currency: target) { amount, from in
+        let convert: @MainActor (Double, String) -> Double? = { amount, from in
             converter.convertWithLoadedRates(amount: amount, from: from, to: target)
+        }
+        if always {
+            nextUp.reload(.current(dataModel), currency: target, convert: convert)
+        } else {
+            nextUp.reloadIfChanged(.current(dataModel), currency: target, convert: convert)
         }
     }
 

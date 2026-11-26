@@ -128,21 +128,27 @@ struct StockbarOverviewView: View {
                 }
             }
         }
-        .onAppear { updateChart(); chartModel.activate(); reloadNextUp() }
+        .onAppear { updateChart(); chartModel.activate(); reloadNextUp(always: true) }
         .onDisappear { chartModel.deactivate() }
-        .onReceive(dataModel.tradeContentPublisher) { _ in updateChart(); reloadNextUp() }
+        .onReceive(dataModel.tradeContentPublisher) { _ in updateChart(); reloadNextUp(always: false) }
         .onChange(of: summary.totalValue) { _, _ in updateChart() }
         .onChange(of: summary.currency) { _, _ in updateChart() }
         .onChange(of: summary.valuationSource) { _, _ in updateChart() }
         .onChange(of: chartModel.selectedTimeRange) { _, _ in hoveredPoint = nil }
     }
 
-    /// Reads "Next up" again from what is saved. Makes no request.
-    private func reloadNextUp() {
+    /// Reads "Next up" again from what is saved. Makes no request. On appearing
+    /// it always reads; after a quote or trade update only if the holdings changed.
+    private func reloadNextUp(always: Bool) {
         let target = dataModel.preferredCurrency
         let converter = dataModel.currencyConverter
-        nextUp.reload(.current(dataModel), currency: target) { amount, from in
+        let convert: @MainActor (Double, String) -> Double? = { amount, from in
             converter.convertWithLoadedRates(amount: amount, from: from, to: target)
+        }
+        if always {
+            nextUp.reload(.current(dataModel), currency: target, convert: convert)
+        } else {
+            nextUp.reloadIfChanged(.current(dataModel), currency: target, convert: convert)
         }
     }
 

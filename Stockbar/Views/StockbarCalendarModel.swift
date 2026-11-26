@@ -326,6 +326,8 @@ final class StockbarNextUpModel {
     private let timeZone: TimeZone
     private var task: Task<Void, Never>?
     private var generation = 0
+    /// What the last reload was for, so a quote update alone reads nothing again.
+    @ObservationIgnored private var lastRead: (inputs: StockbarCalendarInputs, currency: String, day: FolyncLedgerDay)?
 
     init(dividends: any StockbarSavedDividendsReading = FolyncSupplementalCoordinator.shared,
          events: any InstrumentEventsSavedReading = InstrumentEventsService.shared,
@@ -345,6 +347,7 @@ final class StockbarNextUpModel {
         generation += 1
         let generation = generation
         let today = FolyncLedgerDay(now(), in: timeZone)
+        lastRead = (inputs, currency, today)
         let dividends = dividends
         let events = events
         task = Task { [weak self] in
@@ -354,6 +357,17 @@ final class StockbarNextUpModel {
             self.today = today
             self.rows = rows
         }
+    }
+
+    /// Reloads only when the holdings, the currency or the day differ from the
+    /// last reload. Quote updates arrive every refresh while the popover or the
+    /// Overview is open; "Next up" does not depend on prices, so they read
+    /// nothing from disk.
+    func reloadIfChanged(_ inputs: StockbarCalendarInputs, currency: String,
+                         convert: @escaping @MainActor (Double, String) -> Double?) {
+        let today = FolyncLedgerDay(now(), in: timeZone)
+        if let lastRead, lastRead.inputs == inputs, lastRead.currency == currency, lastRead.day == today { return }
+        reload(inputs, currency: currency, convert: convert)
     }
 
     /// The rows from saved data, for `today`.

@@ -2313,6 +2313,31 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertTrue(waiting.rows.isEmpty)
     }
 
+    /// Quote updates arrive every refresh while the popover is open; they must
+    /// not read the saved copies again unless the holdings, currency or day changed.
+    func testNextUpReadsAgainOnlyWhenItsInputsChange() async throws {
+        let saved = SavedCalendarStandIn()
+        let model = StockbarNextUpModel(dividends: saved, events: saved, now: { F.now }, timeZone: F.utc)
+        model.reload(folyncInputs, currency: "GBP") { amount, _ in amount }
+        await settle { await saved.eventReads.count == 1 }
+        model.reloadIfChanged(folyncInputs, currency: "GBP") { amount, _ in amount }
+        model.reloadIfChanged(folyncInputs, currency: "GBP") { amount, _ in amount }
+        await drain()
+        var eventReads = await saved.eventReads
+        XCTAssertEqual(eventReads.count, 1, "the same holdings read nothing again")
+
+        model.reloadIfChanged(folyncInputs, currency: "USD") { amount, _ in amount }
+        await settle { await saved.eventReads.count == 2 }
+        let fewer = StockbarCalendarInputs(isFolyncEnabled: true, isFolyncPortfolio: true,
+                                           holdings: Array(folyncInputs.holdings.prefix(1)), localHoldings: [])
+        model.reloadIfChanged(fewer, currency: "USD") { amount, _ in amount }
+        await settle { await saved.eventReads.count == 3 }
+        model.reload(fewer, currency: "USD") { amount, _ in amount }
+        await settle { await saved.eventReads.count == 4 }
+        eventReads = await saved.eventReads
+        XCTAssertEqual(eventReads.count, 4, "a change of currency or holdings, or an appearance, reads again")
+    }
+
     // MARK: Requests
 
     func testCalendarAndIncomeShareOneDividendsRequest() async throws {
