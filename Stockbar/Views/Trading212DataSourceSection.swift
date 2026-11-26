@@ -274,7 +274,8 @@ struct Trading212DataSourceSection: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 12) {
+        // Wraps rather than truncating at Settings' shared width.
+        StockbarWrappingRow(spacing: 12) {
             Button {
                 testConnection()
             } label: {
