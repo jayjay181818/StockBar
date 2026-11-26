@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.31.9)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.9</link>
+      <pubDate>Thu, 26 Nov 2026 20:45:39 +0000</pubDate>
+      <sparkle:version>382.31.9</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.31.9 of Stockbar 3.8.2. Changes since experimental-382.31.8:
+
+- Calendar: past EPS figures for every share, with a currency per holding (#168)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.31.9/Stockbar-382.31.9.zip" length="8703267" type="application/octet-stream" sparkle:edSignature="geq3dv8ACzv9s/K3iGi/xhlX1iNZ6LNIKo8EDCg7Kti135sdlmY/XquuqBedgSANSwJlDDq/OaeuVWgQE/TsAw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.31.8)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.8</link>
       <pubDate>Thu, 26 Nov 2026 18:58:50 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Income for a local or Trading 212 portfolio, as a labelled estimate (#158)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.26/Stockbar-382.3.26.zip" length="8394427" type="application/octet-stream" sparkle:edSignature="g2qQOmoVvUi6D1+kb7KnYVgiSx/ONLT15a2YMEmtB3lUAse8gYmJwSCfzljcBcmPGWiizFVuXmXML1nxfBaICw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.25)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.25</link>
-      <pubDate>Wed, 25 Nov 2026 19:16:52 +0000</pubDate>
-      <sparkle:version>382.3.25</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.25 of Stockbar 3.8.2. Changes since experimental-382.3.24:
-
-- Glass cards: draw the top highlight without an extra copy of the window (#157)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.25/Stockbar-382.3.25.zip" length="8207828" type="application/octet-stream" sparkle:edSignature="WiBZ8Snzhx9Ya4b9c43ZWr5nSEnj3eAFozroWBD/m/2N7lkEohrq/0w72zd71SHQob0k1uA5D3p40SBLFwi6DQ=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 8Z7WaFjaRR8wLWhADLTDbn017BNBoSSym1GIwRdG+fEX/235fEfI3CGtUkh3s4hjz5eayTJNSmWhUpObom3VCw==
+edSignature: A85L0S9Xz4xvn0lW05S52EEmUQ7z6l07toZqUc1BcadA11vHHtKycTT61RT9+OiV1IlNK6T3cNHxOCP3yRvZAA==
 length: 10243
 -->
