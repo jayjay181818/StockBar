@@ -1063,6 +1063,7 @@ final class InstrumentEventsServiceTests: XCTestCase {
         let historyResults = await history.value
         let calls = await runner.calls()
         XCTAssertEqual(calls.count, 2, "the history caller ran its own run, not the events one")
+        guard calls.count == 2 else { return }
         XCTAssertFalse(calls[0].contains(InstrumentEventsService.earningsHistoryFlag))
         XCTAssertTrue(calls[1].contains(InstrumentEventsService.earningsHistoryFlag))
         XCTAssertNotNil(eventsResults[0].events)
