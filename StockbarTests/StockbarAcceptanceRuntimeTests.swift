@@ -893,6 +893,157 @@ final class StockbarAcceptanceAlertsFixtureTests: XCTestCase {
     }
 }
 
+final class StockbarAcceptanceHoldingsFixtureTests: XCTestCase {
+    private var directory: URL!
+    private var suiteName: String!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarAcceptanceHoldingsFixtureTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        suiteName = TestDefaultsSuite.makeName("AcceptanceHoldings-")
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+        TestDefaultsSuite.remove(suiteName)
+        super.tearDown()
+    }
+
+    private let validJSON = """
+    {"version": 1, "holdings": [
+     {"symbol": "FAKEUS", "units": 40, "averageCost": 52.5, "costCurrency": "USD"},
+     {"symbol": "FAKELN.L", "units": 1200.5},
+     {"symbol": "FAKEFD.L", "units": 85, "averageCost": 71.2, "costCurrency": "GBP"}]}
+    """
+
+    private func write(_ text: String, name: String = "source.json", mode: Int = 0o600) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        return url
+    }
+
+    private func runtime(explicit: Bool) -> StockbarAcceptanceRuntime {
+        StockbarAcceptanceRuntime(root: directory, runID: "run-12345678",
+                                  folyncKeychainService: "com.stockbar.folync.acceptance.run-12345678",
+                                  liveProviderRequestsAllowed: false, loopbackFolyncAllowed: explicit)
+    }
+
+    private var on: StockbarAcceptanceLaunchOptions {
+        var options = StockbarAcceptanceLaunchOptions.none
+        options.usesHoldingsFixture = true
+        return options
+    }
+
+    func testTheOptionIsReadOnlyInAnExplicitAcceptanceRun() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.holdingsKey: source.path]
+        XCTAssertEqual(StockbarAcceptanceLaunchOptions.holdingsKey, "STOCKBAR_ACCEPTANCE_HOLDINGS")
+        XCTAssertTrue(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: true))
+            .usesHoldingsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: runtime(explicit: false))
+            .usesHoldingsFixture, "a root and run id without the explicit run's gate")
+        let normal = try StockbarAcceptanceRuntime.resolve(environment: environment)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: normal).usesHoldingsFixture)
+        var testEnvironment = environment
+        testEnvironment["XCTestConfigurationFilePath"] = "/tmp/StockbarTests.xctestconfiguration"
+        let isolation = try StockbarAcceptanceRuntime.resolveCurrent(
+            environment: testEnvironment, processIdentifier: 4242, uniqueSuffix: "run-0005", isRunningUnderXCTest: true
+        )
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.resolve(environment: testEnvironment, runtime: isolation)
+            .usesHoldingsFixture)
+        XCTAssertFalse(StockbarAcceptanceLaunchOptions.current.usesHoldingsFixture)
+    }
+
+    func testTheBootstrapCopiesItOwnerOnlyAndAFreshCopyStartsOnTheLocalPortfolio() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.holdingsKey: source.path]
+        let explicit = runtime(explicit: true)
+        XCTAssertTrue(try StockbarAcceptanceHoldingsFixture.installCopy(environment: environment, runtime: explicit))
+        let copy = try XCTUnwrap(StockbarAcceptanceHoldingsFixture.copyURL(runtime: explicit))
+        XCTAssertEqual(copy.lastPathComponent, "holdings-fixture.json")
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o777, 0o600)
+        try FileManager.default.removeItem(at: source)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let folync = FolyncSettingsStore(defaults: defaults)
+        folync.save(FolyncStoredSettings(isEnabled: true, baseURL: "http://127.0.0.1:9", scopeID: "all",
+                                         pollingIntervalSeconds: 60))
+        XCTAssertTrue(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: on, runtime: explicit,
+                                                                           defaults: defaults))
+        let stored = try JSONDecoder().decode([Trade].self, from: try XCTUnwrap(defaults.data(forKey: "usertrades")))
+        XCTAssertEqual(stored.map(\.name), ["FAKEUS", "FAKELN.L", "FAKEFD.L"])
+        XCTAssertEqual(stored.map(\.position.unitSize), [40, 1200.5, 85])
+        XCTAssertEqual(stored[0].position.positionAvgCost, 52.5)
+        XCTAssertEqual(stored[0].position.costCurrency, "USD")
+        XCTAssertTrue(stored[1].position.positionAvgCost.isNaN, "no cost given is no cost, not zero")
+        XCTAssertTrue(stored.allSatisfy { !$0.isWatchlistOnly })
+        XCTAssertFalse(folync.load().isEnabled, "the copy opens on the local portfolio")
+        XCTAssertEqual(folync.load().baseURL, "http://127.0.0.1:9", "the stand-in's address is kept")
+
+        // A second launch of the same copy, or one with a portfolio, is left as it is.
+        XCTAssertFalse(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: on, runtime: explicit,
+                                                                            defaults: defaults))
+        let established = try XCTUnwrap(UserDefaults(suiteName: suiteName + "-established"))
+        defer { TestDefaultsSuite.remove(suiteName + "-established") }
+        established.set(true, forKey: DataModel.coreDataPortfolioEstablishedKey)
+        XCTAssertFalse(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: on, runtime: explicit,
+                                                                            defaults: established))
+        XCTAssertNil(established.data(forKey: "usertrades"))
+    }
+
+    func testOutsideAnExplicitRunNothingIsCopiedReadOrSeeded() throws {
+        let source = try write(validJSON)
+        let environment = [StockbarAcceptanceLaunchOptions.holdingsKey: source.path]
+        let other = runtime(explicit: false)
+        XCTAssertFalse(try StockbarAcceptanceHoldingsFixture.installCopy(environment: environment, runtime: other))
+        XCTAssertNil(StockbarAcceptanceHoldingsFixture.copyURL(runtime: other))
+        _ = try write(validJSON, name: StockbarAcceptanceHoldingsFixture.fileName)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        XCTAssertFalse(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: on, runtime: other, defaults: defaults))
+        XCTAssertFalse(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: .none, runtime: runtime(explicit: true),
+                                                                            defaults: defaults))
+        XCTAssertNil(defaults.object(forKey: "usertrades"))
+    }
+
+    func testAFixtureMustBeARegularOwnerOnlyFileOfMadeUpHoldings() throws {
+        XCTAssertNoThrow(try StockbarAcceptanceHoldingsFixture.read(at: try write(validJSON)))
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.read(at: try write(validJSON, name: "shared.json", mode: 0o644))) {
+            XCTAssertEqual($0 as? StockbarAcceptanceHoldingsFixtureError, .notOwnerOnly)
+        }
+        let link = directory.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: try write(validJSON, name: "target.json"))
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.read(at: link)) {
+            XCTAssertEqual($0 as? StockbarAcceptanceHoldingsFixtureError, .notARegularFile)
+        }
+        for (name, bad, error) in [
+            ("real.json", validJSON.replacingOccurrences(of: "FAKEUS", with: "AAPL"), StockbarAcceptanceHoldingsFixtureError.notMadeUp("AAPL")),
+            ("lower.json", validJSON.replacingOccurrences(of: "FAKEUS", with: "fakeus"), .notMadeUp("fakeus")),
+            ("zero.json", validJSON.replacingOccurrences(of: "\"units\": 40", with: "\"units\": 0"), .badFigure("FAKEUS")),
+            ("cost.json", validJSON.replacingOccurrences(of: "52.5", with: "-1"), .badFigure("FAKEUS"))
+        ] {
+            XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.read(at: try write(bad, name: name)), name) {
+                XCTAssertEqual($0 as? StockbarAcceptanceHoldingsFixtureError, error, name)
+            }
+        }
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.decode(Data("{\"version\": 2, \"holdings\": []}".utf8)))
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.decode(Data("{\"version\": 1, \"holdings\": []}".utf8)))
+
+        // The bootstrap refuses a bad source, and the app a copy no longer owner-only.
+        let badSource = try write(validJSON.replacingOccurrences(of: "FAKEUS", with: "AAPL"), name: "bad-source.json")
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.installCopy(
+            environment: [StockbarAcceptanceLaunchOptions.holdingsKey: badSource.path], runtime: runtime(explicit: true)))
+        _ = try write(validJSON, name: StockbarAcceptanceHoldingsFixture.fileName, mode: 0o640)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.seedIfRequested(options: on, runtime: runtime(explicit: true),
+                                                                                  defaults: defaults))
+        XCTAssertNil(defaults.object(forKey: "usertrades"))
+    }
+}
+
 // MARK: - Main window shell
 
 @MainActor
