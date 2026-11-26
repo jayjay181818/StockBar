@@ -87,6 +87,8 @@ DIVIDEND_HISTORY_PERIOD = "2y"
 # any limit up to 25 (upcoming estimates first, then the most recent reports),
 # which covers well over a year of quarterly reports.
 EARNINGS_HISTORY_LIMIT = 12
+# The short chart asked for the quote currency of the EPS figures.
+CURRENCY_CHART_PERIOD = "5d"
 # yfinance's names for the earnings page's columns (base.py, the scrape).
 EARNINGS_COLUMNS = {
     "reportedEPS": ("Reported EPS",),
@@ -463,8 +465,9 @@ def fetch_earnings_history(symbol, today, now_seconds):
     """One symbol's earnings of the last twelve months, None for no data, or raises.
 
     One request for Yahoo's earnings page (`Ticker.get_earnings_dates`); a
-    second, for the chart's quote currency, only when the page gives an EPS
-    figure in the twelve months.
+    second, a short chart for the quote currency, only when the page gives an
+    EPS figure in the twelve months. A chart that does not answer fails the
+    symbol.
     """
     with raising_logged_failures(symbol):
         ticker = yf.Ticker(symbol)
@@ -476,7 +479,15 @@ def fetch_earnings_history(symbol, today, now_seconds):
             return None
 
         def quote_currency():
-            return metadata_value(ticker.history_metadata, "currency")
+            # history() lets a rate limit through, where history_metadata
+            # alone would swallow it. Any other failure leaves the chart's
+            # metadata empty: then nothing is answered, rather than an answer
+            # saved for a day with its figures dropped.
+            ticker.history(period=CURRENCY_CHART_PERIOD, interval="1d")
+            metadata = ticker.history_metadata
+            if metadata_value(metadata, "instrumentType") is None:
+                raise RuntimeError("the chart gave no metadata, so the EPS figures' currency is unknown")
+            return metadata_value(metadata, "currency")
 
         earnings, currency = recent_earnings(symbol, rows, today, quote_currency)
 

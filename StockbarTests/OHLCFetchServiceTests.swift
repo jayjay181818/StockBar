@@ -1139,6 +1139,31 @@ final class InstrumentEventsServiceTests: XCTestCase {
         XCTAssertNotNil(events[0].events)
     }
 
+    /// "Next up" reads only saved copies: over a real service it never runs
+    /// the helper, of either kind, and never asks for past earnings.
+    @MainActor
+    func testNextUpNeverAsksForPastEarningsOrAnythingElse() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA")),
+                                                            Self.answer(Self.history("ALPHA"))])
+        let service = makeService(runner: runner)
+        _ = await service.events(for: ["ALPHA"])
+        let inputs = StockbarCalendarInputs(isFolyncEnabled: false, isFolyncPortfolio: false,
+                                            holdings: [CalendarHolding(symbol: "ALPHA", yahooSymbol: "ALPHA")],
+                                            localHoldings: [LocalIncomeHolding(symbol: "ALPHA", units: 10)])
+        let today = FolyncLedgerDay(start, in: TimeZone(identifier: "UTC") ?? .gmt)
+        _ = await StockbarNextUpModel.read(inputs, today: today, currency: "GBP", convert: { amount, _ in amount },
+                                           dividends: NoSavedDividends(), events: service)
+        let folyncInputs = StockbarCalendarInputs(isFolyncEnabled: true, isFolyncPortfolio: true,
+                                                  holdings: inputs.holdings, localHoldings: inputs.localHoldings)
+        _ = await StockbarNextUpModel.read(folyncInputs, today: today, currency: "GBP", convert: { amount, _ in amount },
+                                           dividends: NoSavedDividends(), events: service)
+        let runs = (await service.eventsRuns, await service.earningsHistoryRuns)
+        let calls = await runner.callCount()
+        XCTAssertEqual(runs.0, 1, "only the events call made above")
+        XCTAssertEqual(runs.1, 0, "Next up never asks for past earnings")
+        XCTAssertEqual(calls, 1)
+    }
+
     func testAnOlderFixtureWithoutPastEarningsStillReads() throws {
         let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
         {"version": 1, "holdings": [{"symbol": "FAKEUS", "earningsInDays": 9}]}
@@ -1160,6 +1185,11 @@ final class InstrumentEventsServiceTests: XCTestCase {
         }
         XCTFail("Condition never became true")
     }
+}
+
+/// Has no saved dividends; records nothing.
+private struct NoSavedDividends: StockbarSavedDividendsReading {
+    func savedDividends(_ query: FolyncDividendsQuery) async -> FolyncDividendsResponse? { nil }
 }
 
 /// Answers each run with the next response, repeating the last. Can hold a

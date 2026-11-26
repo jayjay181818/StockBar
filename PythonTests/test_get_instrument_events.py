@@ -147,6 +147,12 @@ class _FakeTicker:
             logging.getLogger("yfinance").error(message)
         return self._spec.get("dividends", _FakeSeries([]))
 
+    def history(self, period="1mo", interval="1d"):
+        self._log.append((self.symbol, "history", period))
+        if "chart_error" in self._spec:
+            raise self._spec["chart_error"]
+        return None
+
     @property
     def history_metadata(self):
         self._log.append((self.symbol, "metadata", None))
@@ -630,7 +636,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
 
     def test_each_shape_of_figures_exactly_as_given(self):
         envelopes, fake = self.run_history(
-            {"ALPHA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS}}, ["ALPHA"])
+            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS}}, ["ALPHA"])
 
         envelope = envelopes[0]
         self.assertTrue(envelope["success"])
@@ -654,7 +660,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         for currency in ("GBp", "GBX"):
             with self.subTest(currency=currency):
                 envelopes, _ = self.run_history(
-                    {"BETA.L": {"metadata": {"currency": currency}, "earnings": US_EARNINGS}}, ["BETA.L"])
+                    {"BETA.L": {"metadata": {"instrumentType": "EQUITY", "currency": currency}, "earnings": US_EARNINGS}}, ["BETA.L"])
                 history = envelopes[0]["earningsHistory"]
                 self.assertIsNone(history["epsCurrency"])
                 self.assertEqual([row["date"] for row in history["earnings"]],
@@ -666,7 +672,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
                 self.assertIn("EPS figures left out", self.stderr)
 
     def test_unknown_currency_drops_the_figures_and_never_falls_back_to_the_suffix(self):
-        for metadata in ({}, {"currency": "  "}):
+        for metadata in ({"instrumentType": "EQUITY"}, {"instrumentType": "EQUITY", "currency": "  "}):
             with self.subTest(metadata=metadata):
                 envelopes, _ = self.run_history(
                     {"GAMMA": {"metadata": metadata, "earnings": US_EARNINGS}}, ["GAMMA"])
@@ -676,8 +682,8 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
 
     def test_pounds_and_other_currencies_are_given_as_they_are(self):
         envelopes, _ = self.run_history({
-            "DELTA.L": {"metadata": {"currency": "GBP"}, "earnings": US_EARNINGS},
-            "EPS.AS": {"metadata": {"currency": "EUR"}, "earnings": US_EARNINGS},
+            "DELTA.L": {"metadata": {"instrumentType": "EQUITY", "currency": "GBP"}, "earnings": US_EARNINGS},
+            "EPS.AS": {"metadata": {"instrumentType": "EQUITY", "currency": "EUR"}, "earnings": US_EARNINGS},
         }, ["DELTA.L", "EPS.AS"])
         for envelope, currency in zip(envelopes, ("GBP", "EUR")):
             history = envelope["earningsHistory"]
@@ -687,7 +693,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
     def test_the_quote_currency_is_asked_only_when_there_is_a_figure(self):
         no_figures = _FakeEarningsFrame([(report("2026-08-01"), (NAN, NAN, NAN))])
         envelopes, fake = self.run_history(
-            {"ALPHA": {"metadata": {"currency": "USD"}, "earnings": no_figures}}, ["ALPHA"])
+            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": no_figures}}, ["ALPHA"])
         history = envelopes[0]["earningsHistory"]
         self.assertEqual(history["earnings"],
                          [{"date": "2026-08-01", "reportedEPS": None, "estimatedEPS": None, "surprisePercent": None}])
@@ -697,9 +703,9 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
     def test_an_empty_history_is_an_answer_and_no_page_is_no_data(self):
         old_only = _FakeEarningsFrame([(report("2024-05-01"), (1.0, 1.1, 10.0))])
         envelopes, _ = self.run_history({
-            "ALPHA": {"metadata": {"currency": "USD"}, "earnings": _FakeEarningsFrame([])},
-            "BETA": {"metadata": {"currency": "USD"}, "earnings": old_only},
-            "FUND.L": {"metadata": {"currency": "GBP"}},
+            "ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": _FakeEarningsFrame([])},
+            "BETA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": old_only},
+            "FUND.L": {"metadata": {"instrumentType": "EQUITY", "currency": "GBP"}},
         }, ["ALPHA", "BETA", "FUND.L"])
 
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"], [])
@@ -714,7 +720,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
             (report("2026-10-30"), (1.48, 1.52, 2.7)),
             (report("2026-10-30", hour=17), (1.48, NAN, NAN)),
         ])
-        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": twice}}, ["ALPHA"])
+        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": twice}}, ["ALPHA"])
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"],
                          [{"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7}])
 
@@ -725,7 +731,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
             (None, (1.0, 1.0, 1.0)),
             (_NaTLike(), (1.0, 1.0, 1.0)),
         ])
-        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": odd}}, ["ALPHA"])
+        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": odd}}, ["ALPHA"])
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"], [
             {"date": "2026-07-22", "reportedEPS": None, "estimatedEPS": None, "surprisePercent": None},
             {"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7},
@@ -733,7 +739,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
 
     def test_a_page_without_one_of_the_columns_still_reads(self):
         frame = _FakeEarningsFrame([(report("2026-10-30"), (1.52, 3.0))], columns=("Reported EPS", "Surprise (%)"))
-        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": frame}}, ["ALPHA"])
+        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": frame}}, ["ALPHA"])
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"],
                          [{"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": None, "surprisePercent": 3.0}])
 
@@ -750,7 +756,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         ], name="Earnings Date")
         frame = pandas.DataFrame({"EPS Estimate": [1.61, 1.48, NAN], "Reported EPS": [NAN, 1.52, 1.54],
                                   "Surprise(%)": [NAN, 2.7, NAN]}, index=index)
-        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": frame}}, ["ALPHA"])
+        envelopes, _ = self.run_history({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": frame}}, ["ALPHA"])
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"], [
             {"date": "2026-07-22", "reportedEPS": 1.54, "estimatedEPS": None, "surprisePercent": None},
             {"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7},
@@ -761,8 +767,8 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
     def test_yfinances_page_cache_is_cleared_once_per_history_run_only(self):
         cleared = []
         with mock.patch.object(self.module, "forget_cached_pages", lambda: cleared.append(True)):
-            self.run_history({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS},
-                              "BETA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS}}, ["ALPHA", "BETA"])
+            self.run_history({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS},
+                              "BETA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS}}, ["ALPHA", "BETA"])
             self.assertEqual(cleared, [True])
             self.run_symbols({"ALPHA": US_SHARE}, ["ALPHA"])
             self.assertEqual(cleared, [True], "the events mode reads no cached page")
@@ -791,7 +797,7 @@ class EarningsHistoryFailureTests(InstrumentEventsTestCase):
             "NET": {"earnings_error": ConnectionError("Max retries exceeded")},
             "SLOW": {"earnings_logged_errors": ["Read timed out. (read timeout=30)"], "earnings": None},
             "ODD": {"earnings_error": KeyError("table")},
-            "FINE": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS},
+            "FINE": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS},
         }, ["NET", "SLOW", "ODD", "FINE"])
         codes = [envelope.get("error", {}).get("error_code") for envelope in envelopes]
         self.assertEqual(codes, ["NETWORK_ERROR", "TIMEOUT", "PROVIDER_ERROR", None])
@@ -804,10 +810,20 @@ class EarningsHistoryFailureTests(InstrumentEventsTestCase):
             ["ALPHA"])
         self.assertEqual(envelopes[0]["error"]["error_code"], "NETWORK_ERROR")
 
+    def test_a_chart_that_does_not_answer_fails_the_symbol_instead_of_dropping_its_figures(self):
+        envelopes, _ = self.run_history({
+            "EMPTY": {"metadata": {}, "earnings": US_EARNINGS},
+            "LIMITED": {"chart_error": YFRateLimitError(), "earnings": US_EARNINGS},
+            "LATER": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS},
+        }, ["EMPTY", "LIMITED", "LATER"])
+        self.assertEqual(envelopes[0]["error"]["error_code"], "PROVIDER_ERROR", "nothing saved with its figures dropped")
+        self.assertEqual(envelopes[1]["error"]["error_code"], "RATE_LIMIT", "a rate-limited chart pauses the app")
+        self.assertEqual(envelopes[2]["error"]["error_code"], "RATE_LIMIT", "and nothing more is asked")
+
     def test_rate_limit_stops_the_run_and_marks_the_rest(self):
         envelopes, fake = self.run_history({
             "ALPHA": {"earnings_error": YFRateLimitError()},
-            "BETA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS},
+            "BETA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS},
         }, ["ALPHA", "BETA"])
         self.assertEqual([envelope["error"]["error_code"] for envelope in envelopes], ["RATE_LIMIT", "RATE_LIMIT"])
         self.assertNotIn("BETA", fake.constructed, "nothing more is asked after a rate limit")
@@ -815,7 +831,7 @@ class EarningsHistoryFailureTests(InstrumentEventsTestCase):
     def test_the_deadline_and_the_batch_budget_still_apply(self):
         readings = iter([100.0, 100.0, 200.0])
         envelopes, fake = self.run_history(
-            {"ALPHA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS}, "BETA": {}},
+            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS}, "BETA": {}},
             ["ALPHA", "BETA"], time_budget_seconds=30, clock=lambda: next(readings))
         self.assertTrue(envelopes[0]["success"])
         self.assertEqual(envelopes[1]["error"]["error_code"], "TIMEOUT")
@@ -856,7 +872,7 @@ class CommandLineTests(InstrumentEventsTestCase):
         self.assertEqual(output.count("\n"), 1, "One line of JSON on stdout")
 
     def test_earnings_history_flag_answers_with_the_history_envelope(self):
-        self.module.yf = _FakeYF({"ALPHA": {"metadata": {"currency": "USD"}, "earnings": US_EARNINGS}})
+        self.module.yf = _FakeYF({"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": US_EARNINGS}})
         self.module.YFINANCE_AVAILABLE = True
 
         with mock.patch.object(self.module, "forget_cached_pages", lambda: None):
