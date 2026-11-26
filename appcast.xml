@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.31.4)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.4</link>
+      <pubDate>Thu, 26 Nov 2026 11:42:29 +0000</pubDate>
+      <sparkle:version>382.31.4</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.31.4 of Stockbar 3.8.2. Changes since experimental-382.31.3:
+
+- Risk: a reading for the Sortino ratio (#163)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.31.4/Stockbar-382.31.4.zip" length="8429794" type="application/octet-stream" sparkle:edSignature="CEG6WaJ7RjfWI0lGKtVI/lJ2UKHYtggbbQ4yOL6WP+WKm8BJSD+xwsIf+eVa0X0yHGxb9Mez/ChG65jZybIxCg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.31.3)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.3</link>
       <pubDate>Thu, 26 Nov 2026 10:04:04 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Read Yahoo's chart details with the yfinance the app ships (#153)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.21/Stockbar-382.3.21.zip" length="8170015" type="application/octet-stream" sparkle:edSignature="4SlS6Ahr5CUe98057uBGoleN+PH2kdTkdubIGMRiXkaLJM+Ct9FZ1Acnoi6CS6lIGhF1CFoFOJM2jzI/Mwo3BA=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.20)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.20</link>
-      <pubDate>Sat, 21 Nov 2026 00:43:24 +0000</pubDate>
-      <sparkle:version>382.3.20</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.20 of Stockbar 3.8.2. Changes since experimental-382.3.19:
-
-- Record the redesign benchmark and bring the log up to date (#151)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.20/Stockbar-382.3.20.zip" length="8169875" type="application/octet-stream" sparkle:edSignature="L8F5Whv8c+Hyyt49pCMlP5HmgQXXTtTxcbRjjt+Xm7NwiD/ZRRIy5MUs/n2VvSTG8Yx5R4Vr1G8WIfjWzFMxAw=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: SQbleDK7djsMhmSJL81mMVTqKPNyHcWk7nAKgU2k5yl7LGgySnoWpfvgqlCxVtv0cb1Y/xX3B661wxrnFIEsBA==
-length: 10294
+edSignature: B/cwP2A116eqsBnwF6hFjUPk7LIaRMQ2N8OnTXpphovcmTAUsgM9u7uVMMhnibG/NgcuWYeRFL0X5w6Q7uqABg==
+length: 10273
 -->
