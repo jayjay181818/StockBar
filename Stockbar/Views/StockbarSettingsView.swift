@@ -629,7 +629,7 @@ extension StockbarSettingsView {
     }
 }
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
+enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case menuBar
     case appearance
