@@ -7,7 +7,9 @@ import Foundation
 //   one the Income page asks for (`IncomeFigures.query(today:)`).
 // - A local or Trading 212 portfolio's dividends come from the Income page's
 //   own estimate (`LocalIncomeEstimate`), never from a second one.
-// - Earnings dates come from Yahoo (`InstrumentEvents`), for either portfolio.
+// - Earnings dates come from Yahoo (`InstrumentEvents`), for either portfolio;
+//   past earnings, for the Past view only, from Yahoo's earnings history
+//   (`InstrumentEarningsHistory`).
 //
 // Every date is a calendar day (`FolyncLedgerDay`), read straight from the
 // answer, and every sum of days is done in UTC on noon of the day, so no date
@@ -81,6 +83,14 @@ struct CalendarHolding: Equatable, Sendable {
     let yahooSymbol: String?
 }
 
+/// A past earnings report's figures, exactly as Yahoo gives them.
+struct CalendarEarningsFigures: Equatable, Sendable {
+    let reportedEPS: Double?
+    let estimatedEPS: Double?
+    /// Yahoo's surprise, in percent.
+    let surprisePercent: Double?
+}
+
 /// One dated event: a line of the list and an entry in the grid.
 struct CalendarRow: Identifiable, Equatable, Sendable {
     let id: String
@@ -100,6 +110,8 @@ struct CalendarRow: Identifiable, Equatable, Sendable {
     /// Folync marks the amount partial.
     let amountIsPartial: Bool
     let pill: CalendarPill?
+    /// A past earnings row's figures; nil on every other row.
+    var earningsFigures: CalendarEarningsFigures?
 
     var isDividend: Bool { kind != .earnings }
     var isEstimated: Bool { pill == .estimated }
@@ -124,7 +136,8 @@ struct CalendarRow: Identifiable, Equatable, Sendable {
 struct CalendarRows: Equatable, Sendable {
     /// Today and later, soonest first.
     var upcoming: [CalendarRow] = []
-    /// Before today, dividends only, newest first.
+    /// Before today, newest first: dividends, and past earnings once they
+    /// have been asked for.
     var past: [CalendarRow] = []
 
     static let empty = CalendarRows()
@@ -395,30 +408,68 @@ enum CalendarFigures {
         return CalendarEarningsCoverage(withoutSymbol: withoutSymbol, withoutDate: withoutDate)
     }
 
-    /// Dividend rows and earnings rows together. Earnings are upcoming only.
-    static func combined(dividends: CalendarRows, earnings: [CalendarRow]) -> CalendarRows {
+    /// Past earnings rows from Yahoo's earnings history, keyed by the symbol asked.
+    ///
+    /// One row per report dated before today and in the last twelve months,
+    /// with its figures as Yahoo gives them, and no pill: the date has passed.
+    /// A holding with no Yahoo symbol gets no row.
+    static func pastEarningsRows(holdings: [CalendarHolding], histories: [String: InstrumentEarningsHistory],
+                                 today: FolyncLedgerDay) -> [CalendarRow] {
+        let pastStart = today.adding(months: -12)
+        var seen = Set<String>()
+        var rows: [CalendarRow] = []
+        for holding in holdings {
+            guard let asked = holding.yahooSymbol?.uppercased(), seen.insert(asked).inserted,
+                  let history = histories[asked] else { continue }
+            var days = Set<FolyncLedgerDay>()
+            for report in history.earnings {
+                let reported = day(report.date)
+                guard reported < today, reported >= pastStart, days.insert(reported).inserted else { continue }
+                let figures = CalendarEarningsFigures(reportedEPS: report.reportedEPS, estimatedEPS: report.estimatedEPS,
+                                                      surprisePercent: report.surprisePercent)
+                rows.append(CalendarRow(id: "\(asked)#reported#\(reported.string)", kind: .earnings, day: reported,
+                                        symbol: holding.symbol, payDay: nil, endDay: nil, amount: nil, currency: "",
+                                        amountIsEstimate: false, amountIsPartial: false, pill: nil,
+                                        earningsFigures: figures))
+            }
+        }
+        return rows.sorted(by: CalendarRow.newestFirst)
+    }
+
+    /// How many holdings have no past earnings row, and why.
+    static func pastEarningsCoverage(holdings: [CalendarHolding], histories: [String: InstrumentEarningsHistory],
+                                     today: FolyncLedgerDay) -> CalendarEarningsCoverage {
+        let shown = Set(pastEarningsRows(holdings: holdings, histories: histories, today: today).map(\.symbol))
+        var withoutSymbol = 0
+        var withoutDate = 0
+        for holding in holdings where !shown.contains(holding.symbol) {
+            if holding.yahooSymbol == nil { withoutSymbol += 1 } else { withoutDate += 1 }
+        }
+        return CalendarEarningsCoverage(withoutSymbol: withoutSymbol, withoutDate: withoutDate)
+    }
+
+    /// Dividend rows and earnings rows together: upcoming earnings join
+    /// Upcoming, past earnings join Past.
+    static func combined(dividends: CalendarRows, earnings: [CalendarRow],
+                         pastEarnings: [CalendarRow] = []) -> CalendarRows {
         CalendarRows(upcoming: (dividends.upcoming + earnings).sorted(by: CalendarRow.soonestFirst),
-                     past: dividends.past)
+                     past: (dividends.past + pastEarnings).sorted(by: CalendarRow.newestFirst))
     }
 
     // MARK: Filters
 
-    /// The filters a view offers. Past lists dividends only, so it has no
-    /// Earnings filter.
+    /// The filters a view offers: All, Dividends and Earnings, in both views.
     static func filters(for mode: CalendarMode) -> [CalendarFilter] {
-        switch mode {
-        case .upcoming: CalendarFilter.allCases
-        case .past: [.all, .dividends]
-        }
+        CalendarFilter.allCases
     }
 
     /// The rows a view shows under a filter.
     static func rows(_ rows: CalendarRows, mode: CalendarMode, filter: CalendarFilter) -> [CalendarRow] {
-        let list = mode == .upcoming ? rows.upcoming : rows.past.filter(\.isDividend)
+        let list = mode == .upcoming ? rows.upcoming : rows.past
         switch filter {
         case .all: return list
         case .dividends: return list.filter(\.isDividend)
-        case .earnings: return mode == .upcoming ? list.filter { !$0.isDividend } : []
+        case .earnings: return list.filter { !$0.isDividend }
         }
     }
 

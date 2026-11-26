@@ -23,6 +23,11 @@ struct StockbarCalendarInputs: Equatable {
 ///   one events call gives both the dividend estimate and the earnings dates.
 /// For a Folync portfolio the earnings dates take one events call of their own.
 ///
+/// Past earnings take a second kind of call (`earningsHistory(for:)`), made
+/// only while the Past view is chosen: when it is chosen, when the page opens
+/// on it, on the refresh control and when a holding comes or goes. Upcoming,
+/// "Next up", the popover and the Overview never make it.
+///
 /// The load rule is Income's: ask when the page becomes the selected page and
 /// on the refresh control; never on a timer, from the popover or the
 /// Overview, or because another page changed.
@@ -47,6 +52,11 @@ final class StockbarCalendarModel {
     /// Yahoo cannot be asked for a Folync portfolio's earnings (live market
     /// data is off and no acceptance fixture answers).
     private(set) var earningsNotAllowed = false
+    /// Past earnings answers, keyed by the symbol asked; asked for only in Past.
+    private(set) var historyResults: [String: InstrumentEarningsHistoryResult] = [:]
+    private(set) var isLoadingHistory = false
+    /// Yahoo cannot be asked for past earnings.
+    private(set) var historyNotAllowed = false
 
     var mode: CalendarMode = .upcoming {
         didSet {
@@ -54,6 +64,7 @@ final class StockbarCalendarModel {
             month = CalendarMonthRange.start(mode: mode, today: today)
             if !CalendarFigures.filters(for: mode).contains(filter) { filter = .all }
             selectedDay = nil
+            if mode == .past, isActive, let inputs = lastInputs { loadHistory(inputs, forceRefresh: false) }
         }
     }
     var filter: CalendarFilter = .all
@@ -63,16 +74,25 @@ final class StockbarCalendarModel {
     var selectedDay: FolyncLedgerDay?
 
     private let provider: any InstrumentEventsProviding
+    private let historyProvider: any InstrumentEarningsHistoryProviding
     private let isAllowed: () -> Bool
     private let now: () -> Date
     private let timeZone: TimeZone
     private var earningsTask: Task<Void, Never>?
     private var earningsGeneration = 0
+    private var historyTask: Task<Void, Never>?
+    private var historyGeneration = 0
+    /// The symbols the last past-earnings call asked for.
+    private var historySymbols: [String]?
+    /// What the page was last shown for, so choosing Past can ask.
+    @ObservationIgnored private var lastInputs: StockbarCalendarInputs?
     private var isActive = false
 
-    init(router: any StockbarIncomeRouting, provider: any InstrumentEventsProviding, isAllowed: @escaping () -> Bool,
+    init(router: any StockbarIncomeRouting, provider: any InstrumentEventsProviding,
+         historyProvider: any InstrumentEarningsHistoryProviding, isAllowed: @escaping () -> Bool,
          now: @escaping () -> Date = Date.init, timeZone: TimeZone = .current) {
         self.provider = provider
+        self.historyProvider = historyProvider
         self.isAllowed = isAllowed
         self.now = now
         self.timeZone = timeZone
@@ -99,8 +119,10 @@ final class StockbarCalendarModel {
     func activate(_ inputs: StockbarCalendarInputs) {
         guard !isActive else { return }
         isActive = true
+        lastInputs = inputs
         start(inputs)
         month = monthRange.clamped(CalendarMonthRange.start(mode: mode, today: today))
+        if mode == .past { loadHistory(inputs, forceRefresh: false) }
     }
 
     /// The page is no longer selected: stop listening for anything in flight.
@@ -109,12 +131,15 @@ final class StockbarCalendarModel {
         folync.deactivate()
         local.deactivate()
         cancelEarnings()
+        cancelHistory()
     }
 
     /// The refresh control: asks Folync (or Yahoo, for the estimate) and Yahoo
-    /// for earnings afresh, both forced.
+    /// for earnings afresh, both forced; in Past, past earnings too.
     func refresh(_ inputs: StockbarCalendarInputs) {
         guard isActive else { return }
+        lastInputs = inputs
+        if mode == .past { loadHistory(inputs, forceRefresh: true) }
         switch source {
         case .folync:
             folync.refresh()
@@ -129,6 +154,12 @@ final class StockbarCalendarModel {
     /// The portfolio source changed while the page is selected.
     func inputsChanged(from old: StockbarCalendarInputs, to new: StockbarCalendarInputs) {
         guard isActive else { return }
+        lastInputs = new
+        if mode == .past, Self.historySymbols(new) != historySymbols {
+            // A holding came or went, or the portfolio changed: the service's
+            // day-long copies mean only new symbols reach Yahoo.
+            loadHistory(new, forceRefresh: false)
+        }
         if old.isFolyncEnabled != new.isFolyncEnabled {
             folync.deactivate()
             local.deactivate()
@@ -215,6 +246,63 @@ final class StockbarCalendarModel {
         earningsResults = Dictionary(answers.map { ($0.symbol, $0) }, uniquingKeysWith: { _, last in last })
     }
 
+    // MARK: Past earnings
+
+    /// The symbols past earnings are asked for: the ones upcoming earnings
+    /// use. None for a Folync connection whose portfolio is not loaded.
+    private static func historySymbols(_ inputs: StockbarCalendarInputs) -> [String] {
+        guard !inputs.isFolyncEnabled || inputs.isFolyncPortfolio else { return [] }
+        var seen = Set<String>()
+        return inputs.holdings.compactMap(\.yahooSymbol).filter { seen.insert($0.uppercased()).inserted }
+    }
+
+    private func loadHistory(_ inputs: StockbarCalendarInputs, forceRefresh: Bool) {
+        cancelHistory()
+        let symbols = Self.historySymbols(inputs)
+        historySymbols = symbols
+        guard isAllowed() else {
+            historyResults = [:]
+            historyNotAllowed = true
+            return
+        }
+        historyNotAllowed = false
+        guard !symbols.isEmpty else {
+            historyResults = [:]
+            return
+        }
+        historyGeneration += 1
+        let generation = historyGeneration
+        isLoadingHistory = true
+        let provider = historyProvider
+        historyTask = Task { [weak self] in
+            let answers = await provider.earningsHistory(for: symbols, forceRefresh: forceRefresh)
+            guard !Task.isCancelled else { return }
+            self?.applyHistory(answers, generation: generation)
+        }
+    }
+
+    private func cancelHistory() {
+        historyTask?.cancel()
+        historyTask = nil
+        historyGeneration += 1
+        isLoadingHistory = false
+    }
+
+    private func applyHistory(_ answers: [InstrumentEarningsHistoryResult], generation: Int) {
+        guard isActive, generation == historyGeneration else { return }
+        historyTask = nil
+        isLoadingHistory = false
+        if InstrumentEventsAnswers.allRefused(answers) {
+            historyResults = [:]
+            historyNotAllowed = true
+            return
+        }
+        historyResults = Dictionary(answers.map { ($0.symbol, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// Past earnings by symbol asked.
+    var historyAnswers: [String: InstrumentEarningsHistory] { historyResults.compactMapValues(\.history) }
+
     // MARK: Month bar
 
     func showPreviousMonth() {
@@ -249,11 +337,18 @@ final class StockbarCalendarModel {
     }
 
     var isLoading: Bool {
+        let history = mode == .past && isLoadingHistory
         switch source {
-        case .folync: folync.isLoading || isLoadingEarnings
-        case .local: local.isLoading
-        case .none: false
+        case .folync: return folync.isLoading || isLoadingEarnings || history
+        case .local: return local.isLoading || history
+        case .none: return false
         }
+    }
+
+    /// Yahoo's answers whose state the notices report: in Past, the past
+    /// earnings answers too.
+    var yahooAnswerStates: [InstrumentAnswerState] {
+        yahooResults.map(\.answerState) + (mode == .past ? historyResults.values.map(\.answerState) : [])
     }
 
     var isRefreshing: Bool {
@@ -279,7 +374,9 @@ final class StockbarCalendarModel {
             return .empty
         }
         let earnings = CalendarFigures.earningsRows(holdings: inputs.holdings, answers: earningsAnswers, today: today)
-        return CalendarFigures.combined(dividends: dividends, earnings: earnings)
+        let pastEarnings = CalendarFigures.pastEarningsRows(holdings: inputs.holdings, histories: historyAnswers,
+                                                            today: today)
+        return CalendarFigures.combined(dividends: dividends, earnings: earnings, pastEarnings: pastEarnings)
     }
 
     /// The rows the list and the grid show, under the view and filter chosen.
@@ -287,10 +384,11 @@ final class StockbarCalendarModel {
         CalendarFigures.rows(rows, mode: mode, filter: filter)
     }
 
-    /// The grid's rows: the month's rows of both views, so a past payment in
-    /// this month still shows in Upcoming's grid. Past shows dividends only.
+    /// The grid's rows. Upcoming's grid also has this month's past dividends,
+    /// so a past payment in this month still shows there; past earnings show
+    /// in Past only.
     func gridRows(_ rows: CalendarRows) -> [CalendarRow] {
-        let both = CalendarRows(upcoming: rows.upcoming + rows.past, past: rows.past)
+        let both = CalendarRows(upcoming: rows.upcoming + rows.past.filter(\.isDividend), past: rows.past)
         return mode == .upcoming
             ? CalendarFigures.rows(both, mode: .upcoming, filter: filter)
             : CalendarFigures.rows(rows, mode: .past, filter: filter)
