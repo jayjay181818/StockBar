@@ -7,6 +7,27 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.42)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.42</link>
+      <pubDate>Thu, 26 Nov 2026 21:19:13 +0000</pubDate>
+      <sparkle:version>382.42</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.42 of Stockbar 3.8.2. Changes since testing-382.31:
+
+- Release documents for 3.9.0 (#169)
+- Calendar: past EPS figures for every share, with a currency per holding (#168)
+- Calendar: past earnings in the Past view (#167)
+- Settings: every tab as Glass cards, at the page's full width (#166)
+- Activity: kind switches that combine, with Interest on its own (#165)
+- Calendar, and Next up in the popover and on the Overview (#164)
+- Risk: a reading for the Sortino ratio (#163)
+- Settings and Alerts as mocked; Backups and Diagnostics checked (#162)
+- Record the third promotion to testing</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.42/Stockbar-382.42.zip" length="8703265" type="application/octet-stream" sparkle:edSignature="qikiM3tzeYtWEjFOyEScn5Inb0+rAHs4YlVr4amhyFvhWhtO93FiEUUr2E9MXHVFfHqAvSUkYlSrSEifSMVjAw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.31)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.31</link>
       <pubDate>Thu, 26 Nov 2026 00:39:24 +0000</pubDate>
@@ -221,6 +242,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: QqhTPQ6B3QB3r10xTMQqhwnyqgsU7u7lBk7tfiVQl/wfd6HoExcmdk9FcCVA5Jana1MdiHwiJWtIm4+ia9lKAA==
-length: 19732
+edSignature: 72xW00tHyPtDn37yuSRqXyXINEoFCjxwlXUoj0VDh4Nbt8Hd/x/onKt1MCzP236PPMsE2l4N5T0LL8q1R5pACA==
+length: 21131
 -->
