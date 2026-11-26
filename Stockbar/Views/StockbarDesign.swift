@@ -105,8 +105,9 @@ enum StockbarLayout {
     static let insetRadius: CGFloat = 9
     static let sectionSpacing: CGFloat = 18
     /// The widest Settings' content gets, on every tab. Wide enough for
-    /// Folync's buttons in one row; at the minimum window size they wrap.
-    static let settingsContentWidth: CGFloat = 720
+    /// Folync's buttons in one row (at the minimum window size they wrap),
+    /// and under the width macOS caps a grouped form's groups at.
+    static let settingsContentWidth: CGFloat = 700
 }
 
 /// Lays its children out in a row that wraps onto further lines when the

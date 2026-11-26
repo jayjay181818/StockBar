@@ -86,19 +86,24 @@ struct StockbarSettingsView: View {
         }
     }
 
-    /// The grouped-form tabs. Their groups start at the page header's left
-    /// edge and stop at the same width as Connections' cards.
-    private static let groupedFormGroupInset: CGFloat = 18
+    /// How far inside its own edges macOS draws a grouped form's groups with
+    /// no content margins: a minimum margin it keeps plus the groups' own
+    /// inset (measured on macOS 27). It also caps the groups at about 702
+    /// points and centres them, so `settingsContentWidth` stays under that.
+    private static let groupedFormGroupInset: CGFloat = 37.5
 
+    /// The grouped-form tabs. Their groups start at the page header's left
+    /// edge and stop at the same width as Connections' cards, so the form is
+    /// widened past the page padding by the difference.
     private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         Form {
             content()
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        // A grouped form draws its groups this far inside its margins.
-        .contentMargins(.horizontal, StockbarLayout.pagePadding - Self.groupedFormGroupInset, for: .scrollContent)
-        .frame(maxWidth: StockbarLayout.settingsContentWidth + 2 * StockbarLayout.pagePadding, alignment: .topLeading)
+        .contentMargins(.horizontal, 0, for: .automatic)
+        .frame(maxWidth: StockbarLayout.settingsContentWidth + 2 * Self.groupedFormGroupInset, alignment: .topLeading)
+        .padding(.horizontal, StockbarLayout.pagePadding - Self.groupedFormGroupInset)
     }
 
     @ViewBuilder

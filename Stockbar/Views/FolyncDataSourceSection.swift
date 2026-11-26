@@ -68,7 +68,7 @@ struct FolyncDataSourceSection: View {
             }
 
             // One row that wraps at the minimum window size.
-            StockbarWrappingRow(spacing: 8) {
+            StockbarWrappingRow(spacing: 6) {
                 Button("Test Connection") { testConnection() }
                     .disabled(isWorking || !canSubmitConnectionRequest)
                 Button("Preview") { loadPreview() }
