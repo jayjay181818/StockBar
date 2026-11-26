@@ -7,6 +7,43 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.31)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.31</link>
+      <pubDate>Thu, 26 Nov 2026 00:39:24 +0000</pubDate>
+      <sparkle:version>382.31</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.31 of Stockbar 3.8.2. Changes since testing-382.3:
+
+- Accept either wording of the minutes in the footer test (#160)
+- Income for a local or Trading 212 portfolio, as a labelled estimate (#158)
+- Glass cards: draw the top highlight without an extra copy of the window (#157)
+- Trading 212: value a cash-only account, and only the account in use (#156)
+- Allocation's Cash row: one source for holdings, total and cash (#155)
+- Allocation: a Cash row, so its shares match Holdings' weights (#154)
+- Read Yahoo's chart details with the yfinance the app ships (#153)
+- Record the redesign benchmark and bring the log up to date (#151)
+- Holdings: the editing table fits at the minimum window size (#150)
+- Charts: the controls in one row and the chart on a card; a full Data Health grid (#149)
+- Let the acceptance copy change the settings it was started with (#148)
+- Risk: each figure said once, with a chart of the falls (#147)
+- Holdings: a Weight column and one switch for amounts or percentages (#146)
+- Switches in Settings for the Income, Trades and Activity pages (#145)
+- Allocation: a donut beside its list, three views and the correlations as a grid (#144)
+- Add the Income page: dividends expected, received and by holding (#143)
+- Add the Trades page: every position opened, and how it did (#142)
+- Add the Activity page: every Folync transaction, by month (#141)
+- Give the main window the Glass shell with a floating sidebar (#140)
+- Give the Overview its total, longer ranges and what the total is made of (#139)
+- Give the portfolio popover the Glass layout with today's movers (#138)
+- Give every surface in the main window the Glass look (#137)
+- Ask Yahoo for instrument type, dividend dates and earnings dates (#136)
+- Read Folync's dividends, trade analysis and transactions (#135)
+- Let the acceptance copy reach a Folync on this Mac (#134)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.31/Stockbar-382.31.zip" length="8394423" type="application/octet-stream" sparkle:edSignature="w0TqlEIqLRO1Fq5PFwogWC+7D9qN6rtw8MiIO3y55IFEQrZMYxt0uv3IqQZY+NdP4E6MGBTfqDVTs8LaBzGUAg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.3)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.3</link>
       <pubDate>Wed, 18 Nov 2026 18:13:10 +0000</pubDate>
@@ -184,6 +221,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 75cnBL4vGo7eooeJLspai4vpSZ08YB43QvuOPv15WudgCZC2nMaHYhPdI8VgH9FL/e294Zv19UIau5tcp9gCDg==
-length: 17060
+edSignature: QqhTPQ6B3QB3r10xTMQqhwnyqgsU7u7lBk7tfiVQl/wfd6HoExcmdk9FcCVA5Jana1MdiHwiJWtIm4+ia9lKAA==
+length: 19732
 -->
