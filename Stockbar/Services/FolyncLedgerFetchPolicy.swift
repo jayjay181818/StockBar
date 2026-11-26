@@ -154,6 +154,12 @@ actor FolyncLedgerFetchPolicy {
     /// tests, which wait on this instead of on the clock.
     var waitingCallerCount: Int { pending.values.reduce(0) { $0 + $1.callers } }
 
+    /// The first page kept for `key` while it is inside the reuse window, or
+    /// nil. Makes no request and takes no turn.
+    func keptFirstPage<Value: Sendable>(_ key: Key) -> Value? {
+        reusable(key.firstPage)
+    }
+
     /// Forgets every kept first page, for example when the connection changes.
     func removeAll() {
         kept.removeAll()

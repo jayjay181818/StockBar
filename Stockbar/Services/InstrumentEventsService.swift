@@ -214,6 +214,45 @@ struct InstrumentEventsResult: Sendable, Equatable {
     }
 }
 
+/// What a set of answers says about Yahoo, for the pages that show them.
+enum InstrumentEventsAnswers {
+    /// When Yahoo is rate-limiting: the latest time the service will ask again.
+    static func rateLimitedUntil<Results: Sequence>(_ results: Results) -> Date?
+    where Results.Element == InstrumentEventsResult {
+        results.compactMap { result -> Date? in
+            if case .rateLimited(let until) = result.failure { return until }
+            return nil
+        }.max()
+    }
+
+    /// Answers shown from an older saved copy because Yahoo did not answer,
+    /// with the oldest copy's time.
+    static func staleCopies<Results: Sequence>(_ results: Results) -> (count: Int, oldest: Date?)
+    where Results.Element == InstrumentEventsResult {
+        let stale = results.filter(\.isStale)
+        return (stale.count, stale.compactMap(\.fetchedAt).min())
+    }
+
+    /// Symbols Yahoo did not answer for and nothing is saved, for a reason
+    /// other than having no record (network, timeout, the helper failing).
+    static func failedWithoutCopy<Results: Sequence>(_ results: Results) -> Int
+    where Results.Element == InstrumentEventsResult {
+        results.filter { result in
+            guard result.events == nil, let failure = result.failure else { return false }
+            switch failure {
+            case .noData, .invalidSymbol, .rateLimited, .providerDisabled: return false
+            default: return true
+            }
+        }.count
+    }
+
+    /// Every answer is "live market data is off" with nothing saved.
+    static func allRefused<Results: Collection>(_ results: Results) -> Bool
+    where Results.Element == InstrumentEventsResult {
+        !results.isEmpty && results.allSatisfy { $0.failure == .providerDisabled && $0.events == nil }
+    }
+}
+
 // MARK: - Service
 
 /// What asks for instrument events: `InstrumentEventsService`, or a stand-in in tests.
@@ -222,6 +261,13 @@ protocol InstrumentEventsProviding: Sendable {
 }
 
 extension InstrumentEventsService: InstrumentEventsProviding {}
+
+/// What reads the saved copies only: `InstrumentEventsService`, or a stand-in in tests.
+protocol InstrumentEventsSavedReading: Sendable {
+    func savedEvents(for symbols: [String]) async -> [String: InstrumentEvents]
+}
+
+extension InstrumentEventsService: InstrumentEventsSavedReading {}
 
 /// Instrument events from Yahoo, saved for a day per symbol.
 ///
@@ -377,6 +423,20 @@ actor InstrumentEventsService {
             }
             return InstrumentEventsResult(symbol: symbol, source: .yahoo, outcome: .failed(.noData))
         }
+    }
+
+    /// The copies already saved for `symbols`, of any age, keyed by symbol.
+    /// Never runs the script, never asks Yahoo and never starts a pause: for
+    /// "Next up", which shows only what is already known.
+    func savedEvents(for symbols: [String]) -> [String: InstrumentEvents] {
+        var answers: [String: InstrumentEvents] = [:]
+        for raw in symbols {
+            let symbol = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard answers[symbol] == nil, PythonConfiguration.validateSymbol(symbol),
+                  let entry = savedEntry(symbol) else { continue }
+            answers[symbol] = entry.events
+        }
+        return answers
     }
 
     // MARK: Running the script

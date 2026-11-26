@@ -421,7 +421,7 @@ private var partialTag: some View {
 }
 
 /// An empty state for the page: an icon, a title, a sentence and, at most, one button.
-private struct StockbarIncomeMessage: View {
+struct StockbarIncomeMessage: View {
     let systemImage: String
     var tint: Color = .secondary
     let title: String

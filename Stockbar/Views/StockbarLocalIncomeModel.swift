@@ -131,7 +131,7 @@ final class StockbarLocalIncomeModel {
         task = nil
         isLoading = false
         isRefreshing = false
-        if !answers.isEmpty, answers.allSatisfy({ $0.failure == .providerDisabled && $0.events == nil }) {
+        if InstrumentEventsAnswers.allRefused(answers) {
             results = [:]
             phase = .notAllowed
             return
@@ -152,29 +152,13 @@ final class StockbarLocalIncomeModel {
     }
 
     /// When Yahoo is rate-limiting: the latest time the service will ask again.
-    var rateLimitedUntil: Date? {
-        results.values.compactMap { result -> Date? in
-            if case .rateLimited(let until) = result.failure { return until }
-            return nil
-        }.max()
-    }
+    var rateLimitedUntil: Date? { InstrumentEventsAnswers.rateLimitedUntil(results.values) }
 
     /// Holdings shown from an older saved copy because Yahoo did not answer,
     /// with the oldest copy's time.
-    var staleCopies: (count: Int, oldest: Date?) {
-        let stale = results.values.filter(\.isStale)
-        return (stale.count, stale.compactMap(\.fetchedAt).min())
-    }
+    var staleCopies: (count: Int, oldest: Date?) { InstrumentEventsAnswers.staleCopies(results.values) }
 
     /// Holdings Yahoo did not answer for and nothing is saved, for a reason
     /// other than having no record (network, timeout, the helper failing).
-    var failedWithoutCopy: Int {
-        results.values.filter { result in
-            guard result.events == nil, let failure = result.failure else { return false }
-            switch failure {
-            case .noData, .invalidSymbol, .rateLimited, .providerDisabled: return false
-            default: return true
-            }
-        }.count
-    }
+    var failedWithoutCopy: Int { InstrumentEventsAnswers.failedWithoutCopy(results.values) }
 }

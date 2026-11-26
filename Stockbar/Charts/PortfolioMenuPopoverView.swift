@@ -552,6 +552,8 @@ struct PortfolioMenuPopoverView: View {
     /// Everything but the movers' list, as last laid out; the list gets what
     /// the screen leaves of `maximumHeight` after it.
     @State private var chromeHeight: CGFloat = 470
+    /// "Next up", from saved data only: opening the popover asks nothing.
+    @State private var nextUp = StockbarNextUpModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let actions: PortfolioMenuActions
@@ -644,6 +646,10 @@ struct PortfolioMenuPopoverView: View {
                                               basis: dataModel.portfolioGainBasis)
             )
 
+            if !nextUp.rows.isEmpty {
+                StockbarNextUpList(rows: nextUp.rows, today: nextUp.today)
+            }
+
             Divider()
 
             MenuPopoverFooter(
@@ -669,10 +675,12 @@ struct PortfolioMenuPopoverView: View {
         .onAppear {
             viewModel.activate()
             refreshChartModel()
+            reloadNextUp()
         }
         .onDisappear { viewModel.deactivate() }
         .onReceive(dataModel.tradeContentPublisher) { _ in
             refreshChartModel()
+            reloadNextUp()
         }
         .onChange(of: dataModel.portfolioMenuBarDisplaySettings) { _, _ in
             refreshChartModel()
@@ -711,6 +719,15 @@ struct PortfolioMenuPopoverView: View {
             if !viewModel.coverageLabel.isEmpty {
                 PortfolioMenuCoverageLine(text: viewModel.coverageLabel)
             }
+        }
+    }
+
+    /// Reads "Next up" again from what is saved. Makes no request.
+    private func reloadNextUp() {
+        let target = dataModel.preferredCurrency
+        let converter = dataModel.currencyConverter
+        nextUp.reload(.current(dataModel), currency: target) { amount, from in
+            converter.convertWithLoadedRates(amount: amount, from: from, to: target)
         }
     }
 

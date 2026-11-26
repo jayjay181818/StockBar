@@ -11,6 +11,8 @@ struct StockbarOverviewView: View {
     /// The point under the pointer. Only written when it changes, so moving along one point does not re-render.
     @State private var hoveredPoint: MenuChartDataPoint?
     @State private var summaryCache = DisplaySummaryCache()
+    /// "Next up", from saved data only: opening the Overview asks nothing.
+    @State private var nextUp = StockbarNextUpModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, navigationState: StockbarMainNavigationState) {
@@ -103,6 +105,9 @@ struct StockbarOverviewView: View {
                         } else {
                             summaryCard
                         }
+                        if !nextUp.rows.isEmpty {
+                            StockbarNextUpCards(rows: nextUp.rows, today: nextUp.today)
+                        }
                         if !showsSideInspector {
                             inspector.stockbarCard()
                         }
@@ -123,13 +128,22 @@ struct StockbarOverviewView: View {
                 }
             }
         }
-        .onAppear { updateChart(); chartModel.activate() }
+        .onAppear { updateChart(); chartModel.activate(); reloadNextUp() }
         .onDisappear { chartModel.deactivate() }
-        .onReceive(dataModel.tradeContentPublisher) { _ in updateChart() }
+        .onReceive(dataModel.tradeContentPublisher) { _ in updateChart(); reloadNextUp() }
         .onChange(of: summary.totalValue) { _, _ in updateChart() }
         .onChange(of: summary.currency) { _, _ in updateChart() }
         .onChange(of: summary.valuationSource) { _, _ in updateChart() }
         .onChange(of: chartModel.selectedTimeRange) { _, _ in hoveredPoint = nil }
+    }
+
+    /// Reads "Next up" again from what is saved. Makes no request.
+    private func reloadNextUp() {
+        let target = dataModel.preferredCurrency
+        let converter = dataModel.currencyConverter
+        nextUp.reload(.current(dataModel), currency: target) { amount, from in
+            converter.convertWithLoadedRates(amount: amount, from: from, to: target)
+        }
     }
 
     private var offeredRanges: [MenuChartTimeRange] { Self.offeredRanges(for: summary.valuationSource) }

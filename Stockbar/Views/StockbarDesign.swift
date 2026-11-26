@@ -1009,6 +1009,12 @@ extension StockbarPalette {
         dark: NSColor(srgbRed: 0.99, green: 0.78, blue: 0.20, alpha: 1)
     )
 
+    /// Calendar's markers: dividends (ex-dividend and payment) in the Income
+    /// page's gold, earnings in lavender, as in the mock-ups. Neither is red
+    /// or green, which mean loss and gain.
+    static let calendarDividend = incomeFill
+    static let calendarEarnings = allocationLavender
+
     /// The Income chart: received income takes `incomeFill`; income still to
     /// come takes this darker gold, solid when declared and hatched when estimated.
     static let incomeToComeFill = adaptive(
@@ -1470,5 +1476,66 @@ private struct StockbarRollingDigitsSetting: ViewModifier {
 
     func body(content: Content) -> some View {
         content.environment(\.stockbarRollingDigits, rolls)
+    }
+}
+
+// MARK: - Calendar marker
+
+/// Calendar's marker for one event: an open circle for an ex-dividend date, a
+/// filled circle for a payment, a diamond for earnings. An estimated date is
+/// drawn with a dashed outline (a payment or earnings marker becomes a dashed
+/// outline around a smaller mark), so it differs by shape, not by colour alone.
+struct StockbarCalendarMarker: View {
+    let kind: CalendarEventKind
+    let isEstimated: Bool
+    var size: CGFloat = 10
+
+    var body: some View {
+        let tint = kind == .earnings ? StockbarPalette.calendarEarnings : StockbarPalette.calendarDividend
+        let dashed = StrokeStyle(lineWidth: max(1.4, size / 7), dash: [size / 5, size / 7])
+        let solid = StrokeStyle(lineWidth: max(1.6, size / 5.5))
+        Group {
+            switch (kind, isEstimated) {
+            case (.exDividend, false):
+                Circle().strokeBorder(tint, style: solid)
+            case (.exDividend, true):
+                Circle().strokeBorder(tint, style: dashed)
+            case (.payment, false):
+                Circle().fill(tint)
+            case (.payment, true):
+                ZStack {
+                    Circle().strokeBorder(tint, style: dashed)
+                    Circle().fill(tint).padding(size * 0.3)
+                }
+            case (.earnings, false):
+                Rectangle().fill(tint).rotationEffect(.degrees(45)).padding(size * 0.15)
+            case (.earnings, true):
+                ZStack {
+                    Rectangle().stroke(tint, style: dashed).rotationEffect(.degrees(45)).padding(size * 0.15)
+                    Rectangle().fill(tint).rotationEffect(.degrees(45)).padding(size * 0.36)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Calendar's pill: "Declared", "Estimated" (with a dashed edge, as in the
+/// mock-ups) or "Upcoming".
+struct StockbarCalendarPill: View {
+    let pill: CalendarPill
+
+    var body: some View {
+        Text(pill.title)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .stockbarPill()
+            .overlay {
+                if pill == .estimated {
+                    Capsule().strokeBorder(.secondary.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                }
+            }
+            .fixedSize()
     }
 }
