@@ -830,6 +830,12 @@ struct StockbarSectionTitle: View {
 struct StockbarSettingsPage<Content: View>: View {
     /// Space between one section's card and the next.
     static var sectionSpacing: CGFloat { 20 }
+    /// Close under the tab bar at the top; the page padding every page has
+    /// at the sides and the bottom.
+    static var contentInsets: EdgeInsets {
+        EdgeInsets(top: 12, leading: StockbarLayout.pagePadding,
+                   bottom: StockbarLayout.pageInsets.bottom, trailing: StockbarLayout.pagePadding)
+    }
 
     private let content: Content
 
@@ -843,8 +849,7 @@ struct StockbarSettingsPage<Content: View>: View {
                 content
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, StockbarLayout.pagePadding)
-            .padding(.vertical, 12)
+            .padding(Self.contentInsets)
         }
     }
 }

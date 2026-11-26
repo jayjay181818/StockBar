@@ -1221,6 +1221,13 @@ final class StockbarSettingsLayoutTests: XCTestCase {
             XCTAssertEqual(content.width, width - 2 * StockbarLayout.pagePadding, accuracy: 0.5,
                            "No cap: the content takes the page's whole width at \(width) points")
         }
+        // A page taller than the window ends with the bottom inset every page has.
+        let tall = frames(of: StockbarSettingsPage {
+            Color.clear.frame(height: 900).settingsProbe("content", in: space)
+        }, size: CGSize(width: 1_000, height: 300))
+        let content = try XCTUnwrap(tall["content"])
+        XCTAssertEqual(content.minY, 12, accuracy: 0.5, "Close under the tab bar")
+        XCTAssertEqual(StockbarSettingsPage<EmptyView>.contentInsets.bottom, StockbarLayout.pageInsets.bottom)
     }
 
     func testASectionsCardFillsItsWidthAndCarriesItsTitle() throws {
