@@ -10,7 +10,7 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-`experimental` has been promoted to `testing` three times, each time at
+`experimental` has been promoted to `testing` four times, each time at
 the owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
 merge commit `2256b6c`, published as testing build 370.16: see
 [Promotion to `testing`](#promotion-to-testing-2026-11-13). On 2026-11-17
@@ -20,6 +20,9 @@ testing build 370.29: see
 On 2026-11-26 the redesign, pull requests 133 to 160, followed as merge
 commit `9cb4276`, published as testing build 382.31: see
 [Third promotion to `testing`](#third-promotion-to-testing-2026-11-26).
+Later that day pull requests 160 to 169, the 3.9.0 candidate, followed as
+merge commit `4b48c11`, published as testing build 382.42: see
+[Fourth promotion to `testing`](#fourth-promotion-to-testing-2026-11-26).
 `main` has none of it, and no stable release has been made from it. The
 owner considers the overhaul finished: from here `experimental` is kept for
 major overhauls only.
@@ -203,6 +206,7 @@ Figures from either side of a break are not compared with each other.
 | A look at "the rest of core" | Asked for by the owner on 2026-11-13, to follow the promotion, and settled the same day: the refresh path the benchmark never runs. The read-only review was done the same day and the owner chose what to do with each finding; see [Review of the refresh path](#review-of-the-refresh-path-2026-11-13). Done in pull requests 104 to 110 |
 | Full comparison of pull requests 109 and 110 | Done 2026-11-16, six launches a side on the merged commit: no row moved firmly. See [pull request 109's entry](#109-release-the-portfolio-popovers-content-when-it-closes) |
 | Second promotion to `testing` | Done 2026-11-17: pull request 113, merge commit `78c886b` on `testing`, testing build 370.29. See [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17) |
+| Fourth promotion to `testing` | Done 2026-11-26: pull request 170, merge commit `4b48c11` on `testing`, testing build 382.42, the 3.9.0 candidate. See [Fourth promotion to `testing`](#fourth-promotion-to-testing-2026-11-26) |
 | Stable release and `main` | Asked for by the owner on 2026-11-17, after they had used testing build 370.29 and experimental build 370.29.2 and checked the portfolio popover by hand: version 3.8.0, released from `testing` by its own pull request and tag, with `main` brought up to date afterwards. Pull request 111, the weekly Python package update, is not in it: the recommendation was for it to follow the release, so that the release installs the packages that were tested |
 
 ### Planned next, in order
@@ -463,7 +467,10 @@ data with the owner's leave (merged as `86d5a53`, build 382.31.8). Pull
 request 168 shows every share's past EPS figures, with a per-holding
 currency in Settings, at the owner's request (merged as `409c906`, build
 382.31.9). The owner parked Reminders: it is not in 3.9.0. Pull request
-169 brings the public documents up to date for 3.9.0.
+169 brings the public documents up to date for 3.9.0 (merged as
+`71714a8`, build 382.31.10). At the owner's word ("promote to testing"),
+pull request 170 took `experimental` into `testing` as testing build
+382.42, and pull request 171 brings it back.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -1133,6 +1140,39 @@ merged with a merge commit.
   the promotion's merge commit.
 - Not exercised by the lead: the owner's own data. That look is the
   owner's, on the experimental or testing build.
+
+## Fourth promotion to `testing`, 2026-11-26
+
+The owner asked for it on 2026-11-26 ("then promote to testing"), once the
+release documents were merged. Reminders was parked by the owner and is
+not in it. `experimental` at `71714a8`, which is pull requests 160 to 169
+(Calendar and Next up, past earnings, Activity's kind switches, Settings as
+cards, the Earnings Figures card and the release documents), went into
+`testing` through
+[pull request 170](https://github.com/jayjay181818/StockBar/pull/170),
+merged with a merge commit.
+
+- Branches. `testing` was `9cb4276` and is `4b48c11`, a merge commit whose
+  parents are `9cb4276` and `71714a8` and whose files are those of
+  `71714a8`. `testing` was already contained in `experimental`, through
+  pull request 161. The head was a temporary branch,
+  `feature/promote-experimental-to-testing-4`. `main` is untouched. No
+  version tag was made and nothing was released on the Stable channel. No
+  repository setting was changed.
+- CI. All four checks passed on `71714a8` before the merge.
+- Tests locally: pull request 168's 1142 XCTest tests with 0 failures and
+  its `checks`, `docs-check`, `build-release` and Python tests; pull
+  request 169 changed documents only, and `checks` and `docs-check` passed
+  on it.
+- The testing build. The merge published build 382.42 as the prerelease
+  `testing-382.42` ("StockBar 3.8.2 testing build 382.42"), with one
+  archive, `Stockbar-382.42.zip`, of 8,703,265 bytes.
+- Experimental builds. Pull request 171 starts from `4b48c11` and is
+  merged with a merge commit straight after the promotion, so
+  `experimental` holds the promotion's merge commit and its builds number
+  above 382.42.
+- Not exercised by the lead: the owner's own data. That look is the
+  owner's, on the testing build.
 
 ## Pull requests
 
@@ -6817,8 +6857,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   holdings" rather than nothing; Income and Calendar are also dimmed while
   Folync is on but its portfolio is not showing yet; two renamed Folync
   settings labels. Also: record 168's merge line.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `71714a8` (build 382.31.10).
 - Benchmark: none needed. Documents only.
 - Testing: `checks` and `docs-check` pass; every relative link and image
   in the README and documents resolves. No code changed.
@@ -6830,6 +6869,27 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   proposed change to `Stockbar/Views/AGENTS.md` (the sidebar's one list of
   pages, and surfaces only from `StockbarDesign.swift`) awaits the owner.
   The wiki is updated by hand at release.
+- Verdict: retained.
+
+### 170 and 171: The fourth promotion, and `testing` brought back
+
+- What: pull request 170 is the
+  [fourth promotion](#fourth-promotion-to-testing-2026-11-26). Pull request
+  171 records it, with "Where things stand" and the merge line of pull
+  request 169, and starts from `testing` at `4b48c11`, so merging it brings
+  the promotion's merge commit into `experimental`. Only this file changes.
+- Merged: 170 on 2026-11-26 as merge commit `4b48c11` on `testing`. 171 is
+  merged with a merge commit, the exception to the squash rule described
+  under [How this branch works](#how-this-branch-works); its merge commit
+  is filled in by the next pull request.
+- Benchmark: no before/after run. `4b48c11` has the files of `71714a8`,
+  and pull request 171 changes only this file.
+- Testing: `docs-check` passes on this branch. The tests of the promoted
+  commit are under the fourth promotion.
+- Review: read by its author, with each figure checked against the
+  published build.
+- Known issues: none known. The bring-back followed the promotion straight
+  away.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -7125,6 +7185,7 @@ launch.
 | Pull request 167, past earnings | Claude Opus 5.5 (session lead) for the specification, review, the live check, two rounds of fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker built it in an hour without calling Yahoo and wrote out the live check; the one supervised run then found the London date fault that no fake could have shown |
 | Pull request 168, past EPS figures for every share | Claude Opus 5.5 (session lead) for the live check, the specification, review and the record; one Opus 5.5 worker | Worth it: forty-five minutes. The live check against the companies' own results showed the price currency mislabels a dollar-priced share too, which settled the design |
 | Pull request 169, release documents | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: a quarter of an hour, with four places where the documents had drifted from the code found and fixed |
+| The fourth promotion to `testing` and pull requests 170 and 171 | Claude Opus 5.5 (session lead) | Done directly: the promotion, the check of the published build and this record, with the bring-back straight after |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
