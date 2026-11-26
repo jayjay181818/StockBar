@@ -32,10 +32,10 @@ class DataModel {
     private let migrationService = DataMigrationService.shared
     private let aliasIdentityMigrationService = AliasIdentityMigrationService()
     @ObservationIgnored private var pendingPersistenceTask: Task<Void, Never>?
-    private let trading212SettingsStore = Trading212SettingsStore.shared
-    private let trading212CredentialStore = Trading212CredentialStore.shared
-    private let trading212PreviewCoordinator = Trading212PreviewCoordinator()
-    private let trading212BrokerLinkStore = BrokerLinkStore.shared
+    private let trading212SettingsStore: Trading212SettingsStore
+    private let trading212CredentialStore: Trading212CredentialStore
+    private let trading212PreviewCoordinator: Trading212PreviewCoordinator
+    private let trading212BrokerLinkStore: BrokerLinkStore
     private let trading212BrokerSyncPlanner = Trading212BrokerSyncPlanner()
     private let trading212BrokerOnlyImportPlanner = Trading212BrokerOnlyImportPlanner()
     @ObservationIgnored private var trading212BrokerSyncTask: Task<Void, Never>?
@@ -50,6 +50,13 @@ class DataModel {
     @ObservationIgnored private var lastTrading212ScheduledReconciliation = Date.distantPast
     @ObservationIgnored private var isTrading212BrokerSyncInProgress = false
     @ObservationIgnored private var isTrading212HoldingReconciliationInProgress = false
+    /// Bumped whenever the Trading 212 account changes under the app: credentials saved,
+    /// replaced or cleared, Trading 212 turned on or off, or another environment or account
+    /// type chosen. A request started before a bump stores nothing when it returns.
+    @ObservationIgnored private var trading212AccountGeneration = 0
+    /// The time a Trading 212 valuation is stamped with and judged fresh against. A test
+    /// moves it on to age a valuation without waiting.
+    @ObservationIgnored var trading212Clock: () -> Date = { Date() }
     private(set) var trading212BrokerValuationSnapshot: Trading212BrokerValuationSnapshot?
     var folyncPortfolioSnapshot: FolyncPortfolioSnapshot?
     var folyncConnectionState: FolyncConnectionState = .notConfigured
@@ -231,9 +238,17 @@ class DataModel {
 
     init(
         currencyConverter: CurrencyConverter = .shared,
-        startRuntimeServices: Bool = true
+        startRuntimeServices: Bool = true,
+        trading212SettingsStore: Trading212SettingsStore = .shared,
+        trading212CredentialStore: Trading212CredentialStore = .shared,
+        trading212PreviewCoordinator: Trading212PreviewCoordinator = Trading212PreviewCoordinator(),
+        trading212BrokerLinkStore: BrokerLinkStore = .shared
     ) {
         self.currencyConverter = currencyConverter
+        self.trading212SettingsStore = trading212SettingsStore
+        self.trading212CredentialStore = trading212CredentialStore
+        self.trading212PreviewCoordinator = trading212PreviewCoordinator
+        self.trading212BrokerLinkStore = trading212BrokerLinkStore
         // Pure calculation service: create it up front so totals never fall
         // back to a placeholder $0.00 while runtime services start.
         self.portfolioCalculationService = PortfolioCalculationService(currencyConverter: currencyConverter)
@@ -919,15 +934,28 @@ class DataModel {
                 skippedReason: "Trading 212 credentials need Keychain approval. Open Settings and run Test Connection or Sync Linked Holdings once."
             )
         }
+        let generation = trading212AccountGeneration
         var links = try await trading212BrokerLinkStore.loadSnapshot()
-        let trading212AccountKeys = Set(links.accounts.filter { $0.broker == "Trading212" }.map(\.brokerAccountKey))
-        guard links.positions.contains(where: { trading212AccountKeys.contains($0.brokerAccountKey) }) else {
-            return Trading212BrokerSyncResult(
-                updatedCount: 0,
-                deletedCount: 0,
-                missingCount: 0,
-                brokerOnlyCount: 0,
-                skippedReason: "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
+        // Links of another environment or account type belong to another account; only the
+        // active one's count. Its full key needs the account's id, which only the broker's
+        // answer gives, so the planner checks that key again once it is known.
+        let activeAccountPrefix = Self.trading212AccountKeyPrefix(settings)
+        guard links.positions.contains(where: { $0.brokerAccountKey.hasPrefix(activeAccountPrefix) }) else {
+            // Nothing linked. With no holding of the app's own, the account (cash, say) is
+            // the whole portfolio: value it from its summary, one request. Beside holdings
+            // of the app's own, or ones not known, it would replace their total, so it is
+            // left alone.
+            guard !mayHaveOwnedHoldings else {
+                return Trading212BrokerSyncResult(
+                    updatedCount: 0,
+                    deletedCount: 0,
+                    missingCount: 0,
+                    brokerOnlyCount: 0,
+                    skippedReason: Self.trading212NoLinkedHoldingsReason
+                )
+            }
+            return try await valueUnlinkedTrading212Account(
+                settings: settings, credentials: credentials, generation: generation, reason: reason
             )
         }
 
@@ -939,15 +967,9 @@ class DataModel {
             includeMetadata: false,
             useCache: false
         )
-        // Folync may have taken over while the request was in flight.
-        guard !isFolyncPortfolioActive else {
-            return Trading212BrokerSyncResult(
-                updatedCount: 0,
-                deletedCount: 0,
-                missingCount: 0,
-                brokerOnlyCount: 0,
-                skippedReason: Self.trading212SkippedForFolyncReason
-            )
+        // Folync may have taken over, or the account changed, while the request was in flight.
+        if let skipped = try trading212SyncSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
         }
         if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
             links = try await trading212BrokerLinkStore.loadSnapshot()
@@ -963,8 +985,12 @@ class DataModel {
             preview: preview,
             options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
             quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
-            syncedAt: Date()
+            syncedAt: trading212Clock()
         )
+        // The link store's reads and writes above were suspension points too.
+        if let skipped = try trading212SyncSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
+        }
 
         trading212BrokerValuationSnapshot = plan.valuationSnapshot
         if !plan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
@@ -982,6 +1008,133 @@ class DataModel {
             missingCount: plan.missingLinkedSymbols.count,
             brokerOnlyCount: plan.brokerOnlyCount,
             skippedReason: nil
+        )
+        await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
+        return result
+    }
+
+    nonisolated static let trading212AccountNotValuedReason =
+        "No linked Trading 212 holdings, and Trading 212's account summary gave no value or currency, so the account is not valued."
+
+    nonisolated static let trading212NoLinkedHoldingsReason =
+        "No linked Trading 212 holdings found. Run Preview Import and Link Matched Holdings first."
+
+    /// Whether the app may hold holdings of its own: rows with a position that are not
+    /// benchmarks, or a portfolio not read yet or that could not be read, whose holdings
+    /// are not known.
+    private var mayHaveOwnedHoldings: Bool {
+        if portfolioLoadFailed || (requiresInitialTradeLoad && !hasCompletedInitialTradeLoad) { return true }
+        return realTimeTrades.contains { !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) }
+    }
+
+    nonisolated static let trading212AccountChangedReason =
+        "Trading 212's settings or credentials changed while Stockbar was waiting for the broker, so nothing was stored."
+
+    /// The start every key of the active Trading 212 account has: broker, environment and
+    /// account type. The rest of a key (label, credentials, the account's id) follows.
+    nonisolated static func trading212AccountKeyPrefix(_ settings: Trading212StoredSettings) -> String {
+        "Trading212|\(settings.environment.rawValue)|\(settings.accountType.rawValue)|"
+    }
+
+    /// Checked after every wait on the broker or the link store, before anything is stored.
+    /// Cancellation throws, as it does in the request itself. Otherwise a result that says
+    /// why nothing is stored, or nil when the request still applies: Folync is not active,
+    /// Trading 212 is still on with the same environment and account type, credentials are
+    /// still stored, and they have not been saved, replaced or cleared since (`generation`).
+    private func trading212SyncSkippedAfterRequest(
+        settings: Trading212StoredSettings,
+        generation: Int
+    ) throws -> Trading212BrokerSyncResult? {
+        guard let reason = try trading212RequestNoLongerApplies(settings: settings, generation: generation) else {
+            return nil
+        }
+        return Trading212BrokerSyncResult(
+            updatedCount: 0, deletedCount: 0, missingCount: 0, brokerOnlyCount: 0, skippedReason: reason
+        )
+    }
+
+    private func trading212RequestNoLongerApplies(
+        settings: Trading212StoredSettings,
+        generation: Int
+    ) throws -> String? {
+        try Task.checkCancellation()
+        if isFolyncPortfolioActive { return Self.trading212SkippedForFolyncReason }
+        let current = trading212SettingsStore.load()
+        guard generation == trading212AccountGeneration,
+              current.isEnabled,
+              current.accountType.isSupportedByPublicAPI,
+              current.environment == settings.environment,
+              current.accountType == settings.accountType,
+              trading212CredentialStore.storageState(environment: current.environment).hasCredentials
+        else {
+            return Self.trading212AccountChangedReason
+        }
+        return nil
+    }
+
+    private func trading212ReconciliationSkippedAfterRequest(
+        settings: Trading212StoredSettings,
+        generation: Int
+    ) throws -> Trading212HoldingReconciliationResult? {
+        guard let reason = try trading212RequestNoLongerApplies(settings: settings, generation: generation) else {
+            return nil
+        }
+        return Trading212HoldingReconciliationResult(
+            syncedCount: 0, importedCount: 0, deletedCount: 0, missingCount: 0, brokerOnlyCount: 0, skippedReason: reason
+        )
+    }
+
+    /// The Trading 212 account changed under the app: credentials were saved, replaced or
+    /// cleared, or settings imported. The stored valuation is the old account's, so it goes
+    /// at once, and the menu bar, the popover and the Overview are told as a sync tells
+    /// them; a request in flight stores nothing when it returns.
+    func trading212AccountDidChange() {
+        trading212AccountGeneration &+= 1
+        guard trading212BrokerValuationSnapshot != nil else { return }
+        trading212BrokerValuationSnapshot = nil
+        tradeContentDidChange.send()
+    }
+
+    /// Trading 212's settings were saved. Turning it on or off, or choosing another
+    /// environment or account type, changes the account; any other setting does not, and
+    /// the valuation stands.
+    func trading212SettingsDidChange(from previous: Trading212StoredSettings, to current: Trading212StoredSettings) {
+        guard previous.isEnabled != current.isEnabled
+            || previous.environment != current.environment
+            || previous.accountType != current.accountType else { return }
+        trading212AccountDidChange()
+    }
+
+    /// The ordinary sync for a set-up account with nothing linked and no holding of the
+    /// app's own: the account's summary, one request, stored as a valuation with no
+    /// positions, so the account is valued as its cash (and any holdings not linked).
+    private func valueUnlinkedTrading212Account(
+        settings: Trading212StoredSettings,
+        credentials: Trading212AuthConfiguration,
+        generation: Int,
+        reason: String
+    ) async throws -> Trading212BrokerSyncResult {
+        let fetched = try await trading212PreviewCoordinator.accountSummary(settings: settings, credentials: credentials)
+        // Folync may have taken over, or the account changed, while the request was in flight.
+        if let skipped = try trading212SyncSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
+        }
+        let snapshot = trading212BrokerSyncPlanner.accountOnlyValuationSnapshot(
+            account: fetched.account,
+            accountSummary: fetched.summary,
+            syncedAt: trading212Clock()
+        )
+        trading212BrokerValuationSnapshot = snapshot
+        // No row changes, so nothing else tells the menu bar, the popover's chart or the
+        // Overview that the totals moved; a linked sync tells them by replacing the rows.
+        tradeContentDidChange.send()
+        let result = Trading212BrokerSyncResult(
+            updatedCount: 0,
+            deletedCount: 0,
+            missingCount: 0,
+            brokerOnlyCount: 0,
+            skippedReason: snapshot == nil ? Self.trading212AccountNotValuedReason : nil,
+            valuedAccountOnly: snapshot != nil
         )
         await logger.info("Trading 212 linked sync (\(reason)): \(result.userMessage)")
         return result
@@ -1055,6 +1208,7 @@ class DataModel {
             )
         }
 
+        let generation = trading212AccountGeneration
         let existingManualHoldings = realTimeTrades.map { trading212ManualHoldingSnapshot(from: $0) }
         var links = try await trading212BrokerLinkStore.loadSnapshot()
         var preview = try await trading212PreviewCoordinator.preview(
@@ -1065,6 +1219,10 @@ class DataModel {
             includeMetadata: true,
             useCache: false
         )
+        // Before the links file is touched: an overtaken request rewrites nothing.
+        if let skipped = try trading212ReconciliationSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
+        }
         if try await trading212BrokerLinkStore.adoptLinks(for: preview.account) {
             // The preview matched rows against the old keys; rebuild it so linked
             // holdings are not mistaken for broker-only ones and imported again.
@@ -1079,16 +1237,9 @@ class DataModel {
             )
             await logger.info("Trading 212 account key changed (label or API key); moved existing links to the new key")
         }
-        // Folync may have taken over while the requests were in flight.
-        guard !isFolyncPortfolioActive else {
-            return Trading212HoldingReconciliationResult(
-                syncedCount: 0,
-                importedCount: 0,
-                deletedCount: 0,
-                missingCount: 0,
-                brokerOnlyCount: 0,
-                skippedReason: Self.trading212SkippedForFolyncReason
-            )
+        // Folync may have taken over, or the account changed, while the requests were in flight.
+        if let skipped = try trading212ReconciliationSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
         }
         if try await trading212BrokerLinkStore.recordISINs(from: preview.rows) {
             links = try await trading212BrokerLinkStore.loadSnapshot()
@@ -1115,8 +1266,11 @@ class DataModel {
             preview: preview,
             options: Trading212BrokerSyncOptions(deleteMissingLinkedHoldings: settings.deleteMissingLinkedHoldings),
             quarantinedProviderKeys: AliasIdentityMigrationService.quarantinedProviderKeys(),
-            syncedAt: Date()
+            syncedAt: trading212Clock()
         )
+        if let skipped = try trading212ReconciliationSkippedAfterRequest(settings: settings, generation: generation) {
+            return skipped
+        }
         trading212BrokerValuationSnapshot = syncPlan.valuationSnapshot
         if !syncPlan.tradeUpdates.isEmpty { lastTrading212LinkedSyncAt = Date() }
         applyTrading212BrokerSyncPlan(syncPlan)
@@ -1152,6 +1306,14 @@ class DataModel {
                 positions: importPlan.records.map(\.linkedPosition),
                 linkedAt: importedAt
             )
+            // The account had nothing linked when it was valued; now its holdings are
+            // imported and linked, so the valuation stands beside them as it did before an
+            // account-only valuation existed, until the next sync values them one by one.
+            if var valuation = trading212BrokerValuationSnapshot, valuation.isAccountOnly,
+               valuation.accountKey == preview.account.brokerAccountKey {
+                valuation.isAccountOnly = false
+                trading212BrokerValuationSnapshot = valuation
+            }
         }
 
         if syncPlan.changedCount > 0 || !importPlan.records.isEmpty {
@@ -1453,6 +1615,79 @@ class DataModel {
         )
     }
 
+    /// Which figure `calculateNetGains()` gives, decided the same way, so a
+    /// label can say what the total is without working it out again.
+    var netGainsSource: PortfolioGainsSource {
+        if let value = folyncPortfolioSnapshot?.profitLoss.unrealized.value, value.isFinite {
+            return .folync
+        }
+        guard portfolioCalculationService != nil else { return .averageCost }
+        if let gain = freshTrading212BrokerValuationSnapshot()?.totalUnrealizedProfitLoss, gain.isFinite {
+            return .trading212
+        }
+        return .averageCost
+    }
+
+    /// The holding's share of the portfolio, in percent, or nil when it is not known.
+    /// For a Folync portfolio this is Folync's own `allocationPct`, as given. Otherwise
+    /// it is the holding's value as a share of `netValue` (the total the Holdings
+    /// strip shows, from `calculateNetValue()`), both in that total's currency.
+    /// A watchlist-only row has no position, so no weight.
+    func calculatePositionWeight(for trade: RealTimeTrade,
+                                 netValue: (amount: Double, currency: String)) -> Double? {
+        guard !trade.trade.isWatchlistOnly else { return nil }
+        if let snapshot = folyncPortfolioSnapshot {
+            guard let identity = trade.sourceIdentity,
+                  let holding = snapshot.holdings.first(where: { $0.overlayKey(scopeID: snapshot.scope.id) == identity })
+            else { return nil }
+            return HoldingsWeight.given(holding.allocationPct)
+        }
+        // No Folync snapshot here, so the lookup is only the fresh Trading 212 valuation.
+        guard let value = weighedPositionValue(for: trade, in: holdingsValuationLookup()) else { return nil }
+        return HoldingsWeight.share(
+            value: value.amount, currency: value.currency,
+            of: netValue.amount, currency: netValue.currency,
+            convert: currencyConverter.convert(amount:from:to:)
+        )
+    }
+
+    /// What a valuation pass reads from its source, looked up once for the whole pass:
+    /// Folync's holdings by overlay identity, or else the fresh Trading 212 valuation.
+    /// Allocation builds one per calculation rather than scanning Folync's holdings once
+    /// per row for its value and again for its day's change.
+    func holdingsValuationLookup() -> HoldingsValuationLookup {
+        guard let snapshot = folyncPortfolioSnapshot else {
+            return HoldingsValuationLookup(folyncHoldings: nil, broker: freshTrading212BrokerValuationSnapshot())
+        }
+        // The first holding with a key wins, as `holdings.first(where:)` finds it.
+        let holdings = Dictionary(snapshot.holdings.map { ($0.overlayKey(scopeID: snapshot.scope.id), $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        return HoldingsValuationLookup(folyncHoldings: holdings, broker: nil)
+    }
+
+    /// The value behind a holding's weight, in the currency it is in, as Holdings and
+    /// Allocation both take it: Folync's market value for a Folync holding (Holdings shows
+    /// Folync's own weight for it), the broker's current value for a Trading 212 position,
+    /// otherwise price times units. Nil for a watchlist row, a Folync row that matches no
+    /// Folync holding, and a holding with no usable price outside a Trading 212 account
+    /// (the net value leaves it out, so it has no share of it). The same figures as
+    /// `calculatePositionValue(for:)` gives, read from `lookup`.
+    func weighedPositionValue(for trade: RealTimeTrade,
+                              in lookup: HoldingsValuationLookup) -> (amount: Double, currency: String)? {
+        guard !trade.trade.isWatchlistOnly else { return nil }
+        if lookup.folyncHoldings != nil {
+            guard let holding = lookup.folyncHolding(for: trade) else { return nil }
+            return (holding.marketValue ?? .nan, holding.resolvedValueCurrency)
+        }
+        if let valuation = lookup.broker?.position(for: trade.trade.name) {
+            return (valuation.brokerCurrentValue, valuation.currency)
+        }
+        let price = trade.realTimeInfo.getCurrentDisplayPrice()
+        guard price.isFinite, price > 0 else { return nil }
+        let amount = price * trade.trade.position.unitSize
+        return (amount.isFinite ? amount : .nan, trade.realTimeInfo.currency ?? "")
+    }
+
     /// Calculates the total portfolio value (market value) in the preferred currency - delegates to PortfolioCalculationService
     func calculateNetValue() -> (amount: Double, currency: String) {
         if let snapshot = folyncPortfolioSnapshot,
@@ -1469,6 +1704,71 @@ class DataModel {
             preferredCurrency: preferredCurrency,
             brokerValuationSnapshot: freshTrading212BrokerValuationSnapshot()
         )
+    }
+
+    /// Where Holdings' total and its cash come from, decided once, here, for both. Allocation
+    /// takes its total and cash from this and each holding's value from
+    /// `weighedPositionValue(for:in:)`, so the two pages weigh the same holdings against the
+    /// same total. The choice of source is the one `calculatePositionValue(for:)` and
+    /// `calculatePositionWeight(for:netValue:)` make: Folync whenever its snapshot is there,
+    /// then a fresh Trading 212 account, then the local portfolio. With Folync's holdings,
+    /// the cash is Folync's or not known, never another account's.
+    func holdingsWeightBasis() -> HoldingsWeightBasis {
+        func named(_ currency: String?) -> String? {
+            let trimmed = currency?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        func amount(_ value: Double?, _ currency: String?) -> HoldingsWeightBasis.Amount? {
+            guard let value, value.isFinite, let currency = named(currency) else { return nil }
+            return HoldingsWeightBasis.Amount(value: value, currency: currency)
+        }
+        if let snapshot = folyncPortfolioSnapshot {
+            guard let total = snapshot.totalValue.value, total.isFinite else {
+                // Holdings' rows are Folync's, but its net value then comes from Trading 212
+                // or the local holdings (`calculateNetValue()`): not a total of those rows.
+                return HoldingsWeightBasis(source: .folync, total: nil, cash: nil, mismatch: .folyncWithoutTotal)
+            }
+            return HoldingsWeightBasis(
+                source: .folync,
+                total: amount(total, snapshot.totalValue.currency ?? snapshot.scope.currency),
+                cash: amount(snapshot.cash.value, snapshot.cash.currency),
+                mismatch: nil
+            )
+        }
+        guard portfolioCalculationService != nil, let broker = freshTrading212BrokerValuationSnapshot() else {
+            return HoldingsWeightBasis(source: .local, total: nil, cash: nil, mismatch: nil)
+        }
+        // Holdings weighs a holding kept outside the account against the account's value,
+        // which leaves it out.
+        let outside = realTimeTrades.contains {
+            !$0.trade.isWatchlistOnly && !isBenchmarkTrade($0) && broker.position(for: $0.trade.name) == nil
+        }
+        return HoldingsWeightBasis(
+            source: .trading212,
+            total: amount(broker.accountValue, broker.currency),
+            cash: amount(broker.cashValue, broker.currency),
+            mismatch: outside ? .holdingsOutsideBrokerAccount : nil
+        )
+    }
+
+    /// Whether the totals are a Trading 212 account's value from its summary alone, with no
+    /// row of the app's behind them: the account had nothing linked and the app holds
+    /// nothing of its own.
+    var isValuedFromTrading212AccountAlone: Bool {
+        freshTrading212BrokerValuationSnapshot()?.isAccountOnly == true
+    }
+
+    /// Sets how far the stored portfolio has been read, for tests of what an unread or
+    /// unreadable portfolio allows. A model made without runtime services never reads it.
+    func setPortfolioLoadStateForTesting(requiresInitialLoad: Bool, completed: Bool, failed: Bool) {
+        requiresInitialTradeLoad = requiresInitialLoad
+        hasCompletedInitialTradeLoad = completed
+        portfolioLoadFailed = failed
+    }
+
+    /// Puts a Trading 212 valuation in place as a sync does, for tests of what reads it.
+    func setTrading212BrokerValuationSnapshotForTesting(_ snapshot: Trading212BrokerValuationSnapshot?) {
+        trading212BrokerValuationSnapshot = snapshot
     }
 
     /// Calculates the display-aware portfolio summary used by menu bar portfolio surfaces.
@@ -1612,7 +1912,14 @@ class DataModel {
         return service.calculatePositionProfitLoss(for: realTimeTrade, brokerValuation: brokerValuation)
     }
 
-    private func freshTrading212BrokerValuationSnapshot(now: Date = Date()) -> Trading212BrokerValuationSnapshot? {
+    /// The stored Trading 212 valuation when it applies now: Folync not active, Trading 212
+    /// on with the account it was made for, not given way to holdings of the app's own,
+    /// and fresh by `trading212Clock`. What every total, gain and weight reads.
+    func freshTrading212BrokerValuationSnapshot() -> Trading212BrokerValuationSnapshot? {
+        // Folync's portfolio is the whole portfolio while it is active. Where it gives no
+        // total or gain, those are not known; another account's figure never stands in.
+        guard !isFolyncPortfolioActive else { return nil }
+        let now = trading212Clock()
         let settings = trading212SettingsStore.load()
         guard settings.isEnabled,
               settings.accountType.isSupportedByPublicAPI,
@@ -1620,8 +1927,12 @@ class DataModel {
             return nil
         }
 
-        let expectedAccountPrefix = "Trading212|\(settings.environment.rawValue)|\(settings.accountType.rawValue)|"
-        guard snapshot.accountKey.hasPrefix(expectedAccountPrefix) else {
+        guard snapshot.accountKey.hasPrefix(Self.trading212AccountKeyPrefix(settings)) else {
+            return nil
+        }
+        // An account valued without linked positions stands for the portfolio only while the
+        // app has no holding of its own; beside one, the local figures apply as before.
+        if snapshot.isAccountOnly, mayHaveOwnedHoldings {
             return nil
         }
 
@@ -2014,6 +2325,54 @@ enum PortfolioRestoreError: LocalizedError {
             return "Folync is providing the portfolio. Switch to the local portfolio in Settings → Connections before restoring a backup."
         }
     }
+}
+
+/// One valuation pass's view of its source, from `DataModel.holdingsValuationLookup()`.
+struct HoldingsValuationLookup {
+    /// Folync's holdings keyed by overlay identity; nil without a Folync snapshot.
+    let folyncHoldings: [String: FolyncHolding]?
+    /// The fresh Trading 212 valuation; nil with a Folync snapshot, or without a fresh one.
+    let broker: Trading212BrokerValuationSnapshot?
+
+    /// The Folync holding a Folync row shows, or nil.
+    func folyncHolding(for trade: RealTimeTrade) -> FolyncHolding? {
+        guard let identity = trade.sourceIdentity else { return nil }
+        return folyncHoldings?[identity]
+    }
+}
+
+/// What Holdings' weights are of, from `DataModel.holdingsWeightBasis()`.
+struct HoldingsWeightBasis: Equatable, Sendable {
+    enum Source: Equatable, Sendable {
+        case folync
+        case trading212
+        case local
+    }
+
+    /// A figure in the currency its source names for it.
+    struct Amount: Equatable, Sendable {
+        let value: Double
+        let currency: String
+    }
+
+    /// Where Holdings' total does not cover the holdings it weighs.
+    enum Mismatch: Equatable, Sendable {
+        /// Folync gives the holdings but no total, so the net value comes from elsewhere.
+        case folyncWithoutTotal
+        /// Holdings kept outside the Trading 212 account are weighed against its value.
+        case holdingsOutsideBrokerAccount
+    }
+
+    let source: Source
+    /// The source's own total (Folync's total value, the Trading 212 account's value),
+    /// which Holdings shows as its net value. Nil for a local portfolio, whose total is
+    /// its holdings' sum, and when the source gives none or names no currency for it.
+    let total: Amount?
+    /// The cash inside `total`, from the same source. Nil when not known; it can be zero
+    /// or below zero (borrowing).
+    let cash: Amount?
+    /// Nil when Holdings' total covers exactly the holdings it weighs.
+    let mismatch: Mismatch?
 }
 
 // MARK: - RealTimeTrade Extension

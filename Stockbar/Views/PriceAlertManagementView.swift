@@ -65,8 +65,7 @@ struct PriceAlertManagementView: View {
                             .buttonStyle(.borderedProminent)
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 260)
-                .stockbarCard()
+                .stockbarEmptyState(minHeight: 260)
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(alertService.alerts.enumerated()), id: \.element.id) { index, alert in
@@ -158,9 +157,7 @@ struct PriceAlertRow: View {
                         Text("Paused")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(StockbarPalette.hoverFill, in: Capsule())
+                            .stockbarPill()
                     }
                 }
                 Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency))")
@@ -217,8 +214,7 @@ struct PriceAlertRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(isHovered ? StockbarPalette.hoverFill : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .stockbarRow(isHovered: isHovered, cornerRadius: 8)
         .onHover { hovering in
             withAnimation(StockbarMotion.quick) { isHovered = hovering }
         }

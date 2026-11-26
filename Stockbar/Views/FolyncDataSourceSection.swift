@@ -146,8 +146,13 @@ struct FolyncDataSourceSection: View {
                 .font(.caption).foregroundStyle(.secondary)
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Supplemental market data").font(.subheadline).fontWeight(.semibold)
-                    Text("Each enabled category uses Folync’s cached data. Existing Stockbar history is retained and becomes active again when a route is disabled.")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("What Stockbar reads from Folync").font(.subheadline).fontWeight(.semibold)
+                        Text("Portfolio pages are fetched when you open them, not on a timer.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Each enabled chart, benchmark or exchange-rate category uses Folync’s cached data. Existing Stockbar history is retained and becomes active again when a route is disabled.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -171,6 +176,9 @@ struct FolyncDataSourceSection: View {
                         route: .exchangeRates,
                         value: supplementalBinding(\.exchangeRates)
                     )
+                    ForEach(FolyncLedgerRoute.allCases, id: \.self) { route in
+                        ledgerToggle(route)
+                    }
                     Toggle("Allow legacy local-provider fallback", isOn: supplementalBinding(\.allowLegacyFallback))
                         .toggleStyle(.checkbox)
 
@@ -421,7 +429,7 @@ struct FolyncDataSourceSection: View {
                 Toggle(title, isOn: value)
                     .toggleStyle(.checkbox)
                     // A lost capability must not trap an already-enabled route.
-                    .disabled(!value.wrappedValue && capability(for: route)?.isUsable != true)
+                    .disabled(!FolyncRouteSettingsStatus.canChange(isOn: value.wrappedValue, capability: capability(for: route)))
                 Spacer()
                 Text(capabilityLabel(for: route))
                     .font(.caption2)
@@ -446,10 +454,45 @@ struct FolyncDataSourceSection: View {
     }
 
     private func capabilityLabel(for route: FolyncSupplementalRoute) -> String {
-        guard let capability = capability(for: route) else { return "Not supported by this Folync server" }
-        if !capability.supported { return "Unsupported" }
-        if !capability.ready { return "Not ready · \(FolyncConnectionState.readable(reasons: capability.reasonCodes))" }
-        return dataModel.folyncSupplementalStatuses[route]?.label ?? "Ready"
+        FolyncRouteSettingsStatus.label(
+            for: capability(for: route),
+            readyLabel: dataModel.folyncSupplementalStatuses[route]?.label ?? "Ready"
+        )
+    }
+
+    /// The Income, Trades and Activity pages' routes. They have no coverage
+    /// line and no route status: they are fetched only when a page opens.
+    private func ledgerToggle(_ route: FolyncLedgerRoute) -> some View {
+        let capability = FolyncRouteSettingsStatus.capability(for: route, in: dataModel.folyncCapabilities)
+        let value = supplementalBinding(ledgerKeyPath(route))
+        return HStack {
+            Toggle(isOn: value) {
+                HStack(spacing: 6) {
+                    Text(route.settingsTitle)
+                    // The sidebar's badge, drawn the same way.
+                    Text("New")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .stockbarPill(tint: .accentColor)
+                        .accessibilityHidden(true)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .disabled(!FolyncRouteSettingsStatus.canChange(isOn: value.wrappedValue, capability: capability))
+            .accessibilityLabel(route.settingsAccessibilityLabel)
+            Spacer()
+            Text(FolyncRouteSettingsStatus.label(for: capability))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func ledgerKeyPath(_ route: FolyncLedgerRoute) -> WritableKeyPath<FolyncSupplementalSettings, Bool> {
+        switch route {
+        case .dividends: \.dividends
+        case .tradeAnalysis: \.tradeAnalysis
+        case .transactions: \.transactions
+        }
     }
 
     private func capabilityCoverageLabel(for route: FolyncSupplementalRoute) -> String? {

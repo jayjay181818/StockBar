@@ -318,6 +318,125 @@ it to be promoted again. What could still be done, and what
 each would cost, is listed at the end of
 [Milestone 1](#milestone-1-2026-11-12).
 
+From 2026-11-19, at the owner's word, `experimental` is in use again for a
+major change: the Glass redesign and the new Folync pages. Pull request 133
+brought it up to `testing` first, with merge commit `01d4768`. The owner
+said the benchmark for this work can wait until after 02:30 on 2026-11-20
+or later. Pull request 134's comparison was run that morning, twice, with
+another project's `xcodebuild` present on the same Mac during every
+measured launch. After the repeat no row shows a measurable change, and
+both tables are in its record. No launch was measured on a quiet Mac, and
+the rule written before the first launch left the merge to the owner in
+that case. The owner then said "go on", which is the word the rule asked
+for, and it was merged on 2026-11-20 as `5fa923b`.
+
+The same day the owner parked the benchmarks: no comparison is run until
+the other project's work on this Mac has been idle for more than 20
+minutes. Pull request 135, the first of the redesign's data work,
+therefore has no table yet. Asked the same day, the owner chose to merge
+the redesign's pull requests on their local checks and review with the
+benchmark owed. One comparison for each phase is run in the first quiet
+window, and until then each record says that its benchmark is owed. The
+rule is set out under [How this branch works](#how-this-branch-works).
+Pull request 135 was merged on those terms on 2026-11-20 as `e04e21b`.
+Pull request 136, the Yahoo lookup the Calendar needs, followed it the
+same day as `16f1a3d`. Pull request 137 is the first that changes what the
+app looks like: on 2026-11-20 the owner chose the floating sidebar and said
+to build the Glass look and judge it on experimental builds. It was merged
+the same day as `fe59b8d`. The shell, the popover and the Overview were then
+built at the same time, each as its own pull request; the popover's, 138,
+was ready first and was merged as `564056b`. The Overview's, 139, was
+brought up to date with it and followed as `c9453fd`. The shell's, 140, is
+the last of Phase A, and was merged as `92145d7`. With it the phase's
+comparison is owed: from `5fa923b`, the last commit measured, to the head,
+in the first quiet window. A first try the same afternoon measured
+nothing: the other project's builds ran during the wait for twenty quiet
+minutes, and the Mac then went onto battery power. The owner chose to have
+it run that night at 02:30 UTC, with the Mac on mains power and left
+alone.
+
+Phase B's pages followed the same day, built at the same time, each as its
+own pull request: Activity (141, merged as `474d187`), Trades (142,
+`a60edd0`) and Income (143, `9292744`). A local stand-in
+server with a made-up portfolio now serves the three ledger routes, so
+each page can be looked at in the acceptance copy. A second batch, built
+the same way, gave Allocation a donut and its correlations as a grid
+(144, `c34be9e`), put switches for the three new pages in Settings (145,
+`80dfcbc`), gave Holdings a Weight column (146, `9d87d22`) and said each
+of Risk's figures once, with a chart of the falls (147, `995293c`). Pull
+request 148 (`3aff316`) let the acceptance copy change the settings it
+was started with, which showed for the first time that the Holdings
+editing table did not fit at the minimum window size. Pull request 149
+(`241aeb7`) tidied Charts and Data Health, and pull request 150
+(`2d5d992`) made the editing table fit. All were merged on 2026-11-20
+with their benchmark owed; the last of them published experimental build
+382.3.19.
+
+The comparison owed for all of it was run that evening, at the owner's
+request, instead of at 02:30 UTC: from `5fa923b` to `2d5d992`, which
+covers pull requests 135 to 150, twice, from 22:10 to 22:43 UTC and from
+23:03 to 23:35 UTC, each after twenty quiet minutes on mains power. Both
+runs were kept under all three set-aside rules. Three rows rose in both:
+idle memory by 21 to 22 MB, peak memory at launch by 20 to 23 MB, and
+CPU from launch to the idle window by 0.09 to 0.11 s. The memory the app
+holds allocated did not hold its rise in the repeat, so the extra memory
+is most likely what the system holds for the app, such as what it draws
+the window with, rather than the app's own objects. Pull request 140, the
+Glass shell, was named the likeliest cause; measured on its own that
+night, it is not: the rise is already there before it. Both tables are in
+[pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date),
+which was merged on 2026-11-21 as `381fad1` (build 382.3.20).
+
+Pull request 140's own comparison, `c9453fd` against `92145d7`, was run at
+01:01 UTC on 2026-11-21. Idle memory did not move (114.9 MB before, 116.4
+MB after), and peak memory at launch rose by 19.5 MB. In every launch the
+system's drawing memory for the app (the `CoreAnimation` region of the
+footprint) is 3.2 MB at `5fa923b` and 22 MB from pull request 139 onwards,
+so the idle rise is in pull requests 135 to 139; 135 and 136 change no
+view, which leaves 137 (Glass surfaces), 138 (the popover) and 139 (the
+Overview). They are measured one at a time next. The table is in
+[pull request 153's entry](#153-read-yahoos-chart-details-with-the-yfinance-the-app-ships).
+
+On 2026-11-25 the owner allowed one supervised live run of the Yahoo
+events lookup (pull request 136) before Calendar, a local Income estimate
+and a Funds group are built on it. It found that the lookup had never
+answered: with the yfinance the app ships, every symbol was thrown away as
+having no data. Pull request 153 fixes that and records what Yahoo gives;
+it was merged the same day as `6e7184d` (build 382.3.21).
+
+The owner also chose a Cash row for Allocation, so that its shares are of
+the same total as Holdings' weights. Pull request 154 adds it. Two independent
+reviews (GPT-6.2 Astra and Gemini 4 Neon) then found it could still
+disagree with Holdings or show another account's cash, and pull request
+155 fixes that: one source decides holdings, total and cash, and the Cash
+row appears only when the figures add up to the source's total.
+
+The rise in idle memory was traced the same day, by one launch of each of
+pull requests 136 to 138 while another project's builds kept the Mac from
+a timed comparison: the system's drawing memory for the app is 3.2 MB
+after 136, 19 MB after 137 (the Glass surfaces), 19 MB after 138 and 22
+MB from 139. The results are in
+`build/bench/results/coreanimation-check-20261125-115919`.
+
+Pull request 155 was merged as `f925fae` (build 382.3.23). Pull request
+156 then valued a Trading 212 account that holds only cash, which no
+ordinary sync had done, and, after two more independent reviews, made
+Trading 212's figures belong only to the account in use and never to a
+Folync portfolio. It was merged as `1dcde6f` (build 382.3.24).
+
+Pull request 157 then removed the idle memory the redesign added: the
+faint top highlight on dark cards, stroked with a gradient, cost about 18
+MB of drawing memory, and drawing it under a gradient mask instead keeps
+the look and brings that memory back to 3.6 MB. It was merged as
+`45cd139` (build 382.3.25). The timed comparison for pull requests 152
+to 157 was run that evening, twice: idle memory fell from about 118 MB to
+about 100 MB, peak memory at launch by 16 to 22 MB, and nothing else
+changed measurably. The tables are in pull request 158's entry.
+
+Pull request 158 gave a local or Trading 212 portfolio an Income page, as
+an estimate labelled as one: Yahoo's record of each holding's payments
+over the last year, at today's units, and the same a year on.
+
 ## Review of the refresh path, 2026-11-13
 
 A read-only review of the code the benchmark never runs: the price refresh
@@ -3508,6 +3627,2784 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Known issues: none known.
 - Verdict: retained.
 
+### 134: Let the acceptance copy reach a Folync on this Mac
+
+- What: in an acceptance run, a Folync request is let through when its
+  endpoint is on this Mac (`127.0.0.1`, `localhost` or `::1`). Everything
+  else stays refused. The owner approved it on 2026-11-19. Until now
+  `StockbarProviderAccessPolicy` refused every provider in an acceptance
+  run, so the acceptance copy could never read the Folync stand-in on
+  loopback that `script/run_folync_acceptance.sh` and the bootstrap
+  require. The redesign's Folync pages could not be tried on made-up data.
+
+  `StockbarAcceptanceRuntime` gains `loopbackFolyncAllowed`. It is true
+  only for an explicit acceptance run, and false for the automatic XCTest
+  isolation and for a normal run. The policy gains
+  `authorize(_:endpoint:)`. It allows everything when live requests are
+  allowed. Otherwise it allows only `.folync`, with the exception on, to
+  an `http` or `https` URL whose host is exactly one of the three; the
+  host is compared whole, with no name lookup. `authorize(_:)` without an
+  endpoint behaves as before. `FolyncPortfolioSource` and
+  `FolyncSupplementalCoordinator` pass their base URL on every request,
+  before the endpoint check and before any network use. Changing the
+  address inside the acceptance copy to another machine is therefore still
+  refused. These are the only two Folync calls to the policy, and no other
+  provider's gate changes. The preflight report gains
+  `loopbackFolyncAllowed`, so the evidence shows the exception, and
+  `Docs/Development.md` describes it.
+- Merged: 2026-11-20, squash commit `5fa923b`. The merge published
+  experimental build 382.3.3 as the prerelease `experimental-382.3.3`.
+  Checked after it: both jobs of the release workflow succeeded and the
+  prerelease is listed. The published archive was not downloaded or
+  opened.
+- Benchmark: before `01d4768`, after `7aba2f7`, the standard comparison,
+  six launches a side in turns, run twice on 2026-11-20, on macOS 27.2.1
+  and mains power, with the screen unlocked and the display awake. After
+  the repeat no row shows a measurable change. This pull request names no
+  row: the benchmark's launches are acceptance runs with no Folync set
+  up, so they never reach the exception.
+
+  Neither run was measured on a quiet Mac. The comparison was scheduled
+  for 02:30 UTC and did not run then. The Mac restarted at 08:35 UTC and
+  the owner said "Try now" at about 08:55. Another session on the Mac was
+  running a different project's simulator tests: one was running at
+  08:55, and a wait for a quiet Mac passed at 09:06 only for the next to
+  begin within the minute. No start time was going to avoid them, so the
+  first run started at once under rules written into its script before
+  it began. Two are the
+  rules of 2026-11-16, which say when a run is set aside and repeated
+  (see
+  [pull request 108's entry](#108-leave-a-history-cache-file-alone-when-its-value-has-not-changed)).
+  The third is new and decides the merge. A sample every ten seconds
+  notes whether another project's `xcodebuild` is present, and a measured
+  launch with one or more such samples counts as overlapped. With any
+  launch overlapped, the pull request is not merged on that run without
+  the owner's word or a repeat with the other session paused. The samples
+  show that such a process was present, not how hard it was working; the
+  load average and the four busiest processes below are the measure of
+  that.
+
+  First run, turns from 09:14 to 09:47 UTC. No reading inside the turns
+  showed input. The four busiest processes together averaged 260% of a
+  core over the before side's 17 readings and 313% over the after side's
+  16, a ratio of 1.20, so the run stands. All twelve measured launches
+  were overlapped. The load average at the once-a-minute readings inside
+  the turns ran from 5.8 to 48.8. `StorageManagementService` and
+  `ApplicationsStorageExtension`, two system processes, were among the
+  four busiest in 31 of the run's 37 readings, beside the other project's
+  compiler, simulator app and test runner in others. The report flagged
+  no launch. One row is marked: idle CPU
+  wake-ups, possibly lower.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 88.9 (87.1 to 94.8) MB | 90.8 (84.8 to 93.4) MB | +1.9 MB, +2.1% | no measurable change (p = 1.000) |
+  | Idle memory the app holds allocated | 49.1 (40.0 to 51.8) MB | 49.5 (40.0 to 51.7) MB | +0.4 MB, +0.8% | no measurable change (p = 0.859) |
+  | Peak memory, launch and history load | 238.6 (234.9 to 256.9) MB | 247.7 (237.2 to 252.3) MB | +9.1 MB, +3.8% | no measurable change (p = 0.180) |
+  | Idle memory growth across the window | -0.1 (-2.2 to 0.0) MB | 0.0 (-6.5 to 0.1) MB | +0.1 MB, -100.0% | no measurable change (p = 0.364) |
+  | Idle CPU | 0.091 (0.075 to 0.104) s/min | 0.088 (0.079 to 0.097) s/min | -0.003 s/min, -2.7% | no measurable change (p = 0.788) |
+  | Idle CPU wake-ups | 28 (26 to 29) /min | 24 (22 to 28) /min | -4 /min, -12.5% | possibly lower (p = 0.019) |
+  | Idle CPU power | 4.64 (4.25 to 5.22) mW | 5.02 (4.44 to 5.28) mW | +0.38 mW, +8.2% | no measurable change (p = 0.331) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 1.06 (0.99 to 1.35) s | 1.04 (0.96 to 1.88) s | -0.02 s, -1.9% | no measurable change (p = 0.669) |
+  | Launch to history loaded | 1.11 (1.01 to 1.34) s | 1.03 (0.93 to 1.86) s | -0.08 s, -7.2% | no measurable change (p = 0.457) |
+  | CPU from launch to the idle window | 2.25 (2.11 to 2.75) s | 2.18 (2.03 to 3.46) s | -0.07 s, -2.9% | no measurable change (p = 0.485) |
+  | CPU energy from launch to the idle window | 6.31 (5.26 to 6.69) J | 6.39 (4.47 to 6.64) J | +0.08 J, +1.2% | no measurable change (p = 0.937) |
+  | Python helper start to ready, no network | 0.34 (0.30 to 1.03) s | 0.31 (0.29 to 1.02) s | -0.03 s, -8.8% | no measurable change (p = 0.247) |
+  | Python helper start, CPU | 0.33 (0.30 to 0.45) s | 0.31 (0.28 to 0.45) s | -0.02 s, -7.5% | no measurable change (p = 0.411) |
+  | Python helper memory once started | 71.2 (70.4 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.961) |
+
+  Repeat, for that row, turns from 10:08 to 10:41 UTC. A wait of twenty
+  minutes for a quiet Mac found another project's `xcodebuild` at 39 of
+  its 40 checks, so the repeat started without one, under the same
+  rules. No reading inside the turns showed input. The four busiest
+  together averaged 228% of a core over the before side's 16 readings
+  and 276% over the after side's 16, a ratio of 1.21, so it stands.
+  Again all twelve measured launches were overlapped. The load ran from
+  5.1 to 41.1, and the same two system processes were among the four
+  busiest in 32 of 33 readings. The report flagged no launch and marks
+  no row. Idle CPU wake-ups are 26 a minute on both sides.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 93.3 (90.4 to 95.6) MB | 92.7 (85.3 to 95.8) MB | -0.7 MB, -0.7% | no measurable change (p = 0.699) |
+  | Idle memory the app holds allocated | 50.4 (48.1 to 51.9) MB | 49.6 (46.1 to 50.6) MB | -0.8 MB, -1.6% | no measurable change (p = 0.197) |
+  | Peak memory, launch and history load | 248.2 (241.7 to 257.8) MB | 245.4 (238.0 to 261.1) MB | -2.8 MB, -1.1% | no measurable change (p = 0.818) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.1) MB | 0.0 (-3.9 to 0.0) MB | +0.0 MB | no measurable change (p = 0.273) |
+  | Idle CPU | 0.084 (0.074 to 0.097) s/min | 0.079 (0.070 to 0.091) s/min | -0.005 s/min, -6.0% | no measurable change (p = 0.457) |
+  | Idle CPU wake-ups | 26 (24 to 31) /min | 26 (22 to 28) /min | -0 /min, -1.9% | no measurable change (p = 0.662) |
+  | Idle CPU power | 4.25 (3.79 to 4.61) mW | 4.51 (3.89 to 4.84) mW | +0.26 mW, +6.1% | no measurable change (p = 0.394) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.83 (0.62 to 1.05) s | 0.91 (0.56 to 1.04) s | +0.08 s, +9.6% | no measurable change (p = 0.937) |
+  | Launch to history loaded | 0.89 (0.61 to 1.01) s | 0.90 (0.66 to 1.02) s | +0.01 s, +1.7% | no measurable change (p = 0.734) |
+  | CPU from launch to the idle window | 2.06 (1.74 to 2.19) s | 2.12 (1.87 to 2.17) s | +0.06 s, +2.9% | no measurable change (p = 0.677) |
+  | CPU energy from launch to the idle window | 5.80 (4.52 to 6.58) J | 5.91 (5.50 to 6.49) J | +0.11 J, +1.8% | no measurable change (p = 0.818) |
+  | Python helper start to ready, no network | 0.60 (0.33 to 1.09) s | 0.36 (0.29 to 1.00) s | -0.24 s, -40.0% | no measurable change (p = 0.329) |
+  | Python helper start, CPU | 0.43 (0.32 to 0.58) s | 0.34 (0.29 to 0.45) s | -0.09 s, -20.7% | no measurable change (p = 0.102) |
+  | Python helper memory once started | 71.3 (70.3 to 71.4) MB | 71.2 (71.1 to 71.4) MB | -0.0 MB, -0.1% | no measurable change (p = 0.920) |
+
+  The "possibly lower" row did not repeat, so it does not count. The
+  conditions limit what the two tables show. Their ranges are wide: in
+  the first run one launch on the after side took 1.88 s to its first
+  window where the side's median was 1.04 s. A change smaller than that
+  spread would not show, and these figures are not set beside those of
+  other days. What they show is that the app builds and runs the standard
+  launches with the change in it, and that nothing moved by more than a
+  busy Mac's noise. The readings, the samples, the rules and the scripts
+  are kept beside the results, in
+  `build/bench/results/compare-pr134-20261120-091103/conditions` and
+  `build/bench/results/compare-pr134-repeat-20261120-100818/conditions`.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 754 XCTest tests with 0
+  failures. Twelve are new. Eight in `StockbarProviderAccessPolicyTests`
+  cover the policy: the three loopback forms allowed; ten other forms
+  refused, among them `127.0.0.1.example.com`, `localhost.example.com`,
+  `http://127.0.0.1@example.com/`, an address on the local network, a URL
+  with no host and schemes other than HTTP; the other three providers
+  refused even on loopback; Folync without an endpoint still refused; the
+  automatic XCTest runtime refused; a normal run allowed everything. Four
+  in `FolyncPortfolioSourceTests` go through a stubbed `URLSession`. With
+  the policy of an explicit acceptance run, both the source and the
+  supplemental coordinator reach a stub at `http://127.0.0.1:49152`. For
+  addresses elsewhere neither sends a request, and both fail with
+  `disabledForAcceptance(.folync)`. The source's own endpoint check refuses
+  plain HTTP on the local network before the policy is asked, so its test
+  uses HTTPS addresses to reach the policy. The runtime and preflight tests
+  assert the new field.
+
+  The tests were shown to fail on broken code. With `isLoopback` returning
+  true for every URL, four tests failed. With the exception granted without
+  the runtime's flag, the two tests of a policy without it failed. Both
+  mutations were then removed. The policy's initialiser was tidied after
+  them, in lines neither mutation touched, and everything below was run
+  again on the result.
+
+  `checks`, `docs-check` and `build-release` pass, and so do 92 script
+  tests. 70 Python helper tests pass, none skipped. They ran with Homebrew
+  Python 3.15.2, which has no yfinance, rather than the app's own
+  environment, which this work did not touch; CI uses Python 3.13 with the
+  lock file. No Python changed.
+
+  An acceptance copy was built from this branch and run against
+  `build/design/acceptance/stub_folync.py`, a stand-in kept in the
+  untracked `build/` folder, for nearly three minutes, with
+  debug logging, and counted after it had stopped. The stub answered 32
+  requests, all with 200: the snapshot seven times, the portfolio history
+  ten, capabilities six, FX five and benchmarks four. The app logged seven
+  Folync polls with success and none without, and no
+  `provider_access_denied` line, warning or error. A poll reports success
+  only after a 304, or a 200 whose snapshot was decoded and applied, and
+  every answer was a 200; there is no log line of its own for applying. The app also wrote the snapshot cache and five route
+  caches, which it does only after a response passes its checks. The
+  preflight evidence held `liveProviderRequestsAllowed` false and
+  `loopbackFolyncAllowed` true. The session lead then ran the copy again
+  and looked at its window: the Overview and Holdings showed the stand-in's
+  made-up portfolio, labelled as a Folync portfolio.
+- Review: the session lead (Fable 5.2) read the policy, both call sites
+  and the tests against the specification. Written by an Opus subagent from
+  that specification. No independent second review.
+- Known issues:
+  - No launch of either comparison was measured on a quiet Mac, as set out
+    above.
+  - The stand-in answers 200 with a new body every time, so the app's 304
+    path was not exercised in the run.
+  - A manifest with `http://[::1]:<port>` passes the launcher, the
+    bootstrap and the new policy, but not `FolyncEndpointPolicy`, which
+    allows plain HTTP only to `localhost` and `127.0.0.1`. Such a run would
+    still fail, now with the HTTPS message. Not changed here.
+  - `URLSession` follows redirects, and nothing asks the policy about a
+    redirect's target. A Folync on this Mac that redirected elsewhere would
+    be followed. The stand-in never redirects, and a normal run behaves the
+    same way. Not changed here.
+- Verdict: retained. No row shows a measurable change after the repeat,
+  and none was expected to move. Another project's `xcodebuild` was
+  present during every measured launch, and the rule written before the
+  first launch left the merge to the owner in that case. Told so, with
+  the tables and the conditions, the owner said "go on" on 2026-11-20.
+
+### 135: Read Folync's dividends, trade analysis and transactions
+
+- What: the groundwork for the redesign's Income, Activity and Trades
+  pages. Stockbar can now read three Folync routes it did not call:
+  dividends, trade analysis and transactions. Nothing on screen changes,
+  and nothing calls the routes yet; the pages come in later pull
+  requests.
+
+  Stored settings first. `FolyncSupplementalSettings` decoded with the
+  synthesized decoder, so adding a field would have made settings stored
+  by an older build fail to decode, and the Folync configuration would
+  have fallen back to everything off. It now decodes field by field. A
+  missing existing field is off. Three new fields, `dividends`,
+  `tradeAnalysis` and `transactions`, are on when missing, because these
+  routes are fetched only when their page is opened; a new connection
+  takes each from Folync's capabilities. No Settings switch shows them
+  yet. The three routes have their own enum, `FolyncLedgerRoute`, because
+  the Settings screen and the acceptance preflight list every case of
+  `FolyncSupplementalRoute`.
+
+  Folync's capabilities gain three optional resources. A capabilities
+  document saved by an older build has none of them, and confirming it
+  with a 304 would have hidden the routes for good, so documents are now
+  saved under a new cache key. The old document is used only while Folync
+  does not answer, and its ETag is never sent.
+
+  Models for the three responses are in `Services/FolyncLedgerData.swift`.
+  Unknown keys are ignored, a figure Folync sends as null stays unknown
+  and is never read as zero, and an enum value this build does not know
+  is kept. Each route follows the portfolio-history route: the settings,
+  scope and capability gates, the saved copy with its ETag, 304, schema
+  version 2, a stale copy when Folync does not answer, and "could not
+  reach" told apart from "not available".
+
+  Folync rebuilds its whole report for each of these routes, does not
+  queue them, and a later page costs as much as the first. So one object,
+  `FolyncLedgerFetchPolicy`, sits in front of all three. Requests take
+  turns, one at a time across the three routes, and callers asking for
+  the same thing share one request. A first page is reused for five
+  minutes with no request, unless the caller asks for a refresh. Later
+  pages come only from an explicit "load more" and are kept nowhere. A
+  409, a refused cursor or a changed collection revision restarts from
+  page one. A request still waiting its turn is not made once every
+  caller waiting for it has been cancelled. Date parameters are calendar
+  days, not instants, so a day chosen in the user's time zone is the day
+  asked for.
+- Merged: 2026-11-20, squash commit `e04e21b`. The merge published
+  experimental build 382.3.4 as the prerelease `experimental-382.3.4`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run. The owner parked the benchmarks on
+  2026-11-20, see [Where things stand](#where-things-stand), and the
+  other project's work was running while this was built. All fifteen rows
+  of the standard set are therefore not measured for this pull request,
+  and none is carried over from another run. Expected, not measured: no
+  row moves, because nothing calls the new routes and the benchmark's
+  launches set up no Folync. It is covered by the phase's comparison in
+  the first quiet window.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 789 XCTest tests with 0
+  failures. 35 are new: 29 in `FolyncPortfolioSourceTests` and 6 in
+  `Trading212BrokerSyncTests`. They go through a stubbed `URLSession` and
+  cover, for the three routes: page one from each route's own path; the
+  query parameter names and limits; 304; a body that does not decode and
+  a schema other than 2; offline with and without a saved copy; 502 and
+  503 against 500 and 404; the route or Folync switched off; the
+  capability absent, unsupported and not ready; the shared backoff after
+  401 and 429; no request when the provider policy refuses; an invalid
+  scope; saved copies kept apart by route, scope and query; load more;
+  the three restarts; a 400 that is not about the cursor; reuse inside
+  five minutes and a request after it; a failed or stale answer not
+  reused; requests never overlapping across routes; identical concurrent
+  calls sharing one request; a refresh not joining a request that may
+  reuse; a queued request dropped when its callers are cancelled, and
+  made when one still waits; no request for a caller already cancelled;
+  kept pages forgotten after the window; a London summer midnight asking
+  for the right day. The settings tests decode the exact JSON an older
+  build stored, a blob with keys missing and a round trip. The
+  capabilities tests decode with and without the new resources.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed. By the worker, ten: the reuse window ignored (seven
+  tests failed); a null figure read as zero (one); the one-at-a-time gate
+  removed (two); the 409 restart removed (one); the revision restart
+  removed (one); sharing removed (two); a 404 returning the saved copy
+  (one); the old capabilities ETag sent (one); a missing new setting
+  decoded as off (two); the provider check skipped (one). The first try
+  at removing the gate was caught only by the policy's own test, because
+  the stub answered on one thread, so the stub was changed to hold
+  requests open together. By the session lead, four, on the lead's own
+  changes: the dropped-request check removed, the forgetting removed, the
+  check for a caller already cancelled removed, and the time zone
+  ignored. One test failed for each.
+
+  `checks`, `docs-check` and `build-release` pass on the final commit.
+  70 Python helper tests and 92 script tests passed on the worker's last
+  commit; the lead's commit after it changed Swift and one document, no
+  Python.
+
+  Not run: the app. Nothing calls the routes, so there is nothing to see,
+  and neither a real Folync nor the stand-in used for the acceptance copy
+  serves them to this code yet.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the fetch policy, the
+  routes, the settings and capabilities changes and the query types in
+  full, the models in outline, and checked the page, the dividend event
+  and the dividend summary against Folync's client contract. It did not
+  read every test, only their names and the policy's. It changed three
+  things: the dropped request and the caller already cancelled, the
+  forgetting of kept pages, and the calendar-day type. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - None of this has been tried against a real Folync. Two behaviours
+    follow the written contract alone: which 400 counts as a refused
+    cursor, and each response's scope matching the scope asked for.
+  - A stored configuration with no supplemental settings at all still
+    reads as everything off, the three new routes included, until a
+    Settings switch exists for them.
+  - The shapes shared with the existing routes are strict. A quality or
+    scope kind this build does not know still fails the whole answer, as
+    it does for the snapshot and the history.
+  - Parts of the dividends answer that no planned page uses are not
+    decoded: liability coverage, corporate cash flows, undated
+    announcements, per-source coverage and forecast detail. From a
+    transaction, the exchange-rate basis and the provenance.
+  - A cancelled caller is not released at once. It waits until its
+    request's turn comes, and only then learns that no request was made.
+  - A server whose capabilities list none of the three routes is asked
+    for its capabilities in full once after the update, then confirmed
+    with 304 as before.
+- Verdict: retained, with its benchmark owed. The owner chose on
+  2026-11-20 to merge on the local checks and the review, and to measure
+  each phase in the first quiet window.
+
+### 136: Ask Yahoo for instrument type, dividend dates and earnings dates
+
+- What: the groundwork for the redesign's Calendar, its reminders, the
+  Funds group in Allocation and an income estimate for local portfolios.
+  Nothing on screen changes, and nothing calls the new service yet.
+
+  A new helper script, `get_instrument_events.py`, asks Yahoo through the
+  pinned yfinance for each symbol's instrument type, ex-dividend date,
+  pay date, earnings date or range, and the dividends of the last twelve
+  months. A field Yahoo does not give is null, never a guess and never
+  zero. A date already past is returned as it is; the app decides with
+  the clock what is still to come. Dividends quoted in pence are turned
+  into pounds by the rule prices already use (`uses_pence_quotes` in
+  `get_ohlc_data.py`). One symbol failing does not fail the others, and a
+  rate-limit answer stops the run and is reported as its own error.
+  yfinance logs most request failures instead of raising them, so the
+  script reads its log for each symbol and reports a timeout or a lost
+  connection as an error, not as a symbol with nothing. While it runs,
+  the script reads the process clock in UTC: yfinance 1.8.0 makes Yahoo's
+  calendar dates with `datetime.fromtimestamp`, in the local zone, and a
+  date stamped at midnight UTC would come out a day early west of UTC.
+
+  The script is listed everywhere the helper scripts are listed: the
+  worker's whitelist, the Swift pool's copy of it and the compile line in
+  `script/develop.sh`. A new test fails if any of the three misses a
+  script.
+
+  `InstrumentEventsService` runs the script only when
+  `StockbarProviderAccessPolicy` allows the Python bridge, so never in an
+  acceptance run or under XCTest isolation. It keeps each symbol's answer
+  for a day under Application Support, written atomically, and removes
+  copies older than thirty days. Everything missing or expired is asked
+  for in one run, and callers asking at the same time share it. When
+  Yahoo does not answer it returns the saved copy, however old, marked
+  stale. After a rate-limit answer it makes no run for an hour, forced or
+  not. A symbol Yahoo has nothing for is not asked for again that day
+  unless a refresh is forced. No timer and no polling.
+- Merged: 2026-11-20, squash commit `16f1a3d`. The merge published
+  experimental build 382.3.5 as the prerelease `experimental-382.3.5`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run. The owner parked the benchmarks on
+  2026-11-20 until the other project's work on this Mac has been idle for
+  more than 20 minutes. All fifteen rows of the standard set are
+  therefore not measured for this pull request, and none is carried over
+  from another run. Expected, not measured: no row moves, because nothing
+  calls the service. The three Python rows start the worker, whose list
+  of scripts gains one name; what it loads at start is unchanged. It is
+  covered by the next comparison run under the rule of 2026-11-20.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 766 XCTest tests with 0
+  failures. Twelve are new, in `OHLCFetchServiceTests.swift`, with the
+  process runner stubbed and the clock injected: every field decoded and
+  null kept as nil; one unreadable entry not failing the others; a saved
+  copy used inside a day and refreshed after it; several symbols in one
+  run, de-duplicated; callers at the same time sharing a run; a stale
+  copy when the run fails; no run when the provider policy refuses; the
+  hour's pause after a rate limit, for one symbol and for the whole run,
+  forced or not; a forced refresh inside the day; a symbol Yahoo does not
+  know left alone that day; the thirty-day clean-up.
+
+  103 Python helper tests pass on the app's own environment (Python
+  3.13, with yfinance 1.8.0 and pandas importable), none skipped. 33 are
+  new, all with a fake `yf` and no request: a share with everything; a
+  London-like share with a past ex-dividend date, no pay date and pence;
+  a fund with no calendar; pounds not divided again; a missing currency;
+  dividends with a currency of their own; unusable amounts left out; the
+  twelve-month boundary and a leap day; an earnings range; `NaT`, `NaN`,
+  `None`, lists and zoned timestamps; an unknown symbol; an exception for
+  one symbol among several; a failure yfinance only logged; a rate limit
+  with and without its exception type; spacing between symbols; the time
+  budget; the command line; calendar dates read in UTC on a Mac set to
+  Los Angeles, with the zone put back; and the registration test above.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed. By the worker, six: pence not converted (three tests
+  failed); a missing date turned into today's date (six); a rate limit
+  not stopping the run (one); failures yfinance only logged ignored
+  (one); the day-long reuse ignored (six); the provider check skipped
+  (one). The four Python breakages were run against the script's first
+  version; its last commit did not touch the lines they altered. By the
+  session lead, two, on the lead's own changes: the clock left in the
+  local zone, and unknown symbols not remembered. One test failed for
+  each.
+
+  `checks`, `docs-check` and `build-release` pass on the final commit,
+  and so do 92 script tests.
+
+  After pull request 135 was merged this branch was brought up to date
+  with it, and everything was run again on the two together: 801 XCTest
+  tests with 0 failures, 103 Python helper tests and 92 script tests,
+  with `checks`, `docs-check` and `build-release`.
+
+  No request was made to Yahoo in building or testing this. What is
+  known of Yahoo's real answers is the one-off check of 2026-11-19: a US
+  share gave every date and twelve months of dividends; a London share
+  gave a past ex-dividend date, no pay date and dividends in pence; a
+  London-listed fund gave no calendar, only its dividend history; the
+  instrument type came back for all three.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the script and the
+  service in full, and the tests' harness and names, and read in yfinance
+  1.8.0's own source how it makes the calendar dates. It changed two
+  things: the UTC clock while the script runs, and the day's memory of
+  symbols Yahoo does not know. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Nothing here has been tried against Yahoo. In particular it is not
+    known whether a fund with no calendar arrives as a logged "not
+    found", which the script reads as no calendar, or as an error it
+    would report as a failure.
+  - An earnings time is turned into a UTC date. That is the exchange's
+    own date for US and London listings, but can be a day off for an
+    exchange far ahead of UTC.
+  - The UTC setting applies to the whole helper process while the script
+    runs. A request left running past its symbol's deadline may finish
+    after the zone is put back; its answer is not used.
+  - The hour's pause after a rate limit and the memory of unknown
+    symbols are held in memory and do not survive a relaunch.
+  - Symbols go to Yahoo exactly as given. The aliases and the `.LON`
+    handling of `get_stock_data.py` are not applied.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20
+  under [How this branch works](#how-this-branch-works).
+
+### 137: Give every surface in the main window the Glass look
+
+- What: the first visible pull request of the redesign. Every surface in
+  the main window takes the Glass look from one place,
+  `Views/StockbarDesign.swift`: cards, inset panels, the metric strip and
+  tiles, notices, empty states, pills and badges, rows, chart callouts and
+  the range switches inside pages. Pages, content, layout and behaviour
+  are the same. The window, the sidebar, the popover and the Overview's
+  new content are later pull requests.
+
+  Tokens have a light and a dark value: the card's fill, stroke and top
+  highlight, the hover and selected fills, and gain and loss colours that
+  are deeper in light mode so figures stay readable on a light card. Every
+  surface is solid under Reduce Transparency and has a stronger stroke and
+  fill under Increase Contrast. Nothing here uses a glass or blur API, so
+  nothing needs an availability check.
+
+  The colours that already existed were not changed where they are used
+  outside the main window. The popover, the menu-bar price chart and chart
+  series keep the system green and red through the unchanged `signed()`;
+  main-window figures use the new `signedOnSurface`. The popover's own
+  card and hover fills were renamed with their values kept.
+
+  Risk and Allocation no longer draw their own panels. The charts page's
+  panels, the attribution sheet, the Holdings table, the Alerts rows, the
+  Diagnostics log and sheets and the Settings previews all use named
+  surfaces. Holdings and Backups show their three tiles as one strip.
+
+  The range switch is a new capsule control, `StockbarSegmentedControl`.
+  It replaces the native segmented picker for the ranges and modes inside
+  pages: the Overview, the charts page's time range and its line or
+  candlestick style, Risk, Allocation, the attribution sheet and the
+  Settings tab bar. The annotation editor's picker, the Theme picker in
+  the Settings form and the popover's picker stay native. The left and
+  right arrows step the selection and stop at either end, and with Reduce
+  Motion on the selection changes without animating.
+
+  `Scripts/validate_invariants.sh` now fails when a view outside the
+  design file draws a surface from a raw system colour or material. A line
+  that must keep its colour ends with a comment giving the reason. Three
+  lines do: the exported chart image's white page, the popover's notice,
+  which waits for the popover's own pull request, and a grey status dot.
+
+  The acceptance copy gains launch options, read once and only in an
+  explicit acceptance run, by the same gate as the loopback exception of
+  pull request 134: the appearance, the page the window opens on, the
+  preferred currency and the minimum window size. A normal run and the
+  automatic XCTest isolation ignore them. The preflight evidence records
+  the options applied, and `Docs/Development.md` describes them. Every
+  later page of the redesign is checked with them.
+- Merged: 2026-11-20, squash commit `fe59b8d`. The merge published
+  experimental build 382.3.6 as the prerelease `experimental-382.3.6`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20 under
+  [How this branch works](#how-this-branch-works). Unlike the two before
+  it, this pull request changes code the benchmark runs: the main window
+  the launches open draws its surfaces differently. No row is named, and
+  none is expected to move by much, but that is not measured. It is
+  covered by the comparison run after Phase A's last pull request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 814 XCTest tests with 0
+  failures. Thirteen are new: five on the surfaces (solid under Reduce
+  Transparency, stronger under Increase Contrast, the card's values in
+  each scheme, a hosted card honouring the settings it is drawn under, and
+  the gain and loss colours); two on the range switch (the arrow keys, and
+  what it exposes to assistive technology); five on the launch options (an
+  explicit acceptance run reads each one, a normal run and the XCTest
+  isolation ignore them, each unknown value is dropped on its own, and
+  applying writes only the settings named); one on the preflight evidence.
+  95 script tests pass, three new for the invariant check: thirteen
+  made-up direct uses all caught, named surfaces and an allowed line
+  passing, and an allow comment with no reason failing. 103 Python helper
+  tests pass. `checks`, `docs-check` and `build-release` pass on the final
+  commit. The session lead ran the XCTest suite and `checks` again on that
+  commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: the launch options gated on the root alone (the XCTest
+  isolation test failed); Reduce Transparency ignored (two tests failed);
+  the arrow keys allowed to wrap (one); materials dropped from the
+  invariant check (one).
+
+  On screen: the worker ran the acceptance copy against the stand-in with
+  a made-up portfolio and took 37 captures, one window at a time, of every
+  page and every Settings tab in dark and light, the Overview at the
+  minimum window size, the charts page with a holding selected and with
+  its export options open, and the attribution sheet. Two things were
+  fixed after looking. In light mode a white card almost disappeared on
+  the white page and its top highlight erased its edge, so light cards got
+  a firmer outline and a soft shadow and lost the highlight. The chart
+  style switch cut "Candlestick" short and now sizes to its labels. The
+  dark captures were taken before the first of those fixes, which does not
+  change dark mode.
+
+  Not seen on screen: Risk with real figures, Alerts with alerts, Backups
+  with backups and the attribution sheet with data, all empty in a fresh
+  copy and judged on their empty states; the Holdings editing table; the
+  lower part of Settings → Connections. Increase Contrast, Reduce
+  Transparency, Reduce Motion and Full Keyboard Access were not tried on
+  screen, because that would change the settings of the owner's Mac; the
+  first two are covered by tests that override the environment. The
+  popover was not looked at, since its surfaces are deliberately unchanged.
+- Review: written by an Opus worker from the session lead's specification.
+  The session lead (Fable 5.2) read the launch options and their gate, the
+  invariant check and the range switch in full, and looked at eight of the
+  captures: the Overview in dark and light, Holdings and the charts page
+  and Risk in dark, Allocation and Settings → Connections in light. It did
+  not read every view's change. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Whether VoiceOver reads the range switch as one group named by its
+    label is not confirmed. Each segment was confirmed as a button that
+    reports its selected state and can be pressed through accessibility.
+    In-process hosting exposes no accessibility tree, so the test covers
+    the function the control draws its accessibility from.
+  - The charts page's line or candlestick switch lost the icons the native
+    picker had.
+  - Between this pull request and the shell's, the new cards sit in
+    today's window and sidebar, so the app is part old and part new.
+  - Data Health keeps separate tiles, and the grouped sections of native
+    Settings forms keep the system look.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 138: Give the portfolio popover the Glass layout with today's movers
+
+- What: the popover that opens from the portfolio's menu-bar item takes
+  the layout the owner chose. From the top: "Portfolio" with the currency
+  and the number of positions; the total, with its decimals smaller; the
+  change, with its percentage in a badge; the graph, with a dotted
+  "Yesterday's close" line on the Today range; the range switch, with the
+  three ranges it had; "Today's movers"; total return beside net deposits;
+  and the footer with the buttons it had. The owner's two conditions hold:
+  the graph is under the total, and every holding is listed.
+
+  The movers are always today's, whatever range is selected, because
+  Folync gives a holding's change only for the day and in total. Each
+  figure is the one the app already works out for a position's day;
+  nothing here makes a request. They run from the biggest gain to the
+  biggest loss, with unknown changes last and ties in order of name. A
+  move that rounds to 0.00% is no change. The bars share one scale, the
+  largest move rounded up to a whole percent and never less than 1%.
+  Watch-list symbols, benchmarks and empty positions are not listed. A
+  row shows the ticker alone, and the portfolio's name only where two
+  holdings would otherwise read the same. VoiceOver reads a row as one
+  sentence, such as "NVDA, up 2.69 percent today".
+
+  The popover cannot grow past the screen. It is given the room under the
+  menu bar, and the movers list takes what is left after the rest is laid
+  out: at most twelve rows at once, fewer on a short screen but not under
+  three, scrolling inside the popover.
+
+  The headline follows the range switch, saying "past week" or "past
+  month" after the amount. The second figure reads "Cost basis" when total
+  return is measured against cost. The line about history coverage under
+  the graph, the refresh button and the day-reference view for a Folync
+  portfolio with no graph are kept. "Next up" and "Income this month" from
+  the mock-up are not built; they need data that later pull requests
+  bring.
+
+  The popover's background is the system's own, as before. The popover's
+  colours moved into the design file: gain and loss colours that are
+  deeper in light mode, and secondary text that becomes primary under
+  Increase Contrast. The per-symbol popovers took the new surfaces and
+  nothing else; the notice that pull request 137 excepted from the surface
+  check was theirs, it now uses the notice surface, and the exception is
+  gone. Opening, closing and the dismissal monitors are unchanged, and so
+  is the release on close of pull request 109.
+
+  The acceptance copy gains one more launch option,
+  `STOCKBAR_ACCEPTANCE_POPOVER=portfolio`. It opens the popover once, six
+  seconds after launch, the way a click does and with the same dismissal.
+  Without it the popover could not be looked at unless something clicked
+  in the owner's menu bar. It has the gate of the other launch options.
+- Merged: 2026-11-20, squash commit `564056b`. The merge published
+  experimental build 382.3.7 as the prerelease `experimental-382.3.7`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark never
+  opens the popover, so its launches do not run this layout; the status
+  item's set-up gains one check of the launch options. Covered by the
+  comparison after Phase A's last pull request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 827 XCTest tests with 0
+  failures. Thirteen are new, in `PortfolioCalculationTests.swift`: the
+  movers' order with unknown changes and ties; the app's own figure used
+  and only holdings listed; the ticker shown alone unless two rows would
+  read the same; the bar scale and its floor; a bar never past its track;
+  twelve rows before the list scrolls, and fewer on a short screen; the
+  heading at every range; a down day; a row's text for VoiceOver; the
+  figures in the portfolio's currency; the whole popover with 40 holdings
+  kept inside a height limit, in a hosted view; and Increase Contrast
+  reaching the popover's text. The launch option is added to the existing
+  launch-option tests. `checks`, `docs-check` and `build-release` pass on
+  the final commit. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit; the session lead's commit after it changed no
+  Python and no script.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed. By the worker: ties ordered backwards (one test failed);
+  the twelve-row limit, the 1% floor and the watch-list filter removed
+  together (four); the list ignoring the room it is given, and Increase
+  Contrast ignored (three). By the session lead: the ticker shown alone
+  even where two rows then read the same (one).
+
+  On screen: the worker could not open the popover by the acceptance
+  copy's process alone, and rendered its parts off screen instead, with 9
+  and 40 holdings and on a down day, in dark and light. The session lead
+  then added the launch option, opened the real popover in the acceptance
+  copy and captured it, one window at a time, in dark and in light. The
+  dark capture matches the mock-up. It also showed each row as "NVDA ·
+  De…", the label a Folync aggregate gives a holding, which is what the
+  ticker rule above fixes; the capture was taken again after the fix.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the movers and the
+  height limit, the change to how the popover is sized, and looked at the
+  worker's renders and the two real captures. It did not read the whole
+  view. It changed two things: the ticker rule and the launch option. No
+  independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The light popover is not confirmed on screen. A capture of the popover
+    alone leaves out what is behind it, and in light mode the system's
+    popover background then comes out dark grey under dark text. The
+    prototype's capture of the system background showed the same on
+    2026-11-19. The background is the one the popover had before this
+    pull request, so on screen it should look as the light popover did
+    before, but nobody has seen it.
+  - A position whose previous close is missing shows 0.00%, not "–": the
+    app's own figure for its day is zero in that case, and the list takes
+    that figure as it is.
+  - "Yesterday's close" is drawn only when the day's change is known and
+    not zero, so a truly flat day has no line.
+  - Pull request 109's release on close still has no test of its own.
+  - Not looked at: the popover on a real short screen, Increase Contrast
+    and Reduce Transparency on screen, and the glass the system gives the
+    popover on macOS 26. Not listened to: VoiceOver.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 139: Give the Overview its total, longer ranges and what the total is made of
+
+- What: the Overview takes the approved layout. At the head, the total
+  as a large figure with its pence smaller, and beside it two lines,
+  today's change and the change over the selected range, each with an
+  amount and a badge. An unknown change shows "–" with the reason under
+  it. Then the graph in a card, and under it a card that shows what the
+  total is made of. The "Selected Position" panel stays, with everything
+  it does, as a card of its own; the mock-up left it out, and removing a
+  working feature is the owner's decision.
+
+  The range switch offers six ranges where it offered three: 1D, 1W, 1M,
+  3M, 1Y and All. For a Folync portfolio they use the history route and
+  the saved copy the page already used; for the other sources, the stored
+  portfolio values. No route, stored series or timer was added. There is
+  no year-to-date range: Folync's history route has none, and asking for a
+  custom span instead would save a new copy every day. The menu-bar
+  popovers keep their three ranges. The range type no longer lists all
+  its cases by itself, so code that offers ranges has to name them.
+
+  The card is headed "What £84,310.47 is made of", with the total return
+  after it, and has one bar in four parts with a legend: net deposits, the
+  figure "Measure P&L Against" already uses; unrealised and realised
+  gains, as Folync's snapshot gives them (realised gains were already
+  decoded and unused); and "Income, interest and fees", which is the rest
+  of the total. The rules, in `PortfolioTotalComposition`:
+  - One currency. The card is built only when the total and the three
+    figures are all known and all in the summary's currency. Nothing is
+    converted. A figure Folync marks unavailable counts as unknown.
+  - It adds up. Every figure is held in whole pennies, rounded as the
+    app's money formatter rounds for display, and the remainder takes the
+    rounding difference, so the four figures shown sum to the total shown.
+  - A part that is zero or negative has no segment. Its figure is still
+    shown, in red when negative, and a line under the bar says that the
+    bar shows the positive parts only.
+  - A figure Folync marks partial is labelled "Partial", and so is the
+    remainder taken from it.
+  - Only a Folync portfolio gets the card. The other sources give neither
+    net deposits nor realised gains, and keep the old Summary card, as
+    does a Folync portfolio whenever the card cannot be built.
+
+  When Folync is not answering and saved figures are shown, an amber
+  notice at the top says so and gives their time, and the total's label
+  gains "as of" that time. It uses the connection state the app already
+  has and makes no request. When the last failure was not a failure to
+  connect, it says that Folync did not send new figures.
+- Merged: 2026-11-20, squash commit `c9453fd`. The merge published
+  experimental build 382.3.8 as the prerelease `experimental-382.3.8`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. This pull request
+  changes code the benchmark runs: its launches open the main window on
+  the Overview. Covered by the comparison after Phase A's last pull
+  request.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 138 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 841 XCTest tests with 0 failures. Fourteen are
+  new, in `PortfolioCalculationTests.swift`: the parts adding up to the
+  total after rounding, over 211 made-up cases, half pennies among them;
+  the card hidden for a mixed or unknown currency and for sources without
+  the figures; negative and zero parts; the ranges offered and the stored
+  history serving the longer ones; the range line's text when history is
+  stale or missing; the notice's states and words; the large figure's
+  split in more than one locale; and the card's text for VoiceOver.
+  `checks`, `docs-check` and `build-release` pass on the combined code.
+  103 Python helper tests and 95 script tests passed on the worker's last
+  commit; nothing they cover changed after it.
+
+  Bringing it up to date took three small changes by the session lead,
+  all where the popover meets the longer ranges: the popover's range
+  switch lists the three menu ranges by name, its wording covers the
+  longer ranges, and its test of the heading names every range itself.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: realised gains converted on their own (one test failed); a
+  negative part given a width (one); the rounding difference dropped
+  (one, in 211 cases); the notice shown while Folync answers (one); an
+  unknown failure called unreachable (one).
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Overview, one window at a time, in dark and light, at the
+  default and the minimum window size, at each of the six ranges. Six of
+  those captures were taken before a last change to the axis labels and
+  are named so. The stand-in always answers, so the notice and a negative
+  part were rendered off screen from a temporary test and are shown by
+  the committed preview. After bringing the branch up to date the session
+  lead ran the combined build in the acceptance copy and captured its
+  Overview and its popover in dark: six ranges on the Overview, three in
+  the popover, both as intended.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read `PortfolioTotalComposition`
+  in full and looked at five of the captures: the Overview in dark at one
+  month, in light at the minimum size, the notice with a negative part,
+  and the combined build's Overview and popover. It did not read the
+  whole view. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The range line counts money paid in or taken out as change. It is the
+    last value less the first, as it was for one week and one month, and
+    over a year that can be far from the return: in the acceptance copy
+    one year shows +12.80% beside a total return of +23.25%. The user
+    guide says so. Whether long ranges should show the gain without
+    deposits is put to the owner.
+  - No year-to-date range, as set out above.
+  - Net deposits are kept for about fifteen minutes after Folync stops
+    answering. In a longer outage the card gives way to the Summary card,
+    where the mock-up of an outage shows the card.
+  - Not seen on screen: a "–" change with its reason; the Overview of a
+    local or Trading 212 portfolio; the Summary card as the fallback;
+    Increase Contrast and Reduce Transparency on the new card.
+  - On the stand-in, 1Y and All look the same, because its history starts
+    about a year back.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 140: Give the main window the Glass shell with a floating sidebar
+
+- What: the main window becomes the shell of the approved design. The
+  owner chose the floating sidebar on 2026-11-20, knowing that macOS gives
+  none in this window: a unified toolbar on the split view, a split-view
+  controller's sidebar item and a background extension effect had each
+  given the flat full-height one. So the app draws the panel and rebuilds
+  what a standard sidebar gives for free.
+
+  The window is see-through: it is no longer opaque, and the root view
+  draws a blurred view of what is behind it under a light or dark wash.
+  Under Reduce Transparency it is opaque. A unified toolbar with no
+  customisation moves the traffic lights onto the panel and holds the
+  sidebar button. The minimum size, 1060 by 680, is now held by
+  constraints on the content view; the old way let the toolbar's height
+  in, and the window could not be made shorter than about 700 points.
+
+  The sidebar is a floating panel, inset 7 points with a 16-point corner.
+  It uses real glass only behind `#available(macOS 26, *)`, and a system
+  material with a hairline from macOS 15.4 to 25. Its width is fixed at
+  213 points, which keeps every page as wide as it was. Its entries are
+  in three groups: Portfolio (Overview, Holdings, Alerts), Analysis
+  (Charts, Risk, Allocation) and System (Data Health, Backups,
+  Diagnostics, Settings). Only sections that exist are listed. The page
+  that was titled "Performance" is titled "Charts" everywhere a user sees
+  it; its stored value does not change. A selected, a hovered and a
+  pressed entry each look different. An entry can be dimmed with a
+  reason, or carry a "New" badge; both are built and tested and nothing
+  uses them yet.
+
+  One list, `StockbarMainSection.sidebarGroups`, drives the sidebar, the
+  View menu and the shortcuts, so they cannot drift apart. ⌘1 to ⌘9 now
+  run in sidebar order: Overview, Holdings, Alerts, Charts, Risk,
+  Allocation, Data Health, Backups, Diagnostics. That changes which
+  number opens which page, and the user guide says so. View → Hide
+  Sidebar and Show Sidebar, ⌃⌘S and the toolbar button collapse the
+  panel, the page takes the width, and the choice is remembered. With
+  focus in the sidebar, Up and Down move the selection and Home and End
+  go to the first and last entry; Tab goes into the page and Shift-Tab
+  comes back.
+
+  The footer names the portfolio's source and says how fresh it is, with
+  the refresh button. When Folync is not answering and saved figures are
+  shown it turns amber and says "Couldn't reach Folync · figures from"
+  and their time; a rejected token and a rate limit have their own words.
+  It uses the status the app already has and makes no request.
+- Merged: 2026-11-20, squash commit `92145d7`. The merge published
+  experimental build 382.3.9 as the prerelease `experimental-382.3.9`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. Of the redesign's
+  pull requests so far this is the one most likely to move a row: the
+  main window the launches open is now see-through, with a blurred
+  backing and a toolbar. It completes Phase A, so the phase's comparison,
+  from `5fa923b` to the head, is due in the first quiet window.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull requests 138 and
+  139 were merged this branch was brought up to date with them, and the
+  figures here are for all of it together: 856 XCTest tests with 0
+  failures. Fifteen are new, in `StockbarAcceptanceRuntimeTests.swift`:
+  the groups and their order; each entry's shortcut, and the View menu
+  and the sidebar coming from one list; the title "Charts"; hiding the
+  sidebar and remembering it; the dimmed and badge states and the entry
+  states; the footer's words for each state, the warning and its time
+  among them; when the warning is announced; the keyboard's movement of
+  the selection; and the words each entry gives VoiceOver. `checks`,
+  `docs-check` and `build-release` pass on the combined code. 103 Python
+  helper tests and 95 script tests passed on the worker's last commit;
+  nothing they cover changed after it.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: Backups put before Data Health (the order, shortcut and
+  keyboard tests failed); the sidebar choice not saved (two tests); the
+  warning shown for a portfolio that is not Folync's (one); pressed drawn
+  like hovered (one).
+
+  On screen, in the acceptance copy against the stand-in, by the worker:
+  captures, one window at a time, in dark and light, at the default and
+  the minimum size, with the sidebar shown and hidden, and the amber
+  footer with the stand-in stopped. Real clicks: all ten entries; the
+  Overview's range switch at the default and the minimum size, sidebar
+  shown and hidden; the toolbar's sidebar button; dragging the window by
+  the page's strip and by the top of the panel. The keyboard: Up, Down,
+  Home, End, Tab and Shift-Tab, ⌘-number for five pages, ⌃⌘S and ⌘R. Home
+  and End did nothing at first, because AppKit turns them into scroll
+  commands, and were fixed. The headings, each entry's title, position
+  and selected state, and the footer's status were read from the copy's
+  real accessibility tree. After bringing the branch up to date the
+  session lead ran the combined build in the acceptance copy, captured
+  the new Overview inside the new shell in dark and light, and made one
+  real click on the Overview's range switch, which now sits in the
+  window's top strip beside the toolbar: the range changed.
+
+  Two of the worker's test clicks landed outside the acceptance window,
+  near the top of the owner's screen: it had measured its coordinates
+  against a screenshot of another size. No dialog appeared, the owner was
+  told, and later clicks were taken from captures at the window's own
+  size.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the changes to the
+  window controller and the menus, looked at three of the worker's
+  captures, brought the branch up to date and looked at the combined
+  build. It did not read the sidebar's view or its tests. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - A SwiftUI button drawn on the panel at the height of the traffic
+    lights never received a real click, though it worked through
+    accessibility. Why is not established. The sidebar button is a
+    toolbar item for that reason, and anything placed that high needs a
+    real-click check.
+  - After opening Charts, the next click on another entry was lost twice
+    in six tries; a second click always worked. Whether the app or the
+    click tool is at fault is not known.
+  - The sidebar cannot be dragged wider. Its width is fixed.
+  - At the minimum width the Holdings table runs past the right edge of
+    its card. Whether it did before is not known: the page is as wide as
+    it was, but the old minimum could not be reached in the same way.
+  - Not confirmed: that VoiceOver hears the sidebar as one list. SwiftUI
+    gives it no list role, and the inspection tool shows no groups.
+  - Not compiled with Xcode 26, which CI uses for `testing` and `main`.
+    The glass call is guarded and nothing else is believed newer than
+    macOS 14.
+  - Never seen on screen: the dimmed and "New" entries, the hover and
+    pressed states, Reduce Transparency, Increase Contrast, the fallback
+    before macOS 26, zoom and full screen, and the see-through effect
+    itself, which a capture of one window leaves out. Not heard:
+    VoiceOver. Not tried: Full Keyboard Access.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 141: Add the Activity page: every Folync transaction, by month
+
+- What: the first of the redesign's new pages. Activity lists every
+  transaction of a Folync portfolio, read-only, from the transactions
+  route that pull request 135 added. It is a new section in the Portfolio
+  group after Holdings, with a "New" badge. For a portfolio that is not
+  Folync's the entry is dimmed with "Needs a Folync portfolio", the page
+  explains, and no request is made. ⌘1 to ⌘9 follow the sidebar, so the
+  numbers shift again: Activity is ⌘3, and Diagnostics no longer has one.
+
+  A capsule switch chooses the kind: All, Trades, Dividends or Cash. Each
+  kind is a set of the route's actions, and every known action is in
+  exactly one: buys, sells, splits and corporate actions under Trades;
+  dividends and stock dividends under Dividends; deposits, withdrawals,
+  interest, fees, tax, transfers and notes under Cash. All sends no
+  filter, so an action this build does not know still appears. A second
+  switch chooses "As entered" or "Adjusted", the route's two modes, and a
+  search field filters by one holding's ticker.
+
+  Rows are grouped by month, newest first, with no sums in the headings,
+  because a month may be only partly loaded. A row has the day, the
+  action, the ticker, a detail line with the quantity and price as Folync
+  gives them, and the amount in the portfolio's currency. The amount is
+  coloured by its direction and carries a written sign, which the owner
+  asked for; a figure Folync does not give is "–", and a figure it marks
+  partial or unavailable says so. The foot counts the rows shown and
+  offers "Load more"; the route gives no total, so none is shown.
+
+  The page keeps the rule that pull request 135 set for these routes. It
+  asks when it becomes the selected page and on its refresh control, and
+  at no other time. More rows come only from "Load more". A change of
+  kind, mode or holding is held back for 400 ms and cancels the query it
+  replaces. A result that arrives after its request was cancelled is never
+  shown. It keeps no cache of its own: reuse inside five minutes is the
+  fetch policy's.
+- Merged: 2026-11-20, squash commit `474d187`. The merge published
+  experimental build 382.3.10 as the prerelease `experimental-382.3.10`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page, so only the extra
+  sidebar entry is in what they run. Covered by the comparison set for
+  the night of 2026-11-20, if this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 881 XCTest tests with 0
+  failures. Twenty-five are new, in `FolyncPortfolioSourceTests.swift`,
+  with the coordinator stood in for: each state of the page; no request
+  for a portfolio that is not Folync's; one request on opening and none on
+  opening again; the refresh control forcing; load more, and a restart
+  dropping the rows gathered; a change held back and a superseded change
+  cancelled; a cancelled result never shown; going back to the query on
+  screen asking nothing; the kinds, with every action in exactly one; the
+  query for each combination of kind, mode and holding; months grouped by
+  the transaction's own day; the direction, colour and sign of an amount
+  for each action; the detail line; an unknown action; and each row's
+  text for VoiceOver. One of them found a fault that was then fixed:
+  going back to the previous choice while the new one was loading left
+  the page on a spinner with nothing in flight. `checks`, `docs-check`
+  and `build-release` pass on the final commit, and so do 103 Python
+  helper tests and 95 script tests on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: the cancellation check removed (two tests failed); opening
+  the page forcing a refresh (two); one action put in two kinds (two); a
+  portfolio that is not Folync's asking (two); a restart adding to the
+  rows (one); the hold-back removed (two); the spinner fix removed (one).
+
+  Two tests of pull request 135's fetch policy are changed here. They
+  waited on fixed delays, and during this work one of them failed once
+  while other builds loaded the Mac: its two later callers had arrived in
+  the other order. Both now wait until the policy has counted each caller
+  before the next step, through a count the policy exposes for tests. The
+  class was then run three more times.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time, in dark and light, at the
+  default and the minimum size; in Adjusted mode on a holding with a
+  split; filtered to one holding; with no match; loading, with the
+  stand-in answering slowly; with a 503 and nothing saved; with a 404;
+  and with the capability left out. The stand-in's log matched the rule:
+  one request on opening, one for "Load more", one for four letters
+  typed, none for a leading space, none with the capability left out, and
+  none on going back to "As entered" inside five minutes.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the page's view model
+  in full, looked at two of the captures, and changed the two tests
+  above. It did not read the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync. The stand-in's answers follow the
+    written contract and decode with the app's own models, and that is
+    all.
+  - A transfer is shown with no sign and a neutral colour, because the
+    contract does not say which way its money goes.
+  - A 503 with a saved copy was not seen on screen: each acceptance run
+    starts with empty storage. Nor was the dimmed entry, since the
+    acceptance copy always has a Folync portfolio. Both are tested.
+  - Month headings have no sums, the search covers holdings only, and
+    the foot gives no total, where the mock-up had all three.
+  - A note has no money, and is shown with £0.00 as Folync gives it.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 142: Add the Trades page: every position opened, and how it did
+
+- What: Trades shows Folync's trade analysis for a Folync portfolio,
+  read-only, from the route that pull request 135 added. It is a new
+  section in the Analysis group after Charts, with a "New" badge, dimmed
+  with "Needs a Folync portfolio" for any other source. ⌘1 to ⌘9 follow
+  the sidebar: with Activity and Trades added, Trades is ⌘6, Data Health
+  is ⌘9, and Backups and Diagnostics have no number.
+
+  Every figure on the page is Folync's own; the page works nothing out. A
+  strip of four: the win rate, with a caption from the counts of wins and
+  losses; how often a trade beat the S&P 500 over the same days; the
+  total gain on trades; and this year's fees. Then a table with a row for
+  each lot: the holding and its status, the day it was opened, the days
+  held, its cost, its gain, its return, and its return against an index
+  over the same days, in points. Then a card of one year's costs: fees as
+  one figure, the value bought and sold with their counts, and turnover,
+  with a switch for the year when Folync gives more than one.
+
+  Three things are worded by what Folync's contract says, not by the
+  mock-up. The last column is measured against each lot's own index,
+  which is the FTSE 100 for a London holding, so it is headed "vs S&P"
+  only when every row uses the S&P 500 and "vs index" otherwise; the note
+  under the table names the indexes, and so do each cell's tooltip and
+  its text for VoiceOver. The contract does not say which lots the win
+  counts and the total gain cover, so their captions say "trades" and
+  "open and closed trades, all time", not "closed trades". And Folync
+  gives one figure for a year's fees, so commission and tax are not
+  shown apart.
+
+  The switch has four positions, All, Open, Partial and Closed, one for
+  each status the route filters by. The worker built three; the route's
+  "open" leaves out a position that is partly sold and still held, so
+  the session lead added Partial.
+
+  The page keeps the rule for these routes: it asks when it becomes the
+  selected page, on its refresh control and on "Load more", and once more
+  if the portfolio becomes a Folync portfolio while the page is open. A
+  change of the switch is held back for 400 ms and cancels the query it
+  replaces, and a result whose request was cancelled is never shown.
+- Merged: 2026-11-20, squash commit `a60edd0`. The merge published
+  experimental build 382.3.11 as the prerelease `experimental-382.3.11`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 141 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 903 XCTest tests with 0 failures.
+  Twenty-two are new, in `FolyncPortfolioSourceTests.swift`, with the
+  coordinator stood in for: each state of the page; no request for a
+  portfolio that is not Folync's; one request on opening and none on
+  opening again; the refresh control forcing; load more, and a restart
+  dropping the rows; a switch change held back and a superseded one
+  cancelled; a cancelled answer never shown; the query for each position
+  of the switch; the captions from the counts, a missing count included;
+  the pill for each status and for one this build does not know; a lot
+  with no benchmark figure showing "–" and not zero; the year chosen and
+  the years offered; and each row's text for VoiceOver. `checks`,
+  `docs-check` and `build-release` pass on the combined code. 103 Python
+  helper tests and 95 script tests passed on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: a cancelled answer shown; the refresh control not forcing;
+  a restart adding to the rows; a missing benchmark figure read as zero
+  (two tests failed). Two more breakages were caught by nothing at first,
+  a switch change that did not wait and a second opening that asked
+  again; the worker strengthened the tests until each was caught.
+
+  The worker's test of the hold-back waited on a real 400 ms and looked
+  inside a 100 ms window. The session lead replaced the wait with a gate
+  the test opens, so a busy Mac cannot change what the test sees.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time, in dark and light, at the
+  default and the minimum size, on All, Open and Closed; with a 503 and a
+  saved copy; with a 503 and nothing saved; with a 404; with the
+  capability left out; loading; and the explanation for a portfolio that
+  is not Folync's. For the saved copy and the 404 it restarted its own
+  stand-in on the same port during the run. The stand-in's log matched
+  the rule: one request on opening, one for each change of the switch,
+  only the last of two quick changes, and none on going back to All
+  inside five minutes. After the merge with pull request 141 the session
+  lead ran the acceptance copy of the combined code once, in dark, and
+  captured its window: Activity and Trades are both in the sidebar with
+  their badges, and the switch shows its four positions. It did not
+  press the Partial position there.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the switch, the
+  hold-back and how a first page is asked for and applied, looked at the
+  worker's capture of the page with data, and changed the two things
+  above. It did not read the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync.
+  - The captions of the win rate and the total gain rest on a reading of
+    a contract that does not say which lots they cover.
+  - Turnover is captioned "of average value", the base the fees figure
+    names; the contract gives turnover no base.
+  - The "Partial" pill and a "–" in the last column were not seen on
+    screen, because the window could not be scrolled from the
+    background. Both are tested.
+  - The "New" badge is faint on the selected sidebar entry in dark mode.
+  - "Showing 7 of 31" in the mock-up is "Showing N trades": the route
+    gives no total.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 143: Add the Income page: dividends expected, received and by holding
+
+- What: Income shows a Folync portfolio's dividends, read-only, from the
+  route that pull request 135 added. It is a new section in the Analysis
+  group after Charts, with a "New" badge, dimmed with "Needs a Folync
+  portfolio" for any other source. ⌘1 to ⌘9 follow the sidebar: with the
+  three new pages, Income is ⌘6, Trades ⌘7, Risk ⌘8 and Allocation ⌘9,
+  and Data Health, Backups and Diagnostics have no number.
+
+  At the top are Folync's own figures: the income expected in the next 12
+  months, its declared and estimated parts, the yield on today's value
+  and on cost, the income received in the last 12 months, and how many
+  holdings pay. Each line is shown only when Folync gives the figure.
+  Under them is a chart of twelve months, the six up to this one and the
+  six after it, and three views: Outlook lists what is coming, soonest
+  first, with ex-dividend dates; History lists payments received, newest
+  first, with a payment's own currency when it differs; By holding sums
+  each paying holding.
+
+  Two sets of figures are Stockbar's own, and the page says so: the
+  chart's bars and the By holding sums add up the payments Folync lists,
+  by pay date read as a calendar day. An amount that is missing, marked
+  unavailable or in another currency adds nothing and is counted in the
+  note under the chart, and a sum with no known amount is "–", not zero.
+  A payment is called Declared or Estimated only when Folync says which.
+
+  The page keeps the rule for these routes: one request when it becomes
+  the selected page, which serves all three views (every status, pay
+  dates from twelve months back to twelve ahead, at the route's largest
+  page); none on a change of view or on opening again inside five
+  minutes; the refresh control and "Try now" force; "Load more" asks for
+  the next page. No control changes the query, so nothing is held back.
+  A result whose request was cancelled is never shown, and the page
+  keeps no cache of its own.
+
+  Against the mock-up: "Received so far in 2026" is "Received in the last
+  12 months", the figure Folync gives; "all 9 holdings" is Folync's count
+  of the holdings that pay; the earnings row is left for the Calendar;
+  and an ex-dividend row has its amount in the amount column, so it fits
+  at the minimum width.
+
+  The session lead changed one thing in the worker's code. The contract
+  lets Folync name no currency, and the page then labelled every figure
+  as pounds. It now shows those figures without a symbol, leaves the
+  currency out of the two captions, and does not add an amount that
+  names a currency into a sum that has none.
+
+  The User Guide said the Trades switch has three positions. It has had
+  four since pull request 142, and the guide is corrected here.
+- Merged: 2026-11-20, squash commit `9292744`. The merge published
+  experimental build 382.3.12 as the prerelease `experimental-382.3.12`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open this page. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 142 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the three pages together: 931 XCTest tests with 0
+  failures. Twenty-eight are new, in `PortfolioAnalyticsServicesTests.swift`,
+  with the coordinator stood in for: each state of the page; no request
+  for a portfolio that is not Folync's; one request on opening and none
+  on opening again; the refresh control forcing; a refresh cancelling the
+  load it replaces; a result for a page no longer selected never shown;
+  load more, and a restart replacing the rows; the chart's months and the
+  parts of a bar; a payment with no amount, and one in another currency,
+  counted and not added; the order of what is coming; the pills; the By
+  holding sums, a sum with no known amount included; each row's text for
+  VoiceOver; and, added by the session lead, an answer that names no
+  currency. `checks`, `docs-check` and `build-release` pass on the
+  combined code. `python-tests` and 95 script tests passed on the
+  worker's last commit; nothing they cover changed after it.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a second opening that asked again; a cancelled or
+  superseded result shown (two tests failed); an opening that forced a
+  refresh (three tests failed); a payment with no detail counted as
+  declared; amounts in another currency added up; and, by the session
+  lead, the pound fallback put back.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page, one window at a time: the three views in dark at
+  the default size, Outlook and History in light and at the minimum
+  size, loading, a 503 with nothing saved, the saved copy, a 404 and the
+  capability left out. For the saved copy it stopped its own stand-in
+  after the page had loaded. The stand-in's log matched the rule: one
+  request on opening, none for four changes of view, one for the refresh
+  control, none on leaving and coming back, and none with the capability
+  left out. After the merge with pull request 142 the session lead ran
+  the acceptance copy of the combined code once, in dark, and captured
+  its window: Activity, Income and Trades are in the sidebar with their
+  badges, and Outlook shows its figures, chart and rows.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read how the page chooses
+  its currency and what depends on it, looked at the worker's capture of
+  Outlook, and made the change above. It did not read the view, the view
+  model in full or every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - Not tried against a real Folync.
+  - "Load more" and the "incomplete" notice were not seen on screen: the
+    stand-in's 109 payments fit in one page. Both are tested.
+  - The dimmed entry and the explanation for a portfolio that is not
+    Folync's were not seen on screen. Both are tested.
+  - Rows below the fold in "What is coming" were checked through their
+    VoiceOver text, not on screen: the window could not be scrolled from
+    the background.
+  - A Folync user sees "Income needs a Folync portfolio" until the first
+    Folync snapshot exists, as on the other two pages.
+  - A payment's own reason for being partial is not shown; only the
+    reasons Folync gives for the whole answer are.
+  - With no currency named, a payment whose amount does name one shows
+    "–" in the portfolio column. Not seen with a real Folync.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 144: Allocation: a donut beside its list, three views and the correlations as a grid
+
+- What: the Allocation screen shows the figures it already worked out in
+  the layout of the approved mock-up. No figure's arithmetic changes; the
+  two analysis services are untouched.
+
+  A switch in the header chooses Sector, Holding or Currency. One card
+  holds a donut with its list beside it, or under it when the window is
+  narrow: each group's value and share, and for sectors today's change.
+  The centre of the donut gives the total and the number of holdings.
+  Past eight groups the smallest are folded into one "Other" slice and
+  row that says how many it holds. The Currency view is new: holdings'
+  values in the display currency, added up by the currency each is priced
+  in, with pence counted as pounds. It is a plain sum of values the
+  screen already had.
+
+  The diversification score and the concentration are said once, in one
+  card, with the existing recommendations as lines under them.
+
+  The correlations are drawn as a grid, one row and one column for each
+  holding, every cell showing its figure to two decimals and shaded by
+  it: blue for a positive figure, orange for a negative one, nothing at
+  zero. Each cell has a tooltip and a VoiceOver label ("VUSA and NVDA,
+  0.73"). The grid holds the twelve largest holdings and says so when
+  there are more; the three summary figures beside it still cover every
+  holding. One line under it names the most and the least alike pair.
+  The two lists of pairs that were there before are shown only past
+  twelve holdings, when some of their pairs are not in the grid.
+
+  Four sectors change colour, because their old colours read as gain or
+  loss or sat too close to a neighbour's: Healthcare from red to
+  lavender, Financials from green to teal, Real Estate from pink to sand
+  and Basic Materials from mint to slate. No slice is red or green. A
+  holding or a currency keeps the colour it is first given while the
+  page is open.
+
+  Kept as they were: the range control for the correlations, now beside
+  the grid's heading; the notice when some holdings have no price or
+  exchange rate; the attribution entry at the foot; every number format
+  and every label of a figure. Changing the view recalculates nothing.
+
+  Not built from the mock-up: a Funds group, which needs an instrument
+  type that Folync does not give and Yahoo's has not been tried live; a
+  Cash row, which would change every share the screen shows today; the
+  words "Fair" and "Good" beside figures the screen gives no word to;
+  and the line about a Returns page, which does not exist yet.
+- Merged: 2026-11-20, squash commit `c34be9e`. The merge published
+  experimental build 382.3.13 as the prerelease `experimental-382.3.13`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches never open this page. Covered by the comparison set for the
+  night of 2026-11-20, if this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 945 XCTest tests with 0
+  failures. Fourteen are new, in `PortfolioAnalyticsServicesTests.swift`:
+  the currency groups, pence with pounds and a holding with no value
+  included; folding at nine groups and eight left alone; the order of
+  each view; a group keeping its colour when another is added or removed;
+  the grid's holdings past twelve and its line; a cell's text and label;
+  the shade for a positive, a zero, a negative and an unknown figure; the
+  line of pairs, with one pair only included; and the donut's centre.
+  `checks`, `docs-check` and `build-release` pass. 103 Python helper
+  tests and 95 script tests passed on the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied, run
+  and removed: folding at eight groups; pence kept apart from pounds; a
+  leading zero kept in a cell; colours given by rank; and zero shaded.
+
+  On screen: the worker ran the acceptance copy against the stand-in
+  before and after the change and compared every figure, read from the
+  window's accessibility text: both sectors' value, share and day change,
+  the note about holdings with no known sector, and the two states' texts
+  were the same. It captured the three views in dark, Sector in light,
+  and both appearances at the minimum size.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the grouping, folding
+  and grid functions, and looked at three of the captures and at the
+  worker's off-screen drawing of the grid. It did not read the view or
+  every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The grid, the three figures beside it, the line of pairs and the
+    diversification card with a score were never drawn in the running
+    app.** The stand-in has too little shared price history and most of
+    its portfolio has no known sector. The grid was seen only in a
+    drawing made by a temporary test from a made-up matrix.
+  - More than one currency was not seen on screen; the stand-in's
+    portfolio is all in pounds. It is tested.
+  - VoiceOver was not run; the labels were read as text.
+  - "Least alike" names the lowest figure, which for a strongly negative
+    one means the pair that moves most against each other.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 145: Switches in Settings for the Income, Trades and Activity pages
+
+- What: Settings → Connections → Folync gains three checkboxes, "Income",
+  "Trades" and "Activity", each with the "New" badge, after the four
+  older ones. They turn the three pages' Folync routes off and on. The
+  settings themselves have existed since pull request 135, on by default;
+  until now nothing could turn them off.
+
+  Beside each is its status, worded like the older rows' and taken from
+  the capabilities answer the app already has: "Not supported by this
+  Folync server" when the answer leaves the route out, "Unsupported",
+  "Not ready" with Folync's reasons, or "Ready". No request is made to
+  find a status out. A checkbox that is off cannot be turned on while its
+  route is not usable; one that is on can always be turned off. The
+  wording and that rule now live in one place, `FolyncRouteSettingsStatus`,
+  which the older rows use too; what they say is unchanged.
+
+  The block is headed "What Stockbar reads from Folync", with the line
+  "Portfolio pages are fetched when you open them, not on a timer."
+
+  **Turning one of the three off or on makes no request.** Saving a
+  change to the older rows restarts the market-data schedule, which asks
+  Folync for capabilities, benchmarks and rates. A change to the three
+  new ones alone now saves and stops there, and clears nothing saved.
+  The page concerned says it is switched off the next time it is opened,
+  and asks again once it is switched on and opened.
+
+  Against the mock-up: the rows are in one column, because the older
+  rows' coverage lines and the longest status do not fit two at the
+  minimum width; the label is "Income", not "Income and calendar", since
+  there is no Calendar page yet; and there is no "Returns breakdown" row,
+  since Folync has no such route yet.
+- Merged: 2026-11-20, squash commit `80dfcbc`. The merge published
+  experimental build 382.3.14 as the prerelease `experimental-382.3.14`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches set up no Folync and never open Settings. Covered by the
+  comparison set for the night of 2026-11-20, if this is merged by then,
+  or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 144 was
+  merged this branch was brought up to date with it, and the figures here
+  are for the two together: 953 XCTest tests with 0 failures. Eight
+  are new, in `FolyncPortfolioSourceTests.swift`: the status for each
+  route and each case, no capabilities answer included; one route left
+  out changing only its own row; the older rows keeping their wording;
+  the rule for turning on and off; saved settings decoding unchanged;
+  each switch saving only its own setting, leaving the others, the
+  address and the portfolio as they were, and making no request, while
+  an older row's switch still does; and which changes count as needing no
+  request. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: the schedule restarted for one of the new switches;
+  a route that is not ready allowed to be turned on; dividends read as
+  trade analysis; the reasons dropped from "Not ready"; "New" dropped
+  from the name VoiceOver reads; and a change to the fallback treated as
+  one of the new switches.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the Connections tab before and after, in dark and light, at
+  the default and the minimum size, and with one route left out and one
+  not ready, which showed the right statuses. The stand-in's log showed
+  no request for any change of a switch.
+
+  **A switched-off page was not seen on screen, and the reason is a fault
+  in the acceptance copy, not in the app.** The worker found that a
+  switch it turned off was on again when Settings was next opened, and
+  that the older "Exchange rates" switch does the same on `experimental`
+  without this change. The session lead traced it: the acceptance copy
+  keeps its defaults in a suite named by a path, and on macOS 27.2.1 a
+  process never reads back its own change to a key that was already in
+  such a file when it started. The harness seeds the Folync settings
+  before it starts the app, so those are the keys the copy cannot change.
+  Two small programs outside the repository showed the same with no
+  Stockbar code in them, and showed that a suite named in the ordinary
+  way reads back correctly. The released app uses the standard defaults,
+  not a suite named by a path.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the status type and
+  the change to how a settings change is saved, looked at one capture,
+  and traced the fault above with a temporary log line that was never
+  committed. It did not read the view or every test. No independent
+  second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - No page's "switched off" state, and no page asking again after being
+    switched back on, was seen in a running copy, for the reason above.
+    Both are tested with the store stood in for.
+  - The acceptance copy cannot change any setting seeded before it
+    starts: the Folync address, portfolio and seven route settings. So a
+    portfolio that is not Folync's cannot be seen there either. Fixing it
+    means having the app seed its own settings in an acceptance run; not
+    done here.
+  - Not tried against a real Folync.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 146: Holdings: a Weight column and one switch for amounts or percentages
+
+- What: the Holdings screen gains a Weight column, between Value and
+  Today: the holding's share of the portfolio to one decimal. It sorts,
+  with an unknown weight below every known one.
+
+  For a Folync portfolio the weight is Folync's own figure for the
+  holding, shown as given and never worked out here; "–" where Folync
+  gives none. Folync's contract does not say what that figure is a share
+  of, so the line under the table says "Weight is Folync's figure" and
+  no more. For a local or Trading 212 portfolio it is the holding's
+  value as a share of the net value the strip shows, both in the same
+  currency, and "–" when the value, the currency, the exchange rate or a
+  positive total is missing. A watchlist row has no weight.
+
+  One visible switch, Amounts and Percent, beside the search field, sets
+  both the Today and the Total gain columns, and is remembered. Before,
+  each column switched when one of its cells was clicked, which nothing
+  on the screen said; clicking a cell now does nothing. The heading
+  "Total P&L" is "Total gain".
+
+  The strip keeps its three figures and where they come from. The US
+  dollar equivalent moves from brackets to a second line, and the total
+  gains say what they are for the source: "Unrealised, as Folync reports
+  it", "Unrealised, as Trading 212 reports it", or "Unrealised, against
+  average cost" for Stockbar's own sum.
+
+  Under the read-only table one line counts what is shown, "9 holdings
+  and 2 watchlist symbols.", with the right singular and plural forms.
+
+  **The fault at the minimum window size is fixed for the read-only
+  table:** every column, Weight included, is inside the card; before, the
+  last heading was cut off. Numbers are right-aligned. VoiceOver reads a
+  row as one sentence, with the weight and whichever of amount or
+  percentage is showing.
+
+  The editing table for a local portfolio is unchanged. The worker had
+  narrowed every one of its columns so that it fitted the card at the
+  minimum size; that layout cannot be seen in the acceptance copy, which
+  is always a Folync portfolio, so the session lead put the widths back.
+  It is wider than the card at the minimum size and scrolls sideways
+  there, as it always has. Weight is not shown in it.
+- Merged: 2026-11-20, squash commit `9d87d22`. The merge published
+  experimental build 382.3.15 as the prerelease `experimental-382.3.15`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 145 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 964 XCTest tests with 0 failures.
+  Eleven are in a new class in `PortfolioCalculationTests.swift`: a
+  Folync holding's weight as given and "–" when Folync gives none; a
+  local holding's weight, with a value, a currency or a total missing; a
+  watchlist row; the weight's text and its sort order; the one switch and
+  its stored key; the strip's second lines for each source; the line
+  under the table for one, two and no watchlist symbols; a row's sentence
+  for VoiceOver in both modes; and that the editing table's widths are
+  what they were. `checks`, `docs-check` and `build-release` pass on the
+  combined code. 103 Python helper tests and 95 script tests passed on
+  the worker's last commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: unknown weights sorted first; "holdings" used for one
+  holding; the Folync gains called "against average cost"; and a Folync
+  weight worked out from values. A fifth, a wider column in the editing
+  table, was caught by a test of the narrowed layout that went with it.
+
+  On screen: the worker ran the acceptance copy against the stand-in and
+  captured the page before and after, in dark and light, at the minimum
+  size and at 1286 by 850, in Amounts and in Percent, sorted by Weight
+  and with a search. Its first version left the cells showing the old
+  choice when the switch changed; it saw that on screen and fixed it.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read the layout change and
+  what else changed in the editing rows, looked at the worker's captures
+  at the minimum size, and put the editing table's widths back. It did
+  not read the rest of the view or every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The editing table was not seen on screen**, before or after: the
+    acceptance copy cannot be a local portfolio (see record 145).
+  - Watchlist rows were not seen on screen; the stand-in has none.
+  - The weight and the gains caption for a Trading 212 portfolio are not
+    tested: no test helper builds a broker snapshot.
+  - The choice of Amounts or Percent surviving a relaunch was not seen;
+    each acceptance run starts with fresh storage.
+  - With a fresh Trading 212 snapshot the net value is the broker's whole
+    account, cash included, so a holding entered by hand beside it is
+    weighed against a total that leaves it out.
+  - An unknown figure in a row is now "–" in every column; Value, Today
+    and Total gain used "—".
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 147: Risk: each figure said once, with a chart of the falls
+
+- What: the Risk screen shows the figures it already worked out, each
+  once, in the order of the approved mock-up. No existing figure's
+  arithmetic changes: the same functions of `RiskMetricsService` give the
+  same numbers, to the same number of decimals.
+
+  The header has the title, the line "How bumpy the ride has been", the
+  recalculate control and all five ranges. Under it is a strip of four:
+  volatility, the Sharpe ratio, the Sortino ratio and the worst fall, as
+  a negative percentage with its length. The words under volatility and
+  the Sharpe ratio are the screen's own, with their thresholds unchanged.
+
+  "How far below its peak" is new: a chart of how far the portfolio stood
+  below its highest value so far, day by day, with the lowest point
+  marked and labelled. Its series is the one piece of new arithmetic, a
+  pure function beside the existing ones, over the same values and dates
+  as the maximum drawdown, so its lowest point is the strip's worst fall
+  exactly; a test holds the two together on five series. The chart has a
+  sentence for VoiceOver and its draw-in is off under Reduce Motion.
+
+  "On a bad day" gives the two value-at-risk figures in plain words, once
+  each. "Falls of more than 5%" lists the falls the screen listed before,
+  with their dates and lengths. A footnote replaces "Calculation Details":
+  how many trading days the figures rest on, from when to when, that the
+  history is Stockbar's own and not Folync's (said for a Folync portfolio
+  only), the method, and the risk-free rate. Downside deviation, which
+  the mock-up leaves out, is kept as a small figure above the footnote.
+
+  Gone: the six cards and the three sections that repeated them, with
+  their colour bands for the two ratios and their explanatory captions;
+  the calculation date and the "Time Range" row, which the footnote and
+  the range switch already say.
+
+  **One label is corrected.** The length of the worst fall was called
+  "trading days" on the old screen and in the worker's version. The
+  service counts calendar days from the peak to the low whenever it has
+  the dates, and the screen always gives it the dates, so the strip now
+  says "90 days, peak to low", as the list of falls does. The number is
+  the same.
+
+  Against the mock-up: percentages keep two decimals and ratios three,
+  because the figures must stay what they were; and the screen keeps the
+  recalculate control, the currency notice, the limit of five falls and
+  the note that recovery time is not counted.
+- Merged: 2026-11-20, squash commit `995293c`. The merge published
+  experimental build 382.3.16 as the prerelease `experimental-382.3.16`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and never opens this page.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 146 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 978 XCTest tests with 0 failures.
+  Fourteen are new, in `RiskMetricsServiceTests.swift`: the series for a
+  history that only rises, one that falls and recovers, one still falling
+  at the end, one day and none; its lowest point against the maximum
+  drawdown; the label of the lowest point and the chart's sentence; the
+  words under each tile, a figure that is not known included; the two
+  bad-day sentences; a row of the falls and the empty line; and the
+  footnote for a Folync and a local portfolio. `checks`, `docs-check` and
+  `build-release` pass on the combined code. 103 Python helper tests and
+  95 script tests passed on the worker's last commit.
+
+  **The figures were held to the old screen's.** Before changing
+  anything the worker ran the old screen's own formatting on four made-up
+  histories and kept what it printed; a test builds the same figures
+  through the new code and compares every one. The only differences are
+  the minus sign on a fall, "–" for an unknown figure where the old
+  screen had "—", and the corrected label above.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a peak that never moved; the minus sign dropped; a
+  Sharpe threshold changed; "not Folync's" always shown; the last of two
+  equal lows taken; percentages to one decimal; and the two bad-day
+  amounts swapped.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read how the length of a
+  fall is counted and worded, looked at the worker's drawing of the
+  filled page, and corrected the label above. It did not read the view
+  or every test. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - **The filled page was never seen in the running app.** The
+    acceptance copy has no stored history, so Risk shows "Not enough
+    history" there, before and after. The filled page was seen only in
+    drawings made off screen from made-up histories, in dark and light,
+    at the default and the minimum width.
+  - VoiceOver, Reduce Motion and Increase Contrast were not tried on a
+    running app.
+  - The Sortino ratio no longer has a colour; the colour was the only
+    judgement the old screen gave it.
+  - The horizontal axis shows the months Swift Charts picks, which need
+    not include the first.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 148: Let the acceptance copy change the settings it was started with
+
+- What: no change to what users see. The acceptance copy could not
+  change any setting that was seeded before it started (record 145): a
+  Folync switch turned off there was on again, and "Use Local
+  Portfolio…" could not take effect. The cause is its defaults suite,
+  which is named by a path: on macOS 27.2.1 a process never reads back
+  its own change to a key that was already in such a file when the
+  process started, while a key it creates itself reads back correctly.
+
+  So the app process now writes the seeded settings itself.
+  `--acceptance-bootstrap` no longer opens the defaults suite. It writes
+  the same Folync settings as JSON to one seed file in the run's own
+  root, readable by the owner only and renamed into place, and still
+  saves the token to the acceptance Keychain service. At launch, after
+  the preflight and bootstrap arguments are handled and before the
+  application object exists, an explicit acceptance run that has a seed
+  decodes it, saves it through `FolyncSettingsStore` and deletes the
+  file. A missing seed does nothing. One that cannot be read stops the
+  launch with a message and exit status 2, and changes nothing.
+
+  **No rule is loosened, and one is applied twice.** Only an explicit
+  acceptance run looks for a seed: a normal launch and the tests'
+  automatic isolation return before looking for a file or creating the
+  defaults. The seed is refused unless it names plain HTTP to this Mac
+  with no credentials in the address, the same rule the bootstrap
+  applies to its manifest, now in one function used by both. A seed that
+  is not a regular file is refused. The harness scripts are unchanged.
+- Merged: 2026-11-20, squash commit `3aff316`. The merge published
+  experimental build 382.3.17 as the prerelease `experimental-382.3.17`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. What a normal
+  launch gains is one check of the acceptance environment before the
+  application object is made; the benchmark's launches do run that.
+  Covered by the comparison set for the night of 2026-11-20, if this is
+  merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 147 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 992 XCTest tests with 0 failures.
+  Thirteen are in a new class in `StockbarAcceptancePreflightTests.swift`:
+  the bootstrap writes an owner-only seed inside the root and nothing
+  into the suite; adopting moves every field and removes the seed;
+  adopting twice is harmless, and a change made in between survives; a
+  missing seed does nothing; an unreadable seed, and one that is not a
+  regular file, fail and change nothing; a seed naming a Folync off this
+  Mac is refused; the loopback rule itself; and nothing is adopted in a
+  normal launch, under the tests' automatic isolation, or in a run
+  without the loopback exception. One more, beside the existing ones,
+  checks that a manifest naming a Folync off this Mac writes no seed.
+  The existing tests' set-up gave every test the same root, through a
+  missing backslash; that is fixed. `checks`, `docs-check` and
+  `build-release` pass on the combined code. 103 Python helper tests and
+  95 script tests passed on the worker's commit.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: the gate widened to any acceptance run; the seed not
+  deleted; the bootstrap also writing the suite; the seed readable by
+  others; and no loopback check on adoption.
+
+  **On screen, the proof a unit test cannot give.** In a copy built from
+  `experimental` before this change the worker turned "Trades" off; the
+  page still loaded and the stand-in logged the request; back in
+  Settings the checkbox was on. In a copy built from this branch the
+  page said "Trade analysis is switched off" and no request was logged;
+  the checkbox was still off; turned on again, the page loaded.
+  "Exchange rates" stayed off after leaving Settings and coming back.
+  "Use Local Portfolio…", confirmed in the copy's own sheet, gave a
+  local portfolio: Activity, Income and Trades dimmed in the sidebar
+  with "Needs a Folync portfolio", and each page showing its
+  explanation. These states of pull requests 141 to 145 had not been
+  seen on screen before.
+
+  It also showed the Holdings editing table for the first time. At the
+  default size it fits its card. **At the minimum size its last column,
+  the row actions, is past the card's right edge.** The table is in a
+  sideways scroll view; whether it scrolled could not be confirmed from
+  the background. This is how it was before pull request 146 and is
+  what the worker of that pull request had tried to fix.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) read every changed line of
+  the three source files, checked the gate and that a run always has a
+  root, looked at two captures, and added a sentence to the
+  architecture notes. It did not read every test. No independent second
+  review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The launch that stops on an unreadable seed is tested as a function,
+    not as a launch.
+  - A second launch on the same root would meet the old fault, since the
+    keys are then in the file. The harness makes a new root for every
+    run.
+  - No light-mode captures of the new states; the confirmation sheet was
+    seen and not captured.
+  - The Holdings editing table at the minimum size, above. A fix that
+    can now be looked at is the next piece.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 149: Charts: the controls in one row and the chart on a card; a full Data Health grid
+
+- What: a tidy of two screens that had no mock-up. Nothing is added and
+  nothing is taken away.
+
+  On Charts the controls sat in three rows that lined up with nothing:
+  "Chart" and its picker a third of the way across, "Time Range" further
+  right, "Comparison Mode" at the left. Now the chart picker is at the
+  left, flush with the page, and the range switch at the right, on one
+  row, where the other pages have theirs; the visible labels are gone and
+  both controls keep their accessibility labels. The custom dates appear
+  under the range switch, right-aligned. One strip holds everything that
+  changes how the chart is drawn: the Line and Candlestick switch, "Chart
+  options", "Comparison Mode" and the source and coverage note. The
+  strip, the comparison picks, the chart with its loading and empty
+  states, and the caption under it are on one card. Everything under the
+  card keeps its order and its code. The page no longer has side padding
+  of its own, so it lines up with its header.
+
+  One fault of the old layout showed up and is fixed: a short card was
+  centred in the page's minimum height, which moved the controls down
+  whenever a chart was loading or empty.
+
+  On Data Health the six tiles made four columns at the default window
+  size, leaving two alone on a second row. The grid is now three columns
+  when three tiles of the same minimum width fit, otherwise two, so six
+  tiles always make full rows.
+
+  No saved setting changes its key, and nothing about how or when a
+  chart's data is loaded is touched.
+- Merged: 2026-11-20, squash commit `241aeb7`. The merge published
+  experimental build 382.3.18 as the prerelease `experimental-382.3.18`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview and opens neither page. Covered
+  by the comparison set for the night of 2026-11-20, if this is merged
+  by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 148 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 995 XCTest tests with 0 failures.
+  Three are new, in `PortfolioCalculationTests.swift`, for the Data
+  Health grid's column count: three once three tiles fit, two below
+  that, and six tiles always in full rows. Two breakages of that rule
+  were each caught and removed. The Charts change moves views and has no
+  logic of its own to test. `checks`, `docs-check` and `build-release`
+  pass on the combined code. 103 Python helper tests and 95 script tests
+  passed on the worker's last commit.
+
+  **On screen, which is what checks this piece.** The worker ran the
+  acceptance copy before and after and used the controls after the
+  change: three chart types; the range switch, with the point count
+  changing; the custom dates, stepped and reloading; comparison on, a
+  second stock added, normalised off, cleared, off; Line and Candlestick,
+  with the candlestick's hover read-out; grid lines, gradient fill and
+  line width from "Chart options"; the line chart's hover read-out; the
+  metrics collapsing; the filters' select all, clear, zoom in and reset.
+  The captures are before-and-after pairs in dark and light, at the
+  default and the minimum size, where the picker and the range switch
+  still share a row.
+
+  The worker could not settle one thing: "All Time" showed "Unavailable"
+  in its last run, made with the stand-in slowed and the disk full.
+  After the merge with pull request 148 the session lead ran the
+  acceptance copy of the combined code: "All Time" drew the portfolio
+  chart from 230 points and a single stock from 519, and Data Health
+  showed two full rows of three.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) looked at the before and
+  after captures of a single stock, of comparison with custom dates at
+  the minimum size, and of Data Health, and did not read the moved
+  views. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - "Export CSV" and "Export PDF" were not pressed: they open a system
+    save panel. The value threshold filter, the filter's own date range,
+    zoom out, and the candlestick's indicator and option menus were not
+    used. The progress and error views did not appear.
+  - The fallback that puts the range switch on a row of its own was
+    never seen: the two fit on one row at the minimum size.
+  - Not tried against a real Folync or live prices.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 150: Holdings: the editing table fits at the minimum window size
+
+- What: for a local portfolio in Edit mode the Holdings table's columns
+  have fixed widths that add up to 969 points, and the card is 784
+  points wide at the window's minimum size. The last column, the row's
+  watchlist, move and remove buttons, was out of sight there; the table
+  scrolls sideways, but nothing showed that. Pull request 148 made it
+  possible to see this in the acceptance copy.
+
+  The table now has two sets of widths and chooses by the room it has.
+  The regular set is the old one, unchanged, and is used whenever the
+  table is at least 969 points wide, which is a window at least 1245
+  wide. Below that a compact set is used: 66, 100, 86, 90, 84, 84, 96
+  and 88 points, with 8 between columns, 12 at the sides and 6 between
+  the action buttons, 774 in all, so every column is inside the card at
+  the minimum size. The table measures its width where it already did
+  and hands one set to the header and to every row, so the two cannot
+  disagree. The sideways scroll view stays as the fallback.
+
+  Nothing else in the editing rows changes: the fields, the buttons,
+  their tooltips and VoiceOver labels, the order of the columns and how
+  a change is saved. Weight is still not shown in the editing table.
+- Merged: 2026-11-20, squash commit `2d5d992`. The merge published
+  experimental build 382.3.19 as the prerelease `experimental-382.3.19`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark
+  opens the main window on the Overview, with no local holdings being
+  edited. Covered by the comparison set for the night of 2026-11-20, if
+  this is merged by then, or by the next one.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 149 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 999 XCTest tests with 0 failures.
+  Five replace the one that pinned the old widths: the regular set's
+  figures and their sum; the compact set's; that the compact set fits
+  the card at the minimum window size, worked out from the same values
+  the window and the shell use; which set is chosen at, just above, just
+  below and far below the threshold; and that a set's width is its
+  columns, spacing and padding. `checks`, `docs-check` and
+  `build-release` pass on the combined code, and the Python helper tests
+  and the script tests pass.
+
+  The tests were shown to fail on broken code, each breakage applied,
+  run and removed: a compact column made wider; the threshold's "at
+  least" made "more than"; the threshold ignored, so that the regular
+  set was always used (two tests failed); and one space too many counted
+  in a set's width (three tests failed).
+
+  **The worker was cut off before its checks.** The Mac's disk filled
+  while it was showing the tests to fail, and no command could start. It
+  stopped with two breakages done, one of them still in its working
+  tree, and no full test run. The session lead cleared the space,
+  removed the leftover breakage, ran the remaining breakages and every
+  check, and that is what the figures above are.
+
+  On screen, in a copy made a local portfolio: at the minimum size, in
+  dark and light, every column is inside the card with entries of
+  realistic length ("VUSA.L", 1234.5678 units, costs of 87.4321 and
+  12345.67, the currency pickers) and nothing is cut short. The worker
+  pressed watchlist, move up and move down with pointer clicks and each
+  worked; remove showed its confirmation, which was cancelled. At 1250
+  points wide the regular set is used and the columns stand where they
+  did before; at 1240 the compact set is used. The read-only table is
+  the same before and after. Typing in the compact fields behaved
+  normally.
+- Review: written by an Opus worker from the session lead's
+  specification. The session lead (Fable 5.2) looked at the capture at
+  the minimum size, finished the worker's checks as set out above, and
+  did not read the changed views. No independent second review.
+- Known issues:
+  - The benchmark is owed, as set out above.
+  - The Current and Value columns showed "-" throughout, because the
+    acceptance copy fetches no prices. Their compact widths are sized by
+    estimate: a price of £10,000 or more is close to the edge of 84
+    points. A figure too long for its column wraps and makes the row
+    taller; it is not cut off.
+  - That the header and the rows use the same widths rests on one value
+    being passed to both; no test covers it, because those views are
+    private.
+  - One of the units entries was put in through accessibility, not as
+    keystrokes.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 151: Record the redesign benchmark and bring the log up to date
+
+- What: the comparison of `5fa923b` against `2d5d992`, which covers pull
+  requests 135 to 150, with both of its runs and their tables, in this
+  entry; the merge line of pull request 150;
+  [Where things stand](#where-things-stand) brought up to date from pull
+  request 141; and rows in "Who did what" for pull requests 144 to 150,
+  the disk that filled during pull request 150 included, and for this
+  one. Only this file changes.
+- Merged: 2026-11-21, squash commit `381fad1`. The merge published
+  experimental build 382.3.20 as the prerelease `experimental-382.3.20`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
+- Benchmark: no before/after run for this pull request. No file that goes
+  into the app changes (nothing under `Stockbar/`, `StockbarTests/` or
+  `Stockbar.xcodeproj`), so before, `2d5d992`, and after build the same
+  app. What it records is the comparison owed by pull requests 135 to 150
+  under the rule of 2026-11-20 (see
+  [How this branch works](#how-this-branch-works)).
+
+  Before `5fa923b`, the last commit measured, after `2d5d992`, the
+  standard comparison, six launches a side in turns, run twice on
+  2026-11-20, on macOS 27.2.1 and an Apple M3 Pro with 18 GB, on mains
+  power, with the lid open, the screen unlocked and no other project's
+  build present. It had been set for 02:30 UTC on 2026-11-21; the owner
+  asked for it that evening instead. Each run started only after twenty
+  quiet minutes on mains power, checked every twenty seconds, and under
+  the three rules of pull request 134's comparison, written into its
+  script before it began: a run is set aside and repeated if more than
+  two readings inside the turns show input in the minute before, if the
+  four busiest processes together are more than 1.5 times busier over
+  one side's turns than the other's, or if any measured launch has
+  another project's build beside it.
+
+  A first attempt began its wait at 21:27 UTC, started at 21:46, built
+  both commits and was cut off by a restart of T3 Code during round 1's
+  warm-up launch, at 21:49. It measured nothing. Its folder is kept, with
+  an empty `before-1`, as
+  `build/bench/results/interrupted-compare-redesign-20261120-214659`.
+
+  First run: wait from 21:50 UTC, turns from 22:10 to 22:43 UTC. The Mac
+  had been untouched for 9466 s when it started, and no reading inside
+  the turns showed input. The four busiest processes together averaged
+  108% of a core over the before side's 16 readings and 100% over the
+  after side's 16, a ratio of 1.08, so the run stands. None of the
+  measured segments, six launches and two helper measurements a side,
+  had another project's `xcodebuild` beside it. The highest load average
+  at the ten-second samples was 8.9, once, during the after side's second
+  launch; everywhere else it stayed at or below 4.4. Four rows are
+  higher, and two are marked possibly higher. (This sentence said "three"
+  until pull request 153 corrected it.)
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 96.9 (96.3 to 99.3) MB | 119.1 (118.0 to 120.4) MB | +22.2 MB, +22.9% | higher (p = 0.002) |
+  | Idle memory the app holds allocated | 50.8 (50.7 to 51.2) MB | 52.2 (51.3 to 53.2) MB | +1.3 MB, +2.6% | higher (p = 0.002) |
+  | Peak memory, launch and history load | 244.2 (242.7 to 248.3) MB | 267.5 (262.7 to 271.9) MB | +23.3 MB, +9.5% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.1 (0.0 to 0.4) MB | 0.2 (0.1 to 0.5) MB | +0.2 MB, +400.0% | no measurable change (p = 0.054) |
+  | Idle CPU | 0.087 (0.073 to 0.090) s/min | 0.098 (0.075 to 0.108) s/min | +0.011 s/min, +12.1% | possibly higher (p = 0.037) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 26 (25 to 28) /min | +0 /min, +0.0% | no measurable change (p = 0.634) |
+  | Idle CPU power | 3.60 (3.51 to 3.93) mW | 3.94 (3.61 to 4.73) mW | +0.34 mW, +9.4% | possibly higher (p = 0.037) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.48 (0.45 to 0.52) s | 0.49 (0.45 to 0.51) s | +0.01 s, +1.0% | no measurable change (p = 1.000) |
+  | Launch to history loaded | 0.59 (0.57 to 0.60) s | 0.59 (0.56 to 0.61) s | +0.00 s, +0.0% | no measurable change (p = 0.998) |
+  | CPU from launch to the idle window | 1.67 (1.63 to 1.70) s | 1.78 (1.76 to 1.82) s | +0.11 s, +6.9% | higher (p = 0.002) |
+  | CPU energy from launch to the idle window | 5.28 (5.18 to 5.34) J | 5.46 (5.20 to 5.69) J | +0.18 J, +3.4% | no measurable change (p = 0.132) |
+  | Python helper start to ready, no network | 0.27 (0.26 to 1.20) s | 0.27 (0.25 to 0.53) s | -0.01 s, -1.9% | no measurable change (p = 0.621) |
+  | Python helper start, CPU | 0.27 (0.25 to 0.38) s | 0.26 (0.25 to 0.33) s | -0.01 s, -1.9% | no measurable change (p = 0.671) |
+  | Python helper memory once started | 71.1 (71.0 to 71.2) MB | 71.1 (71.1 to 71.2) MB | +0.0 MB, +0.0% | no measurable change (p = 0.394) |
+
+  Repeat, for those rows: wait from 22:43 UTC, turns from 23:03 to 23:35
+  UTC. No reading inside the turns showed input. The four busiest
+  together averaged 91% of a core over the before side's 16 readings and
+  105% over the after side's 16, a ratio of 1.16, so it stands. Again no
+  measured segment had another project's build beside it, and the load
+  stayed at or below 5.5.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 97.3 (95.5 to 99.3) MB | 118.3 (116.6 to 119.6) MB | +21.0 MB, +21.6% | higher (p = 0.002) |
+  | Idle memory the app holds allocated | 51.0 (50.7 to 52.1) MB | 51.1 (50.5 to 52.6) MB | +0.1 MB, +0.3% | no measurable change (p = 0.509) |
+  | Peak memory, launch and history load | 245.9 (241.8 to 248.4) MB | 266.1 (260.9 to 275.5) MB | +20.2 MB, +8.2% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.4) MB | 0.2 (0.2 to 0.5) MB | +0.2 MB | possibly higher (p = 0.013) |
+  | Idle CPU | 0.084 (0.070 to 0.101) s/min | 0.102 (0.074 to 0.105) s/min | +0.018 s/min, +20.8% | no measurable change (p = 0.078) |
+  | Idle CPU wake-ups | 26 (24 to 27) /min | 26 (24 to 28) /min | +0 /min, +0.0% | no measurable change (p = 0.470) |
+  | Idle CPU power | 3.58 (3.40 to 4.14) mW | 3.79 (3.63 to 4.27) mW | +0.21 mW, +5.9% | no measurable change (p = 0.143) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.47 (0.46 to 0.49) s | 0.48 (0.45 to 0.54) s | +0.01 s, +1.1% | no measurable change (p = 0.983) |
+  | Launch to history loaded | 0.58 (0.57 to 0.59) s | 0.60 (0.59 to 0.67) s | +0.03 s, +4.3% | higher (p = 0.006) |
+  | CPU from launch to the idle window | 1.68 (1.62 to 1.71) s | 1.77 (1.75 to 1.94) s | +0.09 s, +5.7% | higher (p = 0.002) |
+  | CPU energy from launch to the idle window | 5.27 (5.17 to 5.40) J | 5.35 (5.22 to 5.45) J | +0.08 J, +1.4% | no measurable change (p = 0.223) |
+  | Python helper start to ready, no network | 0.27 (0.26 to 0.53) s | 0.30 (0.26 to 0.60) s | +0.03 s, +13.2% | no measurable change (p = 0.675) |
+  | Python helper start, CPU | 0.27 (0.25 to 0.34) s | 0.29 (0.25 to 0.39) s | +0.03 s, +11.3% | no measurable change (p = 0.740) |
+  | Python helper memory once started | 71.2 (71.1 to 71.3) MB | 71.2 (71.1 to 71.3) MB | +0.0 MB, +0.0% | no measurable change (p = 1.000) |
+
+  Firm in both runs, each at p = 0.002: idle memory (physical footprint)
+  rose by 22.2 and 21.0 MB, from about 97 MB to about 118 MB; peak
+  memory, launch and history load, by 23.3 and 20.2 MB; and CPU from
+  launch to the idle window by 0.11 and 0.09 s.
+
+  Not held across both runs: the memory the app holds allocated was 1.3
+  MB higher in the first run (p = 0.002) and showed no measurable change
+  in the repeat (+0.1 MB); idle CPU and idle CPU power were possibly
+  higher in the first run only; launch to history loaded was 0.03 s
+  higher (p = 0.006), and idle memory growth possibly higher, in the
+  repeat only. None of those counts without another repeat.
+
+  The memory the app holds allocated is the heap, read after the idle
+  window. It rose by 1.3 MB at most, and not in the repeat, while the
+  physical footprint rose by 21 to 22 MB, so the extra memory is most likely not the app's
+  own objects but memory the system holds for it, such as what it draws
+  the window with. Pull request 140, which gave the main window the Glass
+  shell with a floating sidebar, was named here as the likeliest cause.
+  Measured on its own that night it is not; see pull request 153's entry.
+  Under the rule of 2026-11-20 a row that moves and
+  holds is followed by measuring the phase's pull requests one by one, so
+  pull request 140 is measured on its own next, against pull request 139
+  (`c9453fd` against `92145d7`). Whether about 21 MB more is acceptable is
+  the owner's decision. The readings, the samples, the rules and the
+  scripts are kept beside the results, in
+  `build/bench/results/compare-redesign-20261120-221038/conditions` and
+  `build/bench/results/compare-redesign-repeat-20261120-230329/conditions`.
+- Testing: `docs-check` passes on this pull request's branch. No code
+  changes.
+- Review: read by its author, with every figure checked against the two
+  `report.md` files and the chain logs,
+  `build/bench/chain/compare-redesign.log` and
+  `compare-redesign-repeat.log`. Both tables were taken from the reports
+  by script, without the column that names how each row is read, and
+  compared with them again after the edit. No independent review, for a
+  record of measurements that changes no code.
+- Known issues: the rise of about 21 MB in idle memory, 20 to 23 MB in
+  peak memory and 0.09 to 0.11 s in CPU from launch to the idle window
+  across pull requests 135 to 150 is not yet put down to any one pull
+  request. Pull request 140 is to be measured on its own next.
+- Verdict: retained.
+
+### 153: Read Yahoo's chart details with the yfinance the app ships
+
+- What: the Yahoo events lookup of pull request 136,
+  `Stockbar/Resources/get_instrument_events.py`, read the chart details
+  that yfinance gives (`history_metadata`) only when they were a `dict`.
+  yfinance 1.8.0, the version in `requirements.lock`, gives them as its own
+  read-only mapping (`HistoryMetadata`), which is not a `dict`. So the
+  instrument type was never found and every symbol was thrown away as
+  having no data. The lookup had never answered since it was merged. Nothing
+  shows its results yet, so nothing on screen was wrong. The offline tests
+  passed because their stand-in for yfinance gave plain dicts.
+
+  Both helpers that read those details now accept any mapping. The price
+  helper, `get_stock_data.py`, had the same check in `trading_currency()`,
+  in the fallback used when Yahoo's quote gives no currency. There it
+  returned no currency where the chart had one, and the London suffix rule
+  or nothing was used instead.
+
+  Found in the one supervised live run the owner allowed on 2026-11-25 ("run
+  the yahoo check"), before Calendar, a local Income estimate and a Funds
+  group are built on the lookup. It used twelve public symbols from no
+  portfolio, the helper from `381fad1`, and a throwaway environment made
+  from `requirements.lock` (yfinance 1.8.0), at 08:58 UTC. Every symbol
+  came back "no data", Apple's included. At 08:59 UTC, with the one-line
+  fix, the same symbols gave:
+
+  | Symbol | Type | Ex-dividend | Pay date | Earnings | Payments, last 12 months |
+  | --- | --- | --- | --- | --- | --- |
+  | AAPL | EQUITY | 2026-11-12 | 2026-11-16 | 2027-01-28 | 4, USD |
+  | MSFT | EQUITY | 2026-11-19 | 2026-12-10 | 2027-01-27 | 4, USD |
+  | KO | EQUITY | 2026-12-01 | 2026-12-15 | 2027-02-09 | 4, USD |
+  | SPY | ETF | none | none | none | 4, USD |
+  | VOD.L | EQUITY | 2026-11-19 | none | 2026-11-10 | 2, GBP |
+  | ULVR.L | EQUITY | 2026-11-12 | none | 2027-02-11 | 4, GBP |
+  | HSBA.L | EQUITY | 2026-11-05 | none | 2027-02-23 | 4, GBP |
+  | BP.L | EQUITY | 2026-11-12 | none | 2027-02-09 | 4, GBP |
+  | VUSA.L | ETF | none | none | none | 4, GBP |
+  | VWRL.L | ETF | none | none | none | 4, GBP |
+  | CTY.L | EQUITY | none | none | none | 4, GBP |
+  | SMT.L | EQUITY | none | none | none | 2, GBP |
+
+  So US shares have every date, London shares have the ex-dividend and
+  earnings dates but never a pay date, and ETFs and investment trusts have
+  no dates at all, only their last year's payments. Investment trusts come
+  back as EQUITY. The ex-dividend date is the latest one Yahoo knows and is
+  often past. No rate limit was met. The finding is kept in
+  `build/design/findings/yahoo-events-check-2026-11-25.md`.
+
+  This entry also records pull request 140's own comparison, owed by
+  [pull request 151's entry](#151-record-the-redesign-benchmark-and-bring-the-log-up-to-date),
+  and corrects two of that entry's sentences.
+- Merged: 2026-11-25, squash commit `6e7184d`. The merge published
+  experimental build 382.3.21 as the prerelease `experimental-382.3.21`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches make no Yahoo request. The price helper, whose start it
+  measures, gains one standard-library import.
+
+  **Pull request 140's comparison**, run at 01:01 UTC on 2026-11-21 by the
+  same script as the redesign's, after twenty quiet minutes on mains
+  power: before `c9453fd` (pull request 139), after `92145d7` (pull
+  request 140), six launches a side in turns, on macOS 27.2.1 and an Apple
+  M3 Pro with 18 GB, the lid open and the screen unlocked. No reading inside
+  the turns showed input. The four busiest processes together averaged
+  105% of a core over the before side's 16 readings and 97% over the after
+  side's, a ratio of 1.08. No measured segment had another project's
+  build beside it. The run stands; it was not repeated.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 114.9 (111.4 to 120.6) MB | 116.4 (107.5 to 117.7) MB | +1.5 MB, +1.3% | no measurable change (p = 0.937) |
+  | Idle memory the app holds allocated | 53.7 (52.8 to 54.3) MB | 50.3 (50.0 to 51.8) MB | -3.4 MB, -6.3% | lower (p = 0.002) |
+  | Peak memory, launch and history load | 253.8 (252.3 to 255.5) MB | 273.3 (264.3 to 277.6) MB | +19.5 MB, +7.7% | higher (p = 0.002) |
+  | Idle memory growth across the window | 0.0 (0.0 to 0.3) MB | 0.3 (0.0 to 0.6) MB | +0.3 MB | possibly higher (p = 0.045) |
+  | Idle CPU | 0.084 (0.070 to 0.106) s/min | 0.103 (0.092 to 0.105) s/min | +0.020 s/min, +24.0% | no measurable change (p = 0.058) |
+  | Idle CPU wake-ups | 26 (23 to 28) /min | 26 (25 to 28) /min | +0 /min, +2.0% | no measurable change (p = 0.675) |
+  | Idle CPU power | 3.71 (3.48 to 3.97) mW | 3.85 (3.58 to 4.04) mW | +0.13 mW, +3.5% | no measurable change (p = 0.180) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | +0.000 MB/min | no measurable change (p = 1.000) |
+  | Launch to first window | 0.47 (0.45 to 0.52) s | 0.44 (0.42 to 0.51) s | -0.03 s, -7.4% | possibly lower (p = 0.043) |
+  | Launch to history loaded | 0.58 (0.55 to 0.64) s | 0.58 (0.55 to 0.61) s | -0.01 s, -0.9% | no measurable change (p = 0.874) |
+  | CPU from launch to the idle window | 1.72 (1.68 to 1.74) s | 1.74 (1.68 to 1.76) s | +0.02 s, +1.2% | no measurable change (p = 0.297) |
+  | CPU energy from launch to the idle window | 5.45 (5.34 to 5.55) J | 5.24 (5.15 to 5.40) J | -0.21 J, -3.8% | lower (p = 0.009) |
+  | Python helper start to ready, no network | 0.26 (0.25 to 0.99) s | 0.42 (0.25 to 0.71) s | +0.16 s, +61.5% | no measurable change (p = 0.576) |
+  | Python helper start, CPU | 0.26 (0.25 to 0.37) s | 0.32 (0.25 to 0.47) s | +0.06 s, +23.1% | no measurable change (p = 0.450) |
+  | Python helper memory once started | 71.2 (71.1 to 71.3) MB | 71.1 (70.6 to 71.3) MB | -0.1 MB, -0.1% | no measurable change (p = 0.426) |
+
+  Pull request 140 accounts for most of the rise in peak memory at launch,
+  but not for the rise in idle memory or in CPU from launch to idle:
+  before it, `c9453fd` already idles at about 115 MB against about 97 MB at
+  `5fa923b`. The rows marked lower and possibly were not named and are not
+  repeated, so they do not count. The saved footprint of every launch
+  shows where the idle rise is: the `CoreAnimation` region, the system's
+  drawing memory for the app, is 3.2 MB in every launch of `5fa923b` and
+  22 MB in every launch of `c9453fd`, `92145d7` and `2d5d992`. Pull
+  requests 135 and 136 change no view, so the rise is in 137, 138 or 139.
+  They are to be measured one at a time next. The report is
+  `build/bench/results/compare-pr140-20261121-005920/report.md`, with its
+  readings under `conditions`, and the log is
+  `build/bench/chain/compare-pr140.log`.
+- Testing, on macOS 27.2.1: `python-tests` passes, 104 tests. Two of them
+  are new or extended. In `PythonTests/test_get_instrument_events.py`, every
+  stand-in ticker now gives its chart details as a read-only mapping that
+  is not a dict, the way yfinance 1.8 does, and a new test checks that a
+  symbol is answered from one. In `PythonTests/test_get_stock_data.py`,
+  `trading_currency()` is given one too. With either helper's old dict-only
+  check put back, the tests fail: 20 for the events helper (10 failures, 10
+  errors) and 1 for the price helper. `checks`, `docs-check` and
+  `build-release` pass, 999 XCTest tests pass with 0 failures, and the 95
+  script tests pass. CI does not run for this branch, so these were run
+  locally.
+- Review: by its author. The live result is the evidence; no independent
+  review, for a one-line change to each helper.
+- Known issues:
+  - The events lookup's results are not shown on any screen yet, so the
+    fix is checked by the live run and the tests, not on screen.
+  - The rise in idle memory is still not put down to one pull request.
+- Verdict: retained.
+
+### 154: Allocation: a Cash row, so its shares match Holdings' weights
+
+- What: Allocation gave each group's share of the holdings' total, while
+  Holdings' Weight column gives each holding's share of the net value,
+  cash included, or Folync's own figure. The same holding showed two
+  percentages on two pages: in the made-up portfolio VUSA was 26.4% on
+  Allocation and 25.5% on Holdings. The owner chose on 2026-11-25 to add a
+  Cash row.
+
+  When the portfolio's source gives cash above zero, each of the three
+  views (Sector, Holding, Currency) has a row and a slice named "Cash",
+  shown last and never folded into "Other". Every share on the page is
+  then of holdings plus cash. The donut's centre gives that total, with
+  "9 holdings and cash" under it. Cash comes from a new
+  `DataModel.netValueCash()`, which picks its source exactly as
+  `calculateNetValue()` does: Folync's `cash` figure, or the cash in a
+  fresh Trading 212 account snapshot. It is taken only in the currency
+  the source names and converted at a current rate. Without either, cash
+  counts as not known and nothing is worked out from totals. A local
+  portfolio has none, so its page is as before.
+
+  Cash at zero has no row. Cash below zero has no slice, the shares stay
+  of the holdings alone, and a line under the chart gives the figure and
+  says so. Cash has no sector and no day's change: its change cell is
+  "–", and VoiceOver reads "Cash, £2,940.18, 3.5 percent". It has the only
+  tooltip on the page. Its colour is a new token, `allocationCash`: dark
+  ink on a light card and pale parchment on a dark one, neither red nor
+  green nor the grey of "Other" and Unclassified.
+
+  Diversification and the correlation grid stay holdings-only. A caption
+  says so, and their notes say "of the holdings' value". The Unclassified
+  note gives the Unclassified row's own share and adds "cash included".
+  The valuation code moved unchanged from the view into
+  `AllocationValuation`, so the agreement with Holdings could be tested.
+- Merged: 2026-11-25, squash commit `c361a5a`. The merge published
+  experimental build 382.3.22 as the prerelease `experimental-382.3.22`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches open the Overview and never this page.
+- Testing, on macOS 27.2.1 and Xcode 27.2: after pull request 153 was
+  merged this branch was brought up to date with it, and the figures here
+  are for all of it together: 1012 XCTest tests with 0 failures.
+  Thirteen are new, in `AllocationCashTests` in
+  `PortfolioAnalyticsServicesTests.swift`. They cover:
+  - the row in each view, its size and its place;
+  - no row with no cash, with zero cash, or with cash below zero, and
+    that line's text;
+  - shares adding up to 100%;
+  - the centre and its caption, the VoiceOver text, and the tooltip;
+  - Cash never folded into "Other";
+  - the colour token and where the cash comes from;
+  - each holding's share equal to its Holdings weight, for a local
+    portfolio and for a Folync one with cash.
+
+  Six temporary breakages were each caught and removed:
+  - cash folded into "Other";
+  - shares not taken again over holdings plus cash;
+  - cash taken from the total value instead of the cash figure;
+  - cash below zero treated as held;
+  - the Cash row speaking a day's change;
+  - the caption without "and cash".
+
+  `checks`, `docs-check` and `build-release` pass, PY1012 Python helper
+  tests and 95 script tests pass. CI does not run for this branch, so
+  these were run locally.
+
+  On screen, in the acceptance copy with the stand-in's made-up portfolio
+  (£2,940.18 of cash): each view in dark and light, at the default and the
+  minimum size, before and after, with nothing cut off. The seven holdings
+  shown in the Holding view match their Holdings weights to the shown
+  0.1% (VUSA 25.5%, NVDA 15.4%, MSFT 11.7%). The largest unrounded
+  difference is 0.000035 points, from Folync's weight being rounded to
+  four places. Made a local portfolio, the page has no Cash row. Captures
+  are in `build/design/shots/D3b/`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/D3b-allocation-cash.md`). The session
+  lead read the cash sourcing against `calculateNetValue()`, the
+  presentation code and the colour token, and looked at the captures of
+  the Holding view in dark and the Sector view in light at the minimum
+  size. It did not read every test. No independent second review.
+- Known issues:
+  - **Trading 212 agreement is not established.** Holdings values a
+    Trading 212 position at the broker's figure; Allocation values it at
+    price times units. Where those differ, the two pages' percentages
+    differ too, as before this change. With cash below zero they differ
+    for Trading 212 even without that: Holdings divides by the account
+    value and Allocation by the holdings.
+  - A Folync holding that Stockbar does not show or cannot value still
+    counts in Folync's total, so Folync's weights could then differ from
+    Allocation's.
+  - Cash's change cell is "–", the app's usual mark for an unknown figure,
+    while this page's other unknown day changes keep "—".
+  - The Currency view puts every Folync holding under the currency Folync
+    values it in (GBP in the made-up portfolio), as before.
+  - The local portfolio capture shows no rows at all, because the copy
+    fetches no prices; it shows that there is no Cash row and no more.
+  - The tooltip was not seen on screen.
+  - The worker's accessibility reads twice returned the copy's own menu
+    bar, against the rule to read the window only, and the copy became
+    the active app once, after its own sheet was confirmed. Nothing else
+    was touched.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 155: Allocation's Cash row: one source for holdings, total and cash
+
+- What: two independent reviews of pull requests 153 and 154, by GPT-6.2
+  Astra and Gemini 4 Neon, found that Allocation's Cash row could still
+  disagree with Holdings, or show what it should not. The two reviews
+  agreed on every main point, and the session lead checked them against
+  the code. This pull request fixes them. It also fixes a fault the
+  reviews found next to pull request 153.
+
+  **One source.** A new `DataModel.holdingsWeightBasis()` decides once
+  where Holdings' total and cash come from: Folync whenever its snapshot
+  is there, then a fresh Trading 212 account, then the local portfolio.
+  With Folync's holdings, the cash is Folync's or not known. Before, a
+  Folync snapshot with no total took a leftover Trading 212 account's
+  cash. Each holding's value comes from `weighedPositionValue(for:)`, the
+  code behind Holdings' weight, moved out unchanged. Allocation uses both,
+  so a Trading 212 position is now valued at the broker's figure on both
+  pages.
+
+  **When there is no Cash row.** A Cash row is shown only when all four
+  hold:
+  - the source's holdings and total match;
+  - every holding is valued (a holding known to be worth nothing counts
+    as valued and has no slice);
+  - every figure has a loaded exchange rate into the total's currency
+    (pence go through pounds at a fixed 100);
+  - holdings plus cash, converted into the total's currency, come to the
+    source's total within the larger of 0.05% of it, or half the
+    currency's smallest unit for each figure summed.
+
+  The allowance is set so that every share shown to 0.1% agrees with
+  Holdings. A rounding penny cannot hide the cash, and a difference too
+  small to change any shown share may pass. When the check passes, every
+  share is of the source's own total.
+
+  Otherwise the shares are of the holdings, and a line under the chart
+  says why: Folync gives no total, holdings are kept outside the Trading
+  212 account, some holdings have no price, there is no rate for the
+  cash, or the figures do not add up.
+
+  **Also:**
+  - The allocation card now shows with one holding, or with cash alone
+    (100% Cash, "Cash only").
+  - Conversions on the page use a new
+    `CurrencyConverter.convertWithLoadedRates`, which never uses a built-in
+    fallback rate.
+  - The page recalculates when rates load.
+  - Cash that would display as zero counts as zero.
+  - With cash below zero or left out, every percentage note says "of the
+    holdings' value".
+  - The Cash row's change cell uses the page's own "—".
+  - The Currency view groups a Folync holding by the currency it is
+    priced in, not the one Folync values it in. In the made-up portfolio
+    that view was GBP 96.5% and Cash 3.5%; it is now GBP 59.8%, USD 36.7%
+    and Cash 3.5%.
+  - The Folync holdings are looked up once per recalculation instead of
+    once per row.
+  - The page recalculates when the loaded rates change, not on every
+    refresh that brings the same rates.
+
+  **Python.** When yfinance's `info` fails after the chart has loaded, both
+  the real-time and the previous-close paths of `get_stock_data.py` now
+  still read the chart's currency. Before, a London listing quoted in
+  pounds fell to the pence rule and was divided by 100. The remaining
+  `dict` checks on `info` and `calendar` accept any mapping.
+
+  Holdings itself is not changed. The worker reported these inconsistencies
+  in it, left for a later decision:
+  - Trading 212 with a manual holding beside it: the weights add up to
+    more than 100%.
+  - Folync with no total: the net value is not a total of its rows.
+  - Broker positions linked to no row are counted in the account's value.
+  - Folync holdings hidden for tiny share counts still count in Folync's
+    total.
+  - Holdings still converts with built-in fallback rates.
+  - With cash below zero, the weights add up to more than 100%.
+- Merged: 2026-11-25, squash commit `f925fae`. The merge published
+  experimental build 382.3.23 as the prerelease `experimental-382.3.23`.
+  Checked after it: the release workflow succeeded and the prerelease is
+  listed. The published archive was not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches never open this page. The price helper's change adds no work
+  when `info` succeeds.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is
+  on the current head of `experimental`: 1028 XCTest tests with 0
+  failures, 29 of them in `AllocationCashTests`. The tests go through
+  `holdingsWeightBasis()`, `AllocationValuation.make(from:)` and Holdings'
+  own weight for each source. That covers Folync with and without a
+  total; Trading 212, alone and with a manual holding; local; EUR missing
+  from a loaded rate table; partial coverage; cash only; one holding; tiny
+  cash; borrowing; mixed currencies, pence against pounds, and the
+  allowance; a holding worth nothing or less; and the Currency view's
+  grouping. The Folync fixtures go through the production decoder, and the
+  rates test reads the trigger the page itself keys on. Python helper
+  tests: 108, four of them new.
+
+  Twenty-three temporary breakages were each caught and removed: fifteen
+  in the first round (eleven in Swift, four in Python) and eight in the
+  second. One of them, `info` checked as a `dict` again,
+  was caught by nothing until a test was added. `checks`, `docs-check`
+  and `build-release` pass, and so do 95 script tests. CI does not run for
+  this branch, so these were run locally.
+
+  On screen, in the acceptance copy: the three views of the made-up
+  Folync portfolio look as pull request 154 left them, except for the
+  Cash row's dash and the Currency view's new grouping. Captures are in
+  `build/design/shots/D3c/`, the second round's named `round2-*`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/D3c-allocation-cash-fixes.md`), which
+  was drawn from the two reviews. GPT-6.2 Astra then reviewed the first
+  round's five commits. It confirmed each earlier fault fixed and Holdings'
+  weights unchanged, and found five more faults in the new check and two
+  that predate it. A second Opus worker fixed them on the same branch. The
+  session lead read the source decision, the change to Holdings' weight
+  and the second round's check against the total. The second round had no
+  independent review.
+- Known issues:
+  - The cash-only, single-holding, partial-coverage and "left out" states
+    were never seen on screen, only in tests. The stand-in cannot give an
+    unvalued holding without its data being edited.
+  - Trading 212 with no cash figure, or zero cash, gives no line, so its
+    shares can differ from Holdings' without saying so.
+  - A Trading 212 account holding only cash never fetches its account
+    summary in ordinary sync while hourly reconciliation is off, so
+    Allocation has no cash to show for it. Found in review; not changed.
+  - That the page's task re-runs when rates change rests on a test of the
+    trigger value it keys on, not on a test of the task itself.
+  - A change to only the Trading 212 snapshot's cash waits for the next
+    trade update before the page recalculates.
+  - The worker's first two window reads also returned the acceptance
+    copy's own menu bar, against the rule.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 156: Trading 212: value a cash-only account, and only the account in use
+
+- What: a Trading 212 account with no linked holdings never fetched its
+  account summary in the ordinary sync (`syncLinkedTrading212Holdings`
+  returned before asking the broker anything). With the hourly check off,
+  which is the default, such an account had no value: no net value, and no
+  cash for Allocation's Cash row (pull request 155).
+
+  Now, when Trading 212 is enabled with a supported account type and its
+  credentials load, and nothing is linked under the account in use, each
+  ordinary sync asks for the account's summary, one request. It stores a
+  valuation with no positions, marked account-only. Such a valuation
+  stands only while Stockbar holds no holdings of its own. Beside holdings
+  entered by hand, no request is made, the old "No linked Trading 212
+  holdings found" reason stays, and a valuation stored earlier stops
+  applying as soon as a holding is added. A test showed what this guards
+  against: without it, a manual holding's 100% weight fell to 16%.
+
+  For a cash-only account, Holdings' net value is the cash, the menu bar
+  and popover show it, and Allocation shows one Cash row at 100% ("Cash
+  only"). An account whose summary includes investments not linked here
+  is valued at the whole account. Holdings then says so above its empty
+  table, and Allocation gives the reason it draws nothing. Without an
+  investments figure, the Overview's cost basis and gain are unknown ("-"),
+  not worked out from the cash.
+
+  **Review.** Two independent reviews of the first version, by GLM 5.4 and
+  Gemini 4 Neon, found faults that a second round fixed. Several of them
+  predate this pull request and affected linked accounts too:
+  - links in another Trading 212 account counted as links in the one in
+    use (predated);
+  - the hourly check stored a valuation that overrode hand-entered
+    holdings' figures (predated);
+  - a leftover Trading 212 valuation showed through a Folync portfolio
+    whose total or gain was missing (predated);
+  - clearing or changing the credentials, turning Trading 212 off, or
+    choosing another environment or account type left the old account's
+    figures on screen for up to 20 minutes (predated);
+  - a request still in flight when any of that happened could store its
+    answer (partly predated).
+
+  Now only links under the account in use count, every valuation stored
+  without such links is account-only, a Folync portfolio never takes a
+  Trading 212 figure, and an account change clears the stored valuation
+  at once. Every broker answer is checked again before it is stored. It is
+  stored only if the task was not cancelled, Folync is not active, Trading
+  212 is still on with the same environment and account type, credentials
+  are present, and no account change happened meanwhile.
+
+  Allocation now recalculates when the valuation in force changes: its
+  account, currency, account value and cash. It no longer recalculates on
+  every sync, and it does after a valuation that went stale comes back.
+- Merged: 2026-11-25, squash commit `1dcde6f`. The merge published
+  experimental build 382.3.24 as the prerelease `experimental-382.3.24`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
+- Benchmark: owed, not run, on the rule of 2026-11-20. The benchmark's
+  launches have no Trading 212 account.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is on
+  the current head of `experimental`: 1052 XCTest tests with 0 failures.
+  New tests:
+  - nine sync tests;
+  - a new `Trading212ValuationAccountTests` class of eleven;
+  - `AllocationCashTests`, now 33.
+
+  They use a fake broker, so no request leaves the process. They cover:
+  - the cash-only account, and no request without Trading 212 or without
+    credentials;
+  - holdings beside the account, and a holding added later;
+  - links in another account, and the reconcile path;
+  - Folync with a leftover valuation, and Folync taking over mid-request;
+  - an account change, and a request in flight across one;
+  - an unfinished and a failed portfolio load;
+  - the trigger, including a valuation that goes stale and comes back;
+  - the page's reason lines, and the cost basis.
+
+  Twenty-one temporary breakages were run: ten in the first round and
+  eleven in the second. All but one were caught. The uncaught one is
+  removing the re-check for a cancelled task: the request itself already
+  fails on cancellation, so no test can reach it. `checks`, `docs-check`,
+  `build-release` and `python-tests` pass, and so do 95 script tests. CI
+  does not run for this branch, so these were run locally.
+- Review: written by two Opus workers in turn from the session lead's
+  instructions, with independent reviews of the first round by GLM 5.4
+  (max) and Gemini 4 Neon. The session lead read the valuation's guard,
+  the account-change hooks and the record of each round. The second round
+  had no independent review.
+- Known issues:
+  - Never tried against a real Trading 212 account. The shape of a real
+    cash-only summary (whether `investments` is zero or missing) is not
+    known; both shapes are tested.
+  - Entering a first holding by hand beside a cash-only account makes the
+    net value drop from the cash to that holding.
+  - The hooks are tested, but not their calls from the settings view and
+    the settings import.
+  - The flag cleared when a reconciliation imports and links holdings is
+    not tested.
+  - Nothing here was looked at on screen.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 157: Glass cards: draw the top highlight without an extra copy of the window
+
+- What: the redesign raised the app's idle memory by about 21 MB. Pull
+  requests 137 to 139 were measured one launch at a time on 2026-11-25
+  (record 155), which placed almost all of it in the system's drawing
+  memory for the app, the `CoreAnimation` region of the footprint. It is
+  3.2 MB at pull request 136, 19 MB after 137 and 22 MB from 139. A trace
+  of the surface effects, one variant per launch, found the single cause:
+  the faint highlight along the top of each card in dark mode, drawn as a
+  hairline stroked with a gradient. Pull request 139 added the same
+  highlight to the Overview's new cards, hence its 3 MB.
+
+  | Variant, dark Overview | `CoreAnimation` |
+  | --- | --- |
+  | `experimental` at `1dcde6f` | 22 MB |
+  | the same, light (light cards have no highlight) | 3.6 MB |
+  | no shadow modifier, or a shadow only when it has a colour | 22 MB |
+  | no card fill | 22 MB |
+  | no highlight | 3.6 MB |
+  | the highlight drawn on a `Canvas` | 3.7 MB |
+  | the highlight in a `drawingGroup()` | 3.7 MB |
+  | **the highlight as a plain hairline under a gradient mask** | **3.6 MB** |
+
+  Shadows and fills cost nothing. Why a gradient-stroked hairline costs a
+  window's worth of memory is not known; three other ways of drawing the
+  same highlight avoid it. This pull request draws it as a plain hairline
+  under a gradient mask, in a small view `StockbarSurfaceHighlight`.
+
+  The owner chose this option on 2026-11-25, from screenshots that put
+  the current look, this option and no highlight side by side. The look
+  is the same. Compared by pixel at the default size:
+  - Holdings and Allocation in dark mode differ by at most 6/255;
+  - in light mode they are identical;
+  - the Overview's cards differ only at their rounded top corners, by at
+    most 5/255, which an eight-times zoom does not show.
+
+  Removing the highlight altogether saves the same memory but visibly
+  dims the cards' top edges.
+- Merged: 2026-11-25, squash commit `45cd139`. The merge published
+  experimental build 382.3.25 as the prerelease `experimental-382.3.25`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
+- Benchmark: the one-launch readings above. The timed comparison is owed,
+  on the rule of 2026-11-20, and is to cover pull requests 152 to 157
+  together. The footprint as a whole moved by up to 9 MB between launches
+  with the same `CoreAnimation` figure, so the saving is quoted for that
+  region only until the timed comparison is made.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the worker's last commit,
+  which is on the current head of `experimental`: 1054 XCTest tests with 0
+  failures. Two are new, in `SettingsTransferTests.swift`:
+  - one renders the new highlight beside the old gradient stroke and
+    checks that no pixel differs by more than 2/255;
+  - one checks that the highlight fades out by a third of the way down.
+
+  One temporary breakage failed both. `checks`, `docs-check`,
+  `build-release` and `python-tests` pass, and so do 95 script tests.
+- Review: traced and written by an Opus worker from the session lead's
+  instructions. The session lead read the change and looked at the
+  screenshots. No independent review, for a change of one view that is
+  pinned by a pixel test.
+- Known issues:
+  - Memory was measured with the benchmark's page open, the dark
+    Overview. Other pages were not measured.
+  - About 0.4 MB of today's 3.6 MB against 3.2 MB at pull request 136 is
+    not explained.
+  - Whether the pixel test holds on another Mac's renderer, and whether
+    the saving holds on other macOS versions, is not known.
+  - Other gradients drawn elsewhere, such as the chart's area fill, were
+    not checked for a similar cost.
+  - The two new tests sit in `SettingsTransferTests.swift`, an odd home
+    for them.
+- Verdict: retained, with its timed benchmark owed.
+
+### 158: Income for a local or Trading 212 portfolio, as a labelled estimate
+
+- What: Income was dimmed with "Needs a Folync portfolio" for any portfolio
+  not on Folync. The plan the owner approved on 2026-11-19 says: "Local
+  and Trading 212: Income as a labelled estimate". Now, for a local or
+  Trading 212 portfolio, Income is built from Yahoo's record of each
+  holding's dividends over the last twelve months, times the units held
+  today. The events lookup of pull request 136, repaired in 153, supplies
+  that record.
+
+  The page has the Folync page's shape: an outlook, a history and a view
+  by holding. A notice at the top says the figures are an estimate from
+  Yahoo's record at today's units, not a record of what was paid. Nothing
+  is called "Received".
+  - **The last twelve months:** each payment Yahoo lists, at today's
+    units, marked "estimate".
+  - **The next twelve months:** the same payments a year on, each row
+    marked "Estimate". Where Yahoo gives a real upcoming ex-dividend date,
+    it replaces the nearest estimated date within 45 days, and the row
+    says "Yahoo's date, amount estimated".
+  - **Conversion:** loaded rates only. A holding with no loaded rate keeps
+    its own currency's figures, is left out of the totals, and is named
+    in a notice.
+  - **Yahoo is asked** once when the page is selected and once per press
+    of refresh, never on a timer and never from the popover or the
+    Overview.
+  - **The sidebar** dims Income only when live market data is off.
+  - **Unchanged:** Activity and Trades stay Folync-only. The Folync Income
+    page is the old view, renamed and otherwise unchanged.
+
+  A new acceptance-only launch option, `STOCKBAR_ACCEPTANCE_EVENTS`,
+  gives the events service a fixture file of made-up events instead of
+  Yahoo, so the page can be seen in the acceptance copy. It takes effect
+  only in an explicit acceptance run. The bootstrap checks the file and
+  copies it, owner-only, into the run's root, and the app checks that copy
+  again and stops at launch if any check fails. The checks: a regular
+  file, owned by the user and readable by no one else, at most 64 KB,
+  version 1, and only symbols starting `FAKE`.
+
+  This entry also records the timed comparison owed by pull requests 152
+  to 157, and the merge of 157.
+- Merged: 2026-11-25, squash commit `0c77a54`. The merge published
+  experimental build 382.3.26 as the prerelease `experimental-382.3.26`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
+- Benchmark: this pull request's own comparison is owed, on the rule of
+  2026-11-20. The benchmark's launches never open Income and make no Yahoo
+  request.
+
+  **The comparison owed by pull requests 152 to 157**, run at the owner's
+  request on 2026-11-25 instead of overnight: before `2d5d992` (the last
+  commit measured, record 151), after `45cd139` (pull request 157). Six
+  launches a side, in turns, on macOS 27.2.1 and an Apple M3 Pro with 18
+  GB, on mains power, with the lid open, the screen unlocked and no other
+  project's build present. Each run started after twenty quiet minutes and
+  stood under all three set-aside rules.
+
+  First run: turns from 20:53 to 21:27 UTC. The four busiest processes
+  together averaged 135% of a core on the before side and 126% on the
+  after side, a ratio of 1.08. No reading showed input, and no segment had
+  another build beside it.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 118.2 (113.0 to 122.3) MB | 100.1 (94.1 to 103.9) MB | -18.1 MB, -15.3% | lower (p = 0.002) |
+  | Idle memory the app holds allocated | 54.3 (51.5 to 54.9) MB | 52.8 (51.5 to 53.7) MB | (-1.5 MB, -2.8%) | no measurable change (p = 0.121) |
+  | Peak memory, launch and history load | 267.9 (262.9 to 277.9) MB | 251.5 (241.2 to 259.6) MB | -16.4 MB, -6.1% | lower (p = 0.002) |
+  | Idle memory growth across the window | 0.3 (-1.6 to 0.5) MB | 0.2 (0.2 to 0.4) MB | (-0.0 MB, -16.7%) | no measurable change (p = 0.955) |
+  | Idle CPU | 0.101 (0.091 to 0.109) s/min | 0.100 (0.092 to 0.111) s/min | (-0.001 s/min, -1.0%) | no measurable change (p = 0.970) |
+  | Idle CPU wake-ups | 26 (24 to 28) /min | 26 (23 to 29) /min | (+0 /min, +0.0%) | no measurable change (p = 0.855) |
+  | Idle CPU power | 4.32 (3.69 to 5.00) mW | 4.38 (4.20 to 4.85) mW | (+0.05 mW, +1.3%) | no measurable change (p = 0.732) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | (+0.000 MB/min) | no measurable change (p = 1.000) |
+  | Launch to first window | 0.58 (0.53 to 0.96) s | 0.59 (0.45 to 1.02) s | (+0.01 s, +0.9%) | no measurable change (p = 0.699) |
+  | Launch to history loaded | 0.71 (0.62 to 0.95) s | 0.74 (0.60 to 0.98) s | (+0.02 s, +2.8%) | no measurable change (p = 0.974) |
+  | CPU from launch to the idle window | 1.96 (1.85 to 2.18) s | 1.96 (1.85 to 2.07) s | (+0.00 s, +0.0%) | no measurable change (p = 0.922) |
+  | CPU energy from launch to the idle window | 5.96 (5.72 to 6.43) J | 5.92 (5.78 to 6.11) J | (-0.04 J, -0.7%) | no measurable change (p = 0.729) |
+  | Python helper start to ready, no network | 0.29 (0.28 to 0.55) s | 0.28 (0.27 to 0.54) s | (-0.01 s, -5.1%) | no measurable change (p = 0.437) |
+  | Python helper start, CPU | 0.29 (0.28 to 0.34) s | 0.28 (0.27 to 0.35) s | (-0.01 s, -3.4%) | no measurable change (p = 0.682) |
+  | Python helper memory once started | 71.0 (71.0 to 71.1) MB | 71.1 (71.0 to 71.2) MB | (+0.0 MB, +0.1%) | no measurable change (p = 0.675) |
+
+  Repeat: turns from 21:48 to 22:20 UTC. The ratio was 1.23. One reading
+  showed input in the minute before, which is within the rule's limit of
+  two. No segment had another build beside it.
+
+  | Metric | Before: median (range) | After: median (range) | Change | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Idle memory (physical footprint) | 117.5 (107.2 to 123.2) MB | 100.9 (99.3 to 102.6) MB | -16.5 MB, -14.1% | lower (p = 0.002) |
+  | Idle memory the app holds allocated | 54.0 (50.1 to 55.0) MB | 53.7 (52.1 to 53.9) MB | (-0.2 MB, -0.5%) | no measurable change (p = 0.519) |
+  | Peak memory, launch and history load | 268.9 (261.5 to 280.1) MB | 246.9 (243.4 to 254.1) MB | -21.9 MB, -8.2% | lower (p = 0.002) |
+  | Idle memory growth across the window | 0.4 (0.2 to 0.6) MB | 0.3 (0.2 to 0.4) MB | (-0.1 MB, -12.5%) | no measurable change (p = 0.232) |
+  | Idle CPU | 0.103 (0.086 to 0.114) s/min | 0.103 (0.099 to 0.107) s/min | (-0.001 s/min, -0.5%) | no measurable change (p = 1.000) |
+  | Idle CPU wake-ups | 26 (25 to 28) /min | 26 (25 to 28) /min | (+0 /min, +0.0%) | no measurable change (p = 1.000) |
+  | Idle CPU power | 4.12 (3.95 to 4.35) mW | 4.09 (3.62 to 4.35) mW | (-0.03 mW, -0.7%) | no measurable change (p = 0.461) |
+  | Idle disk writes | 0.000 (0.000 to 0.000) MB/min | 0.000 (0.000 to 0.000) MB/min | (+0.000 MB/min) | no measurable change (p = 1.000) |
+  | Launch to first window | 0.52 (0.49 to 0.88) s | 0.52 (0.49 to 0.53) s | (-0.01 s, -1.0%) | no measurable change (p = 0.801) |
+  | Launch to history loaded | 0.64 (0.60 to 0.90) s | 0.62 (0.60 to 0.66) s | (-0.01 s, -1.6%) | no measurable change (p = 0.660) |
+  | CPU from launch to the idle window | 1.96 (1.83 to 1.99) s | 1.96 (1.82 to 1.99) s | (-0.00 s, -0.3%) | no measurable change (p = 0.983) |
+  | CPU energy from launch to the idle window | 5.99 (5.79 to 6.29) J | 5.94 (5.58 to 5.97) J | (-0.05 J, -0.9%) | no measurable change (p = 0.331) |
+  | Python helper start to ready, no network | 0.28 (0.27 to 0.54) s | 0.29 (0.28 to 0.53) s | (+0.01 s, +3.6%) | no measurable change (p = 0.446) |
+  | Python helper start, CPU | 0.28 (0.27 to 0.34) s | 0.29 (0.27 to 0.34) s | (+0.01 s, +3.6%) | no measurable change (p = 0.870) |
+  | Python helper memory once started | 71.0 (71.0 to 71.1) MB | 71.0 (71.0 to 71.3) MB | (+0.0 MB, +0.0%) | no measurable change (p = 0.708) |
+
+  Firm in both runs: idle memory fell by 18.1 and 16.5 MB, from about 118
+  MB to about 100 MB, and peak memory at launch fell by 16.4 and 21.9 MB.
+  The drawing memory (`CoreAnimation`) was 22 MB in every before launch
+  and 3.6 MB in every after launch, as pull request 157 predicted.
+  Nothing else changed measurably in either run, so pull requests 152 to
+  156 cost nothing the benchmark can see.
+
+  Idle memory is now about 100 MB, against 97 MB before the redesign. The
+  reports are `build/bench/results/compare-pr152-157-20261125-205340/report.md`
+  and `compare-pr152-157-repeat-20261125-214806/report.md`.
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the last commit, which is
+  on the current head of `experimental`: 1075 XCTest tests with 0
+  failures. New tests:
+  - `StockbarLocalIncomeTests`, now 16, two added by the session lead
+    after review;
+  - `StockbarAcceptanceEventsFixtureTests`, 4;
+  - one in `InstrumentEventsServiceTests`.
+
+  They cover:
+  - the windows, the year-on repeat, Yahoo's dates replacing estimated
+    ones, and a payment Yahoo lists as coming not being counted twice;
+  - holdings with no payments, no answer, or no rate;
+  - every "estimate" label;
+  - the sidebar for Folync, local, Trading 212 and providers off;
+  - the acceptance option's gate.
+
+  Eleven temporary breakages were each caught and removed: nine by the
+  worker, and one for each of the session lead's two fixes. `checks`,
+  `docs-check`, `build-release` and `python-tests` pass, and 95 script
+  tests pass. CI does not run for this branch, so these were run locally.
+
+  On screen, in the acceptance copy made a local portfolio with the new
+  fixture (five made-up holdings in pounds, dollars and euros): the
+  outlook, history and by-holding views in dark and light, at the default
+  and the minimum size, nothing cut off. The sidebar shows Income no
+  longer dimmed, and the Folync portfolio's Income page is unchanged.
+  Captures are in `build/design/shots/C4/`.
+- Review: written by an Opus worker from the session lead's
+  specification (`build/design/specs/C4-local-income.md`). GLM 5.4 (max)
+  reviewed it independently and found no bug. It confirmed that the
+  acceptance option cannot be reached outside an explicit run, that Yahoo
+  is asked only as intended, and that the Folync page is unchanged. Of
+  its findings, the session lead fixed two that change figures:
+  - a payment Yahoo lists as still to come was also counted as last
+    year's repeat, so twice (possible when the helper's day is ahead of
+    the user's);
+  - an estimated row already on Yahoo's exact ex-date was not given
+    Yahoo's pay date.
+
+  The session lead also fixed a test that rechecked a first result
+  instead of the second. A review by Gemini 4 Neon was stopped by the
+  owner before it reported.
+- Known issues:
+  - By holding's next date can be a pay date for a payment counted in the
+    last twelve months (ex-dividend past, payment still to come).
+  - A Yahoo date with no payment to attach to shows "–" beside its pill,
+    and a holding with no payments last year but an upcoming date reads
+    "None" beside that date.
+  - Selling everything while the page is open leaves it at £0.00, not "No
+    holdings to estimate". A holding added while the page is open shows
+    "–" as if Yahoo had not answered, until refresh.
+  - With no rate table loaded, a foreign holding keeps "no rate loaded"
+    until something else redraws the page.
+  - "Never on a timer" and "never from the popover or the Overview" are
+    tested by construction only. The positive half of the events
+    service's availability, the 64 KB cap and the owner check have no test.
+  - Never run with real Yahoo data or for a Trading 212 account. Exchange
+    rates were not loaded in the copy, so a converted foreign holding was
+    not seen.
+  - The worker's accessibility reads three times returned its copy's own
+    menu bar, against the rule.
+- Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 160: A footer test that accepts either wording of the minutes
+
+- What: the promotion of `experimental` into `testing`
+  ([pull request 159](https://github.com/jayjay181818/StockBar/pull/159))
+  ran CI on this work for the first time since pull request 133. On Xcode
+  27, one test failed:
+  `StockbarMainWindowShellTests.testTheFooterSaysWhereThePortfolioComesFromAndHowFreshItIs`.
+  It expected the sidebar footer to say "Updated 3 min…" for an update
+  three minutes old. The system's relative date formatter on CI's macOS
+  says "Updated 3m ago" instead. Both are the system's own wording of the
+  same thing, and the app passes on whatever the system gives, so the
+  fault is in the test. It now checks that the text starts "Updated 3" and
+  ends "ago". Nothing in the app changes.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. Only a test changes.
+- Testing, on macOS 27.2.1 and Xcode 27.2: the test's class,
+  `StockbarMainWindowShellTests`, 15 tests with 0 failures. `docs-check`
+  passes. The rest of the suite is unchanged from pull request 158's 1075
+  tests with 0 failures. CI runs on the promotion pull request once it is
+  brought up to this commit.
+- Review: by its author. No independent review, for a one-line change to
+  a test.
+- Known issues: other tests may hold system wording in the same way. CI
+  found only this one.
+- Verdict: retained.
+
 ## Rust evaluation, 2026-11-12
 
 No component was moved to Rust, and none is recommended. The one place where
@@ -3666,6 +6563,19 @@ supervised trial against Yahoo.
   behaviour still works, the benchmark record is complete, no known
   regression. A change that trades one metric for another stays open for a
   decision. A performance change with no measurable benefit is not merged.
+- From 2026-11-20, at the owner's word, the benchmarks are parked while
+  another project's builds and tests run on the same Mac: no comparison is
+  started until that work has been idle for more than 20 minutes. Until
+  then the redesign's pull requests are merged on their local checks and
+  review, each record saying that its benchmark is owed. One comparison is
+  run for each phase of the redesign, in the first quiet window after the
+  phase's last pull request is merged. It runs from the last commit
+  measured to the newest, so it also covers pull requests of other phases
+  merged in between, and its table goes into this log through the next
+  pull request. A
+  row that moves is repeated, and if it holds, the phase's pull requests
+  are measured one by one to find the cause. This replaces, for the
+  redesign, the rule that every pull request carries its own table.
 - The CI workflow does not run for `experimental` or for pull requests into
   it, so every check is run locally: `bash script/develop.sh test`, `checks`,
   `python-tests`, `build-release`, and
@@ -3767,6 +6677,18 @@ launch.
 | Pull requests 109 and 110 | Fable 5.2 (orchestrator), with one independent review of both by Opus | Done directly: four lines and seven, the popover's redraws counted in a trial copy and the snapshot list sized with a standalone program. The review, read-only while the shared comparison ran, took 32 tool calls, about 146,000 tokens and six minutes. It found no defect and was worth it: it checked every reader of the session's snapshot list and every way the popover closes, and named the one thing the code could not show, when AppKit reports a close, which led to the guard in pull request 109 and a standalone check of it |
 | The full comparison of pull requests 109 and 110, the dropped separate comparisons, the trial's third run and pull request 112 | Fable 5.2 (orchestrator) for the measuring on 2026-11-16, then Opus 5.5 (orchestrator, at the owner's change of model) for this record | Done directly: unattended runs with readings taken beside them and set-aside rules fixed before any figure existed. Two of the three comparisons were set aside under those rules, and a rule that sent one "possibly" row to two more comparisons cost about four hours before the owner stopped it. Next time the owner should get that choice before the extra runs start |
 | The second promotion to `testing` and pull request 114 | Opus 5.5 (orchestrator) | Done directly: the tests on the promoted commit, two pull requests and the checks on the published build |
+| The redesign's groundwork, pull requests 135 and 136 | Fable 5.2 (session lead) for the specifications, the review and the records; one Opus 5.5 worker for each pull request's code, in its own worktree | Worth it. The lead's reading found faults in both before they were merged: in 135 the fetch policy never dropped kept pages, a queued request still ran after its callers had gone, and a day given as a date could shift by a day; in 136 the helper read Yahoo's dates in the Mac's time zone and asked again for symbols Yahoo does not know. Each was fixed with a test. The workers' tool calls and tokens were not recorded |
+| The Glass redesign, pull requests 137 to 140 | The same arrangement: one worker for the surfaces, then three in parallel for the popover, the Overview and the shell | Worth it for the building. Merging three branches written at the same time cost the lead a round of conflicts for each, and the popover could not be opened in the acceptance copy until the lead added a launch option. One worker clicked twice outside its own window; the owner was told, and the specifications since require a click to be measured against a capture of the same window |
+| The Folync pages, pull requests 141 to 143 | One worker for the stand-in server's ledger routes, then three in parallel for Activity, Trades and Income | Worth it for the building, with the same cost on merging: all three added a sidebar section, so six files conflicted twice. Later batches add at most one section each. The lead added the Partial position to Trades, removed a guessed currency from Income, and replaced timed waits in three tests with conditions the tests control |
+| The second batch, pull requests 144 to 147: Allocation, the Settings switches, Holdings and Risk | Fable 5.2 (session lead) for the specifications, the review, the merges and the records; four Opus 5.5 workers in parallel, each in its own worktree | Worth it for the building. During 145 the lead traced why the acceptance copy could not change a setting seeded before it started: its defaults suite is named by a path, and on macOS 27.2.1 a process never reads back its own change to a key already in such a file. That became pull request 148. In 146 the lead restored the editing table's column widths, which the worker had narrowed without seeing them, and in 147 corrected "trading days" to "days" for the worst fall's length, which is counted in calendar days. Neither the filled Risk page nor Allocation's grid of correlations was seen in the running acceptance copy, only in drawings made off screen, and the owner was asked to look at both in the real build |
+| Pull requests 148 to 150: the acceptance copy's seeded settings, the Charts and Data Health tidy, and the Holdings editing table | Fable 5.2 (session lead), with three Opus 5.5 workers, each in its own worktree | Worth it, with one cut-off. During pull request 150 the Mac's disk filled to 119 MB free with this work's own leftovers: the build folder every acceptance launch left in the temporary directory, and the build caches of every worktree. It stopped the D1b worker part-way through showing its tests fail. The lead removed about 45 GB of those leftovers, keeping the logs, captures and benchmark results, removed the breakage left in the worker's tree, and finished the breakages and checks. Two workers' accessibility reads returned the system's Apple menu, Recent Items included; neither saved or repeated it, and the owner was told. The D4 worker scrolled once without a capture id of the same window. Later specifications are to say: read a window's tree with a query and never the menu bar, give no pointer or scroll input without a capture of the same window, and clear build folders after each batch |
+| The redesign's comparison, run twice on 2026-11-20, and pull request 151 | Fable 5.2 (orchestrator) for both comparisons; then Gemini 4 Neon (orchestrator, at the owner's change of model), which handed this record and the comparison of pull request 140 to Claude Opus 5.5 | Done directly for the measuring: unattended runs, each after twenty quiet minutes, with the set-aside rules fixed before any figure existed. A first attempt was cut off by a restart of T3 Code before it measured anything. This record was written by Opus 5.5 from the two reports and the chain logs and checked against them; its tool calls and tokens were not recorded |
+| The Yahoo check and pull request 153 | Claude Opus 5.5 (session lead) | Done directly: one supervised live run of twelve public symbols, which found that the events lookup had never answered, then the one-line fix in each helper, the tests and this record. Worth doing before Calendar was built: built first, it would have shown no dates for any holding and looked like missing data. |
+| Pull request 154, Allocation's Cash row | Claude Opus 5.5 (session lead) for the specification, the review and the record; one Opus 5.5 worker in its own worktree | Worth it: thirteen tests, six breakages and before-and-after captures of every view. The lead checked the cash source against the net value's and the captures. The worker's accessibility reads twice returned its copy's menu bar, against the new rule, and its copy became the active app once. |
+| Pull request 155, the Cash row's fixes | Claude Opus 5.5 (session lead); GPT-6.2 Astra (extra high) and Gemini 4 Neon as independent reviewers, at the owner's suggestion; two Opus 5.5 workers in turn | Worth it. The two reviews of 153 and 154, made without each other, agreed on every main fault and found what the lead's reading had missed: another account's cash, a built-in exchange rate, and a Python bug that divided a pound price by 100. Astra's second review found five more in the first fix. Reviews cost little next to the workers, and are worth asking for on any change that works out money figures. |
+| Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
+| Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
+| Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

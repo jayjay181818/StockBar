@@ -96,6 +96,22 @@ if [[ -n "$direct_rolling_digits" ]]; then
   echo "$direct_rolling_digits"
 fi
 
+# 10. Surfaces (cards, panels, pills, notices, rows, callouts) come from
+#     Stockbar/Views/StockbarDesign.swift, which honours light and dark mode,
+#     Increase Contrast and Reduce Transparency. A view that fills a surface
+#     from a raw system colour or material bypasses all of that. A line that is
+#     not a surface, or must keep its colour, ends with the comment
+#     "// stockbar-surface-allow: <reason>".
+raw_surface_pattern='Color\.gray\.opacity|(control|window|text|underPage)BackgroundColor|\b(ultraThin|thin|regular|thick|ultraThick|bar)Material\b|StockbarPalette\.(panelFill|subtleFill|faintFill|sheetHeaderFill)\b|\.background\([^{]*\.opacity\(|\.background\(\s*Color\.[A-Za-z]+\s*[,)]'
+raw_surfaces="$(
+  rg -n "$raw_surface_pattern" Stockbar -g '*.swift' -g '!Stockbar/Views/StockbarDesign.swift' \
+    | rg -v '// stockbar-surface-allow: \S' || true
+)"
+if [[ -n "$raw_surfaces" ]]; then
+  fail "Surface drawn from a raw colour or material; use stockbarCard(), stockbarSurface(_:) or a component in StockbarDesign.swift:"
+  echo "$raw_surfaces"
+fi
+
 if [[ "$status" -eq 0 ]]; then
   echo "Invariant validation passed"
 fi

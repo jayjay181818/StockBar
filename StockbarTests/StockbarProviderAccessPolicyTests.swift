@@ -34,6 +34,130 @@ final class StockbarProviderAccessPolicyTests: XCTestCase {
         XCTAssertThrowsError(try policy.authorize(.python))
     }
 
+    // MARK: - Folync on this Mac in an acceptance run
+
+    private static let loopbackEndpoints = [
+        "http://127.0.0.1:49152",
+        "http://localhost:49152",
+        "http://[::1]:49152"
+    ]
+
+    /// Forms that name, or look like they name, this Mac but do not, plus
+    /// other machines, a URL without a host and schemes other than HTTP.
+    private static let nonLoopbackEndpoints = [
+        "http://127.0.0.1.example.com:49152",
+        "http://localhost.example.com:49152",
+        "http://127.0.0.1@example.com/",
+        "http://192.168.1.10:4100",
+        "https://folync.invalid",
+        "http:///api/client/v2",
+        "file:///tmp/folync",
+        "file://localhost/tmp/folync",
+        "ftp://127.0.0.1:49152",
+        "ws://localhost:49152"
+    ]
+
+    /// The policy an explicit acceptance run gets, built the way the app builds it.
+    private func explicitAcceptancePolicy() throws -> StockbarProviderAccessPolicy {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockbarProviderPolicyTests-\(UUID().uuidString)")
+        let runtime = try StockbarAcceptanceRuntime.resolve(environment: [
+            "STOCKBAR_ACCEPTANCE_ROOT": root.path,
+            "STOCKBAR_ACCEPTANCE_RUN_ID": "acceptance-12345678",
+            "STOCKBAR_DISABLE_LIVE_PROVIDERS": "1"
+        ])
+        return StockbarProviderAccessPolicy(runtime: runtime)
+    }
+
+    func testAcceptancePolicyAllowsFolyncOnThisMac() throws {
+        let policy = try explicitAcceptancePolicy()
+
+        XCTAssertFalse(policy.liveRequestsAllowed)
+        for endpoint in Self.loopbackEndpoints {
+            let url = try XCTUnwrap(URL(string: endpoint))
+            XCTAssertNoThrow(try policy.authorize(.folync, endpoint: url), endpoint)
+        }
+    }
+
+    func testAcceptancePolicyRefusesFolyncAnywhereElse() throws {
+        let policy = try explicitAcceptancePolicy()
+
+        for endpoint in Self.nonLoopbackEndpoints {
+            let url = try XCTUnwrap(URL(string: endpoint), endpoint)
+            XCTAssertThrowsError(try policy.authorize(.folync, endpoint: url), endpoint) { error in
+                XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync), endpoint)
+            }
+        }
+    }
+
+    func testAcceptancePolicyRefusesOtherProvidersEvenOnThisMac() throws {
+        let policy = try explicitAcceptancePolicy()
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:49152"))
+
+        for provider in StockbarProvider.allCases where provider != .folync {
+            XCTAssertThrowsError(try policy.authorize(provider, endpoint: url), provider.rawValue) { error in
+                XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(provider))
+            }
+        }
+    }
+
+    func testAcceptancePolicyStillRefusesFolyncWithoutAnEndpoint() throws {
+        let policy = try explicitAcceptancePolicy()
+
+        XCTAssertThrowsError(try policy.authorize(.folync)) { error in
+            XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync))
+        }
+    }
+
+    func testAutomaticXCTestRuntimeRefusesFolyncOnThisMac() throws {
+        let runtime = try StockbarAcceptanceRuntime.resolveCurrent(
+            environment: [:],
+            processIdentifier: 4242,
+            uniqueSuffix: "loopback-0001",
+            isRunningUnderXCTest: true
+        )
+        let policy = StockbarProviderAccessPolicy(runtime: runtime)
+
+        XCTAssertFalse(runtime.loopbackFolyncAllowed)
+        for endpoint in Self.loopbackEndpoints {
+            let url = try XCTUnwrap(URL(string: endpoint))
+            XCTAssertThrowsError(try policy.authorize(.folync, endpoint: url), endpoint) { error in
+                XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync))
+            }
+        }
+    }
+
+    func testPolicyWithoutTheExceptionRefusesFolyncOnThisMac() throws {
+        let policy = StockbarProviderAccessPolicy(liveRequestsAllowed: false)
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:49152"))
+
+        XCTAssertThrowsError(try policy.authorize(.folync, endpoint: url)) { error in
+            XCTAssertEqual(error as? ProviderAccessError, .disabledForAcceptance(.folync))
+        }
+    }
+
+    func testNormalRuntimeAllowsEveryProviderAtAnyEndpoint() throws {
+        let runtime = try StockbarAcceptanceRuntime.resolve(environment: [:])
+        let policy = StockbarProviderAccessPolicy(runtime: runtime)
+
+        for provider in StockbarProvider.allCases {
+            XCTAssertNoThrow(try policy.authorize(provider))
+            for endpoint in Self.loopbackEndpoints + Self.nonLoopbackEndpoints {
+                let url = try XCTUnwrap(URL(string: endpoint))
+                XCTAssertNoThrow(try policy.authorize(provider, endpoint: url), "\(provider.rawValue) \(endpoint)")
+            }
+        }
+    }
+
+    func testLoopbackMatchesTheWholeHostOfAnHTTPURL() throws {
+        for endpoint in Self.loopbackEndpoints + ["HTTP://LOCALHOST:49152", "https://127.0.0.1:49152/api"] {
+            XCTAssertTrue(StockbarProviderAccessPolicy.isLoopback(try XCTUnwrap(URL(string: endpoint))), endpoint)
+        }
+        for endpoint in Self.nonLoopbackEndpoints {
+            XCTAssertFalse(StockbarProviderAccessPolicy.isLoopback(try XCTUnwrap(URL(string: endpoint))), endpoint)
+        }
+    }
+
     func testPythonRunnerDeniesBeforeLaunchingAProcess() async {
         let runner = PythonProcessRunner(
             config: PythonConfiguration(interpreterPath: "/path/that/must/not/run"),

@@ -19,6 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = CoreDataStack.shared.persistentContainer
         SettingsTransferService().removeLeftoverStagedFiles()
+        // Explicit acceptance runs only; nothing in a normal run or under XCTest.
+        StockbarAcceptanceLaunchOptions.current.apply(to: StockbarRuntimeStorage.userDefaults)
         dataModel = DataModel()
         setupMainMenu()
         AppUpdateService.shared.start()
@@ -225,18 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// One item per page of the main window, ⌘1 onwards. Settings keeps ⌘, in
     /// the application menu.
     private func makeViewMenu() -> NSMenu {
-        let viewMenu = NSMenu(title: "View")
-        for (index, section) in StockbarMainSection.allCases.enumerated() where section != .settings {
-            let item = NSMenuItem(
-                title: section.title,
-                action: #selector(showSection(_:)),
-                keyEquivalent: index < 9 ? "\(index + 1)" : ""
-            )
-            item.target = self
-            item.representedObject = section.rawValue
-            viewMenu.addItem(item)
-        }
-        return viewMenu
+        StockbarSidebarMenu.makeViewMenu(sectionTarget: self, sectionAction: #selector(showSection(_:)))
     }
 
     @objc private func showSection(_ sender: NSMenuItem) {

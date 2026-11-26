@@ -8,19 +8,39 @@ enum FolyncSupplementalRoute: String, CaseIterable, Codable, Hashable, Sendable 
     case exchangeRates
 }
 
+/// Folync's ledger routes. Kept apart from `FolyncSupplementalRoute`, which
+/// the Settings screen and the acceptance preflight iterate: these have no
+/// legacy fallback, are fetched only when their page opens, and go through
+/// `FolyncLedgerFetchPolicy`.
+enum FolyncLedgerRoute: String, CaseIterable, Codable, Hashable, Sendable {
+    case dividends
+    case tradeAnalysis
+    case transactions
+}
+
 struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
     var historicalLineCharts: Bool
     var candlestickCharts: Bool
     var benchmarkMarketData: Bool
     var exchangeRates: Bool
     var allowLegacyFallback: Bool
+    /// The ledger routes (`FolyncLedgerRoute`). They are fetched only when
+    /// their page is opened, so they default to on: settings stored before
+    /// they existed decode with them on, and an existing connection does not
+    /// have to switch on each new page by hand.
+    var dividends: Bool = true
+    var tradeAnalysis: Bool = true
+    var transactions: Bool = true
 
     static let disabled = FolyncSupplementalSettings(
         historicalLineCharts: false,
         candlestickCharts: false,
         benchmarkMarketData: false,
         exchangeRates: false,
-        allowLegacyFallback: false
+        allowLegacyFallback: false,
+        dividends: false,
+        tradeAnalysis: false,
+        transactions: false
     )
 
     static func newConnectionDefaults(capabilities: FolyncCapabilities?) -> FolyncSupplementalSettings {
@@ -30,7 +50,10 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
             candlestickCharts: capabilities.resources.candlesticks.isUsable,
             benchmarkMarketData: capabilities.resources.benchmarks.isUsable,
             exchangeRates: capabilities.resources.exchangeRates.isUsable,
-            allowLegacyFallback: false
+            allowLegacyFallback: false,
+            dividends: capabilities.resources.dividends?.isUsable ?? false,
+            tradeAnalysis: capabilities.resources.tradeAnalysis?.isUsable ?? false,
+            transactions: capabilities.resources.transactions?.isUsable ?? false
         )
     }
 
@@ -42,6 +65,52 @@ struct FolyncSupplementalSettings: Codable, Equatable, Sendable {
         case .exchangeRates: exchangeRates
         }
     }
+
+    func isEnabled(_ route: FolyncLedgerRoute) -> Bool {
+        switch route {
+        case .dividends: dividends
+        case .tradeAnalysis: tradeAnalysis
+        case .transactions: transactions
+        }
+    }
+
+    /// Whether these settings match `other` in the four market-data routes
+    /// and the fallback, whatever the ledger routes say. A change confined to
+    /// the ledger routes needs no request: their pages ask when opened.
+    func hasSameMarketDataRoutes(as other: FolyncSupplementalSettings) -> Bool {
+        historicalLineCharts == other.historicalLineCharts
+            && candlestickCharts == other.candlestickCharts
+            && benchmarkMarketData == other.benchmarkMarketData
+            && exchangeRates == other.exchangeRates
+            && allowLegacyFallback == other.allowLegacyFallback
+    }
+}
+
+extension FolyncSupplementalSettings {
+    private enum CodingKeys: String, CodingKey {
+        case historicalLineCharts, candlestickCharts, benchmarkMarketData, exchangeRates, allowLegacyFallback
+        case dividends, tradeAnalysis, transactions
+    }
+
+    /// Every field is optional in stored data, so settings saved by a build
+    /// with fewer fields still decode. With the synthesized decoder a missing
+    /// field failed the whole stored configuration, and Folync fell back to
+    /// `.disabled`. A missing chart or fallback field is off; a missing ledger
+    /// field is on (see `dividends`). In an extension so the memberwise
+    /// initializer stays.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            historicalLineCharts: try container.decodeIfPresent(Bool.self, forKey: .historicalLineCharts) ?? false,
+            candlestickCharts: try container.decodeIfPresent(Bool.self, forKey: .candlestickCharts) ?? false,
+            benchmarkMarketData: try container.decodeIfPresent(Bool.self, forKey: .benchmarkMarketData) ?? false,
+            exchangeRates: try container.decodeIfPresent(Bool.self, forKey: .exchangeRates) ?? false,
+            allowLegacyFallback: try container.decodeIfPresent(Bool.self, forKey: .allowLegacyFallback) ?? false,
+            dividends: try container.decodeIfPresent(Bool.self, forKey: .dividends) ?? true,
+            tradeAnalysis: try container.decodeIfPresent(Bool.self, forKey: .tradeAnalysis) ?? true,
+            transactions: try container.decodeIfPresent(Bool.self, forKey: .transactions) ?? true
+        )
+    }
 }
 
 struct FolyncCapability: Codable, Equatable, Sendable {
@@ -50,6 +119,51 @@ struct FolyncCapability: Codable, Equatable, Sendable {
     let reasonCodes: [String]
 
     var isUsable: Bool { supported && ready }
+}
+
+/// What Settings → Connections → Folync says beside a route's checkbox, and
+/// whether the checkbox can be changed. Worked out from the capabilities
+/// answer Stockbar already has; it never asks Folync anything.
+enum FolyncRouteSettingsStatus {
+    /// `capability` is nil when there is no capabilities answer yet or the
+    /// server does not list the resource. `readyLabel` is what a usable
+    /// route says; a market-data route can name its last route status instead.
+    static func label(for capability: FolyncCapability?, readyLabel: String = "Ready") -> String {
+        guard let capability else { return "Not supported by this Folync server" }
+        if !capability.supported { return "Unsupported" }
+        if !capability.ready {
+            return "Not ready · \(FolyncConnectionState.readable(reasons: capability.reasonCodes))"
+        }
+        return readyLabel
+    }
+
+    /// A route that is off can be switched on only while its capability is
+    /// usable. One that is on can always be switched off: a lost capability
+    /// must not trap an already-enabled route.
+    static func canChange(isOn: Bool, capability: FolyncCapability?) -> Bool {
+        isOn || capability?.isUsable == true
+    }
+
+    /// A ledger route's capability in the answer Stockbar has, nil when there
+    /// is no answer yet or it leaves the route out.
+    static func capability(for route: FolyncLedgerRoute, in capabilities: FolyncCapabilities?) -> FolyncCapability? {
+        capabilities?.resources.capability(for: route)
+    }
+}
+
+extension FolyncLedgerRoute {
+    /// The page each ledger route feeds, as Settings names its checkbox.
+    var settingsTitle: String {
+        switch self {
+        case .dividends: "Income"
+        case .tradeAnalysis: "Trades"
+        case .transactions: "Activity"
+        }
+    }
+
+    /// The checkbox's name for VoiceOver. The "New" badge is hidden from
+    /// VoiceOver and read as part of the name, as the sidebar does.
+    var settingsAccessibilityLabel: String { "\(settingsTitle), New" }
 }
 
 struct FolyncInstrumentIdentity: Codable, Equatable, Sendable {
@@ -87,6 +201,38 @@ struct FolyncCapabilities: Codable, Equatable, Sendable {
         let candlesticks: FolyncCapability
         let benchmarks: FolyncCapability
         let exchangeRates: FolyncCapability
+        /// The ledger resources. Optional: older servers, and capabilities
+        /// documents saved by older builds, do not have them.
+        let transactions: FolyncCapability?
+        let dividends: FolyncCapability?
+        let tradeAnalysis: FolyncCapability?
+
+        init(
+            lineHistory: FolyncCapability,
+            candlesticks: FolyncCapability,
+            benchmarks: FolyncCapability,
+            exchangeRates: FolyncCapability,
+            transactions: FolyncCapability? = nil,
+            dividends: FolyncCapability? = nil,
+            tradeAnalysis: FolyncCapability? = nil
+        ) {
+            self.lineHistory = lineHistory
+            self.candlesticks = candlesticks
+            self.benchmarks = benchmarks
+            self.exchangeRates = exchangeRates
+            self.transactions = transactions
+            self.dividends = dividends
+            self.tradeAnalysis = tradeAnalysis
+        }
+
+        /// Nil when the server does not list the resource.
+        func capability(for route: FolyncLedgerRoute) -> FolyncCapability? {
+            switch route {
+            case .dividends: dividends
+            case .tradeAnalysis: tradeAnalysis
+            case .transactions: transactions
+            }
+        }
     }
 
     struct FX: Codable, Equatable, Sendable {
@@ -587,6 +733,11 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     /// Ranges whose last portfolio-history request failed, so the log gets one
     /// line when a range starts failing and one when it works again.
     private var portfolioHistoryFailing: Set<String> = []
+    /// The single policy in front of the three ledger routes.
+    private let ledgerPolicy: FolyncLedgerFetchPolicy
+    /// Ledger route, scope and query combinations whose last request failed,
+    /// for one log line when one starts failing and one when it recovers.
+    private var ledgerFailing: Set<String> = []
 
     init(
         settingsStore: FolyncSettingsStore = .shared,
@@ -595,8 +746,10 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         session: URLSession = .shared,
         providerPolicy: StockbarProviderAccessPolicy = .current,
         backoff: FolyncBackoffCoordinator = FolyncBackoffCoordinator(),
+        ledgerPolicy: FolyncLedgerFetchPolicy = FolyncLedgerFetchPolicy(),
         tokenProvider: (@Sendable () throws -> String)? = nil
     ) {
+        self.ledgerPolicy = ledgerPolicy
         self.settingsStore = settingsStore
         self.tokenProvider = tokenProvider ?? {
             let baseURL = settingsStore.load().baseURL
@@ -609,17 +762,34 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         self.backoff = backoff
     }
 
+    /// Where capabilities documents are saved. Documents saved before the
+    /// ledger resources existed are under `legacyCapabilitiesRange`: their
+    /// ETag is never sent, because a 304 would confirm a document that drops
+    /// those resources and hide them for good. They are still shown while
+    /// Folync does not answer.
+    private static let capabilitiesRange = "ledger-v1"
+    private static let legacyCapabilitiesRange = "-"
+
+    private func savedCapabilities(
+        endpoint: String,
+        includingLegacy: Bool
+    ) async -> (payload: FolyncCapabilities, etag: String?)? {
+        let ranges = includingLegacy ? [Self.capabilitiesRange, Self.legacyCapabilitiesRange] : [Self.capabilitiesRange]
+        for range in ranges {
+            if let saved = try? await cache.load(
+                endpoint: endpoint, scopeID: "-", resource: "capabilities", identity: "-", range: range,
+                as: FolyncCapabilities.self
+            ) {
+                return (saved.payload, saved.etag)
+            }
+        }
+        return nil
+    }
+
     func fetchCapabilities(baseURL: URL, token: String) async throws -> FolyncCapabilities? {
         let endpoint = baseURL.absoluteString
         let resource = "capabilities"
-        let cached: (payload: FolyncCapabilities, etag: String?, receiptTime: Date)? = try? await cache.load(
-            endpoint: endpoint,
-            scopeID: "-",
-            resource: resource,
-            identity: "-",
-            range: "-",
-            as: FolyncCapabilities.self
-        )
+        let cached = await savedCapabilities(endpoint: endpoint, includingLegacy: false)
         let response = try await request(
             baseURL: baseURL,
             token: token,
@@ -645,7 +815,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             scopeID: "-",
             resource: resource,
             identity: "-",
-            range: "-",
+            range: Self.capabilitiesRange,
             etag: response.etag
         )
         return capabilities
@@ -657,15 +827,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         do {
             return try await fetchCapabilities(baseURL: configuration.baseURL, token: configuration.token)
         } catch {
-            let cached: (payload: FolyncCapabilities, etag: String?, receiptTime: Date)? = try? await cache.load(
-                endpoint: configuration.endpoint,
-                scopeID: "-",
-                resource: "capabilities",
-                identity: "-",
-                range: "-",
-                as: FolyncCapabilities.self
-            )
-            if let cached {
+            if let cached = await savedCapabilities(endpoint: configuration.endpoint, includingLegacy: true) {
                 memoryCapabilities[configuration.endpoint] = cached.payload
                 return cached.payload
             }
@@ -1030,7 +1192,277 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
 
     func clearInMemoryState() async {
         memoryCapabilities.removeAll()
+        await ledgerPolicy.removeAll()
         await backoff.clear()
+    }
+
+    // MARK: Ledger routes
+
+    /// Page one of the scope's dividends. Reused for five minutes unless
+    /// `forceRefresh`; see `FolyncLedgerFetchPolicy`.
+    func routeDividends(
+        _ query: FolyncDividendsQuery = FolyncDividendsQuery(),
+        forceRefresh: Bool = false
+    ) async -> FolyncRoutedDividendsResult {
+        await routeLedger(query, continuation: nil, forceRefresh: forceRefresh)
+    }
+
+    /// The page after `continuation`, taken from the last page loaded.
+    func loadMoreDividends(
+        _ query: FolyncDividendsQuery,
+        after continuation: FolyncLedgerContinuation
+    ) async -> FolyncRoutedDividendsResult {
+        await routeLedger(query, continuation: continuation, forceRefresh: true)
+    }
+
+    func routeTradeAnalysis(
+        _ query: FolyncTradeAnalysisQuery = FolyncTradeAnalysisQuery(),
+        forceRefresh: Bool = false
+    ) async -> FolyncRoutedTradeAnalysisResult {
+        await routeLedger(query, continuation: nil, forceRefresh: forceRefresh)
+    }
+
+    func loadMoreTradeAnalysis(
+        _ query: FolyncTradeAnalysisQuery,
+        after continuation: FolyncLedgerContinuation
+    ) async -> FolyncRoutedTradeAnalysisResult {
+        await routeLedger(query, continuation: continuation, forceRefresh: true)
+    }
+
+    func routeTransactions(
+        _ query: FolyncTransactionsQuery = FolyncTransactionsQuery(),
+        forceRefresh: Bool = false
+    ) async -> FolyncRoutedTransactionsResult {
+        await routeLedger(query, continuation: nil, forceRefresh: forceRefresh)
+    }
+
+    func loadMoreTransactions(
+        _ query: FolyncTransactionsQuery,
+        after continuation: FolyncLedgerContinuation
+    ) async -> FolyncRoutedTransactionsResult {
+        await routeLedger(query, continuation: continuation, forceRefresh: true)
+    }
+
+    /// The gates run before the fetch policy, so a route switched off, a bad
+    /// scope or a missing capability never gets an answer from the reuse window.
+    private func routeLedger<Query: FolyncLedgerQuery, Response: FolyncLedgerResponse>(
+        _ query: Query,
+        continuation: FolyncLedgerContinuation?,
+        forceRefresh: Bool
+    ) async -> FolyncRoutedLedgerResult<Response> {
+        let route = Query.route
+        // Settings first: a route switched off needs no Keychain read.
+        guard settingsStore.load().isLedgerRouteActive(route),
+              let configuration = await currentConfiguration(),
+              configuration.settings.isLedgerRouteActive(route) else { return .disabled }
+        let scopeID = configuration.settings.scopeID
+        guard (try? FolyncPortfolioSource.validateScopeComponent(scopeID)) != nil else { return .unavailable }
+        guard let capabilities = await capabilitiesForCurrentSettings(),
+              capabilities.resources.capability(for: route)?.isUsable == true else { return .unavailable }
+        let key = FolyncLedgerFetchPolicy.Key(
+            route: route,
+            endpoint: configuration.endpoint,
+            scopeID: scopeID,
+            query: query.cacheKey,
+            cursor: continuation?.cursor
+        )
+        let result: FolyncRoutedLedgerResult<Response>? = await ledgerPolicy.perform(
+            key, forceRefresh: forceRefresh
+        ) { [self] in
+            if let continuation {
+                return await self.fetchLedgerLaterPage(query, after: continuation, configuration: configuration)
+            }
+            let first: LedgerFirstPage<Response> = await self.fetchLedgerFirstPage(query, configuration: configuration)
+            return .init(result: first.result, firstPageToKeep: first.isFresh ? first.result : nil)
+        }
+        // Nil only for a cancelled caller, which has stopped listening: no
+        // request was made for it.
+        return result ?? .unavailable
+    }
+
+    private struct LedgerFirstPage<Response: FolyncLedgerResponse>: Sendable {
+        let result: FolyncRoutedLedgerResult<Response>
+        /// Folync confirmed it just now, by a full answer or a 304.
+        let isFresh: Bool
+    }
+
+    /// Asks for page one, with the saved copy's ETag. Runs inside the policy's turn.
+    private func fetchLedgerFirstPage<Query: FolyncLedgerQuery, Response: FolyncLedgerResponse>(
+        _ query: Query,
+        configuration: Configuration
+    ) async -> LedgerFirstPage<Response> {
+        let route = Query.route
+        let scopeID = configuration.settings.scopeID
+        let saved = try? await cache.load(
+            endpoint: configuration.endpoint,
+            scopeID: scopeID,
+            resource: route.cacheResource,
+            identity: scopeID,
+            range: query.cacheKey,
+            as: Response.self
+        )
+        let usableSaved = saved.flatMap { isUsableLedger($0.payload, scopeID: scopeID) ? $0 : nil }
+        let failureKey = ledgerFailureKey(route: route, configuration: configuration, query: query)
+        do {
+            let response = try await request(
+                baseURL: configuration.baseURL,
+                token: configuration.token,
+                path: ledgerPath(route, scopeID: scopeID),
+                query: query.queryItems(cursor: nil),
+                etag: usableSaved?.etag
+            )
+            if response.statusCode == 304, let usableSaved {
+                await noteLedgerRecovered(key: failureKey, route: route)
+                let status = sourceStatus(quality: usableSaved.payload.quality, stale: false)
+                return LedgerFirstPage(result: .folync(usableSaved.payload, status: status, paging: .firstPage), isFresh: true)
+            }
+            let payload: Response = try await decodeLedger(response, scopeID: scopeID)
+            // A copy that cannot be written is still a good answer.
+            try? await cache.save(
+                payload,
+                endpoint: configuration.endpoint,
+                scopeID: scopeID,
+                resource: route.cacheResource,
+                identity: scopeID,
+                range: query.cacheKey,
+                etag: response.etag
+            )
+            await noteLedgerRecovered(key: failureKey, route: route)
+            let status = sourceStatus(quality: payload.quality, stale: false)
+            return LedgerFirstPage(result: .folync(payload, status: status, paging: .firstPage), isFresh: true)
+        } catch {
+            let result = await ledgerFailure(
+                error, route: route, failureKey: failureKey, saved: usableSaved?.payload, paging: .firstPage
+            )
+            return LedgerFirstPage(result: result, isFresh: false)
+        }
+    }
+
+    /// Asks for the page after `continuation`. A later page is never saved,
+    /// never reused and never replaced by a saved copy. On a 409, a refused
+    /// cursor or a changed collection revision, paging restarts from page one.
+    private func fetchLedgerLaterPage<Query: FolyncLedgerQuery, Response: FolyncLedgerResponse>(
+        _ query: Query,
+        after continuation: FolyncLedgerContinuation,
+        configuration: Configuration
+    ) async -> FolyncLedgerFetchPolicy.Outcome<FolyncRoutedLedgerResult<Response>> {
+        let route = Query.route
+        let scopeID = configuration.settings.scopeID
+        let failureKey = ledgerFailureKey(route: route, configuration: configuration, query: query)
+        do {
+            let response = try await request(
+                baseURL: configuration.baseURL,
+                token: configuration.token,
+                path: ledgerPath(route, scopeID: scopeID),
+                query: query.queryItems(cursor: continuation.cursor),
+                etag: nil
+            )
+            if response.statusCode == 409
+                || (response.statusCode == 400 && FolyncClientAPIErrorBody.refusesCursor(response.data)) {
+                return await restartLedgerPaging(query, configuration: configuration)
+            }
+            let payload: Response = try await decodeLedger(response, scopeID: scopeID)
+            guard payload.page.collectionRevision == continuation.collectionRevision else {
+                return await restartLedgerPaging(query, configuration: configuration)
+            }
+            await noteLedgerRecovered(key: failureKey, route: route)
+            let status = sourceStatus(quality: payload.quality, stale: false)
+            return .init(result: .folync(payload, status: status, paging: .nextPage), firstPageToKeep: nil)
+        } catch {
+            // The caller keeps the rows it has; page one's saved copy is not swapped in.
+            let result: FolyncRoutedLedgerResult<Response> = await ledgerFailure(
+                error, route: route, failureKey: failureKey, saved: nil, paging: .nextPage
+            )
+            return .init(result: result, firstPageToKeep: nil)
+        }
+    }
+
+    /// Page one again, asked for afresh in the same turn (asking the policy
+    /// again from inside its turn would wait for ever). Saved and kept like
+    /// any page one; the caller is told to drop what it gathered.
+    private func restartLedgerPaging<Query: FolyncLedgerQuery, Response: FolyncLedgerResponse>(
+        _ query: Query,
+        configuration: Configuration
+    ) async -> FolyncLedgerFetchPolicy.Outcome<FolyncRoutedLedgerResult<Response>> {
+        await Logger.shared.info("Folync \(Query.route.rawValue) paging restarted from the first page")
+        let first: LedgerFirstPage<Response> = await fetchLedgerFirstPage(query, configuration: configuration)
+        let restarted: FolyncRoutedLedgerResult<Response> = switch first.result {
+        case .folync(let payload, let status, _): .folync(payload, status: status, paging: .restarted)
+        case .disabled, .unavailable, .unreachable: first.result
+        }
+        return .init(result: restarted, firstPageToKeep: first.isFresh ? first.result : nil)
+    }
+
+    private func decodeLedger<Response: FolyncLedgerResponse>(
+        _ response: HTTPResult,
+        scopeID: String
+    ) async throws -> Response {
+        try await validate(response)
+        let payload = try decode(Response.self, data: response.data)
+        try validateSchema(payload.schemaVersion)
+        guard isUsableLedger(payload, scopeID: scopeID) else {
+            throw FolyncPortfolioSourceError.invalidPayload("Ledger page is for another scope or is inconsistent")
+        }
+        return payload
+    }
+
+    /// A 404 means the server has no such route or scope: unavailable, with no
+    /// saved copy (there is nothing to refresh it from). Otherwise a usable
+    /// saved copy is shown as stale; failing that, unreachable when Folync did
+    /// not answer and unavailable when it answered with an error.
+    private func ledgerFailure<Response: FolyncLedgerResponse>(
+        _ error: Error,
+        route: FolyncLedgerRoute,
+        failureKey: String,
+        saved: Response?,
+        paging: FolyncLedgerPaging
+    ) async -> FolyncRoutedLedgerResult<Response> {
+        let category = FolyncRefreshSchedule.failureCategory(error)
+        let routeMissing = category == "http-404"
+        if category != "cancelled" {
+            await noteLedgerFailed(
+                key: failureKey, route: route, category: category, showingSaved: saved != nil && !routeMissing
+            )
+        }
+        if routeMissing { return .unavailable }
+        if let saved { return .folync(saved, status: .stale, paging: paging) }
+        return Self.isUnreachable(category: category) ? .unreachable : .unavailable
+    }
+
+    /// Light on purpose: figures carry their own quality and nulls, and an
+    /// unavailable valuation is still an answer to show. Rejects only a page
+    /// for another scope or one whose paging fields do not fit together.
+    private func isUsableLedger<Response: FolyncLedgerResponse>(_ payload: Response, scopeID: String) -> Bool {
+        payload.scope.id == scopeID
+            && payload.page.limit >= 1
+            && !payload.page.collectionRevision.isEmpty
+            && (!payload.page.hasMore || payload.page.continuation != nil)
+    }
+
+    private func ledgerPath(_ route: FolyncLedgerRoute, scopeID: String) -> [String] {
+        ["api", "client", "v2", "scopes", scopeID, route.pathComponent]
+    }
+
+    private func ledgerFailureKey<Query: FolyncLedgerQuery>(
+        route: FolyncLedgerRoute,
+        configuration: Configuration,
+        query: Query
+    ) -> String {
+        [route.rawValue, configuration.endpoint, configuration.settings.scopeID, query.cacheKey].joined(separator: "\n")
+    }
+
+    private func noteLedgerFailed(key: String, route: FolyncLedgerRoute, category: String, showingSaved: Bool) async {
+        let fallback = showingSaved ? "showing the saved copy" : "nothing saved to show"
+        if ledgerFailing.insert(key).inserted {
+            await Logger.shared.warning("Folync \(route.rawValue) failed (\(category)); \(fallback)")
+        } else {
+            await Logger.shared.debug("Folync \(route.rawValue) failed again (\(category)); \(fallback)")
+        }
+    }
+
+    private func noteLedgerRecovered(key: String, route: FolyncLedgerRoute) async {
+        guard ledgerFailing.remove(key) != nil else { return }
+        await Logger.shared.info("Folync \(route.rawValue) answered again")
     }
 
     func backoffUntil() async -> Date? {
@@ -1234,7 +1666,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         query: [URLQueryItem],
         etag: String?
     ) async throws -> HTTPResult {
-        try providerPolicy.authorize(.folync)
+        try providerPolicy.authorize(.folync, endpoint: baseURL)
         try FolyncEndpointPolicy.validate(baseURL)
         if await backoff.isBackingOff() {
             throw FolyncPortfolioSourceError.rateLimited(retryAfter: nil)

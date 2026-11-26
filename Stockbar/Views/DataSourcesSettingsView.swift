@@ -173,7 +173,7 @@ struct DataSourcesSettingsView: View {
                             Text("Inactive while Folync is authoritative")
                                 .font(.caption)
                                 .padding(6)
-                                .background(.thinMaterial, in: Capsule())
+                                .stockbarSurface(.pill, in: Capsule())
                         }
                     }
                 
@@ -222,7 +222,7 @@ struct DataSourcesSettingsView: View {
                                 }
                                 .padding(8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(StockbarPalette.hoverFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .stockbarSurface(.inset, cornerRadius: 6)
                             }
                         }
                     }
@@ -311,7 +311,7 @@ struct DataSourcesSettingsView: View {
             switch status {
             case .none:
                 Circle()
-                    .fill(Color.gray.opacity(0.3))
+                    .fill(Color.gray.opacity(0.3)) // stockbar-surface-allow: a status dot, not a surface
                     .frame(width: 10, height: 10)
             case .verifying:
                 Circle()

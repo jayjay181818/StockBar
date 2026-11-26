@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import Stockbar
 
@@ -464,5 +465,421 @@ private actor FixtureOHLCStore: OHLCDataStoring {
 
     func savedSnapshots() -> [OHLCSnapshot] {
         saved
+    }
+}
+
+// MARK: - Instrument events
+
+final class InstrumentEventsServiceTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_795_000_000)
+    private let hour: TimeInterval = 3_600
+    private let day: TimeInterval = 86_400
+    private let scriptPath = "/tmp/get_instrument_events.py"
+    private var directory: URL!
+    private var clock: OSAllocatedUnfairLock<Date>!
+
+    override func setUp() {
+        super.setUp()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("InstrumentEventsServiceTests-\(UUID().uuidString)", isDirectory: true)
+        clock = OSAllocatedUnfairLock(initialState: start)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+        super.tearDown()
+    }
+
+    private func advance(_ interval: TimeInterval) {
+        clock.withLock { $0 = $0.addingTimeInterval(interval) }
+    }
+
+    private func makeService(
+        runner: InstrumentEventsRunnerStub,
+        policy: StockbarProviderAccessPolicy = StockbarProviderAccessPolicy(liveRequestsAllowed: true)
+    ) -> InstrumentEventsService {
+        let clock = self.clock!
+        return InstrumentEventsService(
+            scriptPath: scriptPath,
+            processRunner: runner,
+            providerPolicy: policy,
+            directory: directory,
+            now: { clock.withLock { $0 } }
+        )
+    }
+
+    private static func success(_ symbol: String, type: String? = "EQUITY", exDate: String? = "2026-11-28") -> String {
+        let typeJSON = type.map { "\"\($0)\"" } ?? "null"
+        let exJSON = exDate.map { "\"\($0)\"" } ?? "null"
+        return """
+        {"symbol": "\(symbol)", "success": true, "events": {"symbol": "\(symbol)", "instrumentType": \(typeJSON),
+         "exDividendDate": \(exJSON), "dividendPayDate": null, "earningsDate": null, "earningsDateEnd": null,
+         "dividends": [], "dividendCurrency": null, "fetchedAt": 1795000000.5}}
+        """
+    }
+
+    private static func failure(_ symbol: String, code: String) -> String {
+        """
+        {"symbol": "\(symbol)", "success": false, "error": {"error_code": "\(code)", "message": "invented"}}
+        """
+    }
+
+    private static func answer(_ entries: String...) -> InstrumentEventsRunnerStub.Response {
+        .output("[" + entries.joined(separator: ",") + "]")
+    }
+
+    func testTheAcceptanceFixtureAnswersInsteadOfTheHelperAndYahoo() async throws {
+        let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [{"symbol": "FAKEUS", "instrumentType": "EQUITY", "currency": "USD",
+          "dividends": [{"daysFromToday": -40, "amount": 0.25}], "exDividendInDays": 10, "payInDays": 20}]}
+        """.utf8))
+        let runner = InstrumentEventsRunnerStub(responses: [.output("[]")])
+        let clock = self.clock!
+        let service = InstrumentEventsService(
+            scriptPath: nil, processRunner: runner,
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+            directory: directory, now: { clock.withLock { $0 } }, fixture: fixture
+        )
+
+        let results = await service.events(for: ["FAKEUS", "FAKENA"])
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 0, "the helper never runs, and Yahoo is never asked")
+        let events = try XCTUnwrap(results.first?.events)
+        let today = try XCTUnwrap(InstrumentEventDay.on(start))
+        func offset(_ days: Int) -> InstrumentEventDay? {
+            InstrumentEventDay.on(start.addingTimeInterval(Double(days) * day))
+        }
+        XCTAssertEqual(events.dividends, [InstrumentDividend(date: try XCTUnwrap(offset(-40)), amount: 0.25)])
+        XCTAssertEqual(events.exDividendDate, offset(10))
+        XCTAssertEqual(events.dividendPayDate, offset(20))
+        XCTAssertEqual(events.dividendCurrency, "USD")
+        XCTAssertEqual(events.instrumentType, .equity)
+        XCTAssertNotNil(today)
+        XCTAssertEqual(results.last?.outcome, .failed(.noData), "a symbol the fixture does not name has no data")
+        // The answer is saved like Yahoo's: a second ask inside the day is answered from it.
+        let again = await service.events(for: ["FAKEUS"])
+        XCTAssertEqual(again.first?.isStale, false)
+        XCTAssertEqual(again.first?.outcome, results.first?.outcome)
+    }
+
+    func testDecodesEveryFieldAndKeepsNullAsNil() async {
+        let full = """
+        [{"symbol": "ALPHA", "success": true, "events": {"symbol": "ALPHA", "instrumentType": "EQUITY",
+          "exDividendDate": "2026-11-28", "dividendPayDate": "2026-12-10", "earningsDate": "2027-01-28",
+          "earningsDateEnd": "2027-02-04", "dividends": [{"date": "2026-02-05", "amount": 0.25},
+          {"date": "2026-05-07", "amount": 0.26}], "dividendCurrency": "USD", "fetchedAt": 1795000000.5}},
+         {"symbol": "GAMMA.L", "success": true, "events": {"symbol": "GAMMA.L", "instrumentType": "WARRANT",
+          "exDividendDate": null, "dividendPayDate": null, "earningsDate": null, "earningsDateEnd": null,
+          "dividends": null, "dividendCurrency": null, "fetchedAt": 1795000000}}]
+        """
+        let runner = InstrumentEventsRunnerStub(responses: [.output(full)])
+        let service = makeService(runner: runner)
+
+        let results = await service.events(for: ["ALPHA", "GAMMA.L"])
+
+        XCTAssertEqual(results.map(\.symbol), ["ALPHA", "GAMMA.L"])
+        XCTAssertTrue(results.allSatisfy { $0.source == .yahoo && $0.failure == nil })
+        let alpha = results[0].events
+        XCTAssertEqual(alpha?.instrumentType, .equity)
+        XCTAssertEqual(alpha?.exDividendDate, InstrumentEventDay(year: 2026, month: 11, day: 28))
+        XCTAssertEqual(alpha?.dividendPayDate?.description, "2026-12-10")
+        XCTAssertEqual(alpha?.earningsDate?.description, "2027-01-28")
+        XCTAssertEqual(alpha?.earningsDateEnd?.description, "2027-02-04")
+        XCTAssertEqual(alpha?.dividends?.map(\.amount), [0.25, 0.26])
+        XCTAssertEqual(alpha?.dividendCurrency, "USD")
+        XCTAssertEqual(results[0].fetchedAt, Date(timeIntervalSince1970: 1_795_000_000.5))
+
+        let fund = results[1].events
+        XCTAssertEqual(fund?.instrumentType, .other("WARRANT"))
+        XCTAssertEqual(fund?.instrumentType?.rawValue, "WARRANT")
+        XCTAssertNil(fund?.exDividendDate)
+        XCTAssertNil(fund?.dividendPayDate)
+        XCTAssertNil(fund?.earningsDate)
+        XCTAssertNil(fund?.earningsDateEnd)
+        XCTAssertNil(fund?.dividends, "null stays nil, not an empty list")
+        XCTAssertNil(fund?.dividendCurrency)
+
+        XCTAssertNil(InstrumentEventDay("2026-02-30"))
+        XCTAssertNil(InstrumentEventDay("NaT"))
+        XCTAssertNil(InstrumentEventDay("2026-1-05"))
+        XCTAssertLessThan(InstrumentEventDay("2026-09-18")!, InstrumentEventDay("2026-11-28")!)
+    }
+
+    func testOneUnreadableEntryDoesNotFailTheOthers() async {
+        let bad = """
+        {"symbol": "BETA.L", "success": true, "events": {"symbol": "BETA.L", "exDividendDate": "18/09/2026", "fetchedAt": 1}}
+        """
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA"), bad)])
+        let service = makeService(runner: runner)
+
+        let results = await service.events(for: ["ALPHA", "BETA.L"])
+
+        XCTAssertNil(results[0].failure)
+        XCTAssertNotNil(results[0].events)
+        guard case .failed(.scriptFailed) = results[1].outcome else {
+            return XCTFail("Expected an unreadable-answer failure, got \(results[1].outcome)")
+        }
+    }
+
+    func testSavedCopyIsUsedInsideADayAndRefreshedAfter() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA", exDate: "2026-11-28")),
+            Self.answer(Self.success("ALPHA", exDate: "2027-02-20")),
+        ])
+        let service = makeService(runner: runner)
+
+        _ = await service.events(for: ["ALPHA"])
+        advance(23 * hour)
+        let sameDay = await service.events(for: ["ALPHA"])
+        let callsInsideTheDay = await runner.callCount()
+        advance(2 * hour)
+        let nextDay = await service.events(for: ["ALPHA"])
+
+        XCTAssertEqual(callsInsideTheDay, 1)
+        XCTAssertEqual(sameDay[0].events?.exDividendDate?.description, "2026-11-28")
+        XCTAssertEqual(sameDay[0].outcome, .events(sameDay[0].events!, .current))
+        let totalCalls = await runner.callCount()
+        XCTAssertEqual(totalCalls, 2)
+        XCTAssertEqual(nextDay[0].events?.exDividendDate?.description, "2027-02-20")
+
+        // A new service (a relaunch) reads the saved copy instead of running the script.
+        let relaunched = makeService(runner: InstrumentEventsRunnerStub(responses: [.output("[]")]))
+        let fromDisk = await relaunched.events(for: ["ALPHA"])
+        XCTAssertEqual(fromDisk[0].events?.exDividendDate?.description, "2027-02-20")
+        XCTAssertNil(fromDisk[0].failure)
+    }
+
+    func testSeveralSymbolsGoInOneRunWithoutRepeats() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA"), Self.success("BETA.L"))])
+        let service = makeService(runner: runner)
+
+        let results = await service.events(for: ["alpha", "ALPHA", " BETA.L", "-BAD", "ALPHA"])
+
+        let calls = await runner.calls()
+        XCTAssertEqual(calls.count, 1)
+        let arguments = try XCTUnwrap(calls.first)
+        XCTAssertEqual(arguments.first, scriptPath)
+        XCTAssertEqual(Array(arguments.suffix(2)), ["ALPHA", "BETA.L"])
+        XCTAssertTrue(arguments.contains("--json"))
+        XCTAssertFalse(arguments.contains("-BAD"), "Invalid symbols never reach the script")
+        XCTAssertEqual(results.map(\.symbol), ["ALPHA", "BETA.L", "-BAD"])
+        XCTAssertEqual(results[2].outcome, .failed(.invalidSymbol))
+    }
+
+    func testCallersAtTheSameTimeShareOneRun() async {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA"), Self.success("BETA.L"))])
+        await runner.hold()
+        let service = makeService(runner: runner)
+
+        let first = Task { await service.events(for: ["ALPHA", "BETA.L"]) }
+        await runner.waitForCalls(1)
+        let second = Task { await service.events(for: ["BETA.L"]) }
+        await waitUntil { await service.sharedRunWaits == 1 }
+        await runner.release()
+
+        let firstResults = await first.value
+        let secondResults = await second.value
+        let calls = await runner.callCount()
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(firstResults.compactMap(\.events).count, 2)
+        XCTAssertEqual(secondResults.first?.events?.symbol, "BETA.L")
+        XCTAssertNil(secondResults.first?.failure)
+    }
+
+    func testStaleCopyWhenYahooDoesNotAnswer() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA")),
+            Self.answer(Self.failure("ALPHA", code: "NETWORK_ERROR"), Self.failure("BETA.L", code: "NETWORK_ERROR")),
+            .timeout,
+        ])
+        let service = makeService(runner: runner)
+
+        let saved = await service.events(for: ["ALPHA"])
+        advance(3 * day)
+        let failed = await service.events(for: ["ALPHA", "BETA.L"])
+        let timedOut = await service.events(for: ["ALPHA"])
+
+        XCTAssertEqual(failed[0].outcome, .events(saved[0].events!, .stale(.network)))
+        XCTAssertTrue(failed[0].isStale)
+        XCTAssertEqual(failed[1].outcome, .failed(.network), "No saved copy: a failure that says why")
+        XCTAssertEqual(timedOut[0].outcome, .events(saved[0].events!, .stale(.timedOut)))
+    }
+
+    func testNoRunWhenTheProviderPolicyRefuses() async {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA"))])
+        let refused = makeService(runner: runner, policy: StockbarProviderAccessPolicy(liveRequestsAllowed: false))
+
+        let results = await refused.events(for: ["ALPHA"], forceRefresh: true)
+
+        let refusedCalls = await runner.callCount()
+        XCTAssertEqual(refusedCalls, 0)
+        XCTAssertEqual(results[0].outcome, .failed(.providerDisabled))
+
+        // The app's own policy under XCTest isolation refuses too.
+        let isolated = makeService(runner: runner, policy: .current)
+        let isolatedResults = await isolated.events(for: ["ALPHA"])
+        let isolatedCalls = await runner.callCount()
+        XCTAssertEqual(isolatedCalls, 0)
+        XCTAssertEqual(isolatedResults[0].outcome, .failed(.providerDisabled))
+    }
+
+    func testRateLimitPausesRunsForAnHourEvenWhenForced() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA"), Self.failure("BETA.L", code: "RATE_LIMIT")),
+            Self.answer(Self.success("BETA.L")),
+        ])
+        let service = makeService(runner: runner)
+        let pauseEnds = start.addingTimeInterval(hour)
+
+        let limited = await service.events(for: ["ALPHA", "BETA.L"])
+        advance(59 * 60)
+        let paused = await service.events(for: ["BETA.L"], forceRefresh: true)
+        let pausedCalls = await runner.callCount()
+        advance(2 * 60)
+        let resumed = await service.events(for: ["BETA.L"])
+
+        XCTAssertNil(limited[0].failure)
+        XCTAssertEqual(limited[1].outcome, .failed(.rateLimited(retryAfter: pauseEnds)))
+        XCTAssertEqual(paused[0].outcome, .failed(.rateLimited(retryAfter: pauseEnds)))
+        XCTAssertEqual(pausedCalls, 1, "No run inside the hour, forced or not")
+        let resumedCalls = await runner.callCount()
+        XCTAssertEqual(resumedCalls, 2)
+        XCTAssertNil(resumed[0].failure)
+    }
+
+    func testSymbolYahooDoesNotKnowIsNotAskedForAgainThatDay() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA"), Self.failure("NOSUCH", code: "NO_DATA")),
+            Self.answer(Self.failure("NOSUCH", code: "NO_DATA")),
+            Self.answer(Self.success("NOSUCH")),
+        ])
+        let service = makeService(runner: runner)
+
+        let first = await service.events(for: ["ALPHA", "NOSUCH"])
+        advance(hour)
+        let again = await service.events(for: ["ALPHA", "NOSUCH"])
+        let callsInsideTheDay = await runner.callCount()
+        let forced = await service.events(for: ["NOSUCH"], forceRefresh: true)
+        let callsAfterForce = await runner.callCount()
+        advance(day)
+        let nextDay = await service.events(for: ["NOSUCH"])
+        let callsNextDay = await runner.callCount()
+
+        XCTAssertEqual(first[1].outcome, .failed(.noData))
+        XCTAssertEqual(again[1].outcome, .failed(.noData))
+        XCTAssertEqual(callsInsideTheDay, 1, "Yahoo is not asked again that day for a symbol it does not know")
+        XCTAssertEqual(forced[0].outcome, .failed(.noData))
+        XCTAssertEqual(callsAfterForce, 2, "A forced refresh still asks")
+        XCTAssertNil(nextDay[0].failure)
+        XCTAssertEqual(callsNextDay, 3)
+    }
+
+    func testRateLimitForTheWholeRunAlsoPauses() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            .output(#"{"error": true, "error_code": "RATE_LIMIT", "message": "invented", "timestamp": 1}"#),
+        ])
+        let service = makeService(runner: runner)
+
+        _ = await service.events(for: ["ALPHA"])
+        advance(10 * 60)
+        let paused = await service.events(for: ["ALPHA"])
+
+        let calls = await runner.callCount()
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(paused[0].outcome, .failed(.rateLimited(retryAfter: start.addingTimeInterval(hour))))
+    }
+
+    func testForcedRefreshRunsInsideTheDay() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA", exDate: "2026-11-28")),
+            Self.answer(Self.success("ALPHA", exDate: "2026-12-01")),
+        ])
+        let service = makeService(runner: runner)
+
+        _ = await service.events(for: ["ALPHA"])
+        advance(hour)
+        let forced = await service.events(for: ["ALPHA"], forceRefresh: true)
+
+        let calls = await runner.callCount()
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(forced[0].events?.exDividendDate?.description, "2026-12-01")
+        XCTAssertNil(forced[0].failure)
+    }
+
+    func testSavedCopiesOlderThanThirtyDaysAreRemoved() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA")),
+            Self.answer(Self.success("BETA.L")),
+        ])
+        let service = makeService(runner: runner)
+        _ = await service.events(for: ["ALPHA"])
+        advance(2 * day)
+        _ = await service.events(for: ["BETA.L"])
+        try Data("not json".utf8).write(to: directory.appendingPathComponent("events-BROKEN.json"))
+
+        advance(29 * day)
+        let relaunched = makeService(runner: InstrumentEventsRunnerStub(responses: [.timeout]))
+        _ = await relaunched.events(for: [])
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        XCTAssertEqual(names, ["events-BETA.L.json"])
+    }
+
+    private func waitUntil(_ condition: @escaping @Sendable () async -> Bool) async {
+        for _ in 0..<2_000 {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Condition never became true")
+    }
+}
+
+/// Answers each run with the next response, repeating the last. Can hold a
+/// run until released, to show what happens while one is under way.
+private actor InstrumentEventsRunnerStub: PythonProcessRunning {
+    enum Response: Sendable {
+        case output(String)
+        case timeout
+    }
+
+    private var responses: [Response]
+    private var recorded: [[String]] = []
+    private var holding = false
+    private var held: [CheckedContinuation<Void, Never>] = []
+
+    init(responses: [Response]) {
+        self.responses = responses
+    }
+
+    func run(arguments: [String], timeoutSeconds: TimeInterval, logContext: String) async throws -> PythonProcessResult {
+        recorded.append(arguments)
+        if holding {
+            await withCheckedContinuation { held.append($0) }
+        }
+        let response = responses.count > 1 ? responses.removeFirst() : responses[0]
+        switch response {
+        case .output(let text):
+            return PythonProcessResult(stdout: Data(text.utf8), stderr: Data(), exitCode: 0)
+        case .timeout:
+            throw NetworkError.timeout("invented timeout")
+        }
+    }
+
+    func hold() { holding = true }
+
+    func release() {
+        holding = false
+        held.forEach { $0.resume() }
+        held.removeAll()
+    }
+
+    func callCount() -> Int { recorded.count }
+
+    func calls() -> [[String]] { recorded }
+
+    func waitForCalls(_ count: Int) async {
+        for _ in 0..<2_000 where recorded.count < count {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
     }
 }

@@ -77,26 +77,16 @@ struct PerformanceChartView: View {
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            // Chart Type Picker
-            chartTypePicker
-                .padding(.top, 8) // Extra top padding to prevent overlap with tab divider
-            
-            // Time Range Picker
-            timeRangePicker
+        VStack(alignment: .leading, spacing: 16) {
+            // The chart picker and the range switch share one row, left-aligned with the page.
+            chartControlsRow
 
-            // Custom Date Range Picker (shown when Custom is selected)
+            // Custom Date Range Picker (shown when Custom is selected), under the range switch
             if selectedTimeRange == .custom {
                 customDateRangePicker
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
-
-            // Comparison Mode Controls (shown for individual stock charts)
-            if case .individualStock = selectedChartType {
-                comparisonModeControls
-            }
-
-            // Visual Styling Controls
-            visualStylingControls
 
             // Progress Indicator
             if calculationManager.isCalculating {
@@ -108,17 +98,30 @@ struct PerformanceChartView: View {
                 errorView(error)
             }
             
-            // Chart
-            chartView
-            
-            // Performance Metrics Toggle
-            if !displayableChartData.isEmpty {
-                if isFolyncPortfolioChart {
+            // The chart's card: its toolbar strip, the comparison picks, the chart and its caption.
+            VStack(alignment: .leading, spacing: 12) {
+                // Visual Styling Controls (with the Comparison Mode switch for a single stock)
+                visualStylingControls
+
+                // Comparison stock picks (shown while Comparison Mode is on)
+                if case .individualStock = selectedChartType {
+                    comparisonSelectionPanel
+                }
+
+                // Chart (its loading and empty states centred in the card)
+                chartView
+                    .frame(maxWidth: .infinity)
+
+                if !displayableChartData.isEmpty && isFolyncPortfolioChart {
                     Text("Folync valuation history. Return and risk metrics are unavailable here; local snapshot metrics do not apply to this series.")
                         .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    metricsSection
                 }
+            }
+            .stockbarCard(padding: 14)
+
+            // Performance Metrics Toggle
+            if !displayableChartData.isEmpty && !isFolyncPortfolioChart {
+                metricsSection
             }
             
             // Data Filters
@@ -141,9 +144,7 @@ struct PerformanceChartView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(minWidth: 600, minHeight: 450)
+        .frame(minWidth: 600, minHeight: 450, alignment: .top)
         .onChange(of: showingMetrics) { _, newValue in
             adjustChartWindowSize(expanded: newValue)
             // Notify PreferenceView to adjust window size
@@ -306,18 +307,35 @@ struct PerformanceChartView: View {
         // Auto-resizing will handle window sizing automatically
     }
     
-    private var chartTypePicker: some View {
-        HStack {
-            Picker("Chart", selection: $selectedChartType) {
-                Text("Portfolio Value").tag(ChartType.portfolioValue)
-                Text("Portfolio Gains").tag(ChartType.portfolioGains)
-                ForEach(availableSymbols, id: \.self) { symbol in
-                    Text(symbol).tag(ChartType.individualStock(symbol))
-                }
+    /// The picker at the left and the range switch at the right; where the two cannot share
+    /// a row (the narrowest window), the switch goes on a row of its own under the picker.
+    /// Neither control carries a side effect, so either arrangement may be measured.
+    private var chartControlsRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                chartTypePicker
+                Spacer(minLength: 12)
+                timeRangePicker
             }
-            .frame(maxWidth: 340)
-            Spacer()
+            VStack(alignment: .leading, spacing: 10) {
+                chartTypePicker
+                timeRangePicker
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var chartTypePicker: some View {
+        Picker("Chart", selection: $selectedChartType) {
+            Text("Portfolio Value").tag(ChartType.portfolioValue)
+            Text("Portfolio Gains").tag(ChartType.portfolioGains)
+            ForEach(availableSymbols, id: \.self) { symbol in
+                Text(symbol).tag(ChartType.individualStock(symbol))
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 340)
+        .fixedSize()
     }
     
     // MARK: - Progress Indicator Views
@@ -375,12 +393,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-        )
+        .stockbarSurface(.notice, tint: .blue, cornerRadius: 8)
     }
     
     private func errorView(_ error: String) -> some View {
@@ -404,21 +417,14 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.1))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-        )
+        .stockbarSurface(.notice, tint: .orange, cornerRadius: 8)
     }
     
     private var timeRangePicker: some View {
-        Picker("Time Range", selection: $selectedTimeRange) {
-            ForEach(ChartTimeRange.allCases, id: \.self) { range in
-                Text(range.description).tag(range)
-            }
+        StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: ChartTimeRange.allCases) {
+            $0.description
         }
-        .pickerStyle(SegmentedPickerStyle())
+        .fixedSize()
     }
 
     // MARK: - Custom Date Range Picker
@@ -473,8 +479,7 @@ struct PerformanceChartView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(StockbarPalette.panelFill)
-            .cornerRadius(8)
+            .stockbarSurface(.inset, cornerRadius: 8)
         }
     }
 
@@ -490,15 +495,10 @@ struct PerformanceChartView: View {
         HStack(spacing: 16) {
             // Chart Style Picker (only for individual stocks)
             if case .individualStock = selectedChartType {
-                Picker("Style", selection: $chartVisualizationStyle) {
-                    ForEach(ChartVisualizationStyle.allCases, id: \.self) { style in
-                        Label(style.rawValue, systemImage: style.icon)
-                            .tag(style)
-                    }
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .labelsHidden()
-                .frame(width: 180)
+                // Sized to its labels: at the old picker's 180 points "Candlestick" was cut off.
+                StockbarSegmentedControl("Style", selection: $chartVisualizationStyle,
+                                         options: ChartVisualizationStyle.allCases) { $0.rawValue }
+                .fixedSize()
             }
 
             Menu("Chart options") {
@@ -511,6 +511,11 @@ struct PerformanceChartView: View {
                     }
                 }.disabled(chartVisualizationStyle != .line)
             }.fixedSize()
+
+            // Comparison Mode switch (shown for individual stock charts)
+            if case .individualStock = selectedChartType {
+                comparisonModeToggle
+            }
 
             Spacer()
             if let status = selectedSeriesSourceStatus {
@@ -526,8 +531,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(StockbarPalette.sheetHeaderFill)
-        .cornerRadius(6)
+        .stockbarSurface(.sheetHeader, cornerRadius: 6)
     }
 
     // MARK: - Data Loading
@@ -1150,9 +1154,7 @@ struct PerformanceChartView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(StockbarPalette.panelFill)
-        .cornerRadius(8)
-        .shadow(radius: 2)
+        .stockbarCallout()
     }
 }
 

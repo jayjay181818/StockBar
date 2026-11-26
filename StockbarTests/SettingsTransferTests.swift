@@ -468,7 +468,8 @@ final class SettingsTransferTests: XCTestCase {
             root: acceptanceRoot,
             runID: "acceptance-run-0001",
             folyncKeychainService: "com.stockbar.folync.acceptance.acceptance-run-0001",
-            liveProviderRequestsAllowed: false
+            liveProviderRequestsAllowed: false,
+            loopbackFolyncAllowed: true
         )
         let acceptancePlan = try StockbarRelauncher.launchPlan(
             runtime: acceptance, bundleURL: bundle, executableURL: executable,
@@ -483,7 +484,8 @@ final class SettingsTransferTests: XCTestCase {
         let production = StockbarAcceptanceRuntime(
             root: nil, runID: nil,
             folyncKeychainService: StockbarAcceptanceRuntime.productionFolyncKeychainService,
-            liveProviderRequestsAllowed: true
+            liveProviderRequestsAllowed: true,
+            loopbackFolyncAllowed: false
         )
         let productionPlan = try StockbarRelauncher.launchPlan(
             runtime: production, bundleURL: bundle, executableURL: executable,
@@ -1005,4 +1007,182 @@ private struct RollingDigitsProbe: View {
         let _ = (seen.value = transition)
         Color.clear
     }
+}
+
+// MARK: - Glass surfaces
+
+@MainActor
+final class StockbarSurfaceTests: XCTestCase {
+    func testEverySurfaceIsSolidUnderReduceTransparency() {
+        let solid = StockbarSurfaceAccessibility(reduceTransparency: true)
+        for scheme in [ColorScheme.light, .dark] {
+            for surface in StockbarSurface.allCases {
+                for tint in [nil, Color.orange] {
+                    let style = StockbarSurfaceStyle.resolve(surface, tint: tint, scheme: scheme, accessibility: solid)
+                    XCTAssertEqual(style.drawnOpacity, 1, accuracy: 0.001, "\(surface) \(scheme) tint \(tint != nil)")
+                    XCTAssertNil(style.highlight, "\(surface) keeps no translucent highlight")
+                }
+            }
+        }
+    }
+
+    func testIncreaseContrastStrengthensTheStrokeAndTheFill() {
+        for scheme in [ColorScheme.light, .dark] {
+            for surface in StockbarSurface.allCases {
+                let normal = StockbarSurfaceStyle.resolve(surface, scheme: scheme)
+                let strong = StockbarSurfaceStyle.resolve(surface, scheme: scheme,
+                                                          accessibility: .init(increasedContrast: true))
+                XCTAssertGreaterThan(strong.strokeWidth, normal.strokeWidth, "\(surface) \(scheme)")
+                XCTAssertGreaterThan(alpha(strong.stroke), alpha(normal.stroke), "\(surface) \(scheme)")
+                XCTAssertGreaterThanOrEqual(strong.drawnOpacity, normal.drawnOpacity, "\(surface) \(scheme)")
+            }
+        }
+    }
+
+    func testTheCardIsTranslucentAndDiffersByScheme() {
+        let light = StockbarSurfaceStyle.resolve(.card, scheme: .light)
+        let dark = StockbarSurfaceStyle.resolve(.card, scheme: .dark)
+        XCTAssertNotNil(dark.highlight, "the dark card has its faint top highlight")
+        XCTAssertNil(light.highlight, "on the white detail column a white highlight would erase the top hairline")
+        XCTAssertNotEqual(light.shadow, .clear, "a light card lifts off the white page with a soft shadow")
+        XCTAssertLessThan(light.drawnOpacity, 1)
+        XCTAssertLessThan(dark.drawnOpacity, 0.2, "a dark card is a faint tint, not a slab")
+        XCTAssertNotEqual(light, dark)
+    }
+
+    func testTheMaskedHighlightDrawsWhatTheGradientStrokeDrew() throws {
+        // The highlight is a solid hairline under a gradient mask because a
+        // gradient stroke cost about 18 MB of drawing memory on the dark
+        // Overview. It must still draw what the gradient stroke drew.
+        let highlight = try XCTUnwrap(StockbarSurfaceStyle.resolve(.card, scheme: .dark).highlight)
+        let shape = RoundedRectangle(cornerRadius: StockbarLayout.cardRadius, style: .continuous)
+        let masked = try pixels(StockbarSurfaceHighlight(shape: shape, color: highlight))
+        let stroked = try pixels(shape.strokeBorder(
+            LinearGradient(colors: [highlight, .clear], startPoint: StockbarSurfaceHighlight<RoundedRectangle>.fadeStart,
+                           endPoint: StockbarSurfaceHighlight<RoundedRectangle>.fadeEnd),
+            lineWidth: 1
+        ))
+        XCTAssertEqual(masked.count, stroked.count)
+        let largest = zip(masked, stroked).map { abs(Int($0) - Int($1)) }.max() ?? 0
+        XCTAssertLessThanOrEqual(largest, 2, "no channel of any pixel differs by more than 2 of 255")
+        XCTAssertGreaterThan(masked.max() ?? 0, 20, "the hairline is drawn at all")
+    }
+
+    func testTheHighlightFadesOutByMidCard() throws {
+        let shape = Rectangle()
+        let image = try pixels(StockbarSurfaceHighlight(shape: shape, color: .white), width: 100, height: 100, scale: 1)
+        // Alpha of the left edge's hairline (column 0), top to bottom.
+        let alpha = { (row: Int) in image[(row * 100) * 4 + 3] }
+        XCTAssertGreaterThan(alpha(1), 200, "full strength at the top")
+        XCTAssertLessThan(alpha(18), alpha(5), "fading on the way down")
+        XCTAssertEqual(alpha(40), 0, "gone by a third of the way down")
+        XCTAssertEqual(alpha(90), 0)
+    }
+
+    /// RGBA bytes of `view` drawn on its own, at `scale`.
+    private func pixels(_ view: some View, width: CGFloat = 160, height: CGFloat = 90, scale: CGFloat = 2) throws -> [UInt8] {
+        let renderer = ImageRenderer(content: view.frame(width: width, height: height))
+        renderer.scale = scale
+        let image = try XCTUnwrap(renderer.cgImage)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+            space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let data = try XCTUnwrap(context.data)
+        return Array(UnsafeRawBufferPointer(start: data, count: image.width * image.height * 4))
+    }
+
+    func testACardHonoursTheSettingsItIsDrawnUnder() {
+        XCTAssertEqual(drawnSurface(scheme: .dark, accessibility: .init()),
+                       StockbarSurfaceStyle.resolve(.card, scheme: .dark))
+        XCTAssertEqual(drawnSurface(scheme: .light, accessibility: .init(increasedContrast: true)),
+                       StockbarSurfaceStyle.resolve(.card, scheme: .light, accessibility: .init(increasedContrast: true)))
+        let solid = drawnSurface(scheme: .light, accessibility: .init(reduceTransparency: true))
+        XCTAssertEqual(solid?.drawnOpacity ?? 0, 1, accuracy: 0.001)
+    }
+
+    func testGainAndLossDeepenOnlyInLightModeAndTheSystemColoursStay() throws {
+        XCTAssertEqual(StockbarPalette.signed(1), .green, "menu-bar titles, popovers and chart series keep the system green")
+        XCTAssertEqual(StockbarPalette.signed(-1), .red)
+        XCTAssertEqual(StockbarPalette.signedOnSurface(0, neutral: .primary), .primary)
+        XCTAssertEqual(StockbarPalette.signedOnSurface(.nan), .secondary)
+
+        let lightGain = try components(StockbarPalette.signedOnSurface(2), in: .aqua)
+        let darkGain = try components(StockbarPalette.signedOnSurface(2), in: .darkAqua)
+        let systemGreen = try components(Color(nsColor: .systemGreen), in: .darkAqua)
+        XCTAssertEqual(darkGain.green, systemGreen.green, accuracy: 0.01)
+        XCTAssertLessThan(lightGain.green, darkGain.green, "a darker green on a light card")
+        let lightLoss = try components(StockbarPalette.signedOnSurface(-2), in: .aqua)
+        XCTAssertLessThan(lightLoss.red, 0.9)
+        XCTAssertGreaterThan(lightLoss.red, lightLoss.green * 3)
+    }
+
+    private func alpha(_ color: Color) -> CGFloat {
+        NSColor(color).usingColorSpace(.sRGB)?.alphaComponent ?? 0
+    }
+
+    private func components(_ color: Color, in appearance: NSAppearance.Name) throws -> (red: CGFloat, green: CGFloat) {
+        var result: (CGFloat, CGFloat)?
+        try XCTUnwrap(NSAppearance(named: appearance)).performAsCurrentDrawingAppearance {
+            if let rgb = NSColor(color).usingColorSpace(.sRGB) { result = (rgb.redComponent, rgb.greenComponent) }
+        }
+        return try XCTUnwrap(result)
+    }
+
+    /// The surface a card's content is drawn on, read from a real hosting view.
+    private func drawnSurface(scheme: ColorScheme, accessibility: StockbarSurfaceAccessibility?) -> StockbarSurfaceStyle? {
+        let seen = SurfaceSeen()
+        let host = NSHostingView(
+            rootView: SurfaceProbe(seen: seen)
+                .stockbarCard()
+                .environment(\.stockbarSurfaceAccessibilityOverride, accessibility)
+                .environment(\.colorScheme, scheme)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 80, height: 40)
+        host.layoutSubtreeIfNeeded()
+        return seen.value
+    }
+}
+
+@MainActor
+private final class SurfaceSeen {
+    var value: StockbarSurfaceStyle?
+}
+
+private struct SurfaceProbe: View {
+    @Environment(\.stockbarSurface) private var surface
+    let seen: SurfaceSeen
+
+    var body: some View {
+        let _ = (seen.value = surface)
+        Color.clear
+    }
+}
+
+// MARK: - Range switch
+
+@MainActor
+final class StockbarSegmentedControlTests: XCTestCase {
+    func testTheArrowKeysStepThroughTheOptionsAndStopAtEitherEnd() {
+        let options = TestRange.allCases
+        XCTAssertEqual(StockbarSegmentedControl<TestRange>.step(from: .day, by: 1, in: options), .week)
+        XCTAssertEqual(StockbarSegmentedControl<TestRange>.step(from: .month, by: -1, in: options), .week)
+        XCTAssertNil(StockbarSegmentedControl<TestRange>.step(from: .month, by: 1, in: options))
+        XCTAssertNil(StockbarSegmentedControl<TestRange>.step(from: .day, by: -1, in: options))
+    }
+
+    func testItExposesOneLabelledGroupWithEachSegmentsSelectedState() {
+        let exposure = StockbarSegmentedControl<TestRange>.accessibility(
+            label: "Time range", options: TestRange.allCases, selection: .week, title: \.rawValue
+        )
+        XCTAssertEqual(exposure.label, "Time range")
+        XCTAssertEqual(exposure.segments.map(\.label), ["1D", "1W", "1M"])
+        XCTAssertEqual(exposure.segments.map(\.isSelected), [false, true, false])
+    }
+}
+
+private enum TestRange: String, CaseIterable {
+    case day = "1D", week = "1W", month = "1M"
 }

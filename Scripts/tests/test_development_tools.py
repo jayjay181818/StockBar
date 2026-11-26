@@ -122,5 +122,65 @@ class DocumentationValidationTests(unittest.TestCase):
             self.assertTrue(warnings)
 
 
+class RawSurfaceInvariantTests(unittest.TestCase):
+    """Check 10 of validate_invariants.sh, run on made-up view files."""
+
+    def run_validator(self, view_lines, design_lines=()):
+        with tempfile.TemporaryDirectory(prefix='stockbar-invariants-') as directory:
+            root = Path(directory)
+            (root / 'Scripts').mkdir()
+            shutil.copy2(REPO / 'Scripts/validate_invariants.sh', root / 'Scripts/validate_invariants.sh')
+            (root / 'Stockbar/Views').mkdir(parents=True)
+            (root / 'Stockbar/Views/Made.swift').write_text('\n'.join(view_lines) + '\n')
+            (root / 'Stockbar/Views/StockbarDesign.swift').write_text('\n'.join(design_lines) + '\n')
+            (root / 'StockbarTests').mkdir()
+            (root / 'StockbarTests/MadeTests.swift').write_text('\n')
+            (root / 'Stockbar.xcodeproj').mkdir()
+            (root / 'Stockbar.xcodeproj/project.pbxproj').write_text(
+                'PBXFileSystemSynchronizedBuildFileExceptionSet\nMadeTests.swift in Sources\n')
+            return subprocess.run(['bash', 'Scripts/validate_invariants.sh'], cwd=root,
+                                  capture_output=True, text=True)
+
+    def test_each_direct_use_of_a_raw_fill_fails(self):
+        direct_uses = [
+            '        .background(Color.gray.opacity(0.1))',
+            '        .background(Color(NSColor.controlBackgroundColor))',
+            '        .background(Color(.windowBackgroundColor).opacity(0.7))',
+            '        .background(Color(NSColor.textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))',
+            '        .background(.regularMaterial, in: Capsule())',
+            '        .background(.ultraThinMaterial)',
+            '        .background(StockbarPalette.panelFill)',
+            '        .background(StockbarPalette.subtleFill)',
+            '        .background(Color.orange.opacity(0.1))',
+            '        .background(tint.opacity(0.14), in: Capsule())',
+            '        .background(isSelected ? Color.accentColor.opacity(0.15) : .clear)',
+            '        .background(Color.white)',
+            '            .fill(Color.gray.opacity(0.3))',
+        ]
+        for line in direct_uses:
+            with self.subTest(line=line):
+                result = self.run_validator([line])
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('Surface drawn from a raw colour or material', result.stdout)
+                self.assertIn(line.strip(), result.stdout)
+
+    def test_named_surfaces_allowed_lines_and_the_design_file_pass(self):
+        result = self.run_validator(
+            [
+                '        .stockbarCard()',
+                '        .stockbarSurface(.inset, tint: .orange)',
+                '        .foregroundColor(Color.red.opacity(0.5))',
+                '        .background(Color.white) // stockbar-surface-allow: the exported image page',
+            ],
+            design_lines=['        .background(tint.opacity(0.14), in: Capsule())'],
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Invariant validation passed', result.stdout)
+
+    def test_an_allow_comment_needs_a_reason(self):
+        result = self.run_validator(['        .background(Color.white) // stockbar-surface-allow:'])
+        self.assertEqual(result.returncode, 1, result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

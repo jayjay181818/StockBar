@@ -119,8 +119,8 @@ enum SettingsTransferValueKind: Sendable {
 /// Excluded on purpose, and never exported or overwritten:
 /// - machine-specific or Stockbar's own Python environment: `pythonInterpreterPath`,
 ///   `pythonDependencyCheck.interpreterPath`, `pythonDependencyCheck.requirements`;
-/// - window and selection state: `mainWindow.selectedSection`, `settings.selectedTab`,
-///   `menuChartTimeRange.<SYMBOL>`;
+/// - window and selection state: `mainWindow.selectedSection`, `mainWindow.sidebarHidden`, `settings.selectedTab`,
+///   `menuChartTimeRange.<SYMBOL>`, `holdings.gainDisplayMode`;
 /// - caches and runtime state: `cacheCoordinator.state.v1`, `cacheStatistics`,
 ///   `currencyRateHistory`, `historicalBackfillAttemptState.v1`, `lastBackfillDate`,
 ///   `lastBackfillTimestamp`, `lastBackupDate`, `portfolioSnapshots`, `priceSnapshots`,

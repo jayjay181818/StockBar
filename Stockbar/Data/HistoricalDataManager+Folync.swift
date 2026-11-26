@@ -317,7 +317,7 @@ extension HistoricalDataManager {
             folyncSourceStatusBySeries[valueKey] = .unavailable
             folyncSourceStatusBySeries[gainKey] = .unavailable
             if case .unreachable = result {
-                // Shown beside the "Unavailable" badge, so the Performance tab
+                // Shown beside the "Unavailable" badge, so the Charts page
                 // says why, as the popover and the Overview do.
                 folyncUnreachableSeries.insert(valueKey)
                 folyncUnreachableSeries.insert(gainKey)

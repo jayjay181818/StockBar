@@ -3,7 +3,7 @@
 //  Stockbar
 //
 //  Created by Claude Code on 2025-10-03.
-//  Comprehensive portfolio analytics with correlation matrix and sector allocation
+//  Allocation: a donut by sector, holding or currency, diversification, the correlation grid and attribution
 //
 
 import SwiftUI
@@ -34,6 +34,19 @@ struct PortfolioAnalyticsView: View {
     @State private var portfolioUpdateTick = 0
     /// True once a calculation has produced results, so later recalculations keep them visible.
     @State private var hasLoadedOnce = false
+    /// The donut's view: by sector, by holding or by currency.
+    @State private var grouping: AllocationGrouping = .sector
+    /// Each valued holding with the currency it is priced in, for the currency view.
+    @State private var valuedHoldings: [AllocationHolding] = []
+    /// The cash in Holdings' total, in the display currency, from the same calculation run.
+    @State private var cash: AllocationCash = .none
+    /// With a Cash row, Holdings' own total in the display currency, which every share is of.
+    @State private var sourceTotal: Double?
+    /// Why cash the source gives is left out of the shares, when it is.
+    @State private var cashOmission: AllocationCashOmission?
+    /// Slice colours for holdings and currencies, kept while the page is open.
+    @State private var holdingColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
+    @State private var currencyColours = AllocationColourBook(paletteCount: StockbarPalette.allocationSlices.count)
 
     private let correlationService = CorrelationMatrixService()
     private let sectorService = SectorAnalysisService()
@@ -68,47 +81,92 @@ struct PortfolioAnalyticsView: View {
     /// 20 trading days need about a month of calendar history.
     nonisolated static let minimumLookbackCalendarDays = 30
 
-    private struct AnalyticsTrigger: Hashable {
+    /// What the calculation depends on. Exchange rates are part of it, so holdings and cash
+    /// left out for want of a rate appear as soon as the rates load.
+    struct AnalyticsTrigger: Hashable {
         let range: TimeRange
         let currency: String
         let tick: Int
+        /// The rate table Allocation converts with, nil until one has loaded: what
+        /// `CurrencyConverter.convertWithLoadedRates(amount:from:to:)` reads, and no more.
+        /// A refresh that brings the same rates under a new time changes nothing here, so
+        /// it does not start the calculation, and the correlation work, again.
+        let loadedRates: [String: Double]?
+        /// The Trading 212 valuation the cash and total come from, as the page reads it (the
+        /// fresh one, `DataModel.freshTrading212BrokerValuationSnapshot()`), nil without one.
+        /// A sync that brings only new cash changes no holding, so without this the page would
+        /// keep the old cash. Keyed on the figures the page uses, not on the time they were
+        /// fetched: a sync that brings the same figures does not recalculate, while a
+        /// valuation that goes stale and comes back, or a stored one that starts to apply,
+        /// passes through nil and so does.
+        let brokerValuation: BrokerValuationStamp?
+
+        struct BrokerValuationStamp: Hashable {
+            let accountKey: String
+            let currency: String
+            let accountValue: Double
+            let cashValue: Double?
+
+            init(_ snapshot: Trading212BrokerValuationSnapshot) {
+                accountKey = snapshot.accountKey
+                currency = snapshot.currency
+                accountValue = snapshot.accountValue
+                cashValue = snapshot.cashValue
+            }
+        }
+
+        /// The trigger for `dataModel`'s state now. Without a model, no valuation.
+        @MainActor
+        init(range: TimeRange, currency: String, tick: Int, converter: CurrencyConverter,
+             dataModel: DataModel? = nil) {
+            self.range = range
+            self.currency = currency
+            self.tick = tick
+            // The observed properties, so a change of either redraws the view and re-keys its task.
+            let rates = converter.exchangeRates
+            loadedRates = rates.isEmpty || converter.lastRefreshTime == .distantPast ? nil : rates
+            if let dataModel {
+                // Read the stored valuation itself, so each one stored redraws the view: the
+                // fresh one can be decided without reading it (Folync active, Trading 212 off).
+                _ = dataModel.trading212BrokerValuationSnapshot
+                brokerValuation = dataModel.freshTrading212BrokerValuationSnapshot().map(BrokerValuationStamp.init)
+            } else {
+                brokerValuation = nil
+            }
+        }
+    }
+
+    /// The trigger the calculation task below is keyed on.
+    var analyticsTrigger: AnalyticsTrigger {
+        AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency,
+                         tick: portfolioUpdateTick, converter: dataModel.currencyConverter,
+                         dataModel: dataModel)
+    }
+
+    /// Something to show: a holding to value, or cash on its own.
+    private var hasAllocationContent: Bool {
+        AllocationPresentation.hasContent(eligibleHoldings: analyticsEligible, cash: cash)
+    }
+
+    private var shareBasis: AllocationShareBasis {
+        AllocationShareBasis(cash: cash, omission: cashOmission)
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
+            VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
                 headerSection
 
-                if isLoading && !hasLoadedOnce {
+                if !hasLoadedOnce {
                     ProgressView("Calculating portfolio analytics...")
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 40)
-                } else if dataModel.realTimeTrades.count < 2 {
+                        .stockbarEmptyState(minHeight: 180)
+                } else if !hasAllocationContent {
                     emptyStateView
                 } else {
-                    // Sector Allocation Section
-                    sectorAllocationSection
-
-                    Divider()
-
-                    // Diversification Section
-                    diversificationSection
-
-                    Divider()
-
-                    // Correlation Matrix Section
-                    correlationMatrixSection
-
-                    Divider()
-
-                    // Correlation Insights Section
-                    correlationInsightsSection
-
-                    Divider()
-
-                    // Attribution Analysis Section (v2.3.1)
-                    attributionAnalysisSection
+                    allocationSection.stockbarCard()
+                    diversificationSection.stockbarCard()
+                    correlationSection.stockbarCard()
+                    attributionAnalysisSection.stockbarCard()
                 }
             }
             .padding(StockbarLayout.pageInsets)
@@ -120,8 +178,9 @@ struct PortfolioAnalyticsView: View {
         }
         // One task for every trigger. SwiftUI cancels the previous run when the id changes, and the
         // sleep debounces bursts of price updates. The first calculation runs immediately, and
-        // earlier results stay on screen while a recalculation is in flight.
-        .task(id: AnalyticsTrigger(range: selectedTimeRange, currency: dataModel.preferredCurrency, tick: portfolioUpdateTick)) {
+        // earlier results stay on screen while a recalculation is in flight. The donut's view
+        // switch is not a trigger: it only regroups figures already worked out.
+        .task(id: analyticsTrigger) {
             if hasLoadedOnce {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
@@ -139,30 +198,37 @@ struct PortfolioAnalyticsView: View {
     // MARK: - Header
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StockbarPageHeader("Allocation", subtitle: "Sector allocation, diversification, correlation and attribution.") {
-                // Time Range Picker
-                Picker("Time Range", selection: $selectedTimeRange) {
-                    ForEach(TimeRange.allCases, id: \.self) { range in
-                        Text(range.rawValue).tag(range)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 250)
-                .help("Price history window used for the correlation analysis")
-            }
+        StockbarPageHeader("Allocation", subtitle: "Where the money is") {
+            StockbarSegmentedControl("Group by", selection: $grouping, options: AllocationGrouping.allCases,
+                                     expands: true) { $0.rawValue }
+            .frame(width: 280)
+            .help("Group the allocation by sector, by holding or by the currency each holding is priced in")
         }
     }
 
-    // MARK: - Sector Allocation
+    // MARK: - Allocation donut and list
 
-    private var sectorAllocationSection: some View {
+    /// The groups for the chosen view: at most eight, then a Cash row when cash is held.
+    private var displayedGroups: [AllocationGroup] {
+        let groups: [AllocationGroup]
+        switch grouping {
+        case .sector:
+            groups = AllocationPresentation.sectorGroups(sectorAllocations, showsDayChange: completeDayCoverage)
+        case .holding:
+            groups = AllocationPresentation.holdingGroups(sectorAllocations)
+        case .currency:
+            groups = AllocationPresentation.currencyGroups(valuedHoldings)
+        }
+        return AllocationPresentation.displayed(groups, cash: cash, sourceTotal: sourceTotal)
+    }
+
+    private var allocationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Sector Allocation")
+            Text("\(grouping.rawValue) Allocation")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
 
-            if sectorAllocations.isEmpty {
+            if sectorAllocations.isEmpty && cash.heldAmount <= 0 {
                 Text(analyticsEligible > 0
                      ? "Sector allocation needs a price and exchange rate for at least one holding."
                      : "No sector data available")
@@ -171,149 +237,212 @@ struct PortfolioAnalyticsView: View {
             } else {
                 if analyticsCoverage < analyticsEligible {
                     Label(
-                        "Based on \(analyticsCoverage) of \(analyticsEligible) holdings. The rest have no price or exchange rate yet, so the percentages are of the valued part only.",
+                        AllocationPresentation.coverageNotice(covered: analyticsCoverage, eligible: analyticsEligible,
+                                                              leavesOutCash: cashOmission == .partialCoverage),
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)
                     .foregroundColor(.secondary)
                 }
-                // Pie Chart
-                Chart(sectorAllocations) { allocation in
-                    SectorMark(
-                        angle: .value("Value", allocation.totalValue),
-                        innerRadius: .ratio(0.5),
-                        angularInset: 1.5
-                    )
-                    .foregroundStyle(by: .value("Sector", sectorLabel(allocation.sector)))
-                }
-                // Same colours as the breakdown table below.
-                .chartForegroundStyleScale(
-                    domain: sectorAllocations.map { sectorLabel($0.sector) },
-                    range: sectorAllocations.map { colorForSector($0.sector) }
-                )
-                .frame(height: 300)
-                .chartLegend(position: .trailing)
-                .accessibilityLabel("Sector allocation")
-                .accessibilityValue(sectorAllocations
-                    .map { "\(sectorLabel($0.sector)) \(String(format: "%.1f", $0.percentageOfPortfolio)) percent" }
-                    .joined(separator: ", "))
 
-                // Sector Breakdown Table
-                VStack(spacing: 4) {
-                    ForEach(sectorAllocations) { allocation in
-                        HStack {
-                            Circle()
-                                .fill(colorForSector(allocation.sector))
-                                .frame(width: 10, height: 10)
-
-                            Text(sectorLabel(allocation.sector))
-                                .font(.subheadline)
-
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text(HoldingsCurrencyFormatter.amount(allocation.totalValue, currency: analyticsCurrency))
-                                    .monospacedDigit()
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-
-                                Text("\(allocation.percentageOfPortfolio, specifier: "%.1f")%")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            // Unknown day change is a dash in a neutral colour, never green.
-                            Text(completeDayCoverage ? AttributionFormat.signedPercent(allocation.dayChangePercent) : "—")
-                                .font(.caption)
-                                .foregroundColor(StockbarPalette.signed(completeDayCoverage ? allocation.dayChangePercent : nil))
-                                .frame(width: 70, alignment: .trailing)
-                                .accessibilityLabel(completeDayCoverage
-                                    ? "Day change \(AttributionFormat.spokenPercent(allocation.dayChangePercent))"
-                                    : "Day change unavailable")
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 8)
-                        .background(StockbarPalette.faintFill)
-                        .cornerRadius(6)
+                let groups = displayedGroups
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 28) {
+                        donut(groups)
+                        allocationList(groups)
+                            .frame(minWidth: 420, maxWidth: 620)
+                    }
+                    VStack(alignment: .center, spacing: 16) {
+                        donut(groups)
+                        allocationList(groups)
                     }
                 }
 
-                if let unclassified = diversificationAnalysis?.unclassifiedPercentage, unclassified > 0 {
-                    Text("\(unclassified, specifier: "%.1f")% of the portfolio is in holdings with no known sector (shown as Unclassified).")
+                if let line = AllocationPresentation.borrowingLine(cash, currency: analyticsCurrency)
+                    ?? AllocationPresentation.omissionLine(cashOmission) {
+                    Text(line)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Shown when the holdings were all valued, as before; its figure is the
+                // Unclassified row's share of the same total as the rows.
+                if grouping == .sector, diversificationAnalysis != nil,
+                   let unclassified = AllocationPresentation.unclassifiedShare(sectorAllocations, cash: cash,
+                                                                               sourceTotal: sourceTotal) {
+                    Text(AllocationPresentation.unclassifiedNote(share: unclassified, basis: shareBasis))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    private func donut(_ groups: [AllocationGroup]) -> some View {
+        let holdingCount = sectorAllocations.reduce(0) { $0 + $1.positions.count }
+        let holdingsTotal = sectorAllocations.reduce(0) { $0 + $1.totalValue }
+        let total = AllocationPresentation.shareTotal(holdingsTotal: holdingsTotal, cash: cash, sourceTotal: sourceTotal)
+        let centre = AllocationPresentation.centreText(total: total, holdingCount: holdingCount,
+                                                       currency: analyticsCurrency, includesCash: cash.heldAmount > 0)
+        return ZStack {
+            Chart(groups) { group in
+                SectorMark(
+                    angle: .value("Value", group.value),
+                    innerRadius: .ratio(0.62),
+                    angularInset: 1.5
+                )
+                .foregroundStyle(colour(for: group))
+            }
+            .chartLegend(.hidden)
+            VStack(spacing: 2) {
+                Text(centre.total)
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(centre.count)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 110)
+        }
+        .frame(width: 210, height: 210)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(grouping.rawValue) allocation, \(centre.total), \(centre.count)")
+        .accessibilityValue(groups
+            .map { "\(AllocationPresentation.rowLabel($0, grouping: grouping)) \(String(format: "%.1f", $0.share)) percent" }
+            .joined(separator: ", "))
+    }
+
+    private func allocationList(_ groups: [AllocationGroup]) -> some View {
+        VStack(spacing: 2) {
+            ForEach(groups) { group in
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(colour(for: group))
+                        .frame(width: 10, height: 10)
+                    Text(AllocationPresentation.rowLabel(group, grouping: grouping))
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    Text(HoldingsCurrencyFormatter.amount(group.value, currency: analyticsCurrency))
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(AllocationPresentation.shareText(group.share))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 54, alignment: .trailing)
+                    if grouping == .sector {
+                        // Unknown day change is a dash in a neutral colour, never green.
+                        Text(AllocationPresentation.dayChangeText(group))
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundColor(StockbarPalette.signedOnSurface(group.dayChangePercent))
+                            .frame(width: 64, alignment: .trailing)
+                    }
+                }
+                .padding(.vertical, 5)
+                .modifier(AllocationRowTooltip(text: group.isCash
+                    ? AllocationPresentation.cashTooltip(group, currency: analyticsCurrency) : nil))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(AllocationPresentation.spokenRow(group, grouping: grouping, currency: analyticsCurrency))
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func colour(for group: AllocationGroup) -> Color {
+        if group.isCash { return StockbarPalette.allocationCash }
+        if group.isOther { return StockbarPalette.allocationOther }
+        switch grouping {
+        case .sector:
+            return SectorAnalysisService.Sector(rawValue: group.key).map(Self.colorForSector) ?? StockbarPalette.allocationOther
+        case .holding:
+            return paletteColour(holdingColours.index(for: group.key))
+        case .currency:
+            return paletteColour(currencyColours.index(for: group.key))
+        }
+    }
+
+    private func paletteColour(_ index: Int?) -> Color {
+        guard let index else { return StockbarPalette.allocationOther }
+        let palette = StockbarPalette.allocationSlices
+        return palette[index % palette.count]
     }
 
     // MARK: - Diversification
 
     private var diversificationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Diversification Analysis")
+            Text("Diversification")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            if cash.heldAmount > 0 {
+                Text(AllocationPresentation.holdingsOnlyCaption)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let analysis = diversificationAnalysis, analysis.isAvailable {
-                // Diversification Score
-                HStack {
+                HStack(alignment: .top, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Diversification Score")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-
-                        Text("\(analysis.score, specifier: "%.1f")/100")
+                        Text(AllocationPresentation.scoreText(analysis.score))
                             .font(.title2)
                             .fontWeight(.bold)
+                            .monospacedDigit()
                             .foregroundColor(colorForDiversificationScore(analysis.score))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
 
-                    Spacer()
+                    Divider()
 
-                    VStack(alignment: .trailing, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text("Concentration Risk")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-
                         Text(analysis.concentrationRisk.rawValue)
-                            .font(.title3)
-                            .fontWeight(.semibold)
+                            .font(.title2)
+                            .fontWeight(.bold)
                             .foregroundColor(colorForRiskLevel(analysis.concentrationRisk))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
                 }
-                .padding()
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(10)
+                .fixedSize(horizontal: false, vertical: true)
 
                 if analysis.unclassifiedPercentage > 0 {
-                    Text("\(analysis.unclassifiedPercentage, specifier: "%.1f")% of the portfolio has no known sector and is excluded from this score.")
+                    Text(AllocationPresentation.diversificationUnclassifiedNote(
+                        share: analysis.unclassifiedPercentage, basis: shareBasis))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
-                // Recommendations
                 if !analysis.recommendations.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Recommendations")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(analysis.recommendations, id: \.self) { recommendation in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text("•")
-                                    .foregroundColor(.blue)
-                                Text(recommendation)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                            Text(recommendation)
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .padding()
-                    .background(StockbarPalette.faintFill)
-                    .cornerRadius(8)
                 }
             } else if let analysis = diversificationAnalysis, analysis.unclassifiedPercentage > 0 {
-                Text("Diversification unavailable: \(analysis.unclassifiedPercentage, specifier: "%.0f")% of the portfolio has no known sector.")
+                Text(AllocationPresentation.diversificationUnavailableNote(
+                    share: analysis.unclassifiedPercentage, basis: shareBasis))
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -324,15 +453,23 @@ struct PortfolioAnalyticsView: View {
         }
     }
 
-    // MARK: - Correlation Matrix
+    // MARK: - Correlation
 
-    private var correlationMatrixSection: some View {
+    private var correlationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Correlation Summary")
-                .font(.headline)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    correlationHeading
+                    Spacer(minLength: 12)
+                    rangeControl
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    correlationHeading
+                    rangeControl
+                }
+            }
 
             if let matrix = correlationMatrix {
-                // Correlation Summary
                 Text("Calculated across \(matrix.symbols.count) holdings")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -347,26 +484,39 @@ struct PortfolioAnalyticsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if let metrics = diversificationMetrics {
-                    HStack(spacing: 20) {
-                        metricCard(
-                            title: "Avg Correlation",
-                            value: String(format: "%.3f", metrics.averageCorrelation),
-                            subtitle: interpretCorrelation(metrics.averageCorrelation)
-                        )
-
-                        metricCard(
-                            title: "Effective N",
-                            value: String(format: "%.1f", metrics.effectiveN),
-                            subtitle: "Independent positions"
-                        )
-
-                        metricCard(
-                            title: "Diversification Ratio",
-                            value: String(format: "%.2f", metrics.diversificationRatio),
-                            subtitle: metrics.diversificationRatio > 1 ? "Good" : "Needs work"
-                        )
+                let symbols = AllocationPresentation.gridSymbols(matrix.symbols, values: holdingValues)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        CorrelationGridView(matrix: matrix, symbols: symbols)
+                        if let metrics = diversificationMetrics {
+                            VStack(spacing: 10) { correlationMetrics(metrics) }
+                                .frame(width: 190)
+                        }
                     }
+                    VStack(alignment: .leading, spacing: 14) {
+                        CorrelationGridView(matrix: matrix, symbols: symbols)
+                        if let metrics = diversificationMetrics {
+                            HStack(spacing: 12) { correlationMetrics(metrics) }
+                        }
+                    }
+                }
+
+                if let note = AllocationPresentation.gridNote(totalHoldings: matrix.symbols.count) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let line = AllocationPresentation.pairsLine(top: topCorrelations, bottom: bottomCorrelations) {
+                    Text(line)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Past the grid's limit, some listed pairs involve holdings the grid leaves out.
+                if matrix.symbols.count > AllocationPresentation.maximumGridHoldings {
+                    correlationPairLists
                 }
             } else {
                 Text("Not enough shared price history. Correlation needs at least \(Self.minimumCorrelationDays) common trading days for two or more holdings.")
@@ -376,77 +526,79 @@ struct PortfolioAnalyticsView: View {
         }
     }
 
-    // MARK: - Correlation Insights
+    private var correlationHeading: some View {
+        Text("How the holdings move together")
+            .font(.headline)
+            .accessibilityAddTraits(.isHeader)
+    }
 
-    private var correlationInsightsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Correlation Insights")
-                .font(.headline)
+    private var rangeControl: some View {
+        StockbarSegmentedControl("Time range", selection: $selectedTimeRange, options: TimeRange.allCases,
+                                 expands: true) { $0.rawValue }
+        .frame(width: 250)
+        .help("Price history window used for the correlation analysis")
+    }
 
-            HStack(alignment: .top, spacing: 20) {
-                // Highest Correlations
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Highest Correlations (Risk)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.red)
+    /// Each holding's value in the display currency, to pick the grid's largest holdings.
+    private var holdingValues: [String: Double] {
+        Dictionary(sectorAllocations.flatMap(\.positions).map { ($0.symbol, $0.value) },
+                   uniquingKeysWith: +)
+    }
 
-                    if topCorrelations.isEmpty {
-                        Text("No data")
+    @ViewBuilder
+    private func correlationMetrics(_ metrics: CorrelationMatrixService.DiversificationMetrics) -> some View {
+        metricCard(
+            title: "Avg Correlation",
+            value: String(format: "%.3f", metrics.averageCorrelation),
+            subtitle: interpretCorrelation(metrics.averageCorrelation)
+        )
+        metricCard(
+            title: "Effective N",
+            value: String(format: "%.1f", metrics.effectiveN),
+            subtitle: "Independent positions"
+        )
+        metricCard(
+            title: "Diversification Ratio",
+            value: String(format: "%.2f", metrics.diversificationRatio),
+            subtitle: metrics.diversificationRatio > 1 ? "Good" : "Needs work"
+        )
+    }
+
+    /// The two pair lists, shown only when the grid cannot hold every holding.
+    private var correlationPairLists: some View {
+        HStack(alignment: .top, spacing: 20) {
+            pairList("Highest Correlations (Risk)", pairs: topCorrelations)
+            pairList("Lowest Correlations (Diversification)", pairs: bottomCorrelations)
+        }
+    }
+
+    private func pairList(_ title: String, pairs: [CorrelationMatrixService.CorrelationPair]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+            if pairs.isEmpty {
+                Text("No data")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(pairs) { pair in
+                    HStack {
+                        Text("\(pair.symbol1) ↔ \(pair.symbol2)")
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(topCorrelations) { pair in
-                            HStack {
-                                Text("\(pair.symbol1) ↔ \(pair.symbol2)")
-                                    .font(.caption)
-                                Spacer()
-                                Text("\(pair.correlation, specifier: "%.3f")")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.red)
-                            }
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 8)
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(4)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity)
-
-                // Lowest Correlations
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Lowest Correlations (Diversification)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
-
-                    if bottomCorrelations.isEmpty {
-                        Text("No data")
+                        Spacer()
+                        Text("\(pair.correlation, specifier: "%.3f")")
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(bottomCorrelations) { pair in
-                            HStack {
-                                Text("\(pair.symbol1) ↔ \(pair.symbol2)")
-                                    .font(.caption)
-                                Spacer()
-                                Text("\(pair.correlation, specifier: "%.3f")")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.green)
-                            }
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 8)
-                            .background(Color.green.opacity(0.1))
-                            .cornerRadius(4)
-                        }
+                            .fontWeight(.medium)
+                            .monospacedDigit()
                     }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .stockbarSurface(.inset, cornerRadius: 4)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Empty State
@@ -461,14 +613,15 @@ struct PortfolioAnalyticsView: View {
             Text("Portfolio Analytics Unavailable")
                 .font(.headline)
 
-            Text("Add at least 2 stocks to your portfolio to see correlation and sector analysis")
+            Text(AllocationPresentation.emptyStateMessage(cashOmission))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 40)
         }
         .padding(.vertical, 60)
-        .frame(maxWidth: .infinity)
+        .stockbarEmptyState(minHeight: 0)
     }
 
     // MARK: - Helper Views
@@ -482,37 +635,36 @@ struct PortfolioAnalyticsView: View {
             Text(value)
                 .font(.title3)
                 .fontWeight(.bold)
+                .monospacedDigit()
 
             Text(subtitle)
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding()
-        .background(StockbarPalette.faintFill)
-        .cornerRadius(8)
+        .padding(10)
+        .stockbarSurface(.inset, cornerRadius: 8)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Color Helpers
 
-    private func sectorLabel(_ sector: SectorAnalysisService.Sector) -> String {
-        sector == .unknown ? "Unclassified" : sector.displayName
-    }
-
-    private func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
+    /// Each sector keeps the colour it had, except Healthcare, Financials, Real Estate and Basic
+    /// Materials, which were red, green, pink and mint: those read as loss and gain here.
+    nonisolated static func colorForSector(_ sector: SectorAnalysisService.Sector) -> Color {
         switch sector {
         case .technology: return .blue
-        case .healthcare: return .red
-        case .financials: return .green
+        case .healthcare: return StockbarPalette.allocationLavender
+        case .financials: return StockbarPalette.allocationSectorTeal
         case .consumerCyclical: return .purple
         case .consumerDefensive: return .orange
         case .industrials: return .brown
         case .energy: return .yellow
         case .utilities: return .cyan
-        case .realEstate: return .pink
-        case .basicMaterials: return .mint
+        case .realEstate: return StockbarPalette.allocationSand
+        case .basicMaterials: return StockbarPalette.allocationSlate
         case .communicationServices: return .indigo
-        case .unknown: return .gray
+        case .unknown: return StockbarPalette.allocationOther
         }
     }
 
@@ -544,78 +696,39 @@ struct PortfolioAnalyticsView: View {
         isLoading = true
         defer { if analyticsRevision == revision { isLoading = false } }
 
-        // Calculate sector allocations
-        var positions: [String: Double] = [:]
-        var dayChanges: [String: Double] = [:]
-
-        let preferredCurrency = dataModel.preferredCurrency
-        var covered = 0
-        var dayCovered = 0
-        let eligibleCount: Int
-        if let snapshot = dataModel.folyncPortfolioSnapshot {
-            eligibleCount = snapshot.displayHoldings.count
-        } else {
-            eligibleCount = dataModel.realTimeTrades.filter {
-                !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
-            }.count
-        }
-        if let snapshot = dataModel.folyncPortfolioSnapshot {
-            for holding in snapshot.displayHoldings {
-                guard let value = holding.marketValue, value.isFinite, value > 0 else { continue }
-                let sourceCurrency = holding.resolvedValueCurrency.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !sourceCurrency.isEmpty,
-                      let converted = convertAnalyticsAmount(value, from: sourceCurrency, to: preferredCurrency), converted > 0 else { continue }
-                positions[holding.resolvedDisplayTicker, default: 0] += converted
-                if let dayGain = holding.dayGain,
-                   let convertedDayGain = convertAnalyticsAmount(dayGain, from: sourceCurrency, to: preferredCurrency) {
-                    dayChanges[holding.resolvedDisplayTicker, default: 0] += convertedDayGain
-                    dayCovered += 1
-                }
-                covered += 1
-            }
-        } else {
-          for trade in dataModel.realTimeTrades {
-            guard !trade.trade.isWatchlistOnly,
-                  !SymbolMetadata.isBenchmarkSymbol(trade.trade.name) else { continue }
-            let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
-            let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
-            let units = trade.trade.position.unitSize
-            guard currentPrice.isFinite, currentPrice > 0, units.isFinite, units > 0 else { continue }
-            guard let rawCurrency = trade.realTimeInfo.currency ?? trade.trade.position.currency,
-                  let sourceCurrency = SymbolMetadata.normalizeCurrency(rawCurrency),
-                  !sourceCurrency.isEmpty else { continue }
-            guard let currentValue = convertAnalyticsAmount(currentPrice * units, from: sourceCurrency, to: preferredCurrency), currentValue > 0 else { continue }
-            positions[trade.trade.name, default: 0] += currentValue
-            if previousClose.isFinite, previousClose > 0 {
-                let rawChange = (currentPrice - previousClose) * units
-                if let convertedChange = convertAnalyticsAmount(rawChange, from: sourceCurrency, to: preferredCurrency) {
-                    dayChanges[trade.trade.name, default: 0] += convertedChange
-                    dayCovered += 1
-                }
-            }
-            covered += 1
-          }
-        }
+        let valuation = AllocationValuation.make(from: dataModel)
+        let positions = valuation.positions
+        let preferredCurrency = valuation.currency
 
         let sectors = await sectorService.calculateSectorAllocations(
             positions: positions,
-            dayChanges: dayChanges
+            dayChanges: valuation.dayChanges
         )
 
         let diversification = await sectorService.analyzeDiversification(
             sectorAllocations: sectors
         )
+        let eligibleCount = valuation.eligible
+        let covered = valuation.covered
         let completeCoverage = eligibleCount > 0 && covered == eligibleCount
-        let completeDay = eligibleCount > 0 && dayCovered == eligibleCount
+        let completeDay = eligibleCount > 0 && valuation.dayCovered == eligibleCount
+        let valuedHoldings = valuation.holdings
 
         await MainActor.run {
             guard self.analyticsRevision == revision else { return }
             // Show what could be valued and say what is missing, rather than
             // blanking the whole section because one holding has no price yet.
             self.sectorAllocations = sectors
+            self.valuedHoldings = valuedHoldings
+            // Colours are handed out here, never while drawing, and kept while the page is open.
+            self.holdingColours.assign(AllocationPresentation.holdingGroups(sectors).map(\.key))
+            self.currencyColours.assign(AllocationPresentation.currencyGroups(valuedHoldings).map(\.key))
             self.analyticsEligible = eligibleCount
             self.diversificationAnalysis = completeCoverage ? diversification : nil
             self.analyticsCurrency = preferredCurrency
+            self.cash = valuation.cash
+            self.sourceTotal = valuation.sourceTotal
+            self.cashOmission = valuation.cashOmission
             self.analyticsCoverage = covered
             self.completeDayCoverage = completeCoverage && completeDay
             self.hasLoadedOnce = true
@@ -686,15 +799,6 @@ struct PortfolioAnalyticsView: View {
         return history
     }
 
-    /// Convert only with a current, known FX rate; fallback constants are not suitable for allocation claims.
-    private func convertAnalyticsAmount(_ amount: Double, from: String, to: String) -> Double? {
-        guard amount.isFinite else { return nil }
-        let info = dataModel.currencyConverter.getExchangeRateInfo(from: from, to: to)
-        guard info.rate.isFinite, !info.isFallback else { return nil }
-        let converted = dataModel.currencyConverter.convert(amount: amount, from: from, to: to)
-        return converted.isFinite ? converted : nil
-    }
-
     // MARK: - Attribution Analysis Section (v2.3.1)
 
     private var attributionAnalysisSection: some View {
@@ -727,6 +831,283 @@ struct PortfolioAnalyticsView: View {
             Text("Includes top contributors, sector attribution, and time-weighted against money-weighted return.")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+/// A tooltip over the whole row, for the rows that have one (only Cash); other rows are left as they were.
+private struct AllocationRowTooltip: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text {
+            content.contentShape(Rectangle()).help(text)
+        } else {
+            content
+        }
+    }
+}
+
+/// What the Allocation page values, worked out once from the data model: each holding's
+/// value in the display currency, its day's change, the currency it is priced in, how many
+/// holdings could be valued, and the cash and total from the source that gives Holdings
+/// its weights. Each holding's value is the one Holdings weighs
+/// (`DataModel.weighedPositionValue(for:in:)`) and the total and cash come from
+/// `DataModel.holdingsWeightBasis()`, so the two pages cannot drift apart.
+struct AllocationValuation {
+    let currency: String
+    var positions: [String: Double] = [:]
+    var dayChanges: [String: Double] = [:]
+    /// The same values as `positions`, kept per holding with the currency it is priced in.
+    var holdings: [AllocationHolding] = []
+    /// Holdings with a known value, a known zero included.
+    var covered = 0
+    var dayCovered = 0
+    /// Holdings that should have been valued; more than `covered` when a price or rate is missing.
+    var eligible = 0
+    var cash: AllocationCash = .none
+    /// With a Cash row, Holdings' own total in the display currency, which every share is of.
+    var sourceTotal: Double?
+    /// Why cash the source gives is left out, when it is.
+    var cashOmission: AllocationCashOmission?
+    /// Each valued holding's value above zero as its source gives it, before any conversion,
+    /// for the check against the source's total.
+    var sourceValues: [HoldingsWeightBasis.Amount] = []
+
+    /// How far the holdings plus cash may be from Holdings' total, as a fraction of it, for
+    /// a Cash row: half the 0.1% the page shows shares to.
+    static let reconciliationTolerance = 0.0005
+
+    @MainActor
+    static func make(from dataModel: DataModel) -> AllocationValuation {
+        let preferredCurrency = dataModel.preferredCurrency
+        var result = AllocationValuation(currency: preferredCurrency)
+        let converter = dataModel.currencyConverter
+        let convertTo = { (amount: Double, from: String, to: String) in
+            convertAnalyticsAmount(amount, from: from, to: to, converter: converter)
+        }
+        let convert = { (amount: Double, from: String) in convertTo(amount, from, preferredCurrency) }
+        // One look at the source for the whole pass, for every row's value and day's change.
+        let lookup = dataModel.holdingsValuationLookup()
+        let owned = dataModel.realTimeTrades.filter {
+            !$0.trade.isWatchlistOnly && !SymbolMetadata.isBenchmarkSymbol($0.trade.name)
+        }
+        result.eligible = owned.count
+        for trade in owned {
+            // Only a holding with no value (none, or not finite) is unvalued.
+            guard let value = dataModel.weighedPositionValue(for: trade, in: lookup),
+                  value.amount.isFinite else { continue }
+            let change = dayChange(of: trade, lookup: lookup)
+            guard value.amount > 0 else {
+                // Known to be worth nothing (written down, say): valued, adding nothing and
+                // with no slice. It needs no exchange rate, since nothing converts. A value
+                // below zero is known too but has no slice to draw; it is left out of the
+                // check against the source's total, which then fails, so there is no Cash row.
+                result.covered += 1
+                if change != nil { result.dayCovered += 1 }
+                continue
+            }
+            guard let converted = convert(value.amount, value.currency), converted > 0 else { continue }
+            let symbol = trade.trade.name
+            result.positions[symbol, default: 0] += converted
+            result.holdings.append(AllocationHolding(symbol: symbol, value: converted,
+                                                     currency: pricingCurrency(of: trade, value: value, lookup: lookup)))
+            result.sourceValues.append(HoldingsWeightBasis.Amount(value: value.amount, currency: value.currency))
+            result.covered += 1
+            if let change, let convertedChange = convert(change.amount, change.currency) {
+                result.dayChanges[symbol, default: 0] += convertedChange
+                result.dayCovered += 1
+            }
+        }
+        result.decideCash(dataModel.holdingsWeightBasis(), convertTo: convertTo)
+        return result
+    }
+
+    /// The currency a holding is priced in, for the currency view. A Folync holding names
+    /// it (`currency`), whatever currency Folync values it in; when that is blank, its
+    /// value's currency stands in, as before. A broker's or local holding's price currency
+    /// comes from its quote, else its position, else its value's currency.
+    @MainActor
+    private static func pricingCurrency(of trade: RealTimeTrade, value: (amount: Double, currency: String),
+                                        lookup: HoldingsValuationLookup) -> String {
+        func named(_ code: String?) -> String? {
+            let trimmed = code?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if lookup.folyncHoldings != nil {
+            return named(lookup.folyncHolding(for: trade)?.currency) ?? named(value.currency) ?? ""
+        }
+        return (trade.realTimeInfo.currency ?? trade.trade.position.currency ?? value.currency)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Today's change in the holding's value: Folync's own figure for a Folync holding,
+    /// otherwise the price's move since the previous close times the units.
+    @MainActor
+    private static func dayChange(of trade: RealTimeTrade,
+                                  lookup: HoldingsValuationLookup) -> (amount: Double, currency: String)? {
+        if lookup.folyncHoldings != nil {
+            // The figure Holdings shows (`DataModel.calculatePositionProfitLoss(for:)`).
+            guard let holding = lookup.folyncHolding(for: trade),
+                  let dayGain = holding.dayGain, dayGain.isFinite else { return nil }
+            return (dayGain, holding.resolvedValueCurrency)
+        }
+        let currentPrice = trade.realTimeInfo.getCurrentDisplayPrice()
+        let previousClose = trade.realTimeInfo.previousClose ?? trade.realTimeInfo.prevClosePrice
+        let units = trade.trade.position.unitSize
+        // Prices are already in pounds for a pence-quoted listing, so pence count as pounds here, as before.
+        guard currentPrice.isFinite, currentPrice > 0, previousClose.isFinite, previousClose > 0, units.isFinite,
+              let currency = SymbolMetadata.normalizeCurrency(trade.realTimeInfo.currency ?? trade.trade.position.currency)
+        else { return nil }
+        return ((currentPrice - previousClose) * units, currency)
+    }
+
+    /// A Cash row only when its share and every holding's share are of the same total as
+    /// Holdings' weights: Holdings' total covers its holdings, every holding is valued, the
+    /// cash converts at a loaded rate, and holdings plus cash come to that total. Otherwise
+    /// the shares are of the holdings and `cashOmission` says why.
+    private mutating func decideCash(_ basis: HoldingsWeightBasis, convertTo: (Double, String, String) -> Double?) {
+        cash = .none
+        sourceTotal = nil
+        cashOmission = nil
+        if let mismatch = basis.mismatch {
+            cashOmission = AllocationCashOmission(mismatch)
+            return
+        }
+        guard let sourceCash = basis.cash, sourceCash.value != 0 else { return }
+        let converted = convertTo(sourceCash.value, sourceCash.currency, currency)
+        // Cash that shows as zero in the display currency is zero: no row, no line.
+        if let converted, HoldingsCurrencyFormatter.displayedSign(of: converted, currency: currency) == 0 { return }
+        guard covered == eligible else { cashOmission = .partialCoverage; return }
+        guard let converted else { cashOmission = .noExchangeRate; return }
+        guard converted > 0 else { cash = .borrowing(converted); return }
+        holdCash(converted, cash: sourceCash, total: basis.total, convertTo: convertTo)
+    }
+
+    /// Cash above zero, with every holding valued: a Cash row when the holdings and cash
+    /// come to the source's total. The check is made in the total's own currency, every
+    /// figure converted into it at loaded rates only (pence through pounds, at 100), since
+    /// that is where the source added them up. A figure with no such rate means no Cash
+    /// row, as cash without one has none. When the check passes, every share is of the
+    /// source's total.
+    private mutating func holdCash(_ converted: Double, cash sourceCash: HoldingsWeightBasis.Amount,
+                                   total: HoldingsWeightBasis.Amount?,
+                                   convertTo: (Double, String, String) -> Double?) {
+        guard let total, total.value > 0 else { cashOmission = .totalDiffers; return }
+        var figures: [Double] = []
+        for figure in sourceValues + [sourceCash] {
+            guard let inTotalCurrency = convertTo(figure.value, figure.currency, total.currency) else {
+                cashOmission = .noExchangeRate
+                return
+            }
+            figures.append(inTotalCurrency)
+        }
+        guard let convertedTotal = convertTo(total.value, total.currency, currency), convertedTotal > 0 else {
+            cashOmission = .noExchangeRate
+            return
+        }
+        guard Self.reconciles(figures, with: total.value, currency: total.currency) else {
+            cashOmission = .totalDiffers
+            return
+        }
+        cash = .held(converted)
+        sourceTotal = convertedTotal
+    }
+
+    /// Whether `figures` (each holding's value and the cash, in the total's currency) add up
+    /// to the source's `total`. The check exists so that every share the page shows, to
+    /// 0.1%, agrees with Holdings' weight. The gap allowed is the larger of
+    /// `reconciliationTolerance` of the total and half the currency's smallest unit for each
+    /// figure summed, which is as far honest rounding can take them apart: two £4.99 parts
+    /// of a £9.99 total are a penny short and still pass. So a small omission that cannot
+    /// change any displayed share may pass too.
+    static func reconciles(_ figures: [Double], with total: Double, currency: String) -> Bool {
+        let sum = figures.reduce(0, +)
+        guard sum.isFinite, total.isFinite else { return false }
+        let allowance = max(reconciliationTolerance * abs(total),
+                            0.5 * smallestUnit(of: currency) * Double(figures.count))
+        // A hair over the allowance for binary floating point: £4.99 + £4.99 is not exactly £9.98.
+        return abs(sum - total) <= allowance * (1 + 1e-9)
+    }
+
+    /// The currency's smallest unit in its own terms: a penny, 0.01, for pounds; 1 for yen;
+    /// 1 for a minor-unit code (pence, GBX), whose figures are already in that unit.
+    static func smallestUnit(of currency: String) -> Double {
+        if CurrencyConverter.minorUnitMajorCurrency(currency) != nil { return 1 }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return pow(10, -Double(formatter.maximumFractionDigits))
+    }
+
+    /// Convert only with a rate from the loaded rate table; a hard-coded fallback rate is
+    /// not good enough for a share of the portfolio. Nil without one.
+    @MainActor
+    static func convertAnalyticsAmount(_ amount: Double, from: String, to: String,
+                                       converter: CurrencyConverter) -> Double? {
+        converter.convertWithLoadedRates(amount: amount, from: from, to: to)
+    }
+}
+
+/// The correlation matrix as a grid: one row and one column per holding, each cell its
+/// figure to two decimals, shaded by it. Takes plain inputs and holds no state.
+struct CorrelationGridView: View {
+    let matrix: CorrelationMatrixService.CorrelationMatrix
+    let symbols: [String]
+
+    var body: some View {
+        Grid(horizontalSpacing: 3, verticalSpacing: 3) {
+            GridRow {
+                Color.clear.frame(width: 1, height: 1)
+                ForEach(symbols, id: \.self) { symbol in
+                    Text(symbol)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(width: 42)
+                        .accessibilityHidden(true)
+                }
+            }
+            ForEach(symbols, id: \.self) { row in
+                GridRow {
+                    Text(row)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: 64, alignment: .leading)
+                        .help(row)
+                        .accessibilityHidden(true)
+                    ForEach(symbols, id: \.self) { column in
+                        cell(row: row, column: column)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(row: String, column: String) -> some View {
+        if row == column {
+            Text("–")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+                .frame(width: 42, height: 26)
+                .accessibilityHidden(true)
+        } else {
+            let value = matrix.correlation(between: row, between: column)
+            let label = AllocationPresentation.cellLabel(row, column, value: value)
+            Text(AllocationPresentation.cellText(value))
+                .font(.caption.monospacedDigit().weight(.medium))
+                .frame(width: 42, height: 26)
+                .background {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(StockbarPalette.correlationFill(AllocationPresentation.shade(value)))
+                }
+                .help(label)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
         }
     }
 }

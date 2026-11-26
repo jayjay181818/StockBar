@@ -34,8 +34,21 @@ struct StockbarAcceptanceRuntime: Sendable {
     let runID: String?
     let folyncKeychainService: String
     let liveProviderRequestsAllowed: Bool
+    /// True only for an explicit acceptance run, whose harness requires a
+    /// Folync stand-in on this Mac. `StockbarProviderAccessPolicy` lets Folync
+    /// requests through to a loopback address then, and to nothing else.
+    /// False for automatic XCTest isolation, and irrelevant in a normal run,
+    /// where live requests are allowed anyway.
+    let loopbackFolyncAllowed: Bool
 
     var isEnabled: Bool { root != nil }
+
+    /// True only for an acceptance run started explicitly with its own root
+    /// and run identifier and live providers disabled. False for a normal run
+    /// and for the automatic XCTest isolation, which also has a root.
+    var isExplicitAcceptanceRun: Bool {
+        root != nil && runID != nil && !liveProviderRequestsAllowed && loopbackFolyncAllowed
+    }
 
     /// Acceptance and XCTest runs keep Trading 212 credentials in their own
     /// Keychain service, like Folync, so they never read or replace the real item.
@@ -80,6 +93,17 @@ struct StockbarAcceptanceRuntime: Sendable {
         guard let root else { return domain }
         return root.appendingPathComponent("Preferences", isDirectory: true)
             .appendingPathComponent(domain).path
+    }
+
+    /// Where `--acceptance-bootstrap` leaves the Folync settings for the app
+    /// to adopt at launch. Inside the root, so it goes with the run.
+    ///
+    /// The app, not the earlier bootstrap process, must be the first to write
+    /// those settings into its defaults: on macOS 27 a process never reads
+    /// back its own change to a key that was already in a suite named by a
+    /// path when the process started.
+    var folyncSettingsSeedURL: URL? {
+        root?.appendingPathComponent("folync-settings-seed.json")
     }
 
     var coreDataStoreURL: URL? {
@@ -144,7 +168,8 @@ struct StockbarAcceptanceRuntime: Sendable {
                 root: nil,
                 runID: nil,
                 folyncKeychainService: productionFolyncKeychainService,
-                liveProviderRequestsAllowed: true
+                liveProviderRequestsAllowed: true,
+                loopbackFolyncAllowed: false
             )
         }
 
@@ -193,7 +218,8 @@ struct StockbarAcceptanceRuntime: Sendable {
             root: root,
             runID: runID,
             folyncKeychainService: "\(productionFolyncKeychainService).acceptance.\(runID)",
-            liveProviderRequestsAllowed: false
+            liveProviderRequestsAllowed: false,
+            loopbackFolyncAllowed: true
         )
     }
 
@@ -229,7 +255,8 @@ struct StockbarAcceptanceRuntime: Sendable {
             root: root,
             runID: runID,
             folyncKeychainService: "\(productionFolyncKeychainService).acceptance.\(runID)",
-            liveProviderRequestsAllowed: false
+            liveProviderRequestsAllowed: false,
+            loopbackFolyncAllowed: false
         )
     }
 }

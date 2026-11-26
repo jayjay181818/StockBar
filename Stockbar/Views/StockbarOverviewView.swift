@@ -46,15 +46,12 @@ struct StockbarOverviewView: View {
         case .localCalculationFallback, .marketDataFallback: "Local portfolio"
         }
     }
-    /// Folync can return a full chart and still mark the period partial (carried or stale
-    /// prices); the change is then withheld, and more local history would not bring it back.
     private var rangeChangeUnavailableHint: String {
-        if summary.valuationSource == .folyncProvided && chartModel.isLoading { return "Checking Folync" }
-        if summary.valuationSource == .folyncProvided && chartModel.folyncUnreachable { return "Couldn't reach Folync" }
-        if summary.valuationSource == .folyncProvided && chartModel.folyncStale { return "No current history from Folync" }
-        return summary.valuationSource == .folyncProvided && chartModel.chartData.count > 1
-            ? "Folync marks this period partial"
-            : "Needs more stored history"
+        Self.rangeChangeUnavailableHint(
+            source: summary.valuationSource, isLoading: chartModel.isLoading,
+            unreachable: chartModel.folyncUnreachable, stale: chartModel.folyncStale,
+            pointCount: chartModel.chartData.count, hasCoverage: chartModel.hasRangeCoverage
+        )
     }
     private var rangeChange: PortfolioMenuRangeChange? {
         PortfolioMenuPerformanceResolver.resolve(
@@ -64,17 +61,48 @@ struct StockbarOverviewView: View {
         )
     }
 
+    /// The composition card's figures, or nil when the card is not shown.
+    private var composition: PortfolioTotalComposition? {
+        PortfolioTotalComposition.overview(
+            summary: summary,
+            snapshot: dataModel.folyncPortfolioSnapshot,
+            netDeposits: dataModel.folyncNetDeposits
+        )
+    }
+    private var notice: String? {
+        Self.unreachableNotice(
+            state: dataModel.folyncConnectionState,
+            hasSnapshot: dataModel.folyncPortfolioSnapshot != nil,
+            failureCategory: dataModel.folyncLastPollFailureCategory,
+            savedAt: savedFiguresDate
+        )
+    }
+    /// When the figures on screen were last known good: Folync's last answer,
+    /// or the time the saved snapshot was generated.
+    private var savedFiguresDate: Date? {
+        let generated = dataModel.folyncPortfolioSnapshot.flatMap { FolyncSupplementalDateParser.instant($0.generatedAt) }
+        return [dataModel.folyncLastCheckedAt, generated].compactMap { $0 }.max()
+    }
+
     var body: some View {
         let _ = summaryCache.beginPass()
         GeometryReader { geometry in
             let showsSideInspector = geometry.size.width >= 1000
-            HStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
                         header
+                        if let notice {
+                            StockbarNotice(message: notice, systemImage: "exclamationmark.triangle.fill", tint: .orange)
+                                .accessibilityAddTraits(.isStaticText)
+                        }
                         hero
                         chartCard
-                        summaryCard
+                        if let composition {
+                            compositionCard(composition)
+                        } else {
+                            summaryCard
+                        }
                         if !showsSideInspector {
                             inspector.stockbarCard()
                         }
@@ -82,18 +110,16 @@ struct StockbarOverviewView: View {
                     .padding(StockbarLayout.pageInsets)
                 }
                 if showsSideInspector {
-                    Divider()
-                        .ignoresSafeArea(edges: .top)
+                    // The inspector is a card in its own column.
                     ScrollView {
                         inspector
-                            .padding(.horizontal, 22)
-                            .padding(.top, 14)
+                            .stockbarCard(padding: 18)
+                            .padding(.top, StockbarLayout.pageInsets.top)
+                            .padding(.trailing, 20)
                             .padding(.bottom, StockbarLayout.pagePadding)
                     }
-                    .frame(width: 270)
-                    .background {
-                        StockbarPalette.cardFill.ignoresSafeArea(edges: .top)
-                    }
+                    .scrollIndicators(.never)
+                    .frame(width: 290)
                 }
             }
         }
@@ -106,110 +132,122 @@ struct StockbarOverviewView: View {
         .onChange(of: chartModel.selectedTimeRange) { _, _ in hoveredPoint = nil }
     }
 
+    private var offeredRanges: [MenuChartTimeRange] { Self.offeredRanges(for: summary.valuationSource) }
+
     private var header: some View {
         StockbarPageHeader(
             "Overview",
-            subtitle: dataModel.isFolyncPortfolioActive ? "Read-only portfolio summary from \(source)." : "Your portfolio at a glance."
+            subtitle: dataModel.isFolyncPortfolioActive ? "\(source) portfolio, read-only" : "Your portfolio at a glance."
         ) {
-            Picker("Time range", selection: Binding(
-                get: { chartModel.selectedTimeRange },
-                set: { range in
-                    withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
-                        chartModel.setTimeRange(range)
-                    }
-                }
-            )) {
-                ForEach(MenuChartTimeRange.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 180)
+            // The switch animates the change itself, and not under Reduce Motion.
+            StockbarSegmentedControl(
+                "Time range",
+                selection: Binding(
+                    get: { chartModel.selectedTimeRange },
+                    set: { chartModel.setTimeRange($0) }
+                ),
+                options: offeredRanges
+            ) { $0.rawValue }
+            .fixedSize()
             .help("Chart period")
         }
     }
 
     private var hero: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .bottom, spacing: 36) {
+            HStack(alignment: .bottom, spacing: 24) {
                 portfolioValue
-                changeMetrics
                 Spacer(minLength: 0)
+                changeRows
             }
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 portfolioValue
-                changeMetrics
+                changeRows
             }
         }
     }
 
-    private var changeMetrics: some View {
-        HStack(alignment: .top, spacing: 30) {
-            changeMetric("Today", amount: summary.dayGain, percent: summary.dayGainPct,
-                         unavailableHint: "Waiting for today's prices")
+    /// Today's change and the selected range's, stacked: label, amount, badge.
+    private var changeRows: some View {
+        Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 8) {
+            changeRow("Today", amount: summary.dayGain, percent: summary.dayGainPct,
+                      unavailableHint: "Waiting for today's prices")
             if chartModel.selectedTimeRange != .day {
-                changeMetric("\(chartModel.selectedTimeRange.description) change",
-                             amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan,
-                             unavailableHint: rangeChangeUnavailableHint)
-                    .transition(.opacity)
+                changeRow(Self.rangeTitle(chartModel.selectedTimeRange),
+                          amount: rangeChange?.value ?? .nan, percent: rangeChange?.percent ?? .nan,
+                          unavailableHint: rangeChangeUnavailableHint)
             }
+        }
+        .fixedSize()
+        .padding(.bottom, 6)
+    }
+
+    private func changeRow(_ title: String, amount: Double, percent: Double, unavailableHint: String) -> some View {
+        let isAvailable = amount.isFinite
+        return GridRow {
+            Text(title)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .gridColumnAlignment(.leading)
+                .accessibilityHidden(true)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(isAvailable ? HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency) : Self.unknownFigure)
+                    .font(.system(size: 20, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(isAvailable ? StockbarPalette.signedOnSurface(amount, neutral: .primary) : .secondary)
+                    .stockbarRollingDigits()
+                if !isAvailable {
+                    Text(unavailableHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .help(isAvailable ? "" : unavailableHint)
+            // A grid row is not one element: the amount carries the row's name.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(isAvailable
+                ? "\(title), \(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency))"
+                : "\(title), unknown, \(unavailableHint)")
+            StockbarChangeBadge(percent: isAvailable ? percent : nil, onSurface: true)
         }
     }
 
     private var portfolioValue: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Total value · \(summary.currency)")
-                .font(.subheadline)
+        let total = HoldingsCurrencyFormatter.amount(PortfolioTotalComposition.displayed(summary.totalValue), currency: summary.currency)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(Self.totalValueTitle(currency: summary.currency, savedAt: notice == nil ? nil : savedFiguresDate))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))
-                .font(.system(size: 42, weight: .semibold, design: .rounded))
-                .monospacedDigit()
+            StockbarHeroFigure(text: total, size: 52)
                 .stockbarRollingDigits()
                 .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion), value: summary.totalValue)
                 .fixedSize()
-                .accessibilityLabel("Total portfolio value \(HoldingsCurrencyFormatter.amount(summary.totalValue, currency: summary.currency))")
+                .accessibilityLabel("Total portfolio value \(total)")
         }
-    }
-
-    private func changeMetric(_ title: String, amount: Double, percent: Double, unavailableHint: String) -> some View {
-        let isAvailable = amount.isFinite && percent.isFinite
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            if isAvailable {
-                HStack(spacing: 8) {
-                    Text(HoldingsCurrencyFormatter.signedAmount(amount, currency: summary.currency))
-                        .font(.system(.title3, design: .rounded).weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(StockbarPalette.signed(amount, neutral: .primary))
-                        .stockbarRollingDigits()
-                    StockbarChangeBadge(percent: percent)
-                }
-            } else {
-                Text("—")
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .help(unavailableHint)
-                Text(unavailableHint)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .fixedSize()
-        .accessibilityElement(children: .combine)
     }
 
     private var chartCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            chart
-                .frame(height: 280)
-            if !chartModel.coverageLabel.isEmpty {
-                Text(chartModel.coverageLabel)
-                    .font(.caption)
+        VStack(alignment: .leading, spacing: 10) {
+            // The chart's key: the portfolio's line only. The coverage note sits on the right.
+            HStack(spacing: 8) {
+                Capsule().fill(chartTint).frame(width: 18, height: 3)
+                    .accessibilityHidden(true)
+                Text("Your portfolio")
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                if !chartModel.coverageLabel.isEmpty {
+                    Text(chartModel.coverageLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
             }
+            chart
+                .frame(height: 260)
         }
-        .stockbarCard()
+        .stockbarCard(padding: 16)
     }
 
     private var chartTint: Color {
@@ -274,6 +312,8 @@ struct StockbarOverviewView: View {
                 }
             }
             .chartYScale(domain: domain)
+            // Room for the last "Nov 2026" label inside the plot.
+            .chartXScale(range: .plotDimension(endPadding: chartModel.selectedTimeRange == .all ? 28 : 0))
             .chartXSelection(value: hoverSelection)
             .chartYAxis {
                 AxisMarks(position: .leading) { value in
@@ -288,9 +328,7 @@ struct StockbarOverviewView: View {
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 6)) { _ in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
-                    AxisValueLabel(format: chartModel.selectedTimeRange == .day
-                                   ? .dateTime.hour().minute()
-                                   : .dateTime.day().month(.abbreviated))
+                    AxisValueLabel(format: Self.axisDateFormat(chartModel.selectedTimeRange))
                 }
             }
             .chartReveal(trigger: chartRevealKey)
@@ -326,16 +364,13 @@ struct StockbarOverviewView: View {
             Text(HoldingsCurrencyFormatter.amount(point.price, currency: summary.currency))
                 .font(.callout.weight(.semibold))
                 .monospacedDigit()
-            Text(point.date, format: chartModel.selectedTimeRange == .day
-                 ? .dateTime.hour().minute()
-                 : .dateTime.day().month(.abbreviated).hour().minute())
+            Text(MenuPopoverFormatter.date(point.date, range: chartModel.selectedTimeRange))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(StockbarPalette.cardStroke))
+        .stockbarCallout()
     }
 
     /// "+£1,234.00 (5.20%)", or the amount alone when there is no percentage.
@@ -343,6 +378,19 @@ struct StockbarOverviewView: View {
         let signed = HoldingsCurrencyFormatter.signedAmount(amount, currency: currency)
         let percentText = MenuPopoverFormatter.percent(percent)
         return percentText.isEmpty ? signed : "\(signed) (\(percentText))"
+    }
+
+    private func compositionCard(_ composition: PortfolioTotalComposition) -> some View {
+        StockbarOverviewCompositionCard(
+            composition: composition,
+            returnText: Self.compositionReturnText(
+                composition, totalReturn: summary.totalReturn(measuredAgainst: dataModel.portfolioGainBasis)
+            ),
+            footnote: Self.compositionFootnote(
+                cash: dataModel.folyncPortfolioSnapshot?.cash, positions: summary.ownedPositionCount,
+                currency: composition.currency
+            )
+        )
     }
 
     private var summaryCard: some View {
@@ -357,7 +405,7 @@ struct StockbarOverviewView: View {
                     value: totalReturn.gain.isFinite
                         ? Self.amountWithPercent(totalReturn.gain, percent: totalReturn.percent, currency: summary.currency)
                         : "—",
-                    valueColor: StockbarPalette.signed(totalReturn.gain, neutral: .primary)
+                    valueColor: StockbarPalette.signedOnSurface(totalReturn.gain, neutral: .primary)
                 )
                 .help("Portfolio value, cash included, less net deposits. Sales, dividends, interest and fees all count.")
                 StockbarDetailRow(label: "Net deposits", value: HoldingsCurrencyFormatter.amount(totalReturn.basisAmount, currency: summary.currency))
@@ -368,7 +416,7 @@ struct StockbarOverviewView: View {
                 value: summary.totalGain.isFinite
                     ? "\(HoldingsCurrencyFormatter.signedAmount(summary.totalGain, currency: summary.currency)) (\(MenuPopoverFormatter.percent(summary.totalGainPct)))"
                     : "—",
-                valueColor: StockbarPalette.signed(summary.totalGain, neutral: .primary)
+                valueColor: StockbarPalette.signedOnSurface(summary.totalGain, neutral: .primary)
             )
             StockbarDetailRow(label: "Cost basis", value: HoldingsCurrencyFormatter.amount(summary.totalCost, currency: summary.currency))
             let cash = dataModel.isFolyncPortfolioActive ? dataModel.folyncPortfolioSnapshot?.cash : nil
@@ -427,12 +475,12 @@ struct StockbarOverviewView: View {
                     StockbarDetailRow(
                         label: "Today",
                         value: HoldingsCurrencyFormatter.signedAmount(profit.dayAmount, currency: profit.currency),
-                        valueColor: StockbarPalette.signed(profit.dayAmount, neutral: .primary)
+                        valueColor: StockbarPalette.signedOnSurface(profit.dayAmount, neutral: .primary)
                     )
                     StockbarDetailRow(
                         label: "Total P&L",
                         value: HoldingsCurrencyFormatter.signedAmount(profit.totalAmount, currency: profit.currency),
-                        valueColor: StockbarPalette.signed(profit.totalAmount, neutral: .primary),
+                        valueColor: StockbarPalette.signedOnSurface(profit.totalAmount, neutral: .primary),
                         showsDivider: false
                     )
                     .help("Unrealised gain or loss against the average cost. Sales and dividends are not included.")
@@ -462,4 +510,238 @@ struct StockbarOverviewView: View {
         chartModel.update(currentValue: summary.totalValue, currentTrades: dataModel.realTimeTrades,
                           preferredCurrency: summary.currency, valuationSource: summary.valuationSource)
     }
+
+    // MARK: - What the page says
+
+    /// An unknown figure.
+    static let unknownFigure = "–"
+    static let positivePartsNote = "The bar shows the positive parts only."
+
+    /// The ranges the graph can draw for a portfolio source, in the switch's
+    /// order. Folync's history route serves every one of them (it has no
+    /// year-to-date range), and so does Stockbar's own store of portfolio
+    /// values for a local or Trading 212 portfolio.
+    static func offeredRanges(for source: PortfolioValuationSource) -> [MenuChartTimeRange] {
+        switch source {
+        case .folyncProvided, .brokerProvided, .localCalculationFallback, .marketDataFallback:
+            [.day, .week, .month, .threeMonths, .year, .all]
+        }
+    }
+
+    /// "1 week", "3 months", "all time".
+    static func rangeTitle(_ range: MenuChartTimeRange) -> String {
+        range.description.lowercased()
+    }
+
+    /// Why the range's change is not shown. Folync can return a full chart and
+    /// still mark the period partial (carried or stale prices); the change is
+    /// then withheld, and more local history would not bring it back.
+    static func rangeChangeUnavailableHint(source: PortfolioValuationSource, isLoading: Bool,
+                                           unreachable: Bool, stale: Bool, pointCount: Int,
+                                           hasCoverage: Bool = false) -> String {
+        guard source == .folyncProvided else { return "Needs more stored history" }
+        if isLoading { return "Checking Folync" }
+        if unreachable { return "Couldn't reach Folync" }
+        if stale { return "No current history from Folync" }
+        guard pointCount > 1 else { return "Needs more stored history" }
+        // A full period whose first value is zero: there is nothing to measure from.
+        return hasCoverage ? "No starting value for this period" : "Folync marks this period partial"
+    }
+
+    static func axisDateFormat(_ range: MenuChartTimeRange) -> Date.FormatStyle {
+        switch range {
+        case .day: .dateTime.hour().minute()
+        case .week, .month, .threeMonths: .dateTime.day().month(.abbreviated)
+        // A year back from today needs no year; "All" can span several.
+        case .year: .dateTime.month(.abbreviated)
+        case .all: .dateTime.month(.abbreviated).year()
+        }
+    }
+
+    /// The amber bar's text while Folync is not answering and saved figures are
+    /// shown, or nil. Uses the connection state the app already keeps.
+    static func unreachableNotice(state: FolyncConnectionState, hasSnapshot: Bool, failureCategory: String?,
+                                  savedAt: Date?, now: Date = Date(),
+                                  locale: Locale = .current, timeZone: TimeZone = .current) -> String? {
+        guard hasSnapshot, case .offlineCached = state else { return nil }
+        // Any failed check with a snapshot on screen is `.offlineCached`: only
+        // a connection failure is called unreachable.
+        let unreachable = failureCategory.map(FolyncSupplementalCoordinator.isUnreachable(category:)) ?? false
+        let lead = unreachable ? "Couldn't reach Folync." : "Folync didn't send new figures."
+        guard let savedAt else { return "\(lead) Showing the figures saved earlier." }
+        return "\(lead) Showing the figures saved \(savedTime(savedAt, now: now, locale: locale, timeZone: timeZone))."
+    }
+
+    /// "at 14:10" today, "on 19 Nov at 14:10" otherwise.
+    static func savedTime(_ date: Date, now: Date, locale: Locale, timeZone: TimeZone) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var time = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
+        time.timeZone = timeZone
+        if calendar.isDate(date, inSameDayAs: now) { return "at \(date.formatted(time))" }
+        var day = Date.FormatStyle(locale: locale, calendar: calendar).day().month(.abbreviated)
+        day.timeZone = timeZone
+        return "on \(date.formatted(day)) at \(date.formatted(time))"
+    }
+
+    /// "Total value, GBP", and ", as of 14:10" while saved figures are shown.
+    static func totalValueTitle(currency: String, savedAt: Date?, now: Date = Date(),
+                                locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+        guard let savedAt else { return "Total value, \(currency)" }
+        let time = savedTime(savedAt, now: now, locale: locale, timeZone: timeZone)
+        // "at 14:10" or "on 19 Nov at 14:10", without its first word.
+        return "Total value, \(currency), as of \(time.drop { $0 != " " }.dropFirst())"
+    }
+
+    static func compositionHeading(_ composition: PortfolioTotalComposition) -> String {
+        "What \(HoldingsCurrencyFormatter.amount(composition.total, currency: composition.currency)) is made of"
+    }
+
+    /// "total return +£15,902.11 (+23.25%)": the total less net deposits, from the
+    /// figures the card shows. Against cost, the P&L Stockbar shows elsewhere.
+    static func compositionReturnText(_ composition: PortfolioTotalComposition, totalReturn: PortfolioTotalReturn) -> String {
+        guard totalReturn.isMeasuredAgainstNetDeposits else {
+            guard totalReturn.gain.isFinite else { return "" }
+            return "P&L against cost \(amountWithPercent(totalReturn.gain, percent: totalReturn.percent, currency: composition.currency))"
+        }
+        return "total return \(amountWithPercent(composition.gainOnDeposits, percent: totalReturn.percent, currency: composition.currency))"
+    }
+
+    /// Net deposits as an amount; the gains and the remainder signed.
+    static func legendFigure(_ part: PortfolioTotalComposition.Part, currency: String) -> String {
+        part.kind == .netDeposits
+            ? HoldingsCurrencyFormatter.amount(part.amount, currency: currency)
+            : HoldingsCurrencyFormatter.signedAmount(part.amount, currency: currency)
+    }
+
+    /// "Net deposits, £68,408.36"; "Realised gains, minus £120.00, partial".
+    static func accessibilityLabel(_ part: PortfolioTotalComposition.Part, currency: String) -> String {
+        let magnitude = HoldingsCurrencyFormatter.amount(abs(part.amount), currency: currency)
+        return "\(part.kind.title), \(part.minorUnits < 0 ? "minus " : "")\(magnitude)\(part.isPartial ? ", partial" : "")"
+    }
+
+    /// "Cash £2,940.18 · 9 positions". Cash keeps the currency Folync gives it in.
+    static func compositionFootnote(cash: FolyncFinancialMetric?, positions: Int, currency: String) -> String {
+        var items: [String] = []
+        if let cash {
+            items.append("Cash " + (cash.value.map { HoldingsCurrencyFormatter.amount($0, currency: cash.currency ?? currency) } ?? unknownFigure))
+        }
+        items.append(positions == 1 ? "1 position" : "\(positions) positions")
+        return items.joined(separator: " · ")
+    }
+}
+
+/// "What £84,310.47 is made of": the heading with the total return, the bar,
+/// and each part's figure. Built from values only, so it can be hosted alone.
+struct StockbarOverviewCompositionCard: View {
+    let composition: PortfolioTotalComposition
+    /// "total return +£15,902.11 (+23.25%)", or empty.
+    let returnText: String
+    /// "Cash £2,940.18 · 9 positions".
+    let footnote: String
+
+    /// What VoiceOver reads, in order: the heading (with the total return),
+    /// then one label per part. The bar itself is decorative and hidden.
+    struct Exposure: Equatable {
+        let heading: String
+        let parts: [String]
+    }
+
+    static func accessibility(_ composition: PortfolioTotalComposition, returnText: String) -> Exposure {
+        let heading = StockbarOverviewView.compositionHeading(composition)
+        return Exposure(
+            heading: returnText.isEmpty ? heading : "\(heading), \(returnText)",
+            parts: composition.parts.map { StockbarOverviewView.accessibilityLabel($0, currency: composition.currency) }
+        )
+    }
+
+    var body: some View {
+        let heading = StockbarOverviewView.compositionHeading(composition)
+        let exposure = Self.accessibility(composition, returnText: returnText)
+        VStack(alignment: .leading, spacing: 14) {
+            Group {
+                if returnText.isEmpty {
+                    Text(heading).fontWeight(.semibold)
+                } else {
+                    Text("\(Text(heading).fontWeight(.semibold))\(Text(" · \(returnText)").foregroundStyle(.secondary))")
+                }
+            }
+            .font(.system(size: 16))
+            .monospacedDigit()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(exposure.heading)
+            .accessibilityAddTraits(.isHeader)
+            StockbarCompositionBar(composition: composition)
+            if composition.barShowsPositivePartsOnly {
+                Text(StockbarOverviewView.positivePartsNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 12) { legend(0..<4, exposure) }
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    GridRow { legend(0..<2, exposure) }
+                    GridRow { legend(2..<4, exposure) }
+                }
+            }
+            Text(footnote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .stockbarCard()
+    }
+
+    private func legend(_ indices: Range<Int>, _ exposure: Exposure) -> some View {
+        ForEach(indices, id: \.self) { index in
+            let part = composition.parts[index]
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(StockbarPalette.compositionFill(part.kind))
+                        .frame(width: 9, height: 9)
+                    Text(part.kind.title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(StockbarOverviewView.legendFigure(part, currency: composition.currency))
+                    .font(.system(size: 17, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(part.minorUnits < 0 ? StockbarPalette.loss : Color.primary)
+                    .stockbarRollingDigits()
+                if part.isPartial {
+                    Text("Partial")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(exposure.parts[index])
+            .accessibilityAddTraits(.isStaticText)
+        }
+    }
+}
+
+// The states the acceptance copy cannot show while its stand-in answers.
+// Invented figures.
+#Preview("Notice and a negative part") {
+    VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
+        StockbarNotice(message: "Couldn't reach Folync. Showing the figures saved at 14:10.")
+        if let composition = PortfolioTotalComposition(
+            currency: "GBP",
+            total: .init(value: 84_310.47, currency: "GBP"),
+            netDeposits: .init(value: 68_408.36, currency: "GBP"),
+            unrealised: .init(value: 16_122.11, currency: "GBP"),
+            realised: .init(value: -1_611.86, currency: "GBP", isPartial: true)
+        ) {
+            StockbarOverviewCompositionCard(
+                composition: composition,
+                returnText: "total return +£15,902.11 (+23.25%)",
+                footnote: "Cash £2,940.18 · 9 positions"
+            )
+        }
+    }
+    .padding(28)
+    .frame(width: 900)
 }

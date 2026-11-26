@@ -192,6 +192,34 @@ public final class CurrencyConverter: @unchecked Sendable {
         return (rate, lastRefreshTime, usingFallback)
     }
 
+    /// `amount` converted with rates from the loaded rate table only, or nil. Unlike
+    /// `convert(amount:from:to:)` and `getExchangeRateInfo(from:to:)`, a currency missing
+    /// from the table has no rate here, and before any table has loaded nothing converts
+    /// except a currency into itself. No hard-coded rate is ever used. Minor units (pence
+    /// and the like) convert through their major currency at 1/100, as `convert` does.
+    public func convertWithLoadedRates(amount: Double, from: String, to: String) -> Double? {
+        guard amount.isFinite else { return nil }
+        let sourceMinor = Self.minorUnitMajorCurrency(from)
+        let targetMinor = Self.minorUnitMajorCurrency(to)
+        let source = sourceMinor ?? Self.normalizedCurrencyCode(from)
+        let target = targetMinor ?? Self.normalizedCurrencyCode(to)
+        guard !source.isEmpty, !target.isEmpty else { return nil }
+        let scale = (sourceMinor == nil ? 1 : 0.01) * (targetMinor == nil ? 1 : 100)
+        guard source != target else { return amount * scale }
+
+        let rates = rateState().rates
+        guard !rates.isEmpty, lastRefreshTime != .distantPast else { return nil }
+        // The table is US dollar based: each entry is units of that currency per dollar.
+        func perDollar(_ currency: String) -> Double? {
+            let rate = currency == "USD" ? (rates["USD"] ?? 1) : rates[currency]
+            guard let rate, rate.isFinite, rate > 0 else { return nil }
+            return rate
+        }
+        guard let sourceRate = perDollar(source), let targetRate = perDollar(target) else { return nil }
+        let result = amount * scale * targetRate / sourceRate
+        return result.isFinite ? result : nil
+    }
+
     // Get formatted time since last refresh
     public func getTimeSinceRefresh() -> String {
         let now = Date()

@@ -203,8 +203,7 @@ struct CandlestickChartView: View {
                         .font(.caption2)
                         .foregroundColor(annotation.color)
                         .padding(2)
-                        .background(Color(.windowBackgroundColor).opacity(0.7))
-                        .cornerRadius(4)
+                        .stockbarCallout(cornerRadius: 4)
                 }
             }
 
@@ -639,9 +638,7 @@ struct CandlestickChartView: View {
                 .foregroundColor(.secondary)
         }
         .padding(8)
-        .background(Color(.windowBackgroundColor).opacity(0.95))
-        .cornerRadius(8)
-        .shadow(radius: 2)
+        .stockbarCallout()
     }
 
     // MARK: - Helper Methods

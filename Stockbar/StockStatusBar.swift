@@ -162,7 +162,7 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
     private var popoverLocalMonitor: Any?
     private var popoverSpaceObserver: NSObjectProtocol?
     private var stalenessTimer: Timer?
-    private let mainPopoverSize = NSSize(width: 330, height: 410)
+    private let mainPopoverSize = NSSize(width: 340, height: 600)
 
     // MARK: - Initialization
     init(dataModel: DataModel) {
@@ -183,6 +183,17 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
         // Open exactly once the click is complete; dismissal belongs to the
         // explicit outside-click monitors rather than the press lifecycle.
         mainStatusItem?.button?.sendAction(on: [.leftMouseUp])
+
+        // An explicit acceptance run can ask for the portfolio popover to open
+        // once after launch. It opens the way a click does, with the same
+        // dismissal, so what is looked at is the real popover.
+        if StockbarAcceptanceLaunchOptions.current.opensPortfolioPopover {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(StockbarAcceptanceLaunchOptions.popoverDelay))
+                guard let self, let button = self.mainStatusItem?.button, self.mainPopover?.isShown != true else { return }
+                self.toggleMainPopover(button)
+            }
+        }
 
         let statusItemVisible = mainStatusItem?.isVisible ?? false
         let hasButton = mainStatusItem?.button != nil
@@ -432,7 +443,10 @@ class StockStatusBar: NSObject, NSPopoverDelegate {
             let hostingController = NSHostingController(
                 rootView: PortfolioMenuPopoverView(
                     dataModel: dataModel,
-                    actions: actionsForCurrentPortfolioPopover()
+                    actions: actionsForCurrentPortfolioPopover(),
+                    maximumHeight: PortfolioMenuPopoverHeight.maximum(
+                        visibleHeight: (sender.window?.screen ?? NSScreen.main)?.visibleFrame.height
+                    )
                 )
             )
             // Size the popover to its SwiftUI content.

@@ -1,3 +1,4 @@
+import collections.abc
 import time
 from datetime import datetime, timedelta, timezone
 import sys
@@ -561,12 +562,14 @@ def trading_currency(ticker, info):
     """The currency prices are quoted in. `financialCurrency` is the currency
     of the company's accounts (USD for a London-listed miner, say), so it is
     not a substitute; the chart metadata is."""
-    currency = info.get('currency') if isinstance(info, dict) else None
+    # A dict in yfinance 1.8; any read-only mapping it may become reads the same way.
+    currency = info.get('currency') if isinstance(info, collections.abc.Mapping) else None
     if currency:
         return currency
     try:
         metadata = ticker.history_metadata
-        if isinstance(metadata, dict):
+        # A dict in older yfinance, a read-only HistoryMetadata mapping in 1.8.
+        if isinstance(metadata, collections.abc.Mapping):
             return metadata.get('currency')
     except Exception:
         pass
@@ -813,6 +816,10 @@ def fetch_real_time_quote_yfinance(symbol):
                 
         except Exception as e:
             log_error(f"yfinance info fetch failed for {symbol}: {e}. Falling back to other methods.")
+            # The chart metadata still names the quote currency, so a pound-quoted
+            # London listing is not mistaken for a pence one by the suffix rule.
+            if currency is None:
+                currency = trading_currency(ticker, {})
 
         # 3. Try to get the latest price using fast_info if we don't have it yet
         if regular_market_price is None:
@@ -1101,7 +1108,8 @@ def fetch_previous_close_yfinance(symbol):
             info = ticker.info
             currency = trading_currency(ticker, info)
         except Exception:
-            currency = None
+            # The chart metadata still names the quote currency when `info` fails.
+            currency = trading_currency(ticker, {})
 
         normalized_currency, uses_pence = normalize_currency(currency, symbol)
         if uses_pence:

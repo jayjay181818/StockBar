@@ -104,6 +104,155 @@ struct PortfolioTotalReturn: Equatable {
     var basisLabel: String { isMeasuredAgainstNetDeposits ? "Net Deposits" : "Cost Basis" }
 }
 
+/// What a portfolio's total is made of, for the Overview: net deposits,
+/// unrealised and realised gains as the portfolio source gives them, and the
+/// rest of the total as "Income, interest and fees".
+///
+/// Built only when the total and the three figures are known and in one
+/// currency; nothing is converted. Every figure is held in whole minor units
+/// (pennies), rounded as they are displayed, and the remainder takes the
+/// rounding difference, so the four parts shown add up to the total shown.
+struct PortfolioTotalComposition: Equatable {
+    enum Kind: CaseIterable, Equatable {
+        case netDeposits, unrealisedGains, realisedGains, incomeInterestAndFees
+
+        var title: String {
+            switch self {
+            case .netDeposits: "Net deposits"
+            case .unrealisedGains: "Unrealised gains"
+            case .realisedGains: "Realised gains"
+            case .incomeInterestAndFees: "Income, interest and fees"
+            }
+        }
+    }
+
+    struct Part: Equatable {
+        let kind: Kind
+        /// Whole minor units, as displayed.
+        let minorUnits: Int64
+        /// The source marks the figure partial; the remainder is partial when
+        /// any figure it comes from is.
+        var isPartial = false
+        var amount: Double { PortfolioTotalComposition.amount(minorUnits) }
+    }
+
+    /// A figure and the currency the source gives it in. Either may be unknown.
+    struct Figure: Equatable {
+        let value: Double?
+        let currency: String?
+        var isPartial = false
+
+        /// A Folync metric. One Folync marks unavailable is unknown.
+        init(_ metric: FolyncFinancialMetric, currency fallbackCurrency: String? = nil) {
+            value = metric.quality == .unavailable ? nil : metric.value
+            currency = metric.currency ?? fallbackCurrency
+            isPartial = metric.quality == .partial
+        }
+
+        init(value: Double?, currency: String?, isPartial: Bool = false) {
+            self.value = value
+            self.currency = currency
+            self.isPartial = isPartial
+        }
+    }
+
+    let currency: String
+    let totalMinorUnits: Int64
+    /// In `Kind.allCases` order.
+    let parts: [Part]
+
+    var total: Double { Self.amount(totalMinorUnits) }
+
+    /// Every amount Stockbar displays has two decimals (`HoldingsCurrencyFormatter`).
+    static let minorUnitsPerUnit = 100.0
+
+    /// `value` in whole minor units, rounded exactly as `HoldingsCurrencyFormatter`
+    /// rounds it for display: by a number formatter with the same settings, whose
+    /// output is read back. (Scaling the double by 100 can round the other way at
+    /// a half penny: 1.015 prints as 1.02.) Nil for a value that is not finite or too large.
+    static func minorUnits(_ value: Double) -> Int64? {
+        guard value.isFinite, abs(value) < 1e13 else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        guard let text = formatter.string(from: NSNumber(value: value)),
+              let digits = Int64(text.filter(\.isNumber)) else { return nil }
+        return text.hasPrefix("-") ? -digits : digits
+    }
+
+    static func amount(_ minorUnits: Int64) -> Double {
+        Double(minorUnits) / minorUnitsPerUnit
+    }
+
+    /// `value` as it is displayed: rounded to whole minor units.
+    static func displayed(_ value: Double) -> Double {
+        minorUnits(value).map(amount) ?? value
+    }
+
+    /// Nil unless all four figures are known and in `currency`.
+    init?(currency: String, total: Figure, netDeposits: Figure, unrealised: Figure, realised: Figure) {
+        let expected = currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !expected.isEmpty else { return nil }
+        var units: [Int64] = []
+        for figure in [total, netDeposits, unrealised, realised] {
+            guard let figureCurrency = figure.currency?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+                  figureCurrency == expected,
+                  let value = figure.value,
+                  let minor = Self.minorUnits(value) else { return nil }
+            units.append(minor)
+        }
+        let (remainder, overflow) = units[0].subtractingReportingOverflow(units[1] + units[2] + units[3])
+        guard !overflow else { return nil }
+        self.currency = expected
+        totalMinorUnits = units[0]
+        let anyPartial = [total, netDeposits, unrealised, realised].contains { $0.isPartial }
+        parts = [
+            Part(kind: .netDeposits, minorUnits: units[1], isPartial: netDeposits.isPartial),
+            Part(kind: .unrealisedGains, minorUnits: units[2], isPartial: unrealised.isPartial),
+            Part(kind: .realisedGains, minorUnits: units[3], isPartial: realised.isPartial),
+            Part(kind: .incomeInterestAndFees, minorUnits: remainder, isPartial: anyPartial)
+        ]
+    }
+
+    /// The Overview's card, for a Folync portfolio only: the other sources give
+    /// neither net deposits nor realised gains. `summary.netDeposits` is the
+    /// figure "Measure P&L Against" uses; its currency is the history's.
+    static func overview(
+        summary: DisplayPortfolioSummary,
+        snapshot: FolyncPortfolioSnapshot?,
+        netDeposits: FolyncNetDeposits?
+    ) -> PortfolioTotalComposition? {
+        guard summary.valuationSource == .folyncProvided, let snapshot, let netDeposits else { return nil }
+        return PortfolioTotalComposition(
+            currency: summary.currency,
+            // The total's currency falls back to the scope's, as the summary's does.
+            total: Figure(snapshot.totalValue, currency: snapshot.scope.currency),
+            netDeposits: Figure(value: summary.netDeposits, currency: netDeposits.currency),
+            unrealised: Figure(snapshot.profitLoss.unrealized),
+            realised: Figure(snapshot.profitLoss.realized)
+        )
+    }
+
+    /// The share of the bar each part takes. A bar cannot draw a negative
+    /// length, so parts that are zero or negative take none and the positive
+    /// parts share the bar in proportion to each other.
+    var barFractions: [Double] {
+        let positive = parts.map { max($0.minorUnits, 0) }
+        let sum = positive.reduce(0, +)
+        guard sum > 0 else { return parts.map { _ in 0 } }
+        return positive.map { Double($0) / Double(sum) }
+    }
+
+    /// True when some part has no segment because it is negative.
+    var barShowsPositivePartsOnly: Bool { parts.contains { $0.minorUnits < 0 } }
+
+    /// The total less net deposits, from the figures shown, so it matches the parts.
+    var gainOnDeposits: Double { Self.amount(totalMinorUnits - parts[0].minorUnits) }
+}
+
 struct PositionProfitLossSummary: Equatable {
     let dayAmount: Double
     let dayPercent: Double
@@ -464,7 +613,13 @@ class PortfolioCalculationService {
             from: brokerValuationSnapshot.currency,
             to: preferredCurrency
         )
-        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss ?? localSummary.totalGain
+        // An account valued from its summary alone has no holdings of Stockbar's to fall back
+        // on: what the summary does not give (its investments' cost and gain) is not known,
+        // never the local sum over no holdings or the account's value less a gain, which
+        // would pass its cash off as a cost.
+        let isAccountOnly = brokerValuationSnapshot.isAccountOnly
+        let totalGainSource = brokerValuationSnapshot.totalUnrealizedProfitLoss
+            ?? (isAccountOnly ? .nan : localSummary.totalGain)
         let totalGain = convertBrokerAmount(
             totalGainSource,
             from: brokerValuationSnapshot.totalUnrealizedProfitLoss == nil ? preferredCurrency : brokerValuationSnapshot.currency,
@@ -476,11 +631,13 @@ class PortfolioCalculationService {
             })
         let totalCost = totalCostSource.map {
             convertBrokerAmount($0, from: brokerValuationSnapshot.currency, to: preferredCurrency)
-        } ?? max(totalValue - totalGain, 0)
+        } ?? (isAccountOnly ? .nan : max(totalValue - totalGain, 0))
         let totalGainPct: Double
         if let totalCostSource, totalCostSource > 0,
            let unrealized = brokerValuationSnapshot.totalUnrealizedProfitLoss {
             totalGainPct = (unrealized / totalCostSource) * 100.0
+        } else if isAccountOnly, totalCostSource == nil || brokerValuationSnapshot.totalUnrealizedProfitLoss == nil {
+            totalGainPct = .nan
         } else {
             totalGainPct = localSummary.totalGainPct
         }
