@@ -461,7 +461,9 @@ width (merged as `c443f38`, build 382.31.7). Pull request 167 adds past
 earnings to the Calendar's Past view, checked once against Yahoo's live
 data with the owner's leave (merged as `86d5a53`, build 382.31.8). Pull
 request 168 shows every share's past EPS figures, with a per-holding
-currency in Settings, at the owner's request.
+currency in Settings, at the owner's request (merged as `409c906`, build
+382.31.9). The owner parked Reminders: it is not in 3.9.0. Pull request
+169 brings the public documents up to date for 3.9.0.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6776,8 +6778,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   validated on import. Two acceptance options, gated and tested like the
   others, open Settings on a tab and preset choices for `FAKE` symbols.
   Also: record 167's merge line.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `409c906` (build 382.31.9).
 - Benchmark: owed, with 158 to 167; a card on a Settings tab and text on a
   page not drawn at launch.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 1142 XCTest tests with 0
@@ -6795,6 +6796,40 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   earnings saved by pull request 167's build without the figures of
   pence-priced shares stay so until the next day or a refresh. Long
   symbols are cut short in the list's symbol column, as before.
+- Verdict: retained.
+
+### 169: Release documents for 3.9.0
+
+- What: the public documents describe the app as it now is, ahead of the
+  promotion. New `Changelogs/release_notes_v3.9.0.md`, from the lead's
+  draft, checked against the code, with Reminders (parked by the owner)
+  taken out; its date is left for the release. `README.md`: highlights,
+  features, setup and the data-sources and privacy sections updated for the
+  new pages, Next up, the see-through window and the Earnings Figures card;
+  Folync described as read-only, with no links. A new main screenshot,
+  `Docs/images/overview.jpg`: the dark Glass Overview of the Folync
+  stand-in's made-up demo portfolio. `Docs/FAQ.md`: a new "Income and
+  Calendar" section (where the dates and amounts come from, why past EPS
+  figures have no currency, what goes to Yahoo for a Folync portfolio, why
+  Folync is read-only, why Activity and Trades are dimmed). `Docs/UserGuide.md`:
+  two corrections. Where the documents disagreed with the code, the code
+  won: Allocation shows the holdings it can value with "Based on N of M
+  holdings" rather than nothing; Income and Calendar are also dimmed while
+  Folync is on but its portfolio is not showing yet; two renamed Folync
+  settings labels. Also: record 168's merge line.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. Documents only.
+- Testing: `checks` and `docs-check` pass; every relative link and image
+  in the README and documents resolves. No code changed.
+- Review: by the session lead, against the screenshot and the diff.
+- Known issues: the README's release history and footer still name 3.8.2,
+  because `checks` ties the footer to the project version; they change with
+  the version at release. The memory figure in the notes is from the
+  comparison at pull request 157; 158 to 168 are still to be measured. A
+  proposed change to `Stockbar/Views/AGENTS.md` (the sidebar's one list of
+  pages, and surfaces only from `StockbarDesign.swift`) awaits the owner.
+  The wiki is updated by hand at release.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -7089,6 +7124,7 @@ launch.
 | Pull request 166, Settings as cards | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: forty minutes, with a before/after list of every control. It pressed scroll-bar buttons and set two pickers in its own copy, which it disclosed |
 | Pull request 167, past earnings | Claude Opus 5.5 (session lead) for the specification, review, the live check, two rounds of fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker built it in an hour without calling Yahoo and wrote out the live check; the one supervised run then found the London date fault that no fake could have shown |
 | Pull request 168, past EPS figures for every share | Claude Opus 5.5 (session lead) for the live check, the specification, review and the record; one Opus 5.5 worker | Worth it: forty-five minutes. The live check against the companies' own results showed the price currency mislabels a dollar-priced share too, which settled the design |
+| Pull request 169, release documents | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: a quarter of an hour, with four places where the documents had drifted from the code found and fixed |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
