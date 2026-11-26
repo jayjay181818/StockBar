@@ -459,7 +459,9 @@ switches combine, with Interest on its own (merged as `6539947`). Pull
 request 166 rebuilds every Settings tab as Glass cards at the page's full
 width (merged as `c443f38`, build 382.31.7). Pull request 167 adds past
 earnings to the Calendar's Past view, checked once against Yahoo's live
-data with the owner's leave.
+data with the owner's leave (merged as `86d5a53`, build 382.31.8). Pull
+request 168 shows every share's past EPS figures, with a per-holding
+currency in Settings, at the owner's request.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6724,8 +6726,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     ("no data");
   - a forced refresh asked the page again rather than answering from
     yfinance's cache.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `86d5a53` (build 382.31.8).
 - Benchmark: owed, under the rule for the redesign, with 158 to 166; none of
   it runs at launch or on a quote refresh.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 1134 XCTest tests with 0
@@ -6747,6 +6748,53 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   only; the footer was read through the accessibility tree, not captured.
   Yahoo's times are approximate: one ADR report stamped the evening before
   in New York keeps that date.
+- Verdict: retained.
+
+### 168: Calendar: past EPS figures for every share, with a currency per holding
+
+- What: pull request 167 left out the EPS figures of pence-priced shares.
+  The owner asked to show them, with an advanced setting to correct a
+  holding's figures. A second supervised live check, with the owner's
+  leave, and the companies' own results settled it: Yahoo gives
+  the figures in the company's reporting currency, in its major unit,
+  never in pence, and the share's price currency is the wrong label for
+  some (a London-listed airline's are in euros; a US-listed Chinese
+  company's in yuan per ADS, though it is priced in dollars). So:
+  - the helper keeps the figures for every quote currency and no longer
+    sends `epsCurrency`, a guess nothing should label figures from (old
+    saved copies and fixtures that carry it still read);
+  - Settings → Advanced gains an **Earnings Figures** card: one row per
+    symbol Calendar asks earnings for, each with **As Given** (the default,
+    no currency), a currency (the app's six first, then the other common
+    ISO codes) or **Hide Figures**;
+  - Calendar writes the figures in the chosen currency ("EPS -€0.27 against
+    -€0.28 expected"), VoiceOver speaks its name, and a hidden holding
+    keeps its date and surprise. The choice is display only: it changes no
+    request and no saved copy, and shows in an open Calendar at once.
+  The choices are kept under `calendar.earningsFigures.v1`, only for
+  holdings set away from As Given, and travel in a settings export,
+  validated on import. Two acceptance options, gated and tested like the
+  others, open Settings on a tab and preset choices for `FAKE` symbols.
+  Also: record 167's merge line.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, with 158 to 167; a card on a Settings tab and text on a
+  page not drawn at launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1142 XCTest tests with 0
+  failures; `python-tests` (128) and the Scripts tests (95) pass; `checks`,
+  `docs-check` and `build-release` pass. Seven temporary breakages were
+  each caught and removed. Captures of the Past view with one holding as
+  given, one in euros and one hidden, in dark and light at the default and
+  minimum size, and one after choosing a currency in the card, are in
+  `build/design/shots/C2c/`.
+- Review: by the session lead, against the diff and the captures.
+- Known issues: the card was read through the accessibility tree, not
+  captured (it sits below the fold and the copy could not be scrolled),
+  and its pop-up of about 160 currencies was never seen open; a choice was
+  made in the copy before Calendar was opened, not while it was open. Past
+  earnings saved by pull request 167's build without the figures of
+  pence-priced shares stay so until the next day or a refresh. Long
+  symbols are cut short in the list's symbol column, as before.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -7040,6 +7088,7 @@ launch.
 | Pull request 165, Activity's kind switches | Claude Opus 5.5 (session lead) | Done directly, at the owner's request after using the page |
 | Pull request 166, Settings as cards | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: forty minutes, with a before/after list of every control. It pressed scroll-bar buttons and set two pickers in its own copy, which it disclosed |
 | Pull request 167, past earnings | Claude Opus 5.5 (session lead) for the specification, review, the live check, two rounds of fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker built it in an hour without calling Yahoo and wrote out the live check; the one supervised run then found the London date fault that no fake could have shown |
+| Pull request 168, past EPS figures for every share | Claude Opus 5.5 (session lead) for the live check, the specification, review and the record; one Opus 5.5 worker | Worth it: forty-five minutes. The live check against the companies' own results showed the price currency mislabels a dollar-priced share too, which settled the design |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
