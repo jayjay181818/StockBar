@@ -643,7 +643,8 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         self.assertNotIn("events", envelope, "a history answer has its own key")
         history = envelope["earningsHistory"]
         self.assertEqual(history["symbol"], "ALPHA")
-        self.assertEqual(history["epsCurrency"], "USD")
+        self.assertNotIn("epsCurrency", history, "the figures' currency is not named, so no field guesses it")
+        self.assertEqual(set(history), {"symbol", "earnings", "fetchedAt"})
         self.assertEqual(history["fetchedAt"], NOW.timestamp())
         self.assertEqual(history["earnings"], [
             {"date": "2025-11-20", "reportedEPS": 0.95, "estimatedEPS": 0.9, "surprisePercent": 5.56},
@@ -656,39 +657,35 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         self.assertNotIn(("ALPHA", "dividends", "2y"), fake.log, "the history mode asks for nothing else")
         self.assertNotIn(("ALPHA", "calendar", None), fake.log)
 
-    def test_pence_quotes_keep_the_dates_and_drop_the_eps_figures(self):
-        for currency in ("GBp", "GBX", "ILA", "ZAc"):
+    def test_figures_kept_as_given_for_every_quote_currency(self):
+        # Yahoo gives the figures in the company's reporting currency, in its
+        # major unit (the live checks of 2026-11-26), so pence quotes are not
+        # divided and an unknown currency drops nothing.
+        quotes = ("GBp", "GBX", "ILA", "ZAc", "ZAC", "GBP", "USD", "EUR", "XQZ", None, "  ")
+        for currency in quotes:
             with self.subTest(currency=currency):
-                envelopes, _ = self.run_history(
-                    {"BETA.L": {"metadata": {"instrumentType": "EQUITY", "currency": currency}, "earnings": US_EARNINGS}}, ["BETA.L"])
+                metadata = {"instrumentType": "EQUITY", "exchangeTimezoneName": "America/New_York"}
+                if currency is not None:
+                    metadata["currency"] = currency
+                envelopes, _ = self.run_history({"BETA.L": {"metadata": metadata, "earnings": US_EARNINGS}}, ["BETA.L"])
                 history = envelopes[0]["earningsHistory"]
-                self.assertIsNone(history["epsCurrency"])
-                self.assertEqual([row["date"] for row in history["earnings"]],
-                                 ["2025-11-20", "2026-02-06", "2026-05-06", "2026-07-22", "2026-10-30"])
-                self.assertTrue(all(row["reportedEPS"] is None and row["estimatedEPS"] is None
-                                    for row in history["earnings"]))
-                # The surprise is a percentage, in no currency: kept as given.
-                self.assertEqual(history["earnings"][-1]["surprisePercent"], 2.7)
-                self.assertIn("EPS figures left out", self.stderr)
+                self.assertNotIn("epsCurrency", history)
+                self.assertEqual(history["earnings"], [
+                    {"date": "2025-11-20", "reportedEPS": 0.95, "estimatedEPS": 0.9, "surprisePercent": 5.56},
+                    {"date": "2026-02-06", "reportedEPS": 2.42, "estimatedEPS": 2.09, "surprisePercent": -10.88},
+                    {"date": "2026-05-06", "reportedEPS": None, "estimatedEPS": None, "surprisePercent": None},
+                    {"date": "2026-07-22", "reportedEPS": 1.54, "estimatedEPS": None, "surprisePercent": None},
+                    {"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7},
+                ], "never divided, never dropped")
+                self.assertNotIn("left out", self.stderr)
 
-    def test_unknown_currency_drops_the_figures_and_never_falls_back_to_the_suffix(self):
-        for metadata in ({"instrumentType": "EQUITY"}, {"instrumentType": "EQUITY", "currency": "  "}):
-            with self.subTest(metadata=metadata):
-                envelopes, _ = self.run_history(
-                    {"GAMMA": {"metadata": metadata, "earnings": US_EARNINGS}}, ["GAMMA"])
-                history = envelopes[0]["earningsHistory"]
-                self.assertIsNone(history["epsCurrency"])
-                self.assertTrue(all(row["reportedEPS"] is None for row in history["earnings"]))
-
-    def test_pounds_and_other_currencies_are_given_as_they_are(self):
-        envelopes, _ = self.run_history({
-            "DELTA.L": {"metadata": {"instrumentType": "EQUITY", "currency": "GBP"}, "earnings": US_EARNINGS},
-            "EPS.AS": {"metadata": {"instrumentType": "EQUITY", "currency": "EUR"}, "earnings": US_EARNINGS},
-        }, ["DELTA.L", "EPS.AS"])
-        for envelope, currency in zip(envelopes, ("GBP", "EUR")):
-            history = envelope["earningsHistory"]
-            self.assertEqual(history["epsCurrency"], currency)
-            self.assertEqual(history["earnings"][-1]["reportedEPS"], 1.52, "never divided")
+    def test_a_pence_share_keeps_its_dates_in_the_exchanges_zone_with_its_figures(self):
+        # The shape of a London share whose figures are in another currency.
+        london = _FakeEarningsFrame([(report("2026-05-04", hour=22), (0.28, 0.27, -4.98))])
+        metadata = {"instrumentType": "EQUITY", "currency": "GBp", "exchangeTimezoneName": "Europe/London"}
+        envelopes, _ = self.run_history({"FAKEAIR.L": {"metadata": metadata, "earnings": london}}, ["FAKEAIR.L"])
+        self.assertEqual(envelopes[0]["earningsHistory"]["earnings"],
+                         [{"date": "2026-05-05", "reportedEPS": 0.27, "estimatedEPS": 0.28, "surprisePercent": -4.98}])
 
     def test_the_chart_is_asked_only_when_a_report_falls_near_the_year(self):
         old_only = _FakeEarningsFrame([(report("2024-05-01"), (1.0, 1.1, 10.0)),
@@ -706,7 +703,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         history = envelopes[0]["earningsHistory"]
         self.assertEqual(history["earnings"],
                          [{"date": "2026-08-01", "reportedEPS": None, "estimatedEPS": None, "surprisePercent": None}])
-        self.assertIsNone(history["epsCurrency"], "no figures, so no currency")
+        self.assertNotIn("epsCurrency", history)
         self.assertEqual(fake.log.count(("ALPHA", "history", "5d")), 1, "one chart request")
 
     def test_dates_are_taken_in_the_exchanges_zone(self):
@@ -930,7 +927,8 @@ class CommandLineTests(InstrumentEventsTestCase):
 
         self.assertEqual(code, 0)
         envelopes = json.loads(output)
-        self.assertEqual(envelopes[0]["earningsHistory"]["epsCurrency"], "USD")
+        self.assertEqual(envelopes[0]["earningsHistory"]["earnings"][-1]["reportedEPS"], 1.52)
+        self.assertNotIn("epsCurrency", envelopes[0]["earningsHistory"])
         self.assertEqual(envelopes[1]["error"]["error_code"], "NO_DATA")
         self.assertEqual(output.count("\n"), 1)
 
