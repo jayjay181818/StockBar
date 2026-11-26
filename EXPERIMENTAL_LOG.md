@@ -451,8 +451,9 @@ arranges Connections as in the mock-up, checks Alerts with made-up alerts
 (an acceptance-only fixture that never stores, checks or notifies) and
 tidies the Diagnostics log. It was merged as `9a2c046` (build 382.31.3).
 Pull request 163 gives the Sortino ratio a reading again, at the owner's
-request. What remains of the redesign before a stable release: the
-Calendar, Reminders and the release documents.
+request (merged as `be6ff84`, build 382.31.4). Pull request 164 adds the
+Calendar and "Next up". What remains of the redesign before a stable
+release: Reminders and the release documents.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6544,8 +6545,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   thresholds, unchanged (`RiskAnalyticsText.sortinoReading`). With no
   falling days the tile still says "No falling days". Also the merge line
   of pull request 162.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `be6ff84` (build 382.31.4).
 - Benchmark: none needed. One line of text on a page that is not drawn at
   launch.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 1086 XCTest tests with 0
@@ -6556,6 +6556,59 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   not rerun.
 - Review: by its author.
 - Known issues: none known.
+- Verdict: retained.
+
+### 164: Calendar, and "Next up" in the popover and on the Overview
+
+- What: the plan's C2. A Calendar page after Income in the sidebar, with the
+  "New" badge, and "Next up" (up to three events in the next fourteen days)
+  in the popover and as cards on the Overview. ⌘-numbers follow the sidebar,
+  as before, so those after Income move down one.
+  - Dividends: for a Folync portfolio, Folync's dividends route with the
+    Income page's own query, so one request serves both pages; pills from
+    Folync's `dateCertainty` ("Declared", "Estimated", otherwise
+    "Upcoming"). For a local or Trading 212 portfolio, the Income page's
+    estimate from Yahoo's record: funds and trusts get last year's dates a
+    year on, marked "Estimated" (the owner's choice of 2026-11-26).
+  - Earnings: Yahoo's dates through the events service, marked as Yahoo's;
+    a range is "Estimated". For a Folync portfolio this sends the holdings'
+    ticker symbols, not amounts, to Yahoo for the first time, as the plan's
+    interim rule allows until Folync has an events route.
+  - Upcoming and Past views, a month grid (each day with events a button
+    with one VoiceOver sentence) and a list grouped This week, Next week and
+    by month. Past lists dividends only (the lead's recommendation; the
+    owner's answer is awaited).
+  - "Next up" reads only what is saved: the dividends page the fetch policy
+    keeps or Folync's copy on disk, and the events service's saved copies.
+    Opening the popover or the Overview asks nothing; with nothing saved it
+    is absent.
+  - `STOCKBAR_ACCEPTANCE_CALENDAR=upcoming|past`, acceptance-only, gated like
+    the others. The events fixture gains an earnings range.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, under the rule for the redesign. The popover and the
+  Overview gain a small list; the comparison for pull requests 158 to 162 is
+  waiting for a quiet Mac and will be followed by one for this.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1107 XCTest tests with 0
+  failures; `checks`, `docs-check` and `build-release` pass; the worker's
+  run also passed the Python helper tests and the 95 Scripts tests. 21 new
+  tests (rows, pills, grouping, the grid, "Next up", requests shared with
+  Income, the sidebar, time zones either side of UTC); eight temporary
+  breakages were each caught and removed. Captures are in
+  `build/design/shots/C2/`.
+- Review: GLM 5.4 (max) found no serious defect. The lead fixed, with tests
+  where they apply: "Next up" re-read its saved copies on every quote
+  update (now only when the holdings, currency or day change); a holding
+  added while the page is open now gets its earnings asked for; the "no
+  earnings dates" footer waits for Yahoo's answer; a past day in Upcoming's
+  grid opens Past at its rows; the scroll honours Reduce Motion.
+- Known issues: a local portfolio with holdings was never seen on screen,
+  so no earnings row, range or estimated row was seen there (the copy's
+  editor would not take background typing); keyboard reach and VoiceOver
+  were not tried; "today" moves on only when the page's data is reloaded,
+  as on Income; "Next up" reads only the first page of a saved dividends
+  answer. One of the worker's accessibility queries returned the system
+  Apple menu, with one Recent Items entry; it was neither saved nor repeated.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6845,6 +6898,7 @@ launch.
 | The third promotion to `testing` and pull requests 160 and 161 | Claude Opus 5.5 (session lead) | Done directly: a one-line test fix that CI found, the promotion, the checks on the published build and this record. The bring-back into `experimental` came a day late |
 | Pull request 162, Settings and Alerts as mocked | Claude Opus 5.5 (session lead) for the specification, review, one fix and the record; one Opus 5.5 worker | Worth it. The worker could not click (the screen was locked) and built an uncommitted aid to reach each tab, which it disclosed; up to ten of its copies ran at once, and each launch left an acceptance-only Keychain item |
 | Pull request 163, the Sortino reading | Claude Opus 5.5 (session lead) | Done directly: a few lines of text and their tests |
+| Pull request 164, Calendar and "Next up" | Claude Opus 5.5 (session lead) for the specification, review, four fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker could not type in its copy (the screen was locked), so the local portfolio's Calendar with holdings was never seen; one accessibility query returned the system menu |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

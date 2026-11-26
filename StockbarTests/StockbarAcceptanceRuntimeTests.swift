@@ -543,7 +543,8 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         "STOCKBAR_ACCEPTANCE_SECTION": "risk",
         "STOCKBAR_ACCEPTANCE_CURRENCY": "gbp",
         "STOCKBAR_ACCEPTANCE_WINDOW": "min",
-        "STOCKBAR_ACCEPTANCE_POPOVER": "portfolio"
+        "STOCKBAR_ACCEPTANCE_POPOVER": "portfolio",
+        "STOCKBAR_ACCEPTANCE_CALENDAR": "Past"
     ]
 
     private let explicitRun = StockbarAcceptanceRuntime(
@@ -560,6 +561,7 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         XCTAssertEqual(options.currency, "GBP")
         XCTAssertTrue(options.opensAtMinimumSize)
         XCTAssertTrue(options.opensPortfolioPopover)
+        XCTAssertEqual(options.calendarMode, CalendarMode.past.rawValue)
     }
 
     func testANormalRunIgnoresTheOptions() throws {
@@ -589,7 +591,8 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             ("STOCKBAR_ACCEPTANCE_SECTION", "performance"),
             ("STOCKBAR_ACCEPTANCE_CURRENCY", "XYZ"),
             ("STOCKBAR_ACCEPTANCE_WINDOW", "max"),
-            ("STOCKBAR_ACCEPTANCE_POPOVER", "symbol")
+            ("STOCKBAR_ACCEPTANCE_POPOVER", "symbol"),
+            ("STOCKBAR_ACCEPTANCE_CALENDAR", "sideways")
         ]
         let expected = StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: explicitRun)
         for (key, value) in unknown {
@@ -601,6 +604,7 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             case StockbarAcceptanceLaunchOptions.sectionKey: withoutIt.section = nil
             case StockbarAcceptanceLaunchOptions.currencyKey: withoutIt.currency = nil
             case StockbarAcceptanceLaunchOptions.popoverKey: withoutIt.opensPortfolioPopover = false
+            case StockbarAcceptanceLaunchOptions.calendarKey: withoutIt.calendarMode = nil
             default: withoutIt.opensAtMinimumSize = false
             }
             XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicitRun),
@@ -914,7 +918,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.title), ["Portfolio", "Analysis", "System"])
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
             [.overview, .holdings, .activity, .alerts],
-            [.charts, .income, .trades, .risk, .allocation],
+            [.charts, .income, .calendar, .trades, .risk, .allocation],
             [.dataHealth, .backups, .diagnostics, .settings]
         ])
         XCTAssertEqual(Set(StockbarMainSection.sidebarOrder), Set(StockbarMainSection.allCases))
@@ -937,9 +941,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 4)
         XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 5)
         XCTAssertEqual(StockbarMainSection.income.shortcutNumber, 6)
-        XCTAssertEqual(StockbarMainSection.trades.shortcutNumber, 7)
-        XCTAssertEqual(StockbarMainSection.allocation.shortcutNumber, 9)
-        XCTAssertNil(StockbarMainSection.dataHealth.shortcutNumber, "the tenth entry has no number")
+        XCTAssertNil(StockbarMainSection.dataHealth.shortcutNumber, "an entry after the ninth has no number")
         XCTAssertNil(StockbarMainSection.diagnostics.shortcutNumber, "only the first nine entries take a number")
         XCTAssertNil(StockbarMainSection.settings.shortcutNumber, "Settings keeps ⌘, and takes no number")
     }
