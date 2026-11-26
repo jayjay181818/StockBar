@@ -27,8 +27,13 @@ struct StockbarCalendarView: View {
     init(dataModel: DataModel, router: any StockbarIncomeRouting = FolyncSupplementalCoordinator.shared,
          provider: any InstrumentEventsProviding = InstrumentEventsService.shared) {
         self.dataModel = dataModel
-        _model = State(initialValue: StockbarCalendarModel(router: router, provider: provider,
-                                                           isAllowed: { InstrumentEventsService.canAnswer }))
+        let model = StockbarCalendarModel(router: router, provider: provider,
+                                          isAllowed: { InstrumentEventsService.canAnswer })
+        // An acceptance copy can open on Past (`STOCKBAR_ACCEPTANCE_CALENDAR`); nil otherwise.
+        if let mode = StockbarAcceptanceLaunchOptions.current.calendarMode.flatMap(CalendarMode.init(rawValue:)) {
+            model.mode = mode
+        }
+        _model = State(initialValue: model)
     }
 
     private var inputs: StockbarCalendarInputs { .current(dataModel) }

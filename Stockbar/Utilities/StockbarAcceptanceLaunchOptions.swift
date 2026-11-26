@@ -17,6 +17,8 @@ import Foundation
 /// - `STOCKBAR_ACCEPTANCE_POPOVER`: `portfolio` opens the portfolio popover
 ///   once, a few seconds after launch, as a click on its menu-bar item would.
 ///   It can then be looked at without anything clicking in the menu bar.
+/// - `STOCKBAR_ACCEPTANCE_CALENDAR`: `upcoming` or `past`, the view the
+///   Calendar page opens on, so Past can be looked at without a click.
 /// - `STOCKBAR_ACCEPTANCE_EVENTS`: the path of a fixture of made-up dividend
 ///   and date answers (`StockbarAcceptanceEventsFixture`). The bootstrap checks
 ///   it and copies it into the run's root; the app reads only that copy and
@@ -35,6 +37,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     static let currencyKey = "STOCKBAR_ACCEPTANCE_CURRENCY"
     static let windowKey = "STOCKBAR_ACCEPTANCE_WINDOW"
     static let popoverKey = "STOCKBAR_ACCEPTANCE_POPOVER"
+    static let calendarKey = "STOCKBAR_ACCEPTANCE_CALENDAR"
     static let eventsKey = "STOCKBAR_ACCEPTANCE_EVENTS"
     static let alertsKey = "STOCKBAR_ACCEPTANCE_ALERTS"
     /// How long after launch the portfolio popover opens, so the first
@@ -47,6 +50,8 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     var currency: String?
     var opensAtMinimumSize = false
     var opensPortfolioPopover = false
+    /// The raw value of a `CalendarMode`: the view Calendar opens on.
+    var calendarMode: String?
     /// Instrument events come from the run's copy of the fixture, not Yahoo.
     var usesInstrumentEventsFixture = false
     /// The Alerts page shows the run's copy of the alerts fixture, for looking only.
@@ -78,6 +83,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
             .flatMap { DataModel.supportedCurrencies.contains($0) ? $0 : nil }
         options.opensAtMinimumSize = value(windowKey)?.lowercased() == "min"
         options.opensPortfolioPopover = value(popoverKey)?.lowercased() == "portfolio"
+        options.calendarMode = value(calendarKey).flatMap { CalendarMode(rawValue: $0.lowercased()) }?.rawValue
         options.usesInstrumentEventsFixture = value(eventsKey) != nil
         options.usesAlertsFixture = value(alertsKey) != nil
         return options
