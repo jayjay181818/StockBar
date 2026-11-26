@@ -690,15 +690,56 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
             self.assertEqual(history["epsCurrency"], currency)
             self.assertEqual(history["earnings"][-1]["reportedEPS"], 1.52, "never divided")
 
-    def test_the_quote_currency_is_asked_only_when_there_is_a_figure(self):
+    def test_the_chart_is_asked_only_when_a_report_falls_near_the_year(self):
+        old_only = _FakeEarningsFrame([(report("2024-05-01"), (1.0, 1.1, 10.0)),
+                                       (report("2027-02-01"), (1.2, NAN, NAN))])
+        envelopes, fake = self.run_history(
+            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": old_only}}, ["ALPHA"])
+        self.assertEqual(envelopes[0]["earningsHistory"]["earnings"], [])
+        self.assertNotIn(("ALPHA", "metadata", None), fake.log, "no chart request when nothing falls in the year")
+
+        # A report without figures still needs the chart, for the exchange's zone.
         no_figures = _FakeEarningsFrame([(report("2026-08-01"), (NAN, NAN, NAN))])
         envelopes, fake = self.run_history(
-            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD"}, "earnings": no_figures}}, ["ALPHA"])
+            {"ALPHA": {"metadata": {"instrumentType": "EQUITY", "currency": "USD",
+                                    "exchangeTimezoneName": "America/New_York"}, "earnings": no_figures}}, ["ALPHA"])
         history = envelopes[0]["earningsHistory"]
         self.assertEqual(history["earnings"],
                          [{"date": "2026-08-01", "reportedEPS": None, "estimatedEPS": None, "surprisePercent": None}])
-        self.assertIsNone(history["epsCurrency"])
-        self.assertNotIn(("ALPHA", "metadata", None), fake.log, "no chart request for nothing to label")
+        self.assertIsNone(history["epsCurrency"], "no figures, so no currency")
+        self.assertEqual(fake.log.count(("ALPHA", "history", "5d")), 1, "one chart request")
+
+    def test_dates_are_taken_in_the_exchanges_zone(self):
+        # The shapes the live check of 2026-11-26 found: Yahoo stamps a London
+        # report in New York time, often the evening before.
+        london = _FakeEarningsFrame([
+            (report("2026-05-04", hour=22), (0.42, 0.44, 3.72)),            # 03:00 in London on 5 May
+            (report("2026-02-24", hour=19, zone=EASTERN_WINTER), (0.33, 0.37, 11.95)),  # midnight in London
+            (report("2026-10-27", hour=0), (0.44, 0.42, -3.88)),            # 05:00 in London, the same day
+            (report("2025-11-19", hour=21, zone=EASTERN_WINTER), (0.3, 0.3, 0.0)),  # 20 Nov in London: the first day of the year
+        ])
+        metadata = {"instrumentType": "EQUITY", "currency": "GBp", "exchangeTimezoneName": "Europe/London"}
+        envelopes, _ = self.run_history({"HSBC.L": {"metadata": metadata, "earnings": london}}, ["HSBC.L"])
+        self.assertEqual([row["date"] for row in envelopes[0]["earningsHistory"]["earnings"]],
+                         ["2025-11-20", "2026-02-25", "2026-05-05", "2026-10-27"])
+
+        # A New York share keeps its New York dates, evening ones included.
+        new_york = _FakeEarningsFrame([(report("2026-10-30", hour=21), (1.48, 1.52, 2.7))])
+        envelopes, _ = self.run_history({"ALPHA": {"metadata": {
+            "instrumentType": "EQUITY", "currency": "USD", "exchangeTimezoneName": "America/New_York"},
+            "earnings": new_york}}, ["ALPHA"])
+        self.assertEqual(envelopes[0]["earningsHistory"]["earnings"][0]["date"], "2026-10-30")
+
+    def test_without_a_known_zone_the_dates_are_taken_as_stamped(self):
+        frame = _FakeEarningsFrame([(report("2026-05-04", hour=22), (0.42, 0.44, 3.72))])
+        for zone in (None, "", "Not/AZone"):
+            with self.subTest(zone=zone):
+                metadata = {"instrumentType": "EQUITY", "currency": "USD"}
+                if zone is not None:
+                    metadata["exchangeTimezoneName"] = zone
+                envelopes, _ = self.run_history({"ALPHA": {"metadata": metadata, "earnings": frame}}, ["ALPHA"])
+                self.assertEqual(envelopes[0]["earningsHistory"]["earnings"][0]["date"], "2026-05-04")
+                self.assertIn("no exchange time zone", self.stderr)
 
     def test_an_empty_history_is_an_answer_and_no_page_is_no_data(self):
         old_only = _FakeEarningsFrame([(report("2024-05-01"), (1.0, 1.1, 10.0))])
@@ -763,6 +804,15 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         ])
         envelopes, _ = self.run_history({"ALPHA": {"earnings": frame.iloc[0:0]}}, ["ALPHA"])
         self.assertEqual(envelopes[0]["earningsHistory"]["earnings"], [])
+
+        # A London report stamped the evening before in New York, as pandas gives it.
+        london = pandas.DataFrame({"EPS Estimate": [0.42], "Reported EPS": [0.44], "Surprise(%)": [3.72]},
+                                  index=pandas.DatetimeIndex([pandas.Timestamp("2026-05-04 22:00").tz_localize(
+                                      "America/New_York")], name="Earnings Date"))
+        envelopes, _ = self.run_history({"HSBC.L": {"metadata": {
+            "instrumentType": "EQUITY", "currency": "GBp", "exchangeTimezoneName": "Europe/London"},
+            "earnings": london}}, ["HSBC.L"])
+        self.assertEqual(envelopes[0]["earningsHistory"]["earnings"][0]["date"], "2026-05-05")
 
     def test_yfinances_page_cache_is_cleared_once_per_history_run_only(self):
         cleared = []

@@ -51,6 +51,7 @@ import re
 import sys
 import threading
 import time
+import zoneinfo
 
 try:
     import yfinance as yf
@@ -87,7 +88,7 @@ DIVIDEND_HISTORY_PERIOD = "2y"
 # any limit up to 25 (upcoming estimates first, then the most recent reports),
 # which covers well over a year of quarterly reports.
 EARNINGS_HISTORY_LIMIT = 12
-# The short chart asked for the quote currency of the EPS figures.
+# The short chart asked for the exchange's time zone and the quote currency.
 CURRENCY_CHART_PERIOD = "5d"
 # yfinance's names for the earnings page's columns (base.py, the scrape).
 EARNINGS_COLUMNS = {
@@ -96,7 +97,10 @@ EARNINGS_COLUMNS = {
     "surprisePercent": ("Surprise(%)", "Surprise (%)"),
 }
 # Minor-unit quote currencies: pence, and the other hundredths Yahoo quotes
-# in (Israeli agorot, South African cents). EPS figures are left out for these.
+# in (Israeli agorot, South African cents). EPS figures are left out for these:
+# the supervised live check of 2026-11-26 found a London share's figures given
+# in the company's reporting currency (HSBC's in dollars), which the page does
+# not name, so the quote currency would mislabel them.
 PENCE_CURRENCIES = ("GBp", "GBX", "ILA", "ZAc", "ZAC")
 
 FAILURE_PATTERNS = (
@@ -318,21 +322,66 @@ def earnings_rows(frame):
     return rows
 
 
-def recent_earnings(symbol, rows, today, currency_for_figures):
+def exchange_zone(name):
+    """The exchange's zone from the chart's `exchangeTimezoneName`, or None."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    try:
+        return zoneinfo.ZoneInfo(name.strip())
+    except Exception:
+        return None
+
+
+def in_zone(value, zone):
+    """A zoned datetime moved into `zone`; anything else as it is."""
+    if zone is None or not isinstance(value, datetime.datetime) or value.tzinfo is None:
+        return value
+    try:
+        return value.astimezone(zone)
+    except Exception:
+        return value
+
+
+def recent_earnings(symbol, rows, today, chart_facts):
     """Earnings dated within the twelve months up to `today`, oldest first.
 
     Returns (list, currency or None). Figures are kept exactly as Yahoo gives
-    them. `currency_for_figures` is called only when some row has an EPS
-    figure, and gives the quote currency or None. The earnings page names no
-    currency, so the figures are taken to be in the quote currency, and are
-    dropped (the dates kept) when that currency is not known or is pence:
-    whether Yahoo gives a pence-quoted share's EPS in pence or pounds cannot
-    be told, and it is not guessed.
+    them. `chart_facts` asks the chart once for {"currency", "zone"}, and is
+    called only when some row falls near the twelve months.
+
+    Yahoo stamps every earnings time in New York time, so each date is taken
+    in the exchange's own zone: a London report at 07:00 is stamped 02:00 or
+    the evening before in New York (the live check of 2026-11-26 found HSBC's
+    19 February 2025 results stamped 18 February, 19:00). Without a zone the
+    date is taken as stamped.
+
+    The earnings page names no currency, so the figures are taken to be in
+    the quote currency, and are dropped (the dates kept) when that currency
+    is not known or is pence (see PENCE_CURRENCIES).
     """
     earliest = one_year_before(today)
-    by_day = {}
+    margin = datetime.timedelta(days=1)
+    near = []
     for when, figures in rows:
         day = iso_date(when)
+        if day is None:
+            continue
+        # Moving into the exchange's zone shifts a date by a day at most.
+        date_value = datetime.date.fromisoformat(day)
+        if earliest - margin <= date_value <= today + margin:
+            near.append((when, figures))
+    if not near:
+        return [], None
+
+    facts = chart_facts()
+    zone = exchange_zone(facts.get("zone"))
+    if zone is None:
+        print(f"{symbol}: the chart gave no exchange time zone; earnings dates taken as Yahoo stamps them",
+              file=sys.stderr)
+
+    by_day = {}
+    for when, figures in near:
+        day = iso_date(in_zone(when, zone))
         if day is None:
             continue
         date_value = datetime.date.fromisoformat(day)
@@ -353,7 +402,7 @@ def recent_earnings(symbol, rows, today, currency_for_figures):
     if not any(entry["reportedEPS"] is not None or entry["estimatedEPS"] is not None for entry in kept):
         return kept, None
 
-    currency = currency_for_figures()
+    currency = facts.get("currency")
     if isinstance(currency, str):
         currency = currency.strip() or None
     if currency is None or currency in PENCE_CURRENCIES:
@@ -470,9 +519,9 @@ def fetch_earnings_history(symbol, today, now_seconds):
     """One symbol's earnings of the last twelve months, None for no data, or raises.
 
     One request for Yahoo's earnings page (`Ticker.get_earnings_dates`); a
-    second, a short chart for the quote currency, only when the page gives an
-    EPS figure in the twelve months. A chart that does not answer fails the
-    symbol.
+    second, a short chart for the exchange's zone and the quote currency,
+    only when a row falls near the twelve months. A chart that does not
+    answer fails the symbol.
     """
     with raising_logged_failures(symbol):
         ticker = yf.Ticker(symbol)
@@ -483,18 +532,19 @@ def fetch_earnings_history(symbol, today, now_seconds):
             # found"): a fund, or a symbol Yahoo has no earnings page for.
             return None
 
-        def quote_currency():
+        def chart_facts():
             # history() lets a rate limit through, where history_metadata
             # alone would swallow it. Any other failure leaves the chart's
             # metadata empty: then nothing is answered, rather than an answer
-            # saved for a day with its figures dropped.
+            # saved for a day with wrong dates or its figures dropped.
             ticker.history(period=CURRENCY_CHART_PERIOD, interval="1d")
             metadata = ticker.history_metadata
             if metadata_value(metadata, "instrumentType") is None:
-                raise RuntimeError("the chart gave no metadata, so the EPS figures' currency is unknown")
-            return metadata_value(metadata, "currency")
+                raise RuntimeError("the chart gave no metadata, so the exchange's zone and currency are unknown")
+            return {"currency": metadata_value(metadata, "currency"),
+                    "zone": metadata_value(metadata, "exchangeTimezoneName")}
 
-        earnings, currency = recent_earnings(symbol, rows, today, quote_currency)
+        earnings, currency = recent_earnings(symbol, rows, today, chart_facts)
 
     return {
         "symbol": symbol,
