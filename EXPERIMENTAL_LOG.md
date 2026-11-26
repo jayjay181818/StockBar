@@ -10,13 +10,16 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-`experimental` has been promoted to `testing` twice, each time at the
-owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
+`experimental` has been promoted to `testing` three times, each time at
+the owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
 merge commit `2256b6c`, published as testing build 370.16: see
 [Promotion to `testing`](#promotion-to-testing-2026-11-13). On 2026-11-17
 pull requests 101 to 112 followed as merge commit `78c886b`, published as
 testing build 370.29: see
 [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17).
+On 2026-11-26 the redesign, pull requests 133 to 160, followed as merge
+commit `9cb4276`, published as testing build 382.31: see
+[Third promotion to `testing`](#third-promotion-to-testing-2026-11-26).
 `main` has none of it, and no stable release has been made from it. The
 owner considers the overhaul finished: from here `experimental` is kept for
 major overhauls only.
@@ -436,6 +439,15 @@ changed measurably. The tables are in pull request 158's entry.
 Pull request 158 gave a local or Trading 212 portfolio an Income page, as
 an estimate labelled as one: Yahoo's record of each holding's payments
 over the last year, at today's units, and the same a year on.
+It was merged as `0c77a54` (build 382.3.26).
+
+On 2026-11-26 the owner asked for the redesign to go to `testing`. Pull requests 133 to 160 were promoted as
+merge commit `9cb4276` and published as testing build 382.31; CI's first
+run on the promotion found one test holding the system's wording, fixed by
+pull request 160. Pull request 161 brings `testing` back. What remains of
+the redesign before a stable release: the Calendar, Reminders, Settings
+and Alerts as mocked with Backups and Diagnostics checked, and the release
+documents.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -1072,6 +1084,39 @@ merged with a merge commit.
 - Not exercised by hand: reopening the portfolio popover after each way it
   can close. The owner's use of the experimental builds on a second Mac is
   the only use on real data.
+
+## Third promotion to `testing`, 2026-11-26
+
+The owner asked for it on 2026-11-26 ("Lets do this"), answering the
+lead's suggestion to look at build 382.3.26 and then promote. `experimental` at `21a1ed2`, which is pull requests 133
+to 160 (the Glass redesign and the new Folync pages, with 160 added during
+the promotion), went into `testing` through
+[pull request 159](https://github.com/jayjay181818/StockBar/pull/159),
+merged with a merge commit.
+
+- Branches. `testing` was `0326182` and is `9cb4276`, a merge commit whose
+  parents are `0326182` and `21a1ed2` and whose files are those of
+  `21a1ed2`. The head was a temporary branch,
+  `feature/promote-experimental-to-testing-3`, which was deleted at the
+  merge. `main` is untouched. No version tag was made and nothing was
+  released on the Stable channel. No repository setting was changed.
+- CI. The pull request was opened at `0c77a54`. CI's first run, the first
+  on this work since pull request 133, failed one test on Xcode 27: the
+  sidebar footer's test expected "Updated 3 min…" where that macOS says
+  "Updated 3m ago". Pull request 160 fixed the test, the promotion branch
+  was moved forward to `21a1ed2`, and both CI jobs then passed.
+- Tests locally: pull request 158's 1075 XCTest tests with 0 failures and
+  its `checks`, `docs-check` and `build-release`, then 160's test class
+  re-run on `21a1ed2` (15 tests, 0 failures).
+- The testing build. The merge published build 382.31 as the prerelease
+  `testing-382.31` ("StockBar 3.8.2 testing build 382.31"), with one
+  archive, `Stockbar-382.31.zip`, of 8,394,423 bytes.
+- Experimental builds. Until `testing` is brought back, experimental
+  builds would be numbered below 382.31. Pull request 161 starts from
+  `9cb4276` and is merged with a merge commit, so `experimental` then holds
+  the promotion's merge commit.
+- Not exercised by the lead: the owner's own data. That look is the
+  owner's, on the experimental or testing build.
 
 ## Pull requests
 
@@ -6391,8 +6436,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   same thing, and the app passes on whatever the system gives, so the
   fault is in the test. It now checks that the text starts "Updated 3" and
   ends "ago". Nothing in the app changes.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `21a1ed2` (build 382.3.27).
 - Benchmark: none needed. Only a test changes.
 - Testing, on macOS 27.2.1 and Xcode 27.2: the test's class,
   `StockbarMainWindowShellTests`, 15 tests with 0 failures. `docs-check`
@@ -6403,6 +6447,27 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   a test.
 - Known issues: other tests may hold system wording in the same way. CI
   found only this one.
+- Verdict: retained.
+
+### 161: Bring `testing` back into `experimental` and record the third promotion
+
+- What: the [third promotion](#third-promotion-to-testing-2026-11-26)
+  recorded, with "Where things stand", the merge line of pull request 160
+  and a row in "Who did what" brought up to date. The branch starts from
+  `testing` at `9cb4276`, the promotion's merge commit, so merging it
+  brings that commit into `experimental`. Only this file changes.
+- Merged: with a merge commit, the exception to the squash rule described
+  under [How this branch works](#how-this-branch-works). The date and
+  commit are filled in by the next pull request.
+- Benchmark: no before/after run. `9cb4276` has the files of `21a1ed2`,
+  and this pull request changes only this file, so the app is the same.
+- Testing: `docs-check` passes on this branch. The tests of the promoted
+  commit are under the third promotion.
+- Review: read by its author, with each figure checked against the
+  published build and the pull requests it names.
+- Known issues: it should have followed the promotion straight away, as
+  the branch's rules say; it came a day later. No experimental build was
+  published in between.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6689,6 +6754,7 @@ launch.
 | Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
 | Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
 | Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
+| The third promotion to `testing` and pull requests 160 and 161 | Claude Opus 5.5 (session lead) | Done directly: a one-line test fix that CI found, the promotion, the checks on the published build and this record. The bring-back into `experimental` came a day late |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
