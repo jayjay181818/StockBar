@@ -444,10 +444,13 @@ It was merged as `0c77a54` (build 382.3.26).
 On 2026-11-26 the owner asked for the redesign to go to `testing`. Pull requests 133 to 160 were promoted as
 merge commit `9cb4276` and published as testing build 382.31; CI's first
 run on the promotion found one test holding the system's wording, fixed by
-pull request 160. Pull request 161 brings `testing` back. What remains of
-the redesign before a stable release: the Calendar, Reminders, Settings
-and Alerts as mocked with Backups and Diagnostics checked, and the release
-documents.
+pull request 160. Pull request 161 brought `testing` back, merged as `8fb23f8`.
+
+Pull request 162 gives the six Settings tabs one left edge and one width,
+arranges Connections as in the mock-up, checks Alerts with made-up alerts
+(an acceptance-only fixture that never stores, checks or notifies) and
+tidies the Diagnostics log. What remains of the redesign before a stable
+release: the Calendar, Reminders and the release documents.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6456,9 +6459,9 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   and a row in "Who did what" brought up to date. The branch starts from
   `testing` at `9cb4276`, the promotion's merge commit, so merging it
   brings that commit into `experimental`. Only this file changes.
-- Merged: with a merge commit, the exception to the squash rule described
-  under [How this branch works](#how-this-branch-works). The date and
-  commit are filled in by the next pull request.
+- Merged: 2026-11-26 with a merge commit, `8fb23f8`, the exception to the
+  squash rule described under [How this branch works](#how-this-branch-works).
+  `9cb4276` is now in `experimental`.
 - Benchmark: no before/after run. `9cb4276` has the files of `21a1ed2`,
   and this pull request changes only this file, so the app is the same.
 - Testing: `docs-check` passes on this branch. The tests of the promoted
@@ -6468,6 +6471,64 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 - Known issues: it should have followed the promotion straight away, as
   the branch's rules say; it came a day later. No experimental build was
   published in between.
+- Verdict: retained.
+
+### 162: Settings and Alerts as mocked; Backups and Diagnostics checked
+
+- What: the last of the plan's "redesigned as mocked" and "restyled only"
+  screens, as one tidy. Every control and behaviour stays; nothing without
+  a feature behind it is added (no Reminders card, no Calendar or Returns
+  rows, no Portfolio picker).
+  - Settings: every tab's content starts at the page header's left edge
+    and stops at one width, 700 points
+    (`StockbarLayout.settingsContentWidth`); section titles match. The five
+    grouped-form tabs keep macOS's own grouped rows, widened past the
+    form's built-in margin so their groups line up. Their fill still
+    differs from Connections' Glass cards: macOS ignores a row background
+    on grouped forms.
+  - Connections: "API Keys" is now "Market-data keys", with each row's
+    status in words ("Not set", "Not verified", "Verified", "Verification
+    failed") beside the field. Folync's status is a pill, its fields a
+    grid and its buttons a row that wraps (`StockbarWrappingRow`); its
+    schedule is one line, "Last checked 9:41, next 9:42". The "What
+    Stockbar reads from Folync" rows are tidied and stay in one column, as
+    record 145 chose. Trading 212's note is a pill. "Fetch Priority" is now
+    "Fetch order". "Use Local Portfolio…" is unchanged.
+  - Alerts: the condition icon sits in a tinted ring, grey when paused;
+    the controls line up across rows; "Triggered … ago" is easier to read;
+    the subtitle matches the mock-up. The page had never been seen with
+    alerts in it.
+  - `STOCKBAR_ACCEPTANCE_ALERTS`, an acceptance-only fixture of made-up
+    alerts behind the same gate as the events fixture. While it is in use
+    the alert service stores nothing, checks no price and makes no
+    notification-centre call, so macOS is never asked for permission.
+  - Diagnostics: ordinary log lines were drawn in the accent blue; they are
+    now the primary text colour, and debug lines secondary. The log card
+    has the standard padding. Backups had no fault.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, under the rule for the redesign. No surface, shadow or
+  gradient is added, and Settings, Alerts and Diagnostics are not drawn at
+  launch, so the single-launch drawing-memory check was not run.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1086 XCTest tests with 0
+  failures; `checks`, `docs-check` and `build-release` pass; the Python
+  helper tests and the 95 Scripts tests pass. New tests cover the fixture's
+  gate and refusals, that fixture alerts are never stored, checked or
+  notified, the schedule line, each alert row's text and the log line
+  colours; eight temporary breakages were each caught and removed.
+  Captures, before and after, in dark and light, at the default and the
+  minimum size, are in `build/design/shots/D5/`, with one of Connections
+  at full width for the owner to compare.
+- Review: by the session lead against the captures and the diff. It added
+  "Not set" for a key that has none, which had read "Not verified".
+- Known issues: at 700 points Folync's last button wraps to a second line
+  at the default size; full-width cards, as on the other pages, would
+  avoid it and are the owner's choice. The worker could not click in its
+  copies (the screen was locked), so it compiled an uncommitted aid into
+  its captured builds to pick tabs and, for the local-portfolio captures,
+  switched Folync off itself rather than through the copy's sheet. A few
+  "before" captures at the minimum size are missing. A stored key's
+  "Verification failed" row was not seen.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6755,6 +6816,7 @@ launch.
 | Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
 | Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
 | The third promotion to `testing` and pull requests 160 and 161 | Claude Opus 5.5 (session lead) | Done directly: a one-line test fix that CI found, the promotion, the checks on the published build and this record. The bring-back into `experimental` came a day late |
+| Pull request 162, Settings and Alerts as mocked | Claude Opus 5.5 (session lead) for the specification, review, one fix and the record; one Opus 5.5 worker | Worth it. The worker could not click (the screen was locked) and built an uncommitted aid to reach each tab, which it disclosed; up to ten of its copies ran at once, and each launch left an acceptance-only Keychain item |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
