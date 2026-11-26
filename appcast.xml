@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.31.3)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.3</link>
+      <pubDate>Thu, 26 Nov 2026 10:04:04 +0000</pubDate>
+      <sparkle:version>382.31.3</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.31.3 of Stockbar 3.8.2. Changes since experimental-382.31.2:
+
+- Settings and Alerts as mocked; Backups and Diagnostics checked (#162)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.31.3/Stockbar-382.31.3.zip" length="8429867" type="application/octet-stream" sparkle:edSignature="64Ajr1Eyn17k5jNohCpy9NSs1vQawTzeRf9RWGZrXXddFy+zIwogwg5P6itF8qfSyCbAnCuP1OwLyswtDQfICA=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.31.2)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.2</link>
       <pubDate>Thu, 26 Nov 2026 09:57:00 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Record the redesign benchmark and bring the log up to date (#151)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.20/Stockbar-382.3.20.zip" length="8169875" type="application/octet-stream" sparkle:edSignature="L8F5Whv8c+Hyyt49pCMlP5HmgQXXTtTxcbRjjt+Xm7NwiD/ZRRIy5MUs/n2VvSTG8Yx5R4Vr1G8WIfjWzFMxAw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.19)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.19</link>
-      <pubDate>Fri, 20 Nov 2026 19:55:23 +0000</pubDate>
-      <sparkle:version>382.3.19</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.19 of Stockbar 3.8.2. Changes since experimental-382.3.18:
-
-- Holdings: the editing table fits at the minimum window size (#150)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.19/Stockbar-382.3.19.zip" length="8169878" type="application/octet-stream" sparkle:edSignature="3qwYwOFJGTpVRrgH8Q8WonlXYdRloNY4cviaozxxLi5McxWWHrNe3kn3MVK9IT7dcXShlKXbHzHHX3razPxeCQ=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 1/ojqZp7xSl261MtVlLkaJ6bBRpn6B+lzQQv5abHpmhGCeDv1FS64Qpyu6NlegrjlrR+y0GVhJdDvTOvF7XcAg==
-length: 10291
+edSignature: SQbleDK7djsMhmSJL81mMVTqKPNyHcWk7nAKgU2k5yl7LGgySnoWpfvgqlCxVtv0cb1Y/xX3B661wxrnFIEsBA==
+length: 10294
 -->
