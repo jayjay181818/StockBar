@@ -2803,6 +2803,54 @@ extension FolyncPortfolioSourceTests {
         XCTAssertEqual(resavedTrades.lots[0].status, .unknown("Reopened"))
     }
 
+    func testSavedDividendsReadTheKeptPageOrTheDiskCopyWithoutARequestOrACredential() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { _ in (200, Self.ledgerJSON(.dividends), "W/\"one\"") }
+        let query = FolyncDividendsQuery(status: .all, from: FolyncLedgerDay(year: 2025, month: 11, day: 20),
+                                         to: FolyncLedgerDay(year: 2027, month: 11, day: 20), limit: 200)
+
+        let nothing = await harness.coordinator.savedDividends(query)
+        XCTAssertNil(nothing, "nothing saved, nothing shown")
+        XCTAssertTrue(harness.ledgerRequests.isEmpty, "reading what is saved asks nothing")
+
+        _ = await harness.coordinator.routeDividends(query)
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+        let kept = await harness.coordinator.savedDividends(query)
+        XCTAssertEqual(kept?.events.isEmpty, false, "the page the fetch policy keeps")
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+
+        // Past the reuse window, a coordinator that has never asked reads the copy on
+        // disk, and never reads the credential (which could raise a Keychain prompt).
+        let credentialReads = LockedBox(0)
+        let cold = FolyncSupplementalCoordinator(
+            settingsStore: harness.settingsStore,
+            cache: FolyncSupplementalCache(directory: harness.cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            tokenProvider: {
+                credentialReads.value += 1
+                throw URLError(.userAuthenticationRequired)
+            }
+        )
+        let fromDisk = await cold.savedDividends(query)
+        XCTAssertEqual(fromDisk?.events.map { $0.eventId }, kept?.events.map { $0.eventId })
+        XCTAssertEqual(credentialReads.value, 0)
+        XCTAssertEqual(harness.ledgerRequests.count, 1, "still the one request")
+
+        let otherQuery = await cold.savedDividends(FolyncDividendsQuery(status: .received))
+        XCTAssertNil(otherQuery, "a copy answers only the query it was saved for")
+
+        var settings = harness.settingsStore.load()
+        settings.supplemental = FolyncSupplementalSettings(
+            historicalLineCharts: false, candlestickCharts: false, benchmarkMarketData: false, exchangeRates: false,
+            allowLegacyFallback: false, dividends: false, tradeAnalysis: true, transactions: true
+        )
+        harness.settingsStore.save(settings)
+        let switchedOff = await cold.savedDividends(query)
+        XCTAssertNil(switchedOff, "dividends switched off show nothing, saved or not")
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+    }
+
     func testLedgerSavedCopyKeepsNullFiguresWhenFolyncDoesNotAnswer() async throws {
         let harness = try makeLedgerHarness()
         harness.respond { _ in (200, Self.ledgerJSON(.dividends), "W/\"one\"") }
@@ -4197,8 +4245,17 @@ final class StockbarActivityPageTests: XCTestCase {
         .folync(try response(ids.map { transaction($0) }, cursor: cursor), status: status, paging: paging)
     }
 
+    /// A defaults suite of the test's own, so a kind chosen in one test is
+    /// never remembered into another.
+    private func ephemeralDefaults() -> UserDefaults {
+        let suite = "activity-tests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { return UserDefaults() }
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
+    }
+
     private func model(_ router: ActivityRouterStub, gate: ActivityDebounceGate? = nil) -> StockbarActivityViewModel {
-        StockbarActivityViewModel(router: router, debounce: { await gate?.wait() })
+        StockbarActivityViewModel(router: router, defaults: ephemeralDefaults(), debounce: { await gate?.wait() })
     }
 
     /// Waits for the model's task, and any task that replaces it, to finish.
@@ -4221,37 +4278,81 @@ final class StockbarActivityPageTests: XCTestCase {
     // MARK: Kinds and queries
 
     func testEveryKnownActionIsInExactlyOneKind() {
-        let kinds: [StockbarActivityKind] = [.trades, .dividends, .cash]
         for action in FolyncTransactionAction.allCases {
-            XCTAssertEqual(kinds.filter { $0.actions.contains(action) }.count, 1, action.rawValue)
+            XCTAssertEqual(StockbarActivityKind.allCases.filter { $0.actions.contains(action) }.count, 1, action.rawValue)
         }
         XCTAssertEqual(StockbarActivityKind.trades.actions, [.buy, .sell, .split, .corporateAction])
         XCTAssertEqual(StockbarActivityKind.dividends.actions, [.dividend, .stockDividend])
-        XCTAssertEqual(StockbarActivityKind.cash.actions, [.deposit, .withdraw, .interest, .fee, .tax, .transfer, .note])
-        XCTAssertEqual(StockbarActivityKind.all.actions, [], "All sends no action filter")
-        XCTAssertEqual(StockbarActivityKind.allCases.map(\.title), ["All", "Trades", "Dividends", "Cash"])
+        XCTAssertEqual(StockbarActivityKind.interest.actions, [.interest])
+        XCTAssertEqual(StockbarActivityKind.cash.actions, [.deposit, .withdraw, .fee, .tax, .transfer, .note])
+        XCTAssertEqual(StockbarActivityKinds.all.actions, [], "All sends no action filter")
+        XCTAssertEqual(StockbarActivityKind.allCases.map(\.title), ["Trades", "Dividends", "Interest", "Cash"])
         XCTAssertEqual(StockbarActivityMode.allCases.map(\.title), ["As entered", "Adjusted"])
     }
 
+    func testTheKindSwitchesCombine() {
+        let all = StockbarActivityKinds.all
+        XCTAssertTrue(all.isAll)
+        XCTAssertTrue(StockbarActivityKind.allCases.allSatisfy(all.isShown), "All lights every switch")
+
+        // A click under All hides that kind: everything but interest.
+        let noInterest = all.toggling(.interest)
+        XCTAssertEqual(noInterest.chosen, [.trades, .dividends, .cash])
+        XCTAssertFalse(noInterest.isShown(.interest))
+        XCTAssertEqual(noInterest.actions, StockbarActivityKind.trades.actions
+            .union(StockbarActivityKind.dividends.actions).union(StockbarActivityKind.cash.actions))
+
+        // Clicking it again shows every kind, which is All.
+        XCTAssertEqual(noInterest.toggling(.interest), .all)
+
+        // Option-click: one kind only; then trades and dividends together.
+        let interestOnly = StockbarActivityKinds.only(.interest)
+        XCTAssertEqual(interestOnly.actions, [.interest])
+        let tradesAndDividends = StockbarActivityKinds.only(.trades).toggling(.dividends)
+        XCTAssertEqual(tradesAndDividends.chosen, [.trades, .dividends])
+
+        // Hiding the last shown kind never leaves an empty page.
+        XCTAssertEqual(interestOnly.toggling(.interest), .all)
+
+        // Saved and read back, in the switches' order; unknown names are dropped.
+        XCTAssertEqual(tradesAndDividends.stored, ["trades", "dividends"])
+        XCTAssertEqual(StockbarActivityKinds(stored: ["dividends", "trades", "bogus"]), tradesAndDividends)
+        XCTAssertEqual(StockbarActivityKinds(stored: nil), .all)
+        XCTAssertEqual(StockbarActivityKinds(stored: StockbarActivityKind.allCases.map(\.rawValue)), .all)
+    }
+
+    func testTheKindsAreRememberedAcrossLaunches() throws {
+        let suite = "activity-kinds-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = StockbarActivityViewModel(router: ActivityRouterStub(), defaults: defaults, debounce: {})
+        XCTAssertEqual(first.kinds, .all)
+        first.kinds = StockbarActivityKinds.all.toggling(.interest)
+        let second = StockbarActivityViewModel(router: ActivityRouterStub(), defaults: defaults, debounce: {})
+        XCTAssertEqual(second.kinds.chosen, [.trades, .dividends, .cash])
+        XCTAssertEqual(second.query.actions, second.kinds.actions)
+    }
+
     func testTheQueryForEachKindModeAndHolding() {
-        let actions: [StockbarActivityKind: String?] = [
-            .all: nil, .trades: "buy,sell,split,corporate_action", .dividends: "dividend,stock_dividend",
-            .cash: "deposit,withdraw,fee,tax,interest,transfer,note"
+        let actions: [StockbarActivityKinds: String?] = [
+            .all: nil, .only(.trades): "buy,sell,split,corporate_action", .only(.dividends): "dividend,stock_dividend",
+            .only(.interest): "interest", .only(.cash): "deposit,withdraw,fee,tax,transfer,note",
+            StockbarActivityKinds([.trades, .dividends]): "buy,sell,dividend,stock_dividend,split,corporate_action"
         ]
         let modes: [StockbarActivityMode: String] = [.asEntered: "input", .adjusted: "adjusted"]
         let holdings: [String: String?] = ["": nil, "   ": nil, " msft ": "MSFT", "Vusa": "VUSA"]
-        for kind in StockbarActivityKind.allCases {
+        for (kinds, list) in actions {
             for (mode, modeValue) in modes {
                 for (holding, ticker) in holdings {
-                    let items = StockbarActivityQuery.make(kind: kind, mode: mode, holding: holding).queryItems
+                    let items = StockbarActivityQuery.make(kinds: kinds, mode: mode, holding: holding).queryItems
                     var expected = [URLQueryItem(name: "mode", value: modeValue)]
                     if let ticker { expected.append(URLQueryItem(name: "ticker", value: ticker)) }
-                    if let list = actions[kind] ?? nil { expected.append(URLQueryItem(name: "actions", value: list)) }
-                    XCTAssertEqual(items, expected, "\(kind) \(mode) '\(holding)'")
+                    if let list { expected.append(URLQueryItem(name: "actions", value: list)) }
+                    XCTAssertEqual(items, expected, "\(kinds) \(mode) '\(holding)'")
                 }
             }
         }
-        let long = StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: String(repeating: "a", count: 60))
+        let long = StockbarActivityQuery.make(kinds: .all, mode: .asEntered, holding: String(repeating: "a", count: 60))
         XCTAssertEqual(long.instrument, .ticker(String(repeating: "A", count: 40)), "the route takes at most 40 characters")
     }
 
@@ -4380,7 +4481,7 @@ final class StockbarActivityPageTests: XCTestCase {
         let router = ActivityRouterStub()
         let viewModel = model(router)
         viewModel.activate(isFolyncPortfolio: false)
-        viewModel.kind = .trades
+        viewModel.kinds = .only(.trades)
         viewModel.refresh()
         viewModel.loadMore()
         await settle(viewModel)
@@ -4392,7 +4493,7 @@ final class StockbarActivityPageTests: XCTestCase {
     func testNoRequestWhileThePageIsNotSelected() async throws {
         let router = ActivityRouterStub()
         let viewModel = model(router)
-        viewModel.kind = .cash
+        viewModel.kinds = .only(.cash)
         viewModel.mode = .adjusted
         viewModel.holding = "MSFT"
         viewModel.refresh()
@@ -4405,7 +4506,7 @@ final class StockbarActivityPageTests: XCTestCase {
         viewModel.activate(isFolyncPortfolio: true)
         await settle(viewModel)
         viewModel.deactivate()
-        viewModel.kind = .all
+        viewModel.kinds = .all
         await settle(viewModel)
         let afterDeactivate = await router.calls
         XCTAssertEqual(afterDeactivate.count, 1, "a change on a page that is not selected asks nothing")
@@ -4421,7 +4522,7 @@ final class StockbarActivityPageTests: XCTestCase {
         viewModel.activate(isFolyncPortfolio: true)
         await settle(viewModel)
         let calls = await router.calls
-        XCTAssertEqual(calls, [.first(StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: ""), forceRefresh: false)],
+        XCTAssertEqual(calls, [.first(StockbarActivityQuery.make(kinds: .all, mode: .asEntered, holding: ""), forceRefresh: false)],
                        "opening the page leaves the five-minute reuse to the fetch policy")
         XCTAssertEqual(viewModel.phase, .loaded)
         XCTAssertEqual(viewModel.transactions.map(\.id), ["a", "b"])
@@ -4517,10 +4618,10 @@ final class StockbarActivityPageTests: XCTestCase {
         viewModel.activate(isFolyncPortfolio: true)
         await settle(viewModel)
 
-        viewModel.kind = .trades
+        viewModel.kinds = .only(.trades)
         await waitUntil { await gate.waits == 1 }
         XCTAssertTrue(viewModel.isQueryPending)
-        viewModel.kind = .cash
+        viewModel.kinds = .only(.cash)
         await waitUntil { await gate.waits == 2 }
         let duringDebounce = await router.calls
         XCTAssertEqual(duringDebounce.count, 1, "nothing is asked until the debounce ends")
@@ -4529,7 +4630,7 @@ final class StockbarActivityPageTests: XCTestCase {
         await settle(viewModel)
         let calls = await router.calls
         XCTAssertEqual(calls.count, 2, "the superseded Trades query is never asked")
-        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kind: .cash, mode: .asEntered, holding: ""),
+        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kinds: .only(.cash), mode: .asEntered, holding: ""),
                                           forceRefresh: false))
         XCTAssertEqual(viewModel.transactions.map(\.id), ["cash"])
         XCTAssertFalse(viewModel.isQueryPending)
@@ -4572,7 +4673,7 @@ final class StockbarActivityPageTests: XCTestCase {
         XCTAssertEqual(viewModel.phase, .loaded, "never left on a spinner with nothing in flight")
         XCTAssertEqual(viewModel.transactions.map(\.id), ["a"])
         let calls = await router.calls
-        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kind: .all, mode: .asEntered, holding: ""),
+        XCTAssertEqual(calls.last, .first(StockbarActivityQuery.make(kinds: .all, mode: .asEntered, holding: ""),
                                           forceRefresh: false), "asked without forcing, so the five-minute reuse answers")
     }
 
@@ -4587,14 +4688,14 @@ final class StockbarActivityPageTests: XCTestCase {
         viewModel.mode = .adjusted
         await waitUntil { await router.heldCount == 1 }
         viewModel.mode = .asEntered
-        viewModel.kind = .dividends
+        viewModel.kinds = .only(.dividends)
         await waitUntil { await router.heldCount == 2 }
         // The superseded query's answer arrives first, then the current one's.
         await router.release(with: try page(["stale-answer"]))
         await router.release(with: try page(["div"]))
         await settle(viewModel)
         XCTAssertEqual(viewModel.transactions.map(\.id), ["div"])
-        XCTAssertEqual(viewModel.appliedQuery, StockbarActivityQuery.make(kind: .dividends, mode: .asEntered, holding: ""))
+        XCTAssertEqual(viewModel.appliedQuery, StockbarActivityQuery.make(kinds: .only(.dividends), mode: .asEntered, holding: ""))
 
         // A cancelled caller is answered `.unavailable`: it never reaches the screen.
         viewModel.refresh()
@@ -4684,9 +4785,13 @@ final class StockbarActivityPageTests: XCTestCase {
                        "Couldn't get current transactions from Folync. Showing the copy saved earlier.")
         XCTAssertEqual(StockbarActivityText.shownCount(1), "Showing 1 transaction")
         XCTAssertEqual(StockbarActivityText.shownCount(12), "Showing 12 transactions")
-        XCTAssertEqual(StockbarActivityText.noRows(kind: .trades, holding: .ticker("MSFT")),
+        XCTAssertEqual(StockbarActivityText.noRows(kinds: .only(.trades), holding: .ticker("MSFT")),
                        "Folync has no trades for MSFT.")
-        XCTAssertEqual(StockbarActivityText.noRows(kind: .all, holding: nil), "Folync has no transactions for this portfolio.")
+        XCTAssertEqual(StockbarActivityText.noRows(kinds: .only(.interest), holding: nil),
+                       "Folync has no interest payments for this portfolio.")
+        XCTAssertEqual(StockbarActivityText.noRows(kinds: StockbarActivityKinds([.trades, .dividends]), holding: nil),
+                       "Folync has no transactions of these kinds for this portfolio.")
+        XCTAssertEqual(StockbarActivityText.noRows(kinds: .all, holding: nil), "Folync has no transactions for this portfolio.")
     }
 
     // MARK: Sidebar
@@ -4800,6 +4905,22 @@ extension FolyncPortfolioSourceTests {
         }
         XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: false, capability: Self.usable))
         XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: true, capability: Self.usable))
+    }
+
+    /// Settings → Connections gives Folync's schedule in one line.
+    func testScheduleLineGivesLastAndNextCheckInOneLine() {
+        let locale = Locale(identifier: "en_GB")
+        let utc = TimeZone(identifier: "UTC")!
+        let last = Date(timeIntervalSince1970: 1_795_707_720)  // 2026-11-26 15:42:00 UTC
+        let next = last.addingTimeInterval(65)
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: last, next: next, locale: locale, timeZone: utc),
+                       "Last checked 15:42, next 15:43")
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: last, next: nil, locale: locale, timeZone: utc),
+                       "Last checked 15:42")
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: nil, next: next, locale: locale, timeZone: utc),
+                       "Next check 15:43")
+        XCTAssertNil(FolyncScheduleText.line(lastChecked: nil, next: nil, locale: locale, timeZone: utc),
+                     "nothing known, no line")
     }
 
     func testSavedSupplementalSettingsKeepTheirKeysAndValues() throws {

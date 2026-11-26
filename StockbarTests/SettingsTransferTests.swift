@@ -538,6 +538,28 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertTrue(already.defaults.bool(forKey: "trading212.deleteMissingLinkedHoldings"))
     }
 
+    func testEarningsFiguresChoicesTravelAndOnlyKnownChoicesAreImported() async throws {
+        XCTAssertEqual(SettingsTransferKeys.settingsKeys[EarningsFiguresSettings.key], .stringDictionary)
+        let source = try makeSide("source")
+        source.defaults.set(["ALPHA": "EUR", "BETA.L": "hide", "GAMMA": "GBX", "DELTA": "eur", "omega": "USD",
+                             "EPSILON": "hidden", "BAD SYM": "EUR", "ZETA": "CHF"],
+                            forKey: EarningsFiguresSettings.key)
+        let file = root.appendingPathComponent("earnings-figures.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        target.defaults.set(["OLD": "JPY"], forKey: EarningsFiguresSettings.key)
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        try await target.service.apply(prepared) { true }
+
+        XCTAssertEqual(target.defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String],
+                       ["ALPHA": "EUR", "BETA.L": "hide", "ZETA": "CHF"],
+                       "pence, lower-case codes and symbols, unknown words and bad symbols are dropped, not guessed")
+        let imported = (target.defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String]) ?? [:]
+        let choices = EarningsFiguresSettings.validated(imported).compactMapValues(EarningsFiguresChoice.init(storedValue:))
+        XCTAssertEqual(choices, ["ALPHA": .currency("EUR"), "BETA.L": .hidden, "ZETA": .currency("CHF")])
+    }
+
     func testLeftoverStagedDatabaseCopiesAreRemovedAtLaunch() throws {
         let side = try makeSide("staging")
         let leftover = side.service.dependencies.stagingRoot
@@ -1185,4 +1207,181 @@ final class StockbarSegmentedControlTests: XCTestCase {
 
 private enum TestRange: String, CaseIterable {
     case day = "1D", week = "1W", month = "1M"
+}
+
+// MARK: - Settings sections
+
+/// Settings' tabs are Glass cards that run the full width of the page, with
+/// macOS's grouped rows' arrangement: title and explanation on the left,
+/// the control at its natural width on the right.
+@MainActor
+final class StockbarSettingsLayoutTests: XCTestCase {
+    private let space = "settings-layout-test"
+
+    /// Lays `view` out at `size` in a real hosting view and returns the
+    /// frames its probes were given, in the root's coordinates.
+    private func frames<V: View>(of view: V, size: CGSize) -> [String: CGRect] {
+        let seen = SettingsFramesSeen()
+        let host = NSHostingView(
+            rootView: view
+                .environment(\.settingsFramesSeen, seen)
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+                .coordinateSpace(name: space)
+        )
+        host.frame = NSRect(origin: .zero, size: size)
+        host.layoutSubtreeIfNeeded()
+        return seen.frames
+    }
+
+    func testEveryTabsPageRunsTheFullWidthInsideThePagePadding() throws {
+        for width in [1_000.0, 1_400.0] {
+            let seen = frames(of: StockbarSettingsPage {
+                Color.clear.frame(height: 20).settingsProbe("content", in: space)
+            }, size: CGSize(width: width, height: 300))
+            let content = try XCTUnwrap(seen["content"])
+            XCTAssertEqual(content.minX, StockbarLayout.pagePadding, accuracy: 0.5)
+            XCTAssertEqual(content.width, width - 2 * StockbarLayout.pagePadding, accuracy: 0.5,
+                           "No cap: the content takes the page's whole width at \(width) points")
+        }
+        // A page taller than the window ends with the bottom inset every page has.
+        let tall = frames(of: StockbarSettingsPage {
+            Color.clear.frame(height: 900).settingsProbe("content", in: space)
+        }, size: CGSize(width: 1_000, height: 300))
+        let content = try XCTUnwrap(tall["content"])
+        XCTAssertEqual(content.minY, 12, accuracy: 0.5, "Close under the tab bar")
+        XCTAssertEqual(StockbarSettingsPage<EmptyView>.contentInsets.bottom, StockbarLayout.pageInsets.bottom)
+    }
+
+    func testASectionsCardFillsItsWidthAndCarriesItsTitle() throws {
+        let seen = frames(of: StockbarSettingsSection("Portfolio", footer: "A footer.") {
+            StockbarSettingsRow("Color Coding") {
+                Toggle("Color Coding", isOn: .constant(true))
+            }
+            .settingsProbe("row", in: space)
+        }
+        .settingsProbe("card", in: space), size: CGSize(width: 900, height: 300))
+        let card = try XCTUnwrap(seen["card"])
+        let row = try XCTUnwrap(seen["row"])
+        XCTAssertEqual(card.width, 900, accuracy: 0.5)
+        // The card's own padding on both sides, and the row below the title.
+        XCTAssertEqual(row.minX, 18, accuracy: 0.5)
+        XCTAssertEqual(row.width, 900 - 36, accuracy: 0.5)
+        XCTAssertGreaterThan(row.minY, card.minY + 18 + 10, "The title comes first")
+    }
+
+    func testAPickerOrToggleKeepsItsNaturalWidthAtTheRowsRightEdge() throws {
+        let seen = frames(of: VStack(spacing: 0) {
+            StockbarSettingsRow("Market Indicators", detail: "Show pre-market, after-hours and closed-market indicators.") {
+                Toggle("Market Indicators", isOn: .constant(false))
+                    .toggleStyle(StockbarSettingsSwitchStyle())
+                    .settingsProbe("toggle", in: space)
+            }
+            .settingsProbe("toggleRow", in: space)
+            StockbarSettingsRow("Measure P&L Against", detail: longExplanation) {
+                basisPicker
+                    .settingsProbe("picker", in: space)
+            }
+            .settingsProbe("pickerRow", in: space)
+        }, size: CGSize(width: 700, height: 300))
+        for name in ["toggle", "picker"] {
+            let control = try XCTUnwrap(seen[name])
+            let row = try XCTUnwrap(seen[name + "Row"])
+            XCTAssertEqual(control.maxX, row.maxX, accuracy: 0.5, "\(name) sits at the row's right edge")
+            XCTAssertLessThan(control.width, 200, "\(name) does not stretch")
+            XCTAssertGreaterThan(control.width, 10)
+        }
+        // Its label is hidden from sight (VoiceOver still reads it), and a long
+        // explanation beside it does not squeeze it, even in a narrow row.
+        let natural = NSHostingView(rootView: basisPicker.labelsHidden()).fittingSize.width
+        XCTAssertEqual(try XCTUnwrap(seen["picker"]).width, natural, accuracy: 1)
+        let narrow = frames(of: StockbarSettingsRow("Measure P&L Against", detail: longExplanation) {
+            basisPicker.settingsProbe("picker", in: space)
+        }, size: CGSize(width: 320, height: 600))
+        XCTAssertEqual(try XCTUnwrap(narrow["picker"]).width, natural, accuracy: 1)
+    }
+
+    private var basisPicker: some View {
+        Picker("Measure P&L Against", selection: .constant("Cost of Current Holdings")) {
+            ForEach(["Net Deposits", "Cost of Current Holdings"], id: \.self) { Text($0).tag($0) }
+        }
+    }
+
+    private var longExplanation: String {
+        String(repeating: "Net deposits are the money you paid in less what you took out, as Folync reports them. ", count: 4)
+    }
+
+    func testATextFieldStretchesAcrossTheRestOfItsRow() throws {
+        let seen = frames(of: StockbarSettingsRow("Custom Template", stretchesControl: true) {
+            TextField("Custom Template", text: .constant(""))
+                .settingsProbe("field", in: space)
+        }
+        .settingsProbe("row", in: space), size: CGSize(width: 800, height: 100))
+        let field = try XCTUnwrap(seen["field"])
+        let row = try XCTUnwrap(seen["row"])
+        XCTAssertEqual(field.maxX, row.maxX, accuracy: 0.5)
+        XCTAssertGreaterThan(field.width, 550, "The field takes what the title leaves")
+        XCTAssertGreaterThan(field.minX, 100, "The title keeps its own width on the left")
+    }
+
+    func testTheExplanationSitsUnderItsTitleOnTheLeft() throws {
+        let seen = frames(of: StockbarSettingsRow("Logs") {
+            Button("Open Diagnostics") {}
+                .settingsProbe("button", in: space)
+        } detail: {
+            Text("View, refresh and clear Stockbar's log. Credentials are redacted.")
+                .settingsProbe("detail", in: space)
+        }
+        .settingsProbe("row", in: space), size: CGSize(width: 700, height: 100))
+        let detail = try XCTUnwrap(seen["detail"])
+        let button = try XCTUnwrap(seen["button"])
+        let row = try XCTUnwrap(seen["row"])
+        XCTAssertEqual(detail.minX, row.minX, accuracy: 0.5)
+        XCTAssertGreaterThan(detail.minY, row.minY + 8, "Under the title, not beside it")
+        XCTAssertLessThan(detail.maxX, button.minX, "The explanation stays clear of the control")
+    }
+
+    func testTheTabsKeepTheirNamesAndOrder() {
+        let titles = SettingsTab.allCases.map(\.title)
+        XCTAssertEqual(titles.first, "General")
+        let expectedOrder = ["General", "Menu Bar", "Appearance", "Connections", "Refresh", "Advanced"]
+        XCTAssertEqual(titles.filter(expectedOrder.contains), expectedOrder)
+        XCTAssertEqual(SettingsTab.dataSources.title, "Connections")
+        XCTAssertTrue(SettingsTab.allCases.allSatisfy { !$0.subtitle.isEmpty })
+    }
+}
+
+@MainActor
+private final class SettingsFramesSeen {
+    var frames: [String: CGRect] = [:]
+}
+
+private struct SettingsFramesSeenKey: EnvironmentKey {
+    static let defaultValue: SettingsFramesSeen? = nil
+}
+
+private extension EnvironmentValues {
+    var settingsFramesSeen: SettingsFramesSeen? {
+        get { self[SettingsFramesSeenKey.self] }
+        set { self[SettingsFramesSeenKey.self] = newValue }
+    }
+}
+
+/// Records the frame it is laid out at, as layout happens.
+private struct SettingsFrameProbe: View {
+    @Environment(\.settingsFramesSeen) private var seen
+    let name: String
+    let space: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            let _ = seen?.frames[name] = proxy.frame(in: .named(space))
+            Color.clear
+        }
+    }
+}
+
+private extension View {
+    func settingsProbe(_ name: String, in space: String) -> some View {
+        background(SettingsFrameProbe(name: name, space: space))
+    }
 }

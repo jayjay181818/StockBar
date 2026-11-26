@@ -10,32 +10,76 @@ import Observation
 
 // MARK: - Controls
 
-/// The kind switch. Each kind is a set of the route's actions; All sends no
-/// action filter, so it also lists actions this build does not know.
+/// The kind switches. Each kind is a set of the route's actions, and every
+/// action this build knows is in exactly one kind. The switches combine.
 enum StockbarActivityKind: String, CaseIterable, Hashable, Sendable {
-    case all
     case trades
     case dividends
+    case interest
     case cash
 
     var title: String {
         switch self {
-        case .all: "All"
         case .trades: "Trades"
         case .dividends: "Dividends"
+        case .interest: "Interest"
         case .cash: "Cash"
         }
     }
 
-    /// The actions this kind asks for. Every known action is in exactly one of
-    /// Trades, Dividends and Cash.
+    /// The actions this kind asks for.
     var actions: Set<FolyncTransactionAction> {
         switch self {
-        case .all: []
         case .trades: [.buy, .sell, .split, .corporateAction]
         case .dividends: [.dividend, .stockDividend]
-        case .cash: [.deposit, .withdraw, .interest, .fee, .tax, .transfer, .note]
+        case .interest: [.interest]
+        case .cash: [.deposit, .withdraw, .fee, .tax, .transfer, .note]
         }
+    }
+}
+
+/// Which kinds the page lists. None chosen, or every one, is All: All sends
+/// no action filter, so it also lists actions this build does not know.
+struct StockbarActivityKinds: Equatable, Hashable, Sendable {
+    /// The kinds chosen; empty for All.
+    let chosen: Set<StockbarActivityKind>
+
+    static let all = StockbarActivityKinds([])
+
+    init(_ chosen: Set<StockbarActivityKind>) {
+        self.chosen = chosen.count == StockbarActivityKind.allCases.count ? [] : chosen
+    }
+
+    var isAll: Bool { chosen.isEmpty }
+
+    /// Whether a kind's rows are listed: every kind is, under All.
+    func isShown(_ kind: StockbarActivityKind) -> Bool { isAll || chosen.contains(kind) }
+
+    var actions: Set<FolyncTransactionAction> {
+        chosen.reduce(into: Set<FolyncTransactionAction>()) { $0.formUnion($1.actions) }
+    }
+
+    /// A click on a kind's switch: shown kinds are hidden and hidden kinds
+    /// shown. Under All every kind is shown, so a click hides that kind.
+    /// Hiding the last shown kind gives All again, never an empty page.
+    func toggling(_ kind: StockbarActivityKind) -> StockbarActivityKinds {
+        var shown = isAll ? Set(StockbarActivityKind.allCases) : chosen
+        if shown.contains(kind) { shown.remove(kind) } else { shown.insert(kind) }
+        return StockbarActivityKinds(shown)
+    }
+
+    /// Option-click on a kind's switch: that kind only.
+    static func only(_ kind: StockbarActivityKind) -> StockbarActivityKinds {
+        StockbarActivityKinds([kind])
+    }
+
+    /// For saving: the chosen kinds' names, in the switches' order.
+    var stored: [String] {
+        StockbarActivityKind.allCases.filter(chosen.contains).map(\.rawValue)
+    }
+
+    init(stored: [String]?) {
+        self.init(Set((stored ?? []).compactMap(StockbarActivityKind.init(rawValue:))))
     }
 }
 
@@ -66,12 +110,12 @@ enum StockbarActivityQuery {
     /// The query for the controls. The mode is always sent and the ticker is
     /// trimmed and upper-cased, so the same choice is always the same query
     /// (and the same saved copy). An empty search sends no ticker.
-    static func make(kind: StockbarActivityKind, mode: StockbarActivityMode, holding: String) -> FolyncTransactionsQuery {
+    static func make(kinds: StockbarActivityKinds, mode: StockbarActivityMode, holding: String) -> FolyncTransactionsQuery {
         let ticker = String(holding.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maximumTickerLength)).uppercased()
         return FolyncTransactionsQuery(
             mode: mode.routeMode,
             instrument: ticker.isEmpty ? nil : .ticker(ticker),
-            actions: kind.actions
+            actions: kinds.actions
         )
     }
 }
@@ -527,8 +571,13 @@ final class StockbarActivityViewModel {
     /// A change of the controls is waiting out its debounce or loading.
     private(set) var isQueryPending = false
 
-    var kind: StockbarActivityKind = .all {
-        didSet { if kind != oldValue { controlsChanged() } }
+    /// Remembered across launches.
+    var kinds: StockbarActivityKinds {
+        didSet {
+            guard kinds != oldValue else { return }
+            defaults.set(kinds.stored, forKey: Self.kindsKey)
+            controlsChanged()
+        }
     }
     var mode: StockbarActivityMode = .asEntered {
         didSet { if mode != oldValue { controlsChanged() } }
@@ -539,7 +588,7 @@ final class StockbarActivityViewModel {
 
     /// The query the controls ask for.
     var query: FolyncTransactionsQuery {
-        StockbarActivityQuery.make(kind: kind, mode: mode, holding: holding)
+        StockbarActivityQuery.make(kinds: kinds, mode: mode, holding: holding)
     }
 
     var canLoadMore: Bool {
@@ -561,12 +610,18 @@ final class StockbarActivityViewModel {
     @ObservationIgnored private let router: any StockbarActivityTransactionsRouting
     @ObservationIgnored private let debounce: @Sendable () async throws -> Void
 
+    @ObservationIgnored private let defaults: UserDefaults
+
     static let debounceInterval = Duration.milliseconds(400)
+    static let kindsKey = "activity.kinds"
 
     init(router: any StockbarActivityTransactionsRouting = FolyncSupplementalCoordinator.shared,
+         defaults: UserDefaults = StockbarRuntimeStorage.userDefaults,
          debounce: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: StockbarActivityViewModel.debounceInterval) }) {
         self.router = router
+        self.defaults = defaults
         self.debounce = debounce
+        self.kinds = StockbarActivityKinds(stored: defaults.stringArray(forKey: Self.kindsKey))
     }
 
     /// The page became the selected page, or the portfolio source changed

@@ -179,6 +179,8 @@ enum SettingsTransferKeys {
         // Memory
         PythonWorkerPool.quitWhenIdleKey: .bool,
         StockbarRollingDigits.key: .bool,
+        // Calendar: each holding's choice for its past EPS figures
+        EarningsFiguresSettings.key: .stringDictionary,
         // Trading 212 configuration (credentials travel separately)
         "trading212.enabled": .bool,
         "trading212.environment": .string,

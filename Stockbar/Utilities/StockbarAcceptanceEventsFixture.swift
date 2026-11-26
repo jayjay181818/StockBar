@@ -38,6 +38,22 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
         let amount: Double
     }
 
+    /// One past earnings report, as the helper's earnings-history mode gives it.
+    struct PastEarnings: Codable, Equatable, Sendable {
+        /// Before today: a negative number of days.
+        let daysFromToday: Int
+        let reportedEPS: Double?
+        let estimatedEPS: Double?
+        let surprisePercent: Double?
+
+        init(daysFromToday: Int, reportedEPS: Double? = nil, estimatedEPS: Double? = nil, surprisePercent: Double? = nil) {
+            self.daysFromToday = daysFromToday
+            self.reportedEPS = reportedEPS
+            self.estimatedEPS = estimatedEPS
+            self.surprisePercent = surprisePercent
+        }
+    }
+
     struct Holding: Codable, Equatable, Sendable {
         let symbol: String
         let instrumentType: String?
@@ -48,6 +64,28 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
         let exDividendInDays: Int?
         let payInDays: Int?
         let earningsInDays: Int?
+        /// The end of an earnings range, as Yahoo can give; nil for a single date.
+        /// Optional, so a fixture written before it was added still reads.
+        let earningsEndInDays: Int?
+        /// Past earnings for the Calendar's Past view. Nil answers "no data",
+        /// as Yahoo does for a fund. Optional, so an older fixture still reads.
+        let pastEarnings: [PastEarnings]?
+        // A fixture written for pull request 167 may carry `epsCurrency`; it
+        // is read past and ignored, as the helper no longer names one.
+
+        init(symbol: String, instrumentType: String?, currency: String?, dividends: [Dividend]?,
+             exDividendInDays: Int?, payInDays: Int?, earningsInDays: Int?, earningsEndInDays: Int? = nil,
+             pastEarnings: [PastEarnings]? = nil) {
+            self.symbol = symbol
+            self.instrumentType = instrumentType
+            self.currency = currency
+            self.dividends = dividends
+            self.exDividendInDays = exDividendInDays
+            self.payInDays = payInDays
+            self.earningsInDays = earningsInDays
+            self.earningsEndInDays = earningsEndInDays
+            self.pastEarnings = pastEarnings
+        }
     }
 
     static let fileName = "instrument-events-fixture.json"
@@ -164,14 +202,7 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
     /// What `get_instrument_events.py --json` would print for `symbols`,
     /// from the fixture: each symbol it names answered, any other "no data".
     func answer(for symbols: [String], now: Date, timeZone: TimeZone = .current) -> Data {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let today = calendar.startOfDay(for: now)
-        func day(_ offset: Int?) -> Any {
-            guard let offset, let date = calendar.date(byAdding: .day, value: offset, to: today) else { return NSNull() }
-            let parts = calendar.dateComponents([.year, .month, .day], from: date)
-            return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
-        }
+        let day = Self.days(from: now, in: timeZone)
         let bySymbol = Dictionary(holdings.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first })
         let envelopes: [[String: Any]] = symbols.map { symbol in
             guard let holding = bySymbol[symbol] else {
@@ -187,7 +218,7 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
                 "exDividendDate": day(holding.exDividendInDays),
                 "dividendPayDate": day(holding.payInDays),
                 "earningsDate": day(holding.earningsInDays),
-                "earningsDateEnd": NSNull(),
+                "earningsDateEnd": day(holding.earningsInDays == nil ? nil : holding.earningsEndInDays),
                 "dividends": dividends,
                 "dividendCurrency": holding.currency ?? NSNull(),
                 "fetchedAt": now.timeIntervalSince1970
@@ -195,5 +226,50 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
             return ["symbol": symbol, "success": true, "events": events]
         }
         return (try? JSONSerialization.data(withJSONObject: envelopes)) ?? Data("[]".utf8)
+    }
+
+    /// What `get_instrument_events.py --json --earnings-history` would print
+    /// for `symbols`, from the fixture: each holding with `pastEarnings`
+    /// answered, with the reports of the twelve months up to today; any other
+    /// "no data".
+    func earningsHistoryAnswer(for symbols: [String], now: Date, timeZone: TimeZone = .current) -> Data {
+        let day = Self.days(from: now, in: timeZone)
+        let bySymbol = Dictionary(holdings.map { ($0.symbol, $0) }, uniquingKeysWith: { first, _ in first })
+        let envelopes: [[String: Any]] = symbols.map { symbol in
+            guard let holding = bySymbol[symbol], let past = holding.pastEarnings else {
+                return ["symbol": symbol, "success": false,
+                        "error": ["error_code": "NO_DATA", "message": "No earnings history in the acceptance fixture"]]
+            }
+            func figure(_ value: Double?) -> Any {
+                guard let value, value.isFinite else { return NSNull() }
+                return value
+            }
+            let earnings: [[String: Any]] = past
+                .filter { (-366...0).contains($0.daysFromToday) }
+                .sorted { $0.daysFromToday < $1.daysFromToday }
+                .map { report in
+                    ["date": day(report.daysFromToday), "reportedEPS": figure(report.reportedEPS),
+                     "estimatedEPS": figure(report.estimatedEPS), "surprisePercent": figure(report.surprisePercent)]
+                }
+            let history: [String: Any] = [
+                "symbol": symbol,
+                "earnings": earnings,
+                "fetchedAt": now.timeIntervalSince1970
+            ]
+            return ["symbol": symbol, "success": true, "earningsHistory": history]
+        }
+        return (try? JSONSerialization.data(withJSONObject: envelopes)) ?? Data("[]".utf8)
+    }
+
+    /// `YYYY-MM-DD` for a number of days from `now`'s day in `timeZone`, or null.
+    private static func days(from now: Date, in timeZone: TimeZone) -> (Int?) -> Any {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let today = calendar.startOfDay(for: now)
+        return { offset in
+            guard let offset, let date = calendar.date(byAdding: .day, value: offset, to: today) else { return NSNull() }
+            let parts = calendar.dateComponents([.year, .month, .day], from: date)
+            return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        }
     }
 }

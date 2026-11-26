@@ -141,6 +141,8 @@ struct StockbarMainView: View {
             .stockbarPage()
         case .income:
             StockbarIncomeView(dataModel: dataModel)
+        case .calendar:
+            StockbarCalendarView(dataModel: dataModel)
         case .trades:
             StockbarTradesView(isFolyncPortfolio: dataModel.isFolyncPortfolioActive) {
                 StockbarSettingsView.showConnectionsTab()
@@ -221,6 +223,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     case activity
     case charts
     case income
+    case calendar
     case trades
     case risk
     case allocation
@@ -237,12 +240,12 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// A section is listed only once its page exists.
     static let sidebarGroups: [StockbarSidebarGroup] = [
         StockbarSidebarGroup(title: "Portfolio", sections: [.overview, .holdings, .activity, .alerts]),
-        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .income, .trades, .risk, .allocation]),
+        StockbarSidebarGroup(title: "Analysis", sections: [.charts, .income, .calendar, .trades, .risk, .allocation]),
         StockbarSidebarGroup(title: "System", sections: [.dataHealth, .backups, .diagnostics, .settings])
     ]
 
     /// Sections drawn with the "New" badge.
-    static let newSections: Set<StockbarMainSection> = [.activity, .income, .trades]
+    static let newSections: Set<StockbarMainSection> = [.activity, .income, .calendar, .trades]
 
     /// Sections whose data only a Folync portfolio has: dimmed, with this
     /// reason, for any other source. Income is not one: a local or Trading 212
@@ -254,7 +257,8 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
     /// Otherwise the Folync-only pages are dimmed, and Income is dimmed while
     /// Folync is enabled but its portfolio is not loaded yet (the page is
     /// Folync's then), or when Yahoo cannot be asked (`localIncomeAvailable`
-    /// false: live market data off and no acceptance fixture).
+    /// false: live market data off and no acceptance fixture). Calendar's
+    /// dividends are Income's, so it follows Income's rule exactly.
     static func dimmedSections(isFolyncPortfolioActive: Bool, isFolyncEnabled: Bool,
                                localIncomeAvailable: Bool) -> [StockbarMainSection: String] {
         guard !isFolyncPortfolioActive else { return [:] }
@@ -264,6 +268,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         } else if !localIncomeAvailable {
             dimmed[.income] = StockbarLocalIncomeModel.notAllowedReason
         }
+        dimmed[.calendar] = dimmed[.income]
         return dimmed
     }
 
@@ -285,6 +290,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .activity: "Activity"
         case .charts: "Charts"
         case .income: "Income"
+        case .calendar: "Calendar"
         case .trades: "Trades"
         case .risk: "Risk"
         case .allocation: "Allocation"
@@ -303,6 +309,7 @@ enum StockbarMainSection: String, CaseIterable, Identifiable {
         case .activity: "list.bullet"
         case .charts: "chart.line.uptrend.xyaxis"
         case .income: "dollarsign.circle"
+        case .calendar: "calendar"
         case .trades: "arrow.left.arrow.right"
         case .risk: "waveform.path.ecg"
         case .allocation: "chart.pie"
@@ -1393,8 +1400,10 @@ private struct StockbarDiagnosticsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
             StockbarPageHeader("Diagnostics", subtitle: "Recent Stockbar logs. Credentials and API keys are redacted.")
+            // The same padding as every other card, so the controls and the
+            // log line up with the page's other edges.
             DebugLogView()
-                .stockbarCard(padding: 6)
+                .stockbarCard()
         }
         .padding(StockbarLayout.pageInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

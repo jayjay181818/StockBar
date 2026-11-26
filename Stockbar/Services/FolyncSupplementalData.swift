@@ -1207,6 +1207,27 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
         await routeLedger(query, continuation: nil, forceRefresh: forceRefresh)
     }
 
+    /// Page one of the dividends for `query` as already held: the page the
+    /// fetch policy keeps for reuse, or else the copy saved on disk. Makes no
+    /// request and reads no credential, so opening the popover or the Overview
+    /// can call it. Nil when dividends are switched off or nothing is saved.
+    func savedDividends(_ query: FolyncDividendsQuery) async -> FolyncDividendsResponse? {
+        let settings = settingsStore.load()
+        guard settings.isEnabled, settings.isLedgerRouteActive(.dividends) else { return nil }
+        let scopeID = settings.scopeID
+        guard (try? FolyncPortfolioSource.validateScopeComponent(scopeID)) != nil else { return nil }
+        let key = FolyncLedgerFetchPolicy.Key(route: .dividends, endpoint: settings.baseURL, scopeID: scopeID,
+                                              query: query.cacheKey, cursor: nil)
+        if let kept: FolyncRoutedDividendsResult = await ledgerPolicy.keptFirstPage(key),
+           case .folync(let response, _, _) = kept {
+            return response
+        }
+        let saved = try? await cache.load(endpoint: settings.baseURL, scopeID: scopeID,
+                                          resource: FolyncLedgerRoute.dividends.cacheResource, identity: scopeID,
+                                          range: query.cacheKey, as: FolyncDividendsResponse.self)
+        return saved.flatMap { isUsableLedger($0.payload, scopeID: scopeID) ? $0.payload : nil }
+    }
+
     /// The page after `continuation`, taken from the last page loaded.
     func loadMoreDividends(
         _ query: FolyncDividendsQuery,

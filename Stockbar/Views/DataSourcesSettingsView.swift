@@ -39,201 +39,79 @@ struct DataSourcesSettingsView: View {
     private let configManager = ConfigurationManager.shared
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // MARK: - API Keys Section
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("API Keys")
-                        .font(.headline)
-                    
-                    // FMP Key
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Financial Modeling Prep:")
-                                // Grows with larger text instead of truncating.
-                                .frame(minWidth: 160, alignment: .leading)
-                                .fixedSize()
-                            
-                            Group {
-                                if showFmpKey {
-                                    TextField("Enter API Key", text: $fmpApiKey)
-                                } else {
-                                    SecureField("Enter API Key", text: $fmpApiKey)
-                                }
-                            }
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .accessibilityLabel("Financial Modeling Prep API key")
-                            
-                            Button(action: { showFmpKey.toggle() }) {
-                                Image(systemName: showFmpKey ? "eye.slash" : "eye")
-                            }
-                            .buttonStyle(.borderless)
-                            .help(showFmpKey ? "Hide API Key" : "Show API Key")
-                            .accessibilityLabel(showFmpKey ? "Hide Financial Modeling Prep API key" : "Show Financial Modeling Prep API key")
-                            
-                            // Status Indicator and Button
-                            HStack(spacing: 4) {
-                                statusIndicator(for: fmpStatus)
-                                
-                                Button(action: {
-                                    saveAndTestKey(service: "fmp", key: fmpApiKey)
-                                }) {
-                                    if fmpStatus == .verifying {
-                                        ProgressView()
-                                            .scaleEffect(0.5)
-                                            .frame(width: 40)
-                                    } else {
-                                        Text("Save & Test")
-                                    }
-                                }
-                                .disabled(fmpApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fmpStatus == .verifying)
-
-                                if hasStoredFmpKey {
-                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "fmp" }
-                                        .disabled(fmpStatus == .verifying)
-                                        .help("Remove the stored Financial Modeling Prep API key")
-                                        .accessibilityLabel("Remove Financial Modeling Prep API key")
-                                }
-                            }
-                        }
+        StockbarSettingsPage {
+            StockbarSettingsSection("Market-data keys", separatesRows: false) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                    apiKeyRow(service: "fmp", key: $fmpApiKey, isShown: $showFmpKey) {
                         Text("Used for US stocks fallback. Free plan allows US historical data.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                            .padding(.leading, 164)
                     }
-                    
-                    // Twelve Data Key
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Twelve Data:")
-                                // Grows with larger text instead of truncating.
-                                .frame(minWidth: 160, alignment: .leading)
-                                .fixedSize()
-                            
-                            Group {
-                                if showTwelveDataKey {
-                                    TextField("Enter API Key", text: $twelveDataApiKey)
-                                } else {
-                                    SecureField("Enter API Key", text: $twelveDataApiKey)
-                                }
-                            }
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .accessibilityLabel("Twelve Data API key")
-                            
-                            Button(action: { showTwelveDataKey.toggle() }) {
-                                Image(systemName: showTwelveDataKey ? "eye.slash" : "eye")
-                            }
-                            .buttonStyle(.borderless)
-                            .help(showTwelveDataKey ? "Hide API Key" : "Show API Key")
-                            .accessibilityLabel(showTwelveDataKey ? "Hide Twelve Data API key" : "Show Twelve Data API key")
-                            
-                            // Status Indicator and Button
-                            HStack(spacing: 4) {
-                                statusIndicator(for: twelveDataStatus)
-                                
-                                Button(action: {
-                                    saveAndTestKey(service: "twelvedata", key: twelveDataApiKey)
-                                }) {
-                                    if twelveDataStatus == .verifying {
-                                        ProgressView()
-                                            .scaleEffect(0.5)
-                                            .frame(width: 40)
-                                    } else {
-                                        Text("Save & Test")
-                                    }
-                                }
-                                .disabled(twelveDataApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || twelveDataStatus == .verifying)
-
-                                if hasStoredTwelveDataKey {
-                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "twelvedata" }
-                                        .disabled(twelveDataStatus == .verifying)
-                                        .help("Remove the stored Twelve Data API key")
-                                        .accessibilityLabel("Remove Twelve Data API key")
-                                }
-                            }
-                        }
-                        HStack {
+                    apiKeyRow(service: "twelvedata", key: $twelveDataApiKey, isShown: $showTwelveDataKey) {
+                        HStack(spacing: 6) {
                             Text("Used for LSE/International fallback.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Link("Get Free Key", destination: URL(string: "https://twelvedata.com/")!)
                                 .font(.caption)
                         }
-                        .padding(.leading, 164)
                     }
                 }
-                .stockbarCard()
-
-                FolyncDataSourceSection(dataModel: dataModel)
-
-                Trading212DataSourceSection(dataModel: dataModel)
-                    .disabled(dataModel.isFolyncPortfolioActive)
-                    .overlay(alignment: .topTrailing) {
-                        if dataModel.isFolyncPortfolioActive {
-                            Text("Inactive while Folync is authoritative")
-                                .font(.caption)
-                                .padding(6)
-                                .stockbarSurface(.pill, in: Capsule())
-                        }
-                    }
-                
-                // MARK: - Priority Section
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Fetch Priority")
-                            .font(.headline)
-                        Spacer()
-                        Button(isEditingPriority ? "Done" : "Edit Order") {
-                            isEditingPriority.toggle()
-                        }
-                    }
-                    
-                    Text(isEditingPriority
-                         ? "Drag to reorder. Stockbar tries each source in this order until one answers."
-                         : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if isEditingPriority {
-                        List {
-                            ForEach(dataSourcePriority, id: \.self) { source in
-                                HStack {
-                                    Image(systemName: "line.3.horizontal")
-                                        .foregroundColor(.secondary)
-                                        .accessibilityHidden(true)
-                                    sourceLabel(for: source)
-                                    Spacer()
-                                }
-                                .padding(.vertical, 4)
-                            }
-                            .onMove(perform: movePriority)
-                        }
-                        .frame(height: 200)
-                        .listStyle(PlainListStyle())
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(dataSourcePriority.enumerated()), id: \.element) { index, source in
-                                HStack {
-                                    Text("\(index + 1).")
-                                        .font(.headline)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 24)
-                                    sourceLabel(for: source)
-                                }
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .stockbarSurface(.inset, cornerRadius: 6)
-                            }
-                        }
-                    }
-                }
-                .stockbarCard()
-                
-                Spacer()
             }
-            .padding(.horizontal, StockbarLayout.pagePadding)
-            .padding(.vertical, 12)
-            .frame(maxWidth: 900, alignment: .leading)
+
+            FolyncDataSourceSection(dataModel: dataModel)
+
+            Trading212DataSourceSection(
+                dataModel: dataModel,
+                inactiveNote: dataModel.isFolyncPortfolioActive ? "Inactive while Folync is authoritative" : nil
+            )
+            .disabled(dataModel.isFolyncPortfolioActive)
+
+            // MARK: - Priority Section
+            StockbarSettingsSection("Fetch order", separatesRows: false) {
+                Text(isEditingPriority
+                     ? "Drag to reorder. Stockbar tries each source in this order until one answers."
+                     : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if isEditingPriority {
+                    List {
+                        ForEach(dataSourcePriority, id: \.self) { source in
+                            HStack {
+                                Image(systemName: "line.3.horizontal")
+                                    .foregroundColor(.secondary)
+                                    .accessibilityHidden(true)
+                                sourceLabel(for: source)
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .onMove(perform: movePriority)
+                    }
+                    .frame(height: 200)
+                    .listStyle(PlainListStyle())
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(dataSourcePriority.enumerated()), id: \.element) { index, source in
+                            HStack {
+                                Text("\(index + 1).")
+                                    .font(.headline)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 24)
+                                sourceLabel(for: source)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .stockbarSurface(.inset, cornerRadius: 6)
+                        }
+                    }
+                }
+            } accessory: {
+                Button(isEditingPriority ? "Done" : "Edit Order") {
+                    isEditingPriority.toggle()
+                }
+            }
         }
         .onAppear {
             loadSettings()
@@ -250,6 +128,69 @@ struct DataSourcesSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Stockbar stops using this source until you enter a key again.")
+        }
+    }
+
+    /// One provider's row: its name, the key field with the help line under
+    /// it, the last test's result, then show/hide, Save & Test and Remove.
+    @ViewBuilder
+    private func apiKeyRow<Help: View>(
+        service: String,
+        key: Binding<String>,
+        isShown: Binding<Bool>,
+        @ViewBuilder help: () -> Help
+    ) -> some View {
+        let name = sourceName(for: service)
+        let status = service == "fmp" ? fmpStatus : twelveDataStatus
+        let hasStoredKey = service == "fmp" ? hasStoredFmpKey : hasStoredTwelveDataKey
+        GridRow(alignment: .firstTextBaseline) {
+            Text("\(name):")
+                // Grows with larger text instead of truncating.
+                .fixedSize()
+            VStack(alignment: .leading, spacing: 4) {
+                Group {
+                    if isShown.wrappedValue {
+                        TextField("Enter API Key", text: key)
+                    } else {
+                        SecureField("Enter API Key", text: key)
+                    }
+                }
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .accessibilityLabel("\(name) API key")
+                help()
+            }
+            .gridColumnAlignment(.leading)
+            statusIndicator(for: status, hasKey: hasStoredKey || !key.wrappedValue.isEmpty)
+            HStack(spacing: 6) {
+                Button {
+                    isShown.wrappedValue.toggle()
+                } label: {
+                    Image(systemName: isShown.wrappedValue ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.borderless)
+                .help(isShown.wrappedValue ? "Hide API Key" : "Show API Key")
+                .accessibilityLabel(isShown.wrappedValue ? "Hide \(name) API key" : "Show \(name) API key")
+
+                Button {
+                    saveAndTestKey(service: service, key: key.wrappedValue)
+                } label: {
+                    if status == .verifying {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 40)
+                    } else {
+                        Text("Save & Test")
+                    }
+                }
+                .disabled(key.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || status == .verifying)
+
+                if hasStoredKey {
+                    Button("Remove", role: .destructive) { pendingKeyRemoval = service }
+                        .disabled(status == .verifying)
+                        .help("Remove the stored \(name) API key")
+                        .accessibilityLabel("Remove \(name) API key")
+                }
+            }
         }
     }
 
@@ -306,8 +247,9 @@ struct DataSourcesSettingsView: View {
         showingAlert = true
     }
     
-    private func statusIndicator(for status: VerificationStatus) -> some View {
-        Group {
+    private func statusIndicator(for status: VerificationStatus, hasKey: Bool) -> some View {
+        let words = Self.statusDescription(status, hasKey: hasKey)
+        return Group {
             switch status {
             case .none:
                 Circle()
@@ -328,15 +270,33 @@ struct DataSourcesSettingsView: View {
             }
         }
         .frame(width: 16, height: 16)
-        .help(Self.statusDescription(status))
+        .help(words)
+        .modifier(StatusWords(text: words))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("API key status")
-        .accessibilityValue(Self.statusDescription(status))
+        .accessibilityValue(words)
     }
     
-    static func statusDescription(_ status: VerificationStatus) -> String {
+    /// The status's words beside its symbol, read as one element.
+    private struct StatusWords: ViewModifier {
+        let text: String
+
+        func body(content: Content) -> some View {
+            HStack(spacing: 5) {
+                content
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+        }
+    }
+
+    /// With no key entered or stored there is nothing to verify, so the row
+    /// says "Not set" rather than "Not verified".
+    static func statusDescription(_ status: VerificationStatus, hasKey: Bool = true) -> String {
         switch status {
-        case .none: return "Not verified"
+        case .none: return hasKey ? "Not verified" : "Not set"
         case .verifying: return "Verifying"
         case .success: return "Verified"
         case .failure: return "Verification failed"

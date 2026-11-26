@@ -17,7 +17,7 @@ struct PriceAlertManagementView: View {
         VStack(alignment: .leading, spacing: StockbarLayout.sectionSpacing) {
             StockbarPageHeader(
                 "Alerts",
-                subtitle: "Get a notification when a price crosses a threshold or moves by a percentage."
+                subtitle: "A notification when a price crosses a level or moves by a percentage."
             ) {
                 Button { showingAddAlert = true } label: {
                     Label("Add Alert", systemImage: "plus")
@@ -52,7 +52,7 @@ struct PriceAlertManagementView: View {
                 .accessibilityElement(children: .contain)
             }
 
-            if alertService.alerts.isEmpty {
+            if shownAlerts.isEmpty {
                 ContentUnavailableView {
                     Label("No alerts yet", systemImage: "bell.badge")
                 } description: {
@@ -68,17 +68,17 @@ struct PriceAlertManagementView: View {
                 .stockbarEmptyState(minHeight: 260)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(alertService.alerts.enumerated()), id: \.element.id) { index, alert in
+                    ForEach(Array(shownAlerts.enumerated()), id: \.element.id) { index, alert in
                         PriceAlertRow(alert: alert, dataModel: dataModel)
                             .transition(.opacity.combined(with: .move(edge: .top)))
-                        if index < alertService.alerts.count - 1 {
-                            Divider().padding(.leading, 52)
+                        if index < shownAlerts.count - 1 {
+                            Divider().padding(.leading, 54).padding(.trailing, 12)
                         }
                     }
                 }
                 .stockbarCard(padding: 6)
                 .animation(StockbarMotion.animation(StockbarMotion.standard, reduceMotion: reduceMotion),
-                           value: alertService.alerts.map(\.id))
+                           value: shownAlerts.map(\.id))
             }
 
             Label("Alerts are delivered as macOS notifications. Each alert triggers at most once every 15 minutes.",
@@ -98,6 +98,14 @@ struct PriceAlertManagementView: View {
                 isPresented: $showingAddAlert
             )
         }
+    }
+
+    /// The alerts to list. The acceptance fixture's alerts are listed only
+    /// for made-up symbols or ones the copy's portfolio holds.
+    private var shownAlerts: [PriceAlert] {
+        guard alertService.isShowingFixture else { return alertService.alerts }
+        let held = Set(dataModel.realTimeTrades.map(\.trade.name))
+        return alertService.alerts.filter { StockbarAcceptanceAlertsFixture.isShowable($0.symbol, held: held) }
     }
 
     private var alertableSymbols: [String] {
@@ -135,19 +143,25 @@ struct PriceAlertRow: View {
 
     private var conditionIcon: String {
         switch alert.condition {
-        case .above: "arrow.up.right.circle.fill"
-        case .below: "arrow.down.right.circle.fill"
+        case .above: "arrow.up.right"
+        case .below: "arrow.down.right"
         case .percentChange: "percent"
         }
     }
 
+    /// Each inline control's width, so the controls line up from row to row
+    /// even where one is missing.
+    private static let controlWidth: CGFloat = 26
+
     var body: some View {
         HStack(spacing: 12) {
+            // The condition in a tinted ring; grey while paused.
             Image(systemName: conditionIcon)
-                .accessibilityHidden(true)
-                .font(.title2)
+                .font(.system(size: 13, weight: .bold))
+                .frame(width: 30, height: 30)
+                .overlay(Circle().strokeBorder(lineWidth: 1.5))
                 .foregroundStyle(alert.isEnabled ? Color.accentColor : Color.secondary)
-                .frame(width: 30)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -160,11 +174,11 @@ struct PriceAlertRow: View {
                             .stockbarPill()
                     }
                 }
-                Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency))")
+                Text(PriceAlertRowText.sentence(for: alert, currency: currency))
                     .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            Spacer(minLength: 12)
 
             VStack(alignment: .trailing, spacing: 2) {
                 if let currentPriceText {
@@ -173,18 +187,19 @@ struct PriceAlertRow: View {
                         .foregroundStyle(.secondary)
                 }
                 if let lastTriggered = alert.lastTriggered {
-                    Text("\(PriceAlertService.shared.notificationsDenied ? "Condition met" : "Triggered") \(lastTriggered.formatted(.relative(presentation: .named)))")
-                        .font(.caption)
+                    Text(PriceAlertRowText.triggered(lastTriggered, notificationsDenied: alertService.notificationsDenied))
+                        .font(.callout)
                         .foregroundStyle(.tertiary)
                 }
             }
 
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 Button {
                     alertService.toggleAlert(id: alert.id)
                 } label: {
-                    Image(systemName: alert.isEnabled ? "pause.circle" : "play.circle")
-                        .font(.title3)
+                    Image(systemName: alert.isEnabled ? "pause.fill" : "play.fill")
+                        .frame(width: Self.controlWidth, height: Self.controlWidth)
+                        .contentShape(Rectangle())
                 }
                 .help(alert.isEnabled ? "Pause alert" : "Resume alert")
                 .accessibilityLabel(alert.isEnabled ? "Pause alert for \(alert.symbol ?? "portfolio")" : "Resume alert for \(alert.symbol ?? "portfolio")")
@@ -193,18 +208,23 @@ struct PriceAlertRow: View {
                     Button {
                         isEditing = true
                     } label: {
-                        Image(systemName: "pencil.circle")
-                            .font(.title3)
+                        Image(systemName: "pencil")
+                            .frame(width: Self.controlWidth, height: Self.controlWidth)
+                            .contentShape(Rectangle())
                     }
                     .help("Edit alert")
                     .accessibilityLabel("Edit alert for \(alert.symbol ?? "portfolio")")
+                } else {
+                    Color.clear.frame(width: Self.controlWidth, height: Self.controlWidth)
+                        .accessibilityHidden(true)
                 }
 
                 Button(role: .destructive) {
                     confirmingDelete = true
                 } label: {
                     Image(systemName: "trash")
-                        .font(.title3)
+                        .frame(width: Self.controlWidth, height: Self.controlWidth)
+                        .contentShape(Rectangle())
                 }
                 .help("Delete alert")
                 .accessibilityLabel("Delete alert for \(alert.symbol ?? "portfolio")")
@@ -235,8 +255,28 @@ struct PriceAlertRow: View {
             Button("Delete", role: .destructive) { alertService.removeAlert(id: alert.id) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\(alert.condition.description) \(alert.formattedThreshold(currency: currency)). This cannot be undone.")
+            Text("\(PriceAlertRowText.sentence(for: alert, currency: currency)). This cannot be undone.")
         }
+    }
+}
+
+/// The words an alert row builds.
+enum PriceAlertRowText {
+    /// "Price rises above $150.00".
+    static func sentence(for alert: PriceAlert, currency: String) -> String {
+        "\(alert.condition.description) \(alert.formattedThreshold(currency: currency))"
+    }
+
+    /// "Triggered 3 days ago", or "Condition met …" when macOS will not show
+    /// Stockbar's notifications, so nothing was delivered.
+    static func triggered(_ date: Date, notificationsDenied: Bool, now: Date = Date(),
+                          locale: Locale = .current) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
+        formatter.locale = locale
+        let when = formatter.localizedString(for: date, relativeTo: now)
+        return "\(notificationsDenied ? "Condition met" : "Triggered") \(when)"
     }
 }
 

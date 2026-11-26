@@ -106,6 +106,58 @@ enum StockbarLayout {
     static let sectionSpacing: CGFloat = 18
 }
 
+/// Lays its children out in a row that wraps onto further lines when the
+/// width runs out, such as a card's buttons at the minimum window size.
+struct StockbarWrappingRow: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    private struct Line {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func lines(maxWidth: CGFloat, subviews: Subviews) -> [Line] {
+        var lines: [Line] = []
+        var current = Line()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = current.indices.isEmpty ? size.width : current.width + spacing + size.width
+            if needed > maxWidth, !current.indices.isEmpty {
+                lines.append(current)
+                current = Line(indices: [index], width: size.width, height: size.height)
+            } else {
+                current.indices.append(index)
+                current.width = needed
+                current.height = max(current.height, size.height)
+            }
+        }
+        if !current.indices.isEmpty { lines.append(current) }
+        return lines
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = lines(maxWidth: proposal.width ?? .infinity, subviews: subviews)
+        let height = lines.reduce(0) { $0 + $1.height } + lineSpacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: lines.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in lines(maxWidth: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                                      anchor: .topLeading, proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += line.height + lineSpacing
+        }
+    }
+}
+
 // MARK: - Surfaces
 
 /// Each kind of surface the app draws.
@@ -771,6 +823,200 @@ struct StockbarSectionTitle: View {
     }
 }
 
+// MARK: - Settings
+
+/// One Settings tab's page: it scrolls as a whole under the tab bar, and its
+/// cards run the full width of the page, inside the padding every page uses.
+struct StockbarSettingsPage<Content: View>: View {
+    /// Space between one section's card and the next.
+    static var sectionSpacing: CGFloat { 20 }
+    /// Close under the tab bar at the top; the page padding every page has
+    /// at the sides and the bottom.
+    static var contentInsets: EdgeInsets {
+        EdgeInsets(top: 12, leading: StockbarLayout.pagePadding,
+                   bottom: StockbarLayout.pageInsets.bottom, trailing: StockbarLayout.pagePadding)
+    }
+
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Self.sectionSpacing) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Self.contentInsets)
+        }
+    }
+}
+
+/// One section of a Settings tab, drawn as a Glass card: the section's title
+/// (a heading for VoiceOver), an optional line under it and an optional
+/// control at its right, the content, then an optional footer.
+///
+/// With `separatesRows`, each row of the content is divided from the next by
+/// a hairline, as macOS's grouped rows are; a row left out by a condition
+/// leaves no divider behind. Without it the content is laid out as given, for
+/// cards that arrange their own content, such as Connections'.
+struct StockbarSettingsSection<Content: View, Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    let footer: String?
+    let separatesRows: Bool
+    private let content: Content
+    private let accessory: Accessory
+
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        footer: String? = nil,
+        separatesRows: Bool = true,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.footer = footer
+        self.separatesRows = separatesRows
+        self.content = content()
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 12)
+                accessory
+            }
+
+            if separatesRows {
+                Group(subviews: content) { rows in
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { row in
+                            if row.id != rows.first?.id {
+                                Divider()
+                            }
+                            row.padding(.vertical, 7)
+                        }
+                    }
+                }
+            } else {
+                content
+            }
+
+            if let footer {
+                Text(footer)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .stockbarCard()
+    }
+}
+
+extension StockbarSettingsSection where Accessory == EmptyView {
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        footer: String? = nil,
+        separatesRows: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(title, subtitle: subtitle, footer: footer, separatesRows: separatesRows,
+                  content: content, accessory: { EmptyView() })
+    }
+}
+
+/// One row of a Settings section: its title, with any explanation under it
+/// in secondary text, on the left; its control on the right.
+///
+/// The control keeps its natural width at the row's right edge; a text field
+/// takes `stretchesControl` and fills the rest of the row instead. The
+/// control's own label is hidden from sight but kept, so a `Toggle` or
+/// `Picker` given the row's title stays named for VoiceOver, as it is in a
+/// grouped form. Nothing here adds an accessibility label of its own.
+struct StockbarSettingsRow<Detail: View, Control: View>: View {
+    let title: String
+    let stretchesControl: Bool
+    private let detail: Detail
+    private let control: Control
+
+    init(
+        _ title: String,
+        stretchesControl: Bool = false,
+        @ViewBuilder control: () -> Control,
+        @ViewBuilder detail: () -> Detail
+    ) {
+        self.title = title
+        self.stretchesControl = stretchesControl
+        self.control = control()
+        self.detail = detail()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                detail
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: stretchesControl ? nil : .infinity, alignment: .leading)
+            .layoutPriority(stretchesControl ? 1 : 0)
+
+            if stretchesControl {
+                control
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                control
+                    .labelsHidden()
+                    .fixedSize()
+            }
+        }
+    }
+}
+
+extension StockbarSettingsRow where Detail == Text? {
+    init(
+        _ title: String,
+        detail: String? = nil,
+        stretchesControl: Bool = false,
+        @ViewBuilder control: () -> Control
+    ) {
+        self.init(title, stretchesControl: stretchesControl, control: control) {
+            detail.map { Text($0) }
+        }
+    }
+}
+
+/// The switch Settings' toggles take outside a grouped form, at the size a
+/// grouped form draws them. Apply it to a page, not to Connections, whose
+/// cards use checkboxes.
+struct StockbarSettingsSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+    }
+}
+
 private struct StockbarInMetricStripKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -952,6 +1198,12 @@ extension StockbarPalette {
         light: NSColor(srgbRed: 0.80, green: 0.55, blue: 0.05, alpha: 1),
         dark: NSColor(srgbRed: 0.99, green: 0.78, blue: 0.20, alpha: 1)
     )
+
+    /// Calendar's markers: dividends (ex-dividend and payment) in the Income
+    /// page's gold, earnings in lavender, as in the mock-ups. Neither is red
+    /// or green, which mean loss and gain.
+    static let calendarDividend = incomeFill
+    static let calendarEarnings = allocationLavender
 
     /// The Income chart: received income takes `incomeFill`; income still to
     /// come takes this darker gold, solid when declared and hatched when estimated.
@@ -1414,5 +1666,66 @@ private struct StockbarRollingDigitsSetting: ViewModifier {
 
     func body(content: Content) -> some View {
         content.environment(\.stockbarRollingDigits, rolls)
+    }
+}
+
+// MARK: - Calendar marker
+
+/// Calendar's marker for one event: an open circle for an ex-dividend date, a
+/// filled circle for a payment, a diamond for earnings. An estimated date is
+/// drawn with a dashed outline (a payment or earnings marker becomes a dashed
+/// outline around a smaller mark), so it differs by shape, not by colour alone.
+struct StockbarCalendarMarker: View {
+    let kind: CalendarEventKind
+    let isEstimated: Bool
+    var size: CGFloat = 10
+
+    var body: some View {
+        let tint = kind == .earnings ? StockbarPalette.calendarEarnings : StockbarPalette.calendarDividend
+        let dashed = StrokeStyle(lineWidth: max(1.4, size / 7), dash: [size / 5, size / 7])
+        let solid = StrokeStyle(lineWidth: max(1.6, size / 5.5))
+        Group {
+            switch (kind, isEstimated) {
+            case (.exDividend, false):
+                Circle().strokeBorder(tint, style: solid)
+            case (.exDividend, true):
+                Circle().strokeBorder(tint, style: dashed)
+            case (.payment, false):
+                Circle().fill(tint)
+            case (.payment, true):
+                ZStack {
+                    Circle().strokeBorder(tint, style: dashed)
+                    Circle().fill(tint).padding(size * 0.3)
+                }
+            case (.earnings, false):
+                Rectangle().fill(tint).rotationEffect(.degrees(45)).padding(size * 0.15)
+            case (.earnings, true):
+                ZStack {
+                    Rectangle().stroke(tint, style: dashed).rotationEffect(.degrees(45)).padding(size * 0.15)
+                    Rectangle().fill(tint).rotationEffect(.degrees(45)).padding(size * 0.36)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Calendar's pill: "Declared", "Estimated" (with a dashed edge, as in the
+/// mock-ups) or "Upcoming".
+struct StockbarCalendarPill: View {
+    let pill: CalendarPill
+
+    var body: some View {
+        Text(pill.title)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .stockbarPill()
+            .overlay {
+                if pill == .estimated {
+                    Capsule().strokeBorder(.secondary.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                }
+            }
+            .fixedSize()
     }
 }

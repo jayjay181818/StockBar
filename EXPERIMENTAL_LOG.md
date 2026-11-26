@@ -10,13 +10,16 @@ To resume this work, read this file and the open pull requests into
 
 ## Where things stand
 
-`experimental` has been promoted to `testing` twice, each time at the
-owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
+`experimental` has been promoted to `testing` three times, each time at
+the owner's word. On 2026-11-13 pull requests 84 to 98 went to `testing` as
 merge commit `2256b6c`, published as testing build 370.16: see
 [Promotion to `testing`](#promotion-to-testing-2026-11-13). On 2026-11-17
 pull requests 101 to 112 followed as merge commit `78c886b`, published as
 testing build 370.29: see
 [Second promotion to `testing`](#second-promotion-to-testing-2026-11-17).
+On 2026-11-26 the redesign, pull requests 133 to 160, followed as merge
+commit `9cb4276`, published as testing build 382.31: see
+[Third promotion to `testing`](#third-promotion-to-testing-2026-11-26).
 `main` has none of it, and no stable release has been made from it. The
 owner considers the overhaul finished: from here `experimental` is kept for
 major overhauls only.
@@ -436,6 +439,31 @@ changed measurably. The tables are in pull request 158's entry.
 Pull request 158 gave a local or Trading 212 portfolio an Income page, as
 an estimate labelled as one: Yahoo's record of each holding's payments
 over the last year, at today's units, and the same a year on.
+It was merged as `0c77a54` (build 382.3.26).
+
+On 2026-11-26 the owner asked for the redesign to go to `testing`. Pull requests 133 to 160 were promoted as
+merge commit `9cb4276` and published as testing build 382.31; CI's first
+run on the promotion found one test holding the system's wording, fixed by
+pull request 160. Pull request 161 brought `testing` back, merged as `8fb23f8`.
+
+Pull request 162 gives the six Settings tabs one left edge and one width,
+arranges Connections as in the mock-up, checks Alerts with made-up alerts
+(an acceptance-only fixture that never stores, checks or notifies) and
+tidies the Diagnostics log. It was merged as `9a2c046` (build 382.31.3).
+Pull request 163 gives the Sortino ratio a reading again, at the owner's
+request (merged as `be6ff84`, build 382.31.4). Pull request 164 adds the
+Calendar and "Next up". What remains of the redesign before a stable
+release: Reminders and the release documents. Pull request 164 was merged
+as `06689ee` (build 382.31.5); pull request 165 lets Activity's kind
+switches combine, with Interest on its own (merged as `6539947`). Pull
+request 166 rebuilds every Settings tab as Glass cards at the page's full
+width (merged as `c443f38`, build 382.31.7). Pull request 167 adds past
+earnings to the Calendar's Past view, checked once against Yahoo's live
+data with the owner's leave (merged as `86d5a53`, build 382.31.8). Pull
+request 168 shows every share's past EPS figures, with a per-holding
+currency in Settings, at the owner's request (merged as `409c906`, build
+382.31.9). The owner parked Reminders: it is not in 3.9.0. Pull request
+169 brings the public documents up to date for 3.9.0.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -1072,6 +1100,39 @@ merged with a merge commit.
 - Not exercised by hand: reopening the portfolio popover after each way it
   can close. The owner's use of the experimental builds on a second Mac is
   the only use on real data.
+
+## Third promotion to `testing`, 2026-11-26
+
+The owner asked for it on 2026-11-26 ("Lets do this"), answering the
+lead's suggestion to look at build 382.3.26 and then promote. `experimental` at `21a1ed2`, which is pull requests 133
+to 160 (the Glass redesign and the new Folync pages, with 160 added during
+the promotion), went into `testing` through
+[pull request 159](https://github.com/jayjay181818/StockBar/pull/159),
+merged with a merge commit.
+
+- Branches. `testing` was `0326182` and is `9cb4276`, a merge commit whose
+  parents are `0326182` and `21a1ed2` and whose files are those of
+  `21a1ed2`. The head was a temporary branch,
+  `feature/promote-experimental-to-testing-3`, which was deleted at the
+  merge. `main` is untouched. No version tag was made and nothing was
+  released on the Stable channel. No repository setting was changed.
+- CI. The pull request was opened at `0c77a54`. CI's first run, the first
+  on this work since pull request 133, failed one test on Xcode 27: the
+  sidebar footer's test expected "Updated 3 min…" where that macOS says
+  "Updated 3m ago". Pull request 160 fixed the test, the promotion branch
+  was moved forward to `21a1ed2`, and both CI jobs then passed.
+- Tests locally: pull request 158's 1075 XCTest tests with 0 failures and
+  its `checks`, `docs-check` and `build-release`, then 160's test class
+  re-run on `21a1ed2` (15 tests, 0 failures).
+- The testing build. The merge published build 382.31 as the prerelease
+  `testing-382.31` ("StockBar 3.8.2 testing build 382.31"), with one
+  archive, `Stockbar-382.31.zip`, of 8,394,423 bytes.
+- Experimental builds. Until `testing` is brought back, experimental
+  builds would be numbered below 382.31. Pull request 161 starts from
+  `9cb4276` and is merged with a merge commit, so `experimental` then holds
+  the promotion's merge commit.
+- Not exercised by the lead: the owner's own data. That look is the
+  owner's, on the experimental or testing build.
 
 ## Pull requests
 
@@ -6391,8 +6452,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   same thing, and the app passes on whatever the system gives, so the
   fault is in the test. It now checks that the text starts "Updated 3" and
   ends "ago". Nothing in the app changes.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `21a1ed2` (build 382.3.27).
 - Benchmark: none needed. Only a test changes.
 - Testing, on macOS 27.2.1 and Xcode 27.2: the test's class,
   `StockbarMainWindowShellTests`, 15 tests with 0 failures. `docs-check`
@@ -6403,6 +6463,373 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   a test.
 - Known issues: other tests may hold system wording in the same way. CI
   found only this one.
+- Verdict: retained.
+
+### 161: Bring `testing` back into `experimental` and record the third promotion
+
+- What: the [third promotion](#third-promotion-to-testing-2026-11-26)
+  recorded, with "Where things stand", the merge line of pull request 160
+  and a row in "Who did what" brought up to date. The branch starts from
+  `testing` at `9cb4276`, the promotion's merge commit, so merging it
+  brings that commit into `experimental`. Only this file changes.
+- Merged: 2026-11-26 with a merge commit, `8fb23f8`, the exception to the
+  squash rule described under [How this branch works](#how-this-branch-works).
+  `9cb4276` is now in `experimental`.
+- Benchmark: no before/after run. `9cb4276` has the files of `21a1ed2`,
+  and this pull request changes only this file, so the app is the same.
+- Testing: `docs-check` passes on this branch. The tests of the promoted
+  commit are under the third promotion.
+- Review: read by its author, with each figure checked against the
+  published build and the pull requests it names.
+- Known issues: it should have followed the promotion straight away, as
+  the branch's rules say; it came a day later. No experimental build was
+  published in between.
+- Verdict: retained.
+
+### 162: Settings and Alerts as mocked; Backups and Diagnostics checked
+
+- What: the last of the plan's "redesigned as mocked" and "restyled only"
+  screens, as one tidy. Every control and behaviour stays; nothing without
+  a feature behind it is added (no Reminders card, no Calendar or Returns
+  rows, no Portfolio picker).
+  - Settings: every tab's content starts at the page header's left edge
+    and stops at one width, 700 points
+    (`StockbarLayout.settingsContentWidth`); section titles match. The five
+    grouped-form tabs keep macOS's own grouped rows, widened past the
+    form's built-in margin so their groups line up. Their fill still
+    differs from Connections' Glass cards: macOS ignores a row background
+    on grouped forms.
+  - Connections: "API Keys" is now "Market-data keys", with each row's
+    status in words ("Not set", "Not verified", "Verified", "Verification
+    failed") beside the field. Folync's status is a pill, its fields a
+    grid and its buttons a row that wraps (`StockbarWrappingRow`); its
+    schedule is one line, "Last checked 9:41, next 9:42". The "What
+    Stockbar reads from Folync" rows are tidied and stay in one column, as
+    record 145 chose. Trading 212's note is a pill. "Fetch Priority" is now
+    "Fetch order". "Use Local Portfolio…" is unchanged.
+  - Alerts: the condition icon sits in a tinted ring, grey when paused;
+    the controls line up across rows; "Triggered … ago" is easier to read;
+    the subtitle matches the mock-up. The page had never been seen with
+    alerts in it.
+  - `STOCKBAR_ACCEPTANCE_ALERTS`, an acceptance-only fixture of made-up
+    alerts behind the same gate as the events fixture. While it is in use
+    the alert service stores nothing, checks no price and makes no
+    notification-centre call, so macOS is never asked for permission.
+  - Diagnostics: ordinary log lines were drawn in the accent blue; they are
+    now the primary text colour, and debug lines secondary. The log card
+    has the standard padding. Backups had no fault.
+- Merged: 2026-11-26 as `9a2c046` (build 382.31.3).
+- Benchmark: owed, under the rule for the redesign. No surface, shadow or
+  gradient is added, and Settings, Alerts and Diagnostics are not drawn at
+  launch, so the single-launch drawing-memory check was not run.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1086 XCTest tests with 0
+  failures; `checks`, `docs-check` and `build-release` pass; the Python
+  helper tests and the 95 Scripts tests pass. New tests cover the fixture's
+  gate and refusals, that fixture alerts are never stored, checked or
+  notified, the schedule line, each alert row's text and the log line
+  colours; eight temporary breakages were each caught and removed.
+  Captures, before and after, in dark and light, at the default and the
+  minimum size, are in `build/design/shots/D5/`, with one of Connections
+  at full width for the owner to compare.
+- Review: by the session lead against the captures and the diff. It added
+  "Not set" for a key that has none, which had read "Not verified".
+- Known issues: at 700 points Folync's last button wraps to a second line
+  at the default size; full-width cards, as on the other pages, would
+  avoid it and are the owner's choice. The worker could not click in its
+  copies (the screen was locked), so it compiled an uncommitted aid into
+  its captured builds to pick tabs and, for the local-portfolio captures,
+  switched Folync off itself rather than through the copy's sheet. A few
+  "before" captures at the minimum size are missing. A stored key's
+  "Verification failed" row was not seen. The acceptance-only Keychain
+  items left by this and earlier workers' copies, 261 in all, were removed
+  on 2026-11-26 with the owner's leave; the app's own item was not touched.
+- Verdict: retained.
+
+### 163: Risk: a reading for the Sortino ratio
+
+- What: the Sortino ratio's tile on the Risk page gets a reading, as the
+  Sharpe ratio's has, for example "Good, counting only the falls". Before
+  the redesign the page coloured both ratios in the same bands; the
+  redesign kept Sharpe's reading and dropped Sortino's colour, and the
+  owner asked for the word back. The reading uses the Sharpe ratio's
+  thresholds, unchanged (`RiskAnalyticsText.sortinoReading`). With no
+  falling days the tile still says "No falling days". Also the merge line
+  of pull request 162.
+- Merged: 2026-11-26 as `be6ff84` (build 382.31.4).
+- Benchmark: none needed. One line of text on a page that is not drawn at
+  launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1086 XCTest tests with 0
+  failures; `checks` and `docs-check` pass. The Risk page's tests now
+  expect the reading under Sortino for the three series kept from before
+  the redesign, and check the thresholds, the missing ratio and an
+  infinite one. No Python or release-build change, so those checks were
+  not rerun.
+- Review: by its author.
+- Known issues: none known.
+- Verdict: retained.
+
+### 164: Calendar, and "Next up" in the popover and on the Overview
+
+- What: the plan's C2. A Calendar page after Income in the sidebar, with the
+  "New" badge, and "Next up" (up to three events in the next fourteen days)
+  in the popover and as cards on the Overview. ⌘-numbers follow the sidebar,
+  as before, so those after Income move down one.
+  - Dividends: for a Folync portfolio, Folync's dividends route with the
+    Income page's own query, so one request serves both pages; pills from
+    Folync's `dateCertainty` ("Declared", "Estimated", otherwise
+    "Upcoming"). For a local or Trading 212 portfolio, the Income page's
+    estimate from Yahoo's record: funds and trusts get last year's dates a
+    year on, marked "Estimated" (the owner's choice of 2026-11-26).
+  - Earnings: Yahoo's dates through the events service, marked as Yahoo's;
+    a range is "Estimated". For a Folync portfolio this sends the holdings'
+    ticker symbols, not amounts, to Yahoo for the first time, as the plan's
+    interim rule allows until Folync has an events route.
+  - Upcoming and Past views, a month grid (each day with events a button
+    with one VoiceOver sentence) and a list grouped This week, Next week and
+    by month. Past lists dividends only (the lead's recommendation; the
+    owner's answer is awaited).
+  - "Next up" reads only what is saved: the dividends page the fetch policy
+    keeps or Folync's copy on disk, and the events service's saved copies.
+    Opening the popover or the Overview asks nothing; with nothing saved it
+    is absent.
+  - `STOCKBAR_ACCEPTANCE_CALENDAR=upcoming|past`, acceptance-only, gated like
+    the others. The events fixture gains an earnings range.
+- Merged: 2026-11-26 as `06689ee` (build 382.31.5).
+- Benchmark: owed, under the rule for the redesign. The popover and the
+  Overview gain a small list; the comparison for pull requests 158 to 162 is
+  waiting for a quiet Mac and will be followed by one for this.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1107 XCTest tests with 0
+  failures; `checks`, `docs-check` and `build-release` pass; the worker's
+  run also passed the Python helper tests and the 95 Scripts tests. 21 new
+  tests (rows, pills, grouping, the grid, "Next up", requests shared with
+  Income, the sidebar, time zones either side of UTC); eight temporary
+  breakages were each caught and removed. Captures are in
+  `build/design/shots/C2/`.
+- Review: GLM 5.4 (max) found no serious defect. The lead fixed, with tests
+  where they apply: "Next up" re-read its saved copies on every quote
+  update (now only when the holdings, currency or day change); a holding
+  added while the page is open now gets its earnings asked for; the "no
+  earnings dates" footer waits for Yahoo's answer; a past day in Upcoming's
+  grid opens Past at its rows; the scroll honours Reduce Motion.
+- Known issues: a local portfolio with holdings was never seen on screen,
+  so no earnings row, range or estimated row was seen there (the copy's
+  editor would not take background typing); keyboard reach and VoiceOver
+  were not tried; "today" moves on only when the page's data is reloaded,
+  as on Income; "Next up" reads only the first page of a saved dividends
+  answer. One of the worker's accessibility queries returned the system
+  Apple menu, with one Recent Items entry; it was neither saved nor repeated.
+- Verdict: retained.
+
+### 165: Activity: kind switches that combine
+
+- What: the owner asked, after using the Activity page on a real
+  portfolio, to hide the daily interest rows, or show only them, or show
+  trades and dividends together. The single **All**/**Trades**/
+  **Dividends**/**Cash** switch becomes **All** plus four switches that
+  combine: **Trades**, **Dividends**, **Interest** (new, taken out of Cash)
+  and **Cash** (deposits, withdrawals, transfers, fees, tax and notes).
+  Under All every switch is lit; a click hides or shows one kind;
+  Option-click, or **Show Only** in a switch's menu, shows one kind alone;
+  hiding the last kind gives All again, never an empty page. The choice is
+  remembered (`activity.kinds` in defaults). The route already takes a set
+  of actions, so any combination is still one request, and a full set is
+  sent as All, with no action filter. Also: the user guide now lists the
+  "Not set" key state added in pull request 162, and record 164's merge
+  line.
+- Merged: 2026-11-26 as `6539947`.
+- Benchmark: none needed. A control on a page that is not drawn at launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1109 XCTest tests with 0
+  failures; `checks` and `docs-check` pass. New tests cover how the
+  switches combine, the queries they send, the saved choice and the empty
+  message for each kind; two temporary breakages (a full set not treated as
+  All, and the choice not saved) were each caught and removed. Seen in the
+  acceptance copy in dark at the default size under All; a click could not
+  be sent to the copy (the screen was locked), so the other states were not
+  seen on screen.
+- Review: by its author.
+- Known issues: none known.
+- Verdict: retained.
+
+### 166: Settings: every tab as Glass cards, at the page's full width
+
+- What: the owner chose for Settings to run the full width of the page,
+  like every other page. The five tabs that were macOS grouped forms
+  (General, Menu Bar, Appearance, Refresh, Advanced) could not: macOS caps
+  a grouped form's groups at about 702 points and ignores row backgrounds.
+  They are rebuilt as Glass cards, as Connections already was, from one
+  shared set of views in `StockbarDesign.swift`: `StockbarSettingsPage`,
+  `StockbarSettingsSection` (a card with a heading, optional footer and
+  hairlines between rows), `StockbarSettingsRow` (title and explanation on
+  the left, the control at its natural width on the right) and
+  `StockbarSettingsSwitchStyle`. Connections uses the same section view.
+  The 700-point cap from pull request 162 is gone; Folync's buttons now fit
+  on one row even at the minimum size. Every control, binding, label,
+  order and hook is unchanged; the worker diffed the lists from the old and
+  new source. Pickers draw as bordered pop-ups, macOS's standard outside a
+  form. VoiceOver now reads each picker and switch by its own name, which
+  the grouped form did not, and card titles are headings.
+- Merged: 2026-11-26 as `c443f38` (build 382.31.7).
+- Benchmark: owed, under the rule for the redesign (more cards on a page
+  that is not drawn at launch).
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the branch rebased onto
+  pull request 165: 1115 XCTest tests with 0 failures; `checks`,
+  `docs-check` and `build-release` pass. The worker's run on its own base
+  also passed the Python tests and the 95 Scripts tests; six new layout tests (no width cap, cards filling
+  their width, controls at natural width on the right, the text field
+  stretching, explanations under their titles, tab names and order) and
+  seven temporary breakages, each caught and removed. 60 captures, before
+  and after, every tab in dark and light at the default and minimum size,
+  are in `build/design/shots/D6/`.
+- Review: by the session lead against the captures and the worker's
+  before/after list of controls.
+- Known issues: some states were not seen in the new layout: the update
+  rows (updates are off in the acceptance copy), a real last-backup date,
+  the Python helper's set-up states, an exchange-rate failure, the
+  external-display warning, the refresh status line and Edit Order. The
+  worker could not scroll by wheel and pressed the copy's scroll-bar page
+  buttons instead, and set two menu-bar pickers and typed in the template
+  field inside its copy; one of its accessibility reads was not filtered
+  and included the copy's own menu names.
+- Verdict: retained.
+
+### 167: Calendar: past earnings in the Past view
+
+- What: the owner chose for the Calendar's Past view to show past earnings
+  as well as dividends. `get_instrument_events.py` gains an
+  `--earnings-history` mode: each symbol's earnings dates of the last
+  twelve months from Yahoo's earnings page (yfinance
+  `Ticker.get_earnings_dates`), with the reported and estimated EPS and the
+  surprise exactly as given. The events service gains a second kind of
+  call, `earningsHistory(for:forceRefresh:)`, made only while Past is
+  chosen, with its own day-long copies and the shared refusals and hour's
+  pause. Past rows read "Earnings, EPS 1.52 against 1.48 expected",
+  "Earnings, EPS 1.52" or "Earnings", with ", surprise 2.70%" when Yahoo
+  gives one; the Earnings filter is back under Past. A new acceptance
+  option, `STOCKBAR_ACCEPTANCE_HOLDINGS`, starts a fresh copy on a local
+  portfolio with made-up holdings, so the local Calendar could be seen.
+  Also: record 166's merge line.
+- The live check: with the owner's leave, the helper was run once from a
+  throwaway environment installed from the lock file, for two US shares,
+  two London shares, a London ETF and an ADR, then once more for one share
+  to see a forced refresh fetch again: 16 requests, no rate limit, yfinance's
+  caches in a scratch folder. It found:
+  - the surprise is a percentage, as shown;
+  - Yahoo stamps every earnings time in New York time, so a London report
+    stamped the evening before came out a day early (HSBC's May report).
+    Each date is now taken in the exchange's own zone, from the chart's
+    `exchangeTimezoneName`; replayed offline, only that date moved;
+  - a London share's EPS figures are in the company's reporting currency
+    (HSBC's in dollars), not pence, and the page does not name it. They
+    stay left out for pence-quoted shares, with the dates and the surprise
+    kept;
+  - twelve rows reach back about three years for a quarterly reporter,
+    more than the twelve months needed; one London share's page had no
+    report since 2017, so it shows none; the ETF has no earnings page
+    ("no data");
+  - a forced refresh asked the page again rather than answering from
+    yfinance's cache.
+- Merged: 2026-11-26 as `86d5a53` (build 382.31.8).
+- Benchmark: owed, under the rule for the redesign, with 158 to 166; none of
+  it runs at launch or on a quote refresh.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1134 XCTest tests with 0
+  failures; `python-tests` ran 129 tests (54 for this helper, with the
+  pandas tests run in the throwaway environment too) and the Scripts tests
+  95; `checks`, `docs-check` and `build-release` pass. Nine temporary
+  breakages in the worker's run and five in the lead's date fix were each
+  caught and removed. Captures of the local Past view in dark and light at
+  the default and minimum size, the Earnings filter and Upcoming are in
+  `build/design/shots/C2b/`.
+- Review: GLM 5.4 (max) found nothing serious; the lead fixed four small
+  points (saved history now fresh only on the day it was fetched, so a new
+  report shows the next morning; agorot and South African cents treated as
+  pence; a missing cache clear logged; the holdings seed refusing amounts
+  too small to store). A chart that does not answer fails the symbol rather
+  than saving a copy without figures for a day; the spec had said to keep
+  the dates, and the worker's way was kept so it can retry.
+- Known issues: the loading, paused and failure states were seen in tests
+  only; the footer was read through the accessibility tree, not captured.
+  Yahoo's times are approximate: one ADR report stamped the evening before
+  in New York keeps that date.
+- Verdict: retained.
+
+### 168: Calendar: past EPS figures for every share, with a currency per holding
+
+- What: pull request 167 left out the EPS figures of pence-priced shares.
+  The owner asked to show them, with an advanced setting to correct a
+  holding's figures. A second supervised live check, with the owner's
+  leave, and the companies' own results settled it: Yahoo gives
+  the figures in the company's reporting currency, in its major unit,
+  never in pence, and the share's price currency is the wrong label for
+  some (a London-listed airline's are in euros; a US-listed Chinese
+  company's in yuan per ADS, though it is priced in dollars). So:
+  - the helper keeps the figures for every quote currency and no longer
+    sends `epsCurrency`, a guess nothing should label figures from (old
+    saved copies and fixtures that carry it still read);
+  - Settings → Advanced gains an **Earnings Figures** card: one row per
+    symbol Calendar asks earnings for, each with **As Given** (the default,
+    no currency), a currency (the app's six first, then the other common
+    ISO codes) or **Hide Figures**;
+  - Calendar writes the figures in the chosen currency ("EPS -€0.27 against
+    -€0.28 expected"), VoiceOver speaks its name, and a hidden holding
+    keeps its date and surprise. The choice is display only: it changes no
+    request and no saved copy, and shows in an open Calendar at once.
+  The choices are kept under `calendar.earningsFigures.v1`, only for
+  holdings set away from As Given, and travel in a settings export,
+  validated on import. Two acceptance options, gated and tested like the
+  others, open Settings on a tab and preset choices for `FAKE` symbols.
+  Also: record 167's merge line.
+- Merged: 2026-11-26 as `409c906` (build 382.31.9).
+- Benchmark: owed, with 158 to 167; a card on a Settings tab and text on a
+  page not drawn at launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1142 XCTest tests with 0
+  failures; `python-tests` (128) and the Scripts tests (95) pass; `checks`,
+  `docs-check` and `build-release` pass. Seven temporary breakages were
+  each caught and removed. Captures of the Past view with one holding as
+  given, one in euros and one hidden, in dark and light at the default and
+  minimum size, and one after choosing a currency in the card, are in
+  `build/design/shots/C2c/`.
+- Review: by the session lead, against the diff and the captures.
+- Known issues: the card was read through the accessibility tree, not
+  captured (it sits below the fold and the copy could not be scrolled),
+  and its pop-up of about 160 currencies was never seen open; a choice was
+  made in the copy before Calendar was opened, not while it was open. Past
+  earnings saved by pull request 167's build without the figures of
+  pence-priced shares stay so until the next day or a refresh. Long
+  symbols are cut short in the list's symbol column, as before.
+- Verdict: retained.
+
+### 169: Release documents for 3.9.0
+
+- What: the public documents describe the app as it now is, ahead of the
+  promotion. New `Changelogs/release_notes_v3.9.0.md`, from the lead's
+  draft, checked against the code, with Reminders (parked by the owner)
+  taken out; its date is left for the release. `README.md`: highlights,
+  features, setup and the data-sources and privacy sections updated for the
+  new pages, Next up, the see-through window and the Earnings Figures card;
+  Folync described as read-only, with no links. A new main screenshot,
+  `Docs/images/overview.jpg`: the dark Glass Overview of the Folync
+  stand-in's made-up demo portfolio. `Docs/FAQ.md`: a new "Income and
+  Calendar" section (where the dates and amounts come from, why past EPS
+  figures have no currency, what goes to Yahoo for a Folync portfolio, why
+  Folync is read-only, why Activity and Trades are dimmed). `Docs/UserGuide.md`:
+  two corrections. Where the documents disagreed with the code, the code
+  won: Allocation shows the holdings it can value with "Based on N of M
+  holdings" rather than nothing; Income and Calendar are also dimmed while
+  Folync is on but its portfolio is not showing yet; two renamed Folync
+  settings labels. Also: record 168's merge line.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. Documents only.
+- Testing: `checks` and `docs-check` pass; every relative link and image
+  in the README and documents resolves. No code changed.
+- Review: by the session lead, against the screenshot and the diff.
+- Known issues: the README's release history and footer still name 3.8.2,
+  because `checks` ties the footer to the project version; they change with
+  the version at release. The memory figure in the notes is from the
+  comparison at pull request 157; 158 to 168 are still to be measured. A
+  proposed change to `Stockbar/Views/AGENTS.md` (the sidebar's one list of
+  pages, and surfaces only from `StockbarDesign.swift`) awaits the owner.
+  The wiki is updated by hand at release.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6689,6 +7116,15 @@ launch.
 | Pull request 156, Trading 212 cash-only accounts | Claude Opus 5.5 (session lead); GLM 5.4 (max) and Gemini 4 Neon as independent reviewers; two Opus 5.5 workers in turn | Worth it again. Asked for one small sync fix, the reviews found five faults around switching accounts that predate it and affected linked accounts too. Asking all three advisors what to do next also helped: they agreed on the order, and GLM's point about holdings beside the account shaped the fix. |
 | Pull request 157, the card highlight's memory | Claude Opus 5.5 (session lead); one Opus 5.5 worker for the trace and the fix | Worth it: one launch per variant, which needs no quiet Mac, found a single cause in about two hours, where timed comparisons had twice been crowded out by another project's builds. Neon's suspect, the shadow, was cleared by the first variants. |
 | Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
+| The third promotion to `testing` and pull requests 160 and 161 | Claude Opus 5.5 (session lead) | Done directly: a one-line test fix that CI found, the promotion, the checks on the published build and this record. The bring-back into `experimental` came a day late |
+| Pull request 162, Settings and Alerts as mocked | Claude Opus 5.5 (session lead) for the specification, review, one fix and the record; one Opus 5.5 worker | Worth it. The worker could not click (the screen was locked) and built an uncommitted aid to reach each tab, which it disclosed; up to ten of its copies ran at once, and each launch left an acceptance-only Keychain item |
+| Pull request 163, the Sortino reading | Claude Opus 5.5 (session lead) | Done directly: a few lines of text and their tests |
+| Pull request 164, Calendar and "Next up" | Claude Opus 5.5 (session lead) for the specification, review, four fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker could not type in its copy (the screen was locked), so the local portfolio's Calendar with holdings was never seen; one accessibility query returned the system menu |
+| Pull request 165, Activity's kind switches | Claude Opus 5.5 (session lead) | Done directly, at the owner's request after using the page |
+| Pull request 166, Settings as cards | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: forty minutes, with a before/after list of every control. It pressed scroll-bar buttons and set two pickers in its own copy, which it disclosed |
+| Pull request 167, past earnings | Claude Opus 5.5 (session lead) for the specification, review, the live check, two rounds of fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker built it in an hour without calling Yahoo and wrote out the live check; the one supervised run then found the London date fault that no fake could have shown |
+| Pull request 168, past EPS figures for every share | Claude Opus 5.5 (session lead) for the live check, the specification, review and the record; one Opus 5.5 worker | Worth it: forty-five minutes. The live check against the companies' own results showed the price currency mislabels a dollar-priced share too, which settled the design |
+| Pull request 169, release documents | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: a quarter of an hour, with four places where the documents had drifted from the code found and fixed |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
