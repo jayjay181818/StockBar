@@ -914,7 +914,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.title), ["Portfolio", "Analysis", "System"])
         XCTAssertEqual(StockbarMainSection.sidebarGroups.map(\.sections), [
             [.overview, .holdings, .activity, .alerts],
-            [.charts, .income, .trades, .risk, .allocation],
+            [.charts, .income, .calendar, .trades, .risk, .allocation],
             [.dataHealth, .backups, .diagnostics, .settings]
         ])
         XCTAssertEqual(Set(StockbarMainSection.sidebarOrder), Set(StockbarMainSection.allCases))

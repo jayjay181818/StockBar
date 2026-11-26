@@ -163,9 +163,13 @@ enum CalendarText {
 
     /// The row's words in lower case, with its amount: "dividend, £38.20".
     private static func phrase(_ row: CalendarRow, locale: Locale) -> String {
-        var words = title(row).lowercased() + detail(row, locale: locale)
-        if let column = amountColumn(row) { words += ", \(column)" }
-        if row.isDividend, row.amount == nil { words += ", amount not known" }
+        // "–" is for the eye; VoiceOver hears "amount not known" instead.
+        var words = title(row).lowercased() + detail(row, locale: locale).replacingOccurrences(of: ", \(unknownFigure)", with: "")
+        if row.isDividend, row.amount == nil {
+            words += ", amount not known"
+        } else if let column = amountColumn(row) {
+            words += ", \(column)"
+        }
         return words
     }
 

@@ -1824,6 +1824,671 @@ final class StockbarLocalIncomeTests: XCTestCase {
     }
 }
 
+// MARK: - Calendar and Next up (invented figures)
+
+/// Stands in for the saved-data readers behind "Next up". It records every
+/// read; it has no way to make a request.
+private actor SavedCalendarStandIn: StockbarSavedDividendsReading, InstrumentEventsSavedReading {
+    private var dividends: [String: FolyncDividendsResponse] = [:]
+    private var events: [String: InstrumentEvents] = [:]
+    private(set) var dividendReads: [FolyncDividendsQuery] = []
+    private(set) var eventReads: [[String]] = []
+
+    func save(_ response: FolyncDividendsResponse, for query: FolyncDividendsQuery) { dividends[query.cacheKey] = response }
+    func save(_ answers: [InstrumentEvents]) { for answer in answers { events[answer.symbol] = answer } }
+
+    func savedDividends(_ query: FolyncDividendsQuery) async -> FolyncDividendsResponse? {
+        dividendReads.append(query)
+        return dividends[query.cacheKey]
+    }
+
+    func savedEvents(for symbols: [String]) async -> [String: InstrumentEvents] {
+        eventReads.append(symbols)
+        return events.filter { symbols.contains($0.key) }
+    }
+}
+
+/// Stands in for the coordinator with a real `FolyncLedgerFetchPolicy` in
+/// front: counts the requests that would reach Folync.
+private actor PolicyRouterStandIn: StockbarIncomeRouting {
+    struct Request: Equatable {
+        let query: String
+        let forceRefresh: Bool
+    }
+
+    private let policy = FolyncLedgerFetchPolicy(now: { IncomeFixture.now })
+    private let response: FolyncDividendsResponse
+    private(set) var requests: [Request] = []
+
+    init(response: FolyncDividendsResponse) { self.response = response }
+
+    private func note(_ request: Request) { requests.append(request) }
+
+    func routeDividends(_ query: FolyncDividendsQuery, forceRefresh: Bool) async -> FolyncRoutedDividendsResult {
+        let key = FolyncLedgerFetchPolicy.Key(route: .dividends, endpoint: "https://folync.test", scopeID: "all",
+                                              query: query.cacheKey, cursor: nil)
+        let response = response
+        let result: FolyncRoutedDividendsResult? = await policy.perform(key, forceRefresh: forceRefresh) {
+            await self.note(Request(query: query.cacheKey, forceRefresh: forceRefresh))
+            let answer = FolyncRoutedDividendsResult.folync(response, status: .current, paging: .firstPage)
+            return FolyncLedgerFetchPolicy.Outcome(result: answer, firstPageToKeep: answer)
+        }
+        return result ?? .unavailable
+    }
+
+    func loadMoreDividends(_ query: FolyncDividendsQuery, after continuation: FolyncLedgerContinuation) async
+        -> FolyncRoutedDividendsResult { .unavailable }
+}
+
+@MainActor
+final class StockbarCalendarTests: XCTestCase {
+    private typealias F = IncomeFixture
+    private let fetchedAt = Date(timeIntervalSince1970: 1_795_100_000)
+
+    private func day(_ text: String) throws -> FolyncLedgerDay {
+        try XCTUnwrap(FolyncLedgerDay(string: text))
+    }
+
+    /// Invented Yahoo answers, read the way the service reads the helper's.
+    private func events(_ symbol: String, currency: String? = "GBP", dividends: [(String, Double)]? = [],
+                        ex: String? = nil, pay: String? = nil, earnings: String? = nil,
+                        earningsEnd: String? = nil) throws -> InstrumentEvents {
+        let object: [String: Any] = [
+            "symbol": symbol, "instrumentType": "EQUITY",
+            "exDividendDate": ex ?? NSNull(), "dividendPayDate": pay ?? NSNull(),
+            "earningsDate": earnings ?? NSNull(), "earningsDateEnd": earningsEnd ?? NSNull(),
+            "dividends": dividends.map { $0.map { ["date": $0.0, "amount": $0.1] as [String: Any] } } ?? NSNull(),
+            "dividendCurrency": currency ?? NSNull(), "fetchedAt": fetchedAt.timeIntervalSince1970
+        ]
+        return try InstrumentEventsService.decoder.decode(InstrumentEvents.self,
+                                                          from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func result(_ events: InstrumentEvents) -> InstrumentEventsResult {
+        InstrumentEventsResult(symbol: events.symbol, source: .yahoo, outcome: .events(events, .current))
+    }
+
+    /// Pounds pass as they are, US dollars at an invented 0.8; nothing else has a rate.
+    private func convert(_ amount: Double, _ currency: String) -> Double? {
+        switch currency {
+        case "GBP": amount
+        case "USD": amount * 0.8
+        default: nil
+        }
+    }
+
+    private func settle(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if await condition() { return }
+            await Task.yield()
+        }
+        XCTFail("condition never held", file: file, line: line)
+    }
+
+    private func drain() async {
+        for _ in 0..<200 { await Task.yield() }
+    }
+
+    /// Folync's invented events around Friday 20 November 2026.
+    private var folyncEvents: [FolyncDividendEvent] {
+        [
+            F.event("e1", "ULVR", pay: "2026-12-11", ex: "2026-11-21", gbp: 58.40, certainty: ("published", "published")),
+            F.event("e2", "VUSA", pay: "2027-01-08", ex: "2026-12-17", gbp: 96.20, certainty: ("estimated", "estimated")),
+            F.event("e3", "HSBA", pay: "2026-11-24", gbp: 38.20),
+            F.event("e4", "SHEL", pay: "2026-11-04", status: "received", gbp: 41.02),
+            F.event("e5", "LGEN", pay: "2026-11-18", gbp: 12.00, certainty: ("published", "published")),
+            F.event("e6", "MSFT", pay: "2025-10-01", status: "received", gbp: 6.12),
+            F.event("e7", "BP", pay: "2026-12-01", ex: "2026-11-10", gbp: nil, certainty: ("published", "maybe"))
+        ]
+    }
+
+    private let folyncInputs = StockbarCalendarInputs(
+        isFolyncEnabled: true, isFolyncPortfolio: true,
+        holdings: [CalendarHolding(symbol: "ULVR", yahooSymbol: "ULVR.L"), CalendarHolding(symbol: "NOSYM", yahooSymbol: nil)],
+        localHoldings: [LocalIncomeHolding(symbol: "ULVR", units: 10), LocalIncomeHolding(symbol: "NOSYM", units: 5)]
+    )
+
+    private let localInputs = StockbarCalendarInputs(
+        isFolyncEnabled: false, isFolyncPortfolio: false,
+        holdings: [CalendarHolding(symbol: "ALPHA", yahooSymbol: "ALPHA"), CalendarHolding(symbol: "BETA", yahooSymbol: "BETA")],
+        localHoldings: [LocalIncomeHolding(symbol: "ALPHA", units: 10), LocalIncomeHolding(symbol: "BETA", units: 4)]
+    )
+
+    private func localAnswers() throws -> [InstrumentEvents] {
+        [
+            try events("ALPHA", dividends: [("2025-11-06", 0.24), ("2025-11-25", 0.24), ("2026-02-05", 0.25),
+                                            ("2026-05-07", 0.26), ("2026-08-06", 0.26)],
+                       ex: "2026-11-26", pay: "2026-12-10", earnings: "2027-01-28"),
+            try events("BETA", currency: "USD", dividends: [("2026-03-02", 0.5)], ex: "2026-12-03")
+        ]
+    }
+
+    private func localEstimate() throws -> LocalIncomeEstimate {
+        LocalIncomeFigures.estimate(holdings: localInputs.localHoldings,
+                                    answers: Dictionary(uniqueKeysWithValues: try localAnswers().map { ($0.symbol, $0) }),
+                                    currency: "GBP", today: F.today, convert: convert)
+    }
+
+    private func summary(_ rows: [CalendarRow]) -> [String] {
+        rows.map { "\($0.day.string) \($0.symbol) \($0.kind) \($0.pill?.title ?? "-")" }
+    }
+
+    // MARK: Rows
+
+    func testFolyncRowsGiveAPaymentAndAnExDividendRowWithTheDatesPill() throws {
+        let rows = CalendarFigures.folyncRows(events: folyncEvents, currency: "GBP", today: F.today)
+        XCTAssertEqual(summary(rows.upcoming), [
+            "2026-11-21 ULVR exDividend Declared",
+            "2026-11-24 HSBA payment Upcoming", // no discovery detail
+            "2026-12-01 BP payment Upcoming", // a date certainty this build does not know
+            "2026-12-11 ULVR payment Declared",
+            "2026-12-17 VUSA exDividend Estimated",
+            "2027-01-08 VUSA payment Estimated"
+        ], "BP's ex-dividend date has passed, so it has no row")
+        XCTAssertEqual(summary(rows.past), [
+            "2026-11-18 LGEN payment Declared", // not marked received, but its day has passed
+            "2026-11-04 SHEL payment -" // received: no pill
+        ], "MSFT's payment is more than twelve months back")
+
+        let ulvrEx = rows.upcoming[0]
+        XCTAssertEqual(ulvrEx.payDay, try day("2026-12-11"))
+        XCTAssertEqual(CalendarText.title(ulvrEx), "Ex-dividend")
+        XCTAssertEqual(CalendarText.detail(ulvrEx, locale: F.britishEnglish), ", pays 11 Dec, £58.40")
+        XCTAssertNil(CalendarText.amountColumn(ulvrEx))
+        XCTAssertEqual(CalendarText.dayLabel(ulvrEx.day, today: F.today, locale: F.britishEnglish), "Tomorrow")
+        XCTAssertEqual(CalendarText.accessibilitySentence(ulvrEx, today: F.today, locale: F.britishEnglish),
+                       "Tomorrow, ULVR, ex-dividend, pays 11 Dec, £58.40, declared.")
+
+        let hsba = rows.upcoming[1]
+        XCTAssertEqual(CalendarText.title(hsba), "Dividend")
+        XCTAssertEqual(CalendarText.detail(hsba), "")
+        XCTAssertEqual(CalendarText.amountColumn(hsba), "£38.20")
+        XCTAssertEqual(CalendarText.accessibilitySentence(hsba, today: F.today, locale: F.britishEnglish),
+                       "Tue 24 Nov, HSBA, dividend, £38.20, upcoming.")
+
+        let bp = rows.upcoming[2]
+        XCTAssertNil(bp.amount)
+        XCTAssertEqual(CalendarText.amountColumn(bp), "–", "unknown is a dash, never zero")
+        XCTAssertEqual(CalendarText.accessibilitySentence(bp, today: F.today, locale: F.britishEnglish),
+                       "Tue 1 Dec, BP, dividend, amount not known, upcoming.")
+    }
+
+    func testLocalRowsComeFromTheIncomeEstimateWithEveryAmountAbout() throws {
+        let rows = CalendarFigures.localRows(estimate: try localEstimate())
+        XCTAssertEqual(summary(rows.upcoming), [
+            "2026-11-26 ALPHA exDividend -", // Yahoo's own date: no pill
+            "2026-12-03 BETA exDividend -", // Yahoo's date with no payment behind it
+            "2026-12-10 ALPHA payment -", // Yahoo's pay date
+            "2027-02-05 ALPHA exDividend Estimated",
+            "2027-03-02 BETA exDividend Estimated",
+            "2027-05-07 ALPHA exDividend Estimated",
+            "2027-08-06 ALPHA exDividend Estimated"
+        ])
+        XCTAssertEqual(summary(rows.past), [
+            "2026-08-06 ALPHA exDividend -", "2026-05-07 ALPHA exDividend -", "2026-03-02 BETA exDividend -",
+            "2026-02-05 ALPHA exDividend -", "2025-11-25 ALPHA exDividend -"
+        ], "Yahoo's record of the last twelve months, as ex-dividend dates")
+        XCTAssertTrue((rows.upcoming + rows.past).allSatisfy(\.amountIsEstimate))
+
+        let alphaEx = rows.upcoming[0]
+        XCTAssertEqual(CalendarText.detail(alphaEx, locale: F.britishEnglish), ", pays 10 Dec, about £2.40")
+        let beta = rows.upcoming[1]
+        XCTAssertNil(beta.amount)
+        XCTAssertEqual(CalendarText.title(beta) + CalendarText.detail(beta), "Ex-dividend", "no made-up amount")
+        let pay = rows.upcoming[2]
+        XCTAssertEqual(CalendarText.title(pay) + CalendarText.detail(pay), "Dividend, about £2.40")
+        XCTAssertNil(CalendarText.amountColumn(pay), "an estimate's amount stays in its sentence")
+        let estimated = rows.upcoming[4]
+        XCTAssertEqual(CalendarText.detail(estimated), ", about £1.60", "converted at the loaded rate")
+        XCTAssertEqual(CalendarText.accessibilitySentence(estimated, today: F.today, locale: F.britishEnglish),
+                       "Tue 2 Mar, BETA, ex-dividend, about £1.60, estimated.")
+        XCTAssertEqual(CalendarText.title(rows.past[0]) + CalendarText.detail(rows.past[0]), "Ex-dividend, about £2.60")
+    }
+
+    func testEarningsRowsSingleRangeAndPast() throws {
+        let holdings = [
+            CalendarHolding(symbol: "NVDA", yahooSymbol: "NVDA"), CalendarHolding(symbol: "ULVR", yahooSymbol: "ULVR.L"),
+            CalendarHolding(symbol: "OLD", yahooSymbol: "OLD"), CalendarHolding(symbol: "WIDE", yahooSymbol: "WIDE"),
+            CalendarHolding(symbol: "SOON", yahooSymbol: "SOON"), CalendarHolding(symbol: "NOSYM", yahooSymbol: nil),
+            CalendarHolding(symbol: "NODATE", yahooSymbol: "NODATE")
+        ]
+        let answers = Dictionary(uniqueKeysWithValues: try [
+            events("NVDA", earnings: "2026-11-25"),
+            events("ULVR.L", earnings: "2027-01-27", earningsEnd: "2027-02-03"),
+            events("OLD", earnings: "2026-11-10"),
+            events("WIDE", earnings: "2026-11-18", earningsEnd: "2026-11-24"),
+            events("SOON", earnings: "2026-11-20"),
+            events("NODATE")
+        ].map { ($0.symbol, $0) })
+        let rows = CalendarFigures.earningsRows(holdings: holdings, answers: answers, today: F.today)
+        XCTAssertEqual(summary(rows), [
+            "2026-11-20 SOON earnings -", "2026-11-25 NVDA earnings -", "2027-01-27 ULVR earnings Estimated"
+        ], "a date before today, or a range already begun, is not shown; no Confirmed pill")
+        let range = rows[2]
+        XCTAssertEqual(range.endDay, try day("2027-02-03"))
+        XCTAssertEqual(CalendarText.title(range) + CalendarText.detail(range, locale: F.britishEnglish),
+                       "Earnings, expected between 27 Jan and 3 Feb")
+        XCTAssertEqual(CalendarText.accessibilitySentence(rows[1], today: F.today, locale: F.britishEnglish),
+                       "Wed 25 Nov, NVDA, earnings.")
+        let coverage = CalendarFigures.earningsCoverage(holdings: holdings, answers: answers, today: F.today)
+        XCTAssertEqual(coverage, CalendarEarningsCoverage(withoutSymbol: 1, withoutDate: 3))
+        XCTAssertEqual(CalendarText.earningsCoverageLine(coverage), "4 holdings have no earnings dates.")
+        XCTAssertNil(CalendarText.earningsCoverageLine(CalendarEarningsCoverage(withoutSymbol: 0, withoutDate: 0)))
+    }
+
+    func testCalendarHoldingsUseTheSymbolYahooIsAskedFor() throws {
+        let local = [LocalIncomeHolding(symbol: "ALPHA.L", units: 3), LocalIncomeHolding(symbol: "BAD SYM", units: 1)]
+        XCTAssertEqual(CalendarFigures.holdings(local: local, folyncHoldings: nil), [
+            CalendarHolding(symbol: "ALPHA.L", yahooSymbol: "ALPHA.L"), CalendarHolding(symbol: "BAD SYM", yahooSymbol: nil)
+        ])
+        let json = """
+        [{"portfolioId":"pf","assetId":"a1","ticker":"ULVR","displayTicker":"ULVR","quoteSymbol":"ULVR.L","name":"U",
+          "currency":"GBP","shares":10,"averageCost":40,"costValue":400,
+          "valuation":{"value":420,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":null}},
+         {"portfolioId":"pf","assetId":"a2","ticker":"NOQ","name":"N","currency":"GBP","shares":1,"averageCost":1,
+          "costValue":1,"valuation":{"value":1,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":null}}]
+        """
+        let folync = try JSONDecoder().decode([FolyncHolding].self, from: Data(json.utf8))
+        let held = [LocalIncomeHolding(symbol: "ULVR", units: 10), LocalIncomeHolding(symbol: "NOQ", units: 1)]
+        XCTAssertEqual(CalendarFigures.holdings(local: held, folyncHoldings: folync), [
+            CalendarHolding(symbol: "ULVR", yahooSymbol: "ULVR.L"), CalendarHolding(symbol: "NOQ", yahooSymbol: nil)
+        ], "a Folync holding uses Folync's quote symbol, and one without gets no earnings")
+    }
+
+    // MARK: Grouping
+
+    func testThisWeekNextWeekAndMonthsWithTodayOnEachDayOfTheWeek() throws {
+        func row(_ text: String) throws -> CalendarRow {
+            CalendarRow(id: text, kind: .payment, day: try day(text), symbol: "X\(text.suffix(2))", payDay: nil,
+                        endDay: nil, amount: 1, currency: "GBP", amountIsEstimate: false, amountIsPartial: false, pill: nil)
+        }
+        // Monday 16 to Sunday 22 November 2026.
+        for date in 16...22 {
+            let today = FolyncLedgerDay(year: 2026, month: 11, day: date)
+            let rows = try [today.string, "2026-11-22", "2026-11-23", "2026-11-29", "2026-11-30", "2026-12-01"].map(row)
+            let groups = CalendarFigures.upcomingGroups(rows, today: today)
+            XCTAssertEqual(groups.map(\.key), [.thisWeek, .nextWeek, .month(IncomeMonth(year: 2026, month: 11)),
+                                               .month(IncomeMonth(year: 2026, month: 12))], "today is the \(date)th")
+            XCTAssertEqual(groups[0].rows.map(\.day.string), date == 22 ? ["2026-11-22", "2026-11-22"]
+                                                                       : [today.string, "2026-11-22"])
+            XCTAssertEqual(groups[1].rows.map(\.day.string), ["2026-11-23", "2026-11-29"], "Monday to Sunday")
+            XCTAssertEqual(groups[2].rows.map(\.day.string), ["2026-11-30"])
+            XCTAssertEqual(CalendarText.groupTitle(groups[3].key, today: today, locale: F.britishEnglish), "December")
+        }
+        XCTAssertEqual(CalendarText.groupTitle(.month(IncomeMonth(year: 2027, month: 1)), today: F.today,
+                                               locale: F.britishEnglish), "January 2027")
+        let past = CalendarFigures.pastGroups(try ["2026-09-03", "2026-11-04", "2026-11-18"].map(row))
+        XCTAssertEqual(past.map(\.key), [.month(IncomeMonth(year: 2026, month: 11)), .month(IncomeMonth(year: 2026, month: 9))])
+        XCTAssertEqual(past[0].rows.map(\.day.string), ["2026-11-18", "2026-11-04"], "newest first")
+    }
+
+    // MARK: Month range and filters
+
+    func testTheMonthBarStopsTwelveMonthsOutInEachView() async throws {
+        let upcoming = CalendarMonthRange(mode: .upcoming, today: F.today)
+        XCTAssertEqual(upcoming.first, IncomeMonth(year: 2026, month: 11))
+        XCTAssertEqual(upcoming.last, IncomeMonth(year: 2027, month: 11))
+        let past = CalendarMonthRange(mode: .past, today: F.today)
+        XCTAssertEqual(past.first, IncomeMonth(year: 2025, month: 11))
+        XCTAssertEqual(past.last, IncomeMonth(year: 2026, month: 11))
+
+        let provider = EventsProviderStandIn()
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, isAllowed: { true },
+                                          now: { F.now }, timeZone: F.utc)
+        model.activate(localInputs)
+        XCTAssertEqual(model.month, upcoming.first)
+        XCTAssertFalse(model.monthRange.canGoBack(from: model.month), "the previous button is disabled")
+        model.showPreviousMonth()
+        XCTAssertEqual(model.month, upcoming.first)
+        for _ in 0..<15 { model.showNextMonth() }
+        XCTAssertEqual(model.month, upcoming.last, "stops at twelve months ahead")
+        XCTAssertFalse(model.monthRange.canGoForward(from: model.month), "the next button is disabled")
+
+        model.mode = .past
+        XCTAssertEqual(model.month, past.last, "Past opens on this month")
+        XCTAssertFalse(model.monthRange.canGoForward(from: model.month))
+        for _ in 0..<15 { model.showPreviousMonth() }
+        XCTAssertEqual(model.month, past.first, "stops at twelve months back")
+        XCTAssertFalse(model.monthRange.canGoBack(from: model.month))
+        await drain()
+        let calls = await provider.calls
+        XCTAssertEqual(calls.count, 1, "moving months and views asks nothing")
+    }
+
+    func testEachFilterAndTheEarningsFilterUnderPast() async throws {
+        let dividend = CalendarRow(id: "d", kind: .payment, day: F.today, symbol: "D", payDay: nil, endDay: nil, amount: 1,
+                                   currency: "GBP", amountIsEstimate: false, amountIsPartial: false, pill: nil)
+        let earnings = CalendarRow(id: "e", kind: .earnings, day: F.today, symbol: "E", payDay: nil, endDay: nil, amount: nil,
+                                   currency: "", amountIsEstimate: false, amountIsPartial: false, pill: nil)
+        let old = CalendarRow(id: "o", kind: .exDividend, day: F.today.adding(months: -1), symbol: "O", payDay: nil,
+                              endDay: nil, amount: 1, currency: "GBP", amountIsEstimate: true, amountIsPartial: false, pill: nil)
+        let rows = CalendarRows(upcoming: [dividend, earnings], past: [old])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .all).map(\.id), ["d", "e"])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .dividends).map(\.id), ["d"])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .earnings).map(\.id), ["e"])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .all).map(\.id), ["o"])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .dividends).map(\.id), ["o"])
+        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .earnings).map(\.id), [])
+        XCTAssertEqual(CalendarFigures.filters(for: .upcoming), [.all, .dividends, .earnings])
+        XCTAssertEqual(CalendarFigures.filters(for: .past), [.all, .dividends], "Past has no Earnings filter")
+        XCTAssertEqual(CalendarText.emptyLine(mode: .upcoming, filter: .earnings), "No earnings dates in the next 12 months.")
+        XCTAssertEqual(CalendarText.emptyLine(mode: .past, filter: .all), "No dividends in the last 12 months.")
+
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: EventsProviderStandIn(),
+                                          isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+        model.filter = .earnings
+        model.mode = .past
+        XCTAssertEqual(model.filter, .all, "switching to Past leaves the Earnings filter")
+        model.filter = .dividends
+        model.mode = .upcoming
+        XCTAssertEqual(model.filter, .dividends)
+        XCTAssertEqual(model.gridRows(rows).map(\.id), ["d", "o"], "Upcoming's grid also shows this month's past rows")
+        model.mode = .past
+        XCTAssertEqual(model.gridRows(rows).map(\.id), ["o"])
+    }
+
+    // MARK: The grid
+
+    func testTheGridStartsOnMondayDimsOtherMonthsAndFoldsExtraSymbols() throws {
+        func row(_ id: String, _ text: String, _ kind: CalendarEventKind = .payment, pill: CalendarPill? = .declared,
+                 amount: Double? = 38.20) throws -> CalendarRow {
+            CalendarRow(id: id, kind: kind, day: try day(text), symbol: id, payDay: nil, endDay: nil, amount: amount,
+                        currency: "GBP", amountIsEstimate: false, amountIsPartial: false, pill: pill)
+        }
+        let rows = try [
+            row("HSBA", "2026-11-24"),
+            row("A", "2026-11-25", .earnings, pill: nil, amount: nil), row("B", "2026-11-25"), row("C", "2026-11-25"),
+            row("D", "2026-11-26"), row("E", "2026-11-26"), row("F", "2026-11-26"), row("G", "2026-11-26"),
+            row("LGEN", "2026-12-03", .exDividend), row("LATE", "2026-12-10")
+        ]
+        let weeks = CalendarFigures.grid(month: IncomeMonth(year: 2026, month: 11), rows: rows, today: F.today)
+        XCTAssertEqual(weeks.count, 6)
+        XCTAssertTrue(weeks.allSatisfy { $0.count == 7 })
+        XCTAssertEqual(weeks.first?.first?.day.string, "2026-10-26", "Monday first")
+        XCTAssertEqual(weeks.last?.last?.day.string, "2026-12-06")
+        let days = weeks.flatMap { $0 }
+        XCTAssertEqual(days.filter(\.isInMonth).count, 30)
+        XCTAssertFalse(days[0].isInMonth, "October's days are dimmed")
+        XCTAssertEqual(days.filter(\.isToday).map(\.day.string), ["2026-11-20"])
+        let wednesday = try XCTUnwrap(days.first { $0.day.string == "2026-11-25" })
+        XCTAssertEqual(wednesday.shown.map(\.symbol), ["B", "C", "A"], "three fit: payments, then earnings")
+        XCTAssertEqual(wednesday.overflow, 0)
+        let thursday = try XCTUnwrap(days.first { $0.day.string == "2026-11-26" })
+        XCTAssertEqual(thursday.shown.map(\.symbol), ["D", "E"])
+        XCTAssertEqual(thursday.overflow, 2, "the rest become +2")
+        let december = try XCTUnwrap(days.first { $0.day.string == "2026-12-03" })
+        XCTAssertFalse(december.isInMonth)
+        XCTAssertEqual(december.rows.map(\.symbol), ["LGEN"], "a dimmed day still shows its events")
+        XCTAssertFalse(days.contains { $0.rows.contains { $0.symbol == "LATE" } })
+
+        let tuesday = try XCTUnwrap(days.first { $0.day.string == "2026-11-24" })
+        XCTAssertEqual(CalendarText.daySentence(tuesday, locale: F.britishEnglish),
+                       "Tuesday 24 November: HSBA dividend, £38.20, declared")
+        XCTAssertEqual(CalendarText.daySentence(wednesday, locale: F.britishEnglish),
+                       "Wednesday 25 November: B dividend, £38.20, declared; C dividend, £38.20, declared; A earnings")
+        XCTAssertEqual(CalendarText.monthSummary(weeks, month: IncomeMonth(year: 2026, month: 11), locale: F.britishEnglish),
+                       "November 2026: events on 3 days.")
+
+        let february = CalendarFigures.grid(month: IncomeMonth(year: 2027, month: 2), rows: [], today: F.today)
+        XCTAssertEqual(february.count, 4, "1 February 2027 is a Monday and the 28th a Sunday")
+        XCTAssertTrue(february.joined().allSatisfy(\.isInMonth))
+    }
+
+    // MARK: Next up
+
+    func testNextUpTakesTheThreeSoonestInTheNextFourteenDays() throws {
+        func row(_ id: String, _ offset: Int, _ kind: CalendarEventKind) -> CalendarRow {
+            CalendarRow(id: id, kind: kind, day: CalendarFigures.adding(days: offset, to: F.today), symbol: id, payDay: nil,
+                        endDay: nil, amount: kind == .earnings ? nil : 38.20, currency: "GBP", amountIsEstimate: false,
+                        amountIsPartial: false, pill: kind == .earnings ? nil : .declared)
+        }
+        let rows = [row("LATE", 15, .payment), row("NVDA", 5, .earnings), row("HSBA", 4, .payment),
+                    row("EDGE", 14, .payment), row("ULVR", 1, .exDividend)]
+        let next = CalendarFigures.nextUp(rows, today: F.today)
+        XCTAssertEqual(next.map(\.id), ["ULVR", "HSBA", "NVDA"])
+        XCTAssertEqual(next.map(CalendarText.nextUpPhrase),
+                       ["ULVR goes ex-dividend", "HSBA pays £38.20", "NVDA reports earnings"])
+        XCTAssertEqual(CalendarText.nextUpSentence(next[0], today: F.today, locale: F.britishEnglish),
+                       "Tomorrow, ULVR goes ex-dividend, declared.")
+        XCTAssertEqual(CalendarFigures.nextUp([row("EDGE", 14, .payment), row("LATE", 15, .payment)], today: F.today)
+            .map(\.id), ["EDGE"], "fourteen days ahead is the last day")
+        XCTAssertTrue(CalendarFigures.nextUp([row("LATE", 15, .payment)], today: F.today).isEmpty)
+    }
+
+    func testNextUpReadsOnlySavedDataAndIsAbsentWithNothingSaved() async throws {
+        let saved = SavedCalendarStandIn()
+        let model = StockbarNextUpModel(dividends: saved, events: saved, now: { F.now }, timeZone: F.utc)
+        model.reload(folyncInputs, currency: "GBP") { amount, _ in amount }
+        await settle { await saved.dividendReads.count == 1 + StockbarNextUpModel.savedQueryDaysBack }
+        await drain()
+        XCTAssertTrue(model.rows.isEmpty, "nothing saved: no Next up")
+
+        // A copy saved yesterday is under yesterday's query, and is still read.
+        let yesterday = CalendarFigures.adding(days: -1, to: F.today)
+        await saved.save(F.response(folyncEvents), for: IncomeFigures.query(today: yesterday))
+        await saved.save([try events("ULVR.L", earnings: "2026-11-23")])
+        model.reload(folyncInputs, currency: "GBP") { amount, _ in amount }
+        await settle { model.rows.count == 3 }
+        XCTAssertEqual(model.rows.map(\.id), ["e1#ex", "ULVR.L#earnings", "e3#pay"])
+        XCTAssertEqual(model.rows.map(CalendarText.nextUpPhrase),
+                       ["ULVR goes ex-dividend", "ULVR reports earnings", "HSBA pays £38.20"])
+        let eventReads = await saved.eventReads
+        XCTAssertEqual(eventReads.last, ["ULVR.L"], "only holdings with a Yahoo symbol are looked up")
+
+        // A local portfolio: the estimate's inputs from the saved copies.
+        await saved.save(try localAnswers())
+        let local = StockbarNextUpModel(dividends: saved, events: saved, now: { F.now }, timeZone: F.utc)
+        local.reload(localInputs, currency: "GBP") { [weak self] amount, currency in self?.convert(amount, currency) }
+        await settle { !local.rows.isEmpty }
+        XCTAssertEqual(local.rows.map(CalendarText.nextUpPhrase), ["ALPHA goes ex-dividend", "BETA goes ex-dividend"],
+                       "ALPHA's payment on 10 December is past the fourteen days")
+
+        // Folync enabled with its portfolio not loaded: nothing.
+        let waiting = StockbarNextUpModel(dividends: saved, events: saved, now: { F.now }, timeZone: F.utc)
+        let notLoaded = StockbarCalendarInputs(isFolyncEnabled: true, isFolyncPortfolio: false, holdings: [], localHoldings: [])
+        waiting.reload(notLoaded, currency: "GBP") { amount, _ in amount }
+        await drain()
+        XCTAssertTrue(waiting.rows.isEmpty)
+    }
+
+    // MARK: Requests
+
+    func testCalendarAndIncomeShareOneDividendsRequest() async throws {
+        let router = PolicyRouterStandIn(response: F.response(folyncEvents))
+        let calendar = StockbarCalendarModel(router: router, provider: EventsProviderStandIn(), isAllowed: { true },
+                                             now: { F.now }, timeZone: F.utc)
+        calendar.activate(folyncInputs)
+        await settle { calendar.folync.phase == .loaded }
+        let income = StockbarIncomeModel(router: router, now: { F.now }, timeZone: F.utc)
+        income.activate(isFolyncPortfolio: true)
+        await settle { income.phase == .loaded }
+        var requests = await router.requests
+        XCTAssertEqual(requests, [.init(query: IncomeFigures.query(today: F.today).cacheKey, forceRefresh: false)],
+                       "one request answers both pages")
+
+        calendar.refresh(folyncInputs)
+        await settle { await router.requests.count == 2 }
+        requests = await router.requests
+        XCTAssertEqual(requests.last?.forceRefresh, true, "the refresh control skips the reuse window")
+    }
+
+    func testAFolyncPortfolioAsksOnceOnActivateAndTheRefreshForcesBoth() async throws {
+        let router = IncomeRouterStandIn()
+        let provider = EventsProviderStandIn()
+        await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage),
+                            .folync(F.response(folyncEvents), status: .current, paging: .firstPage))
+        await provider.answer([result(try events("ULVR.L", earnings: "2026-11-25"))],
+                              [result(try events("ULVR.L", earnings: "2026-11-25"))])
+        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+                                          now: { F.now }, timeZone: F.utc)
+        await drain()
+        var routed = await router.calls
+        var asked = await provider.calls
+        XCTAssertTrue(routed.isEmpty && asked.isEmpty, "nothing before the page is selected")
+
+        model.activate(folyncInputs)
+        model.activate(folyncInputs)
+        await settle { model.folync.phase == .loaded && !model.isLoadingEarnings }
+        routed = await router.calls
+        asked = await provider.calls
+        XCTAssertEqual(routed.map(\.query), [IncomeFigures.query(today: F.today)], "Income's own query")
+        XCTAssertEqual(routed.map(\.forceRefresh), [false])
+        XCTAssertEqual(asked, [.init(symbols: ["ULVR.L"], forceRefresh: false)], "one call, Yahoo symbols only")
+        let rows = model.rows(folyncInputs, currency: "GBP") { amount, _ in amount }
+        XCTAssertTrue(rows.upcoming.contains { $0.kind == .earnings && $0.symbol == "ULVR" })
+        XCTAssertEqual(rows.upcoming.filter(\.isDividend).count, 6)
+
+        // Views, filters and months, and time passing, ask nothing more.
+        model.mode = .past
+        model.filter = .dividends
+        model.showPreviousMonth()
+        await drain()
+        routed = await router.calls
+        asked = await provider.calls
+        XCTAssertEqual(routed.count, 1)
+        XCTAssertEqual(asked.count, 1)
+
+        model.refresh(folyncInputs)
+        await settle {
+            let routed = await router.calls.count
+            let asked = await provider.calls.count
+            return routed == 2 && asked == 2
+        }
+        routed = await router.calls
+        asked = await provider.calls
+        XCTAssertEqual(routed.last?.forceRefresh, true)
+        XCTAssertEqual(asked.last, .init(symbols: ["ULVR.L"], forceRefresh: true))
+
+        model.deactivate()
+        model.refresh(folyncInputs)
+        await drain()
+        routed = await router.calls
+        asked = await provider.calls
+        XCTAssertEqual(routed.count, 2, "a page no longer selected asks nothing")
+        XCTAssertEqual(asked.count, 2)
+    }
+
+    func testALocalPortfolioAsksYahooOnceForBothDividendsAndEarnings() async throws {
+        let router = IncomeRouterStandIn()
+        let provider = EventsProviderStandIn()
+        await provider.answer(try localAnswers().map(result), try localAnswers().map(result))
+        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+                                          now: { F.now }, timeZone: F.utc)
+        model.activate(localInputs)
+        await settle { model.local.phase == .loaded }
+        var asked = await provider.calls
+        XCTAssertEqual(asked, [.init(symbols: ["ALPHA", "BETA"], forceRefresh: false)])
+        let rows = model.rows(localInputs, currency: "GBP", convert: convert)
+        XCTAssertEqual(rows.upcoming.filter { $0.kind == .earnings }.map(\.day.string), ["2027-01-28"],
+                       "earnings from the same answers")
+        XCTAssertEqual(rows.past.count, 5)
+
+        model.refresh(localInputs)
+        await settle { await provider.calls.count == 2 }
+        asked = await provider.calls
+        XCTAssertEqual(asked.last, .init(symbols: ["ALPHA", "BETA"], forceRefresh: true))
+        let routed = await router.calls
+        XCTAssertTrue(routed.isEmpty, "Folync is never asked for a local portfolio")
+    }
+
+    func testWithYahooOffAFolyncPortfolioShowsDividendsWithoutEarnings() async throws {
+        let router = IncomeRouterStandIn()
+        let provider = EventsProviderStandIn()
+        await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage))
+        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { false },
+                                          now: { F.now }, timeZone: F.utc)
+        model.activate(folyncInputs)
+        await settle { model.folync.phase == .loaded }
+        let asked = await provider.calls
+        XCTAssertTrue(asked.isEmpty)
+        XCTAssertTrue(model.earningsNotAllowed)
+        let rows = model.rows(folyncInputs, currency: "GBP") { amount, _ in amount }
+        XCTAssertEqual(rows.upcoming.count, 6)
+        XCTAssertFalse(rows.upcoming.contains { $0.kind == .earnings })
+        XCTAssertEqual(CalendarText.sourceLine(.folync), "Dividends from Folync · Earnings from Yahoo")
+        XCTAssertEqual(CalendarText.sourceLine(.yahooEstimate), "Estimated from Yahoo's record · Earnings from Yahoo")
+    }
+
+    func testYahooPausedStillShowsTheDividends() async throws {
+        let router = IncomeRouterStandIn()
+        let provider = EventsProviderStandIn()
+        let until = F.now.addingTimeInterval(3_600)
+        await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage))
+        await provider.answer([InstrumentEventsResult(symbol: "ULVR.L", source: .yahoo,
+                                                      outcome: .failed(.rateLimited(retryAfter: until)))])
+        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+                                          now: { F.now }, timeZone: F.utc)
+        model.activate(folyncInputs)
+        await settle { model.folync.phase == .loaded && !model.isLoadingEarnings }
+        XCTAssertEqual(InstrumentEventsAnswers.rateLimitedUntil(model.yahooResults), until)
+        XCTAssertFalse(model.earningsNotAllowed)
+        XCTAssertEqual(model.rows(folyncInputs, currency: "GBP") { amount, _ in amount }.upcoming.count, 6)
+    }
+
+    // MARK: The sidebar
+
+    func testCalendarSitsAfterIncomeMarkedNewAndDimmedExactlyAsIncome() throws {
+        typealias S = StockbarMainSection
+        XCTAssertEqual(S.calendar.title, "Calendar")
+        XCTAssertEqual(S.calendar.systemImage, "calendar")
+        XCTAssertEqual(S(rawValue: "calendar"), .calendar, "STOCKBAR_ACCEPTANCE_SECTION=calendar opens it")
+        let analysis = try XCTUnwrap(S.sidebarGroups.first { $0.title == "Analysis" })
+        let income = try XCTUnwrap(analysis.sections.firstIndex(of: .income))
+        XCTAssertEqual(analysis.sections[income + 1], .calendar, "straight after Income")
+        XCTAssertTrue(S.newSections.contains(.calendar))
+        let place = try XCTUnwrap(S.sidebarOrder.firstIndex(of: .calendar))
+        XCTAssertEqual(S.calendar.shortcutNumber, place < 9 ? place + 1 : nil, "the ⌘-number follows the sidebar")
+
+        for active in [false, true] {
+            for enabled in [false, true] {
+                for yahoo in [false, true] {
+                    let dimmed = S.dimmedSections(isFolyncPortfolioActive: active, isFolyncEnabled: enabled,
+                                                  localIncomeAvailable: yahoo)
+                    XCTAssertEqual(dimmed[.calendar], dimmed[.income], "active \(active), enabled \(enabled), yahoo \(yahoo)")
+                }
+            }
+        }
+        // Folync; local and Trading 212 (Folync neither active nor enabled); providers off; Folync loading.
+        XCTAssertNil(S.dimmedSections(isFolyncPortfolioActive: true, isFolyncEnabled: true, localIncomeAvailable: false)[.calendar])
+        XCTAssertNil(S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: false, localIncomeAvailable: true)[.calendar])
+        XCTAssertEqual(S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: false,
+                                        localIncomeAvailable: false)[.calendar], "Needs live market data, which is off")
+        XCTAssertEqual(S.dimmedSections(isFolyncPortfolioActive: false, isFolyncEnabled: true,
+                                        localIncomeAvailable: true)[.calendar], S.needsFolyncReason)
+        let entries = StockbarSidebarModel.groups(dimmed: [:], new: S.newSections).flatMap(\.entries)
+        XCTAssertEqual(entries.first { $0.section == .calendar }?.isNew, true)
+    }
+
+    // MARK: Calendar days
+
+    func testDaysNeverMoveInAnotherTimeZone() async throws {
+        let payDay = try day("2026-11-20")
+        let event = F.event("tz", "TZ", pay: "2026-11-20", gbp: 5, certainty: ("published", "published"))
+        // 20:00 UTC on Friday 20 November is already Saturday the 21st in Tokyo.
+        let evening = Date(timeIntervalSince1970: 1_795_204_800)
+        // 02:00 UTC on the 20th is still Thursday the 19th in Los Angeles.
+        let early = Date(timeIntervalSince1970: 1_795_140_000)
+        for (zone, instant, today) in [("Asia/Tokyo", evening, "2026-11-21"), ("America/Los_Angeles", early, "2026-11-19")] {
+            let timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+            let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: EventsProviderStandIn(),
+                                              isAllowed: { true }, now: { instant }, timeZone: timeZone)
+            model.activate(localInputs)
+            XCTAssertEqual(model.today.string, today, zone)
+            let rows = CalendarFigures.folyncRows(events: [event], currency: "GBP", today: model.today)
+            let row = try XCTUnwrap((rows.upcoming + rows.past).first)
+            XCTAssertEqual(row.day, payDay, "the pay day stays the 20th in \(zone)")
+            XCTAssertEqual(rows.upcoming.isEmpty, zone == "Asia/Tokyo", "past in Tokyo, tomorrow in Los Angeles")
+            let earnings = CalendarFigures.earningsRows(
+                holdings: [CalendarHolding(symbol: "TZ", yahooSymbol: "TZ")],
+                answers: ["TZ": try events("TZ", earnings: "2026-11-20")], today: model.today)
+            XCTAssertEqual(earnings.map(\.day), zone == "Asia/Tokyo" ? [] : [payDay])
+            XCTAssertEqual(CalendarFigures.weekdayIndex(payDay), 4, "a Friday in every zone")
+        }
+        let losAngeles = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        XCTAssertEqual(CalendarText.dayLabel(payDay, today: FolyncLedgerDay(early, in: losAngeles)), "Tomorrow")
+    }
+}
+
 /// The Allocation page's groups, text and grid, worked out from invented figures.
 final class AllocationPresentationTests: XCTestCase {
     private typealias P = AllocationPresentation

@@ -48,6 +48,21 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
         let exDividendInDays: Int?
         let payInDays: Int?
         let earningsInDays: Int?
+        /// The end of an earnings range, as Yahoo can give; nil for a single date.
+        /// Optional, so a fixture written before it was added still reads.
+        let earningsEndInDays: Int?
+
+        init(symbol: String, instrumentType: String?, currency: String?, dividends: [Dividend]?,
+             exDividendInDays: Int?, payInDays: Int?, earningsInDays: Int?, earningsEndInDays: Int? = nil) {
+            self.symbol = symbol
+            self.instrumentType = instrumentType
+            self.currency = currency
+            self.dividends = dividends
+            self.exDividendInDays = exDividendInDays
+            self.payInDays = payInDays
+            self.earningsInDays = earningsInDays
+            self.earningsEndInDays = earningsEndInDays
+        }
     }
 
     static let fileName = "instrument-events-fixture.json"
@@ -187,7 +202,7 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
                 "exDividendDate": day(holding.exDividendInDays),
                 "dividendPayDate": day(holding.payInDays),
                 "earningsDate": day(holding.earningsInDays),
-                "earningsDateEnd": NSNull(),
+                "earningsDateEnd": day(holding.earningsInDays == nil ? nil : holding.earningsEndInDays),
                 "dividends": dividends,
                 "dividendCurrency": holding.currency ?? NSNull(),
                 "fetchedAt": now.timeIntervalSince1970

@@ -528,6 +528,60 @@ final class InstrumentEventsServiceTests: XCTestCase {
         .output("[" + entries.joined(separator: ",") + "]")
     }
 
+    func testSavedEventsReadOnlyWhatIsSavedAndNeverRunTheHelper() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.success("ALPHA"))])
+        let service = makeService(runner: runner)
+
+        let before = await service.savedEvents(for: ["ALPHA"])
+        var count = await runner.callCount()
+        XCTAssertTrue(before.isEmpty, "nothing saved yet, so nothing to show")
+        XCTAssertEqual(count, 0, "reading saved copies never runs the helper")
+
+        _ = await service.events(for: ["ALPHA"])
+        count = await runner.callCount()
+        XCTAssertEqual(count, 1)
+
+        // Two days on the copy is past its day, and is still read, without asking again.
+        advance(2 * day)
+        let saved = await service.savedEvents(for: ["alpha", "BETA", "-BAD", "ALPHA"])
+        count = await runner.callCount()
+        XCTAssertEqual(Array(saved.keys), ["ALPHA"])
+        XCTAssertEqual(saved["ALPHA"]?.exDividendDate, InstrumentEventDay("2026-11-28"))
+        XCTAssertEqual(count, 1, "an old copy is read, never refreshed")
+
+        // Another service over the same folder reads the copy from disk, and runs nothing.
+        let other = InstrumentEventsRunnerStub(responses: [.timeout])
+        let fromDisk = await makeService(runner: other).savedEvents(for: ["ALPHA"])
+        let otherCount = await other.callCount()
+        XCTAssertEqual(fromDisk["ALPHA"]?.symbol, "ALPHA")
+        XCTAssertEqual(otherCount, 0)
+    }
+
+    func testTheAcceptanceFixtureCanGiveAnEarningsRange() async throws {
+        let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [
+          {"symbol": "FAKERANGE", "earningsInDays": 30, "earningsEndInDays": 37},
+          {"symbol": "FAKEONE", "earningsInDays": 9},
+          {"symbol": "FAKEEND", "earningsEndInDays": 5}]}
+        """.utf8))
+        let clock = self.clock!
+        let service = InstrumentEventsService(
+            scriptPath: nil, processRunner: InstrumentEventsRunnerStub(responses: [.output("[]")]),
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+            directory: directory, now: { clock.withLock { $0 } }, fixture: fixture
+        )
+        let results = await service.events(for: ["FAKERANGE", "FAKEONE", "FAKEEND"])
+        func offset(_ days: Int) -> InstrumentEventDay? {
+            InstrumentEventDay.on(start.addingTimeInterval(Double(days) * day))
+        }
+        XCTAssertEqual(results[0].events?.earningsDate, offset(30))
+        XCTAssertEqual(results[0].events?.earningsDateEnd, offset(37))
+        XCTAssertEqual(results[1].events?.earningsDate, offset(9))
+        XCTAssertNil(results[1].events?.earningsDateEnd, "a single date has no end")
+        XCTAssertNil(results[2].events?.earningsDate)
+        XCTAssertNil(results[2].events?.earningsDateEnd, "an end with no start is not a range")
+    }
+
     func testTheAcceptanceFixtureAnswersInsteadOfTheHelperAndYahoo() async throws {
         let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
         {"version": 1, "holdings": [{"symbol": "FAKEUS", "instrumentType": "EQUITY", "currency": "USD",

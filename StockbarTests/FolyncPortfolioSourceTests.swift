@@ -2803,6 +2803,54 @@ extension FolyncPortfolioSourceTests {
         XCTAssertEqual(resavedTrades.lots[0].status, .unknown("Reopened"))
     }
 
+    func testSavedDividendsReadTheKeptPageOrTheDiskCopyWithoutARequestOrACredential() async throws {
+        let harness = try makeLedgerHarness()
+        harness.respond { _ in (200, Self.ledgerJSON(.dividends), "W/\"one\"") }
+        let query = FolyncDividendsQuery(status: .all, from: FolyncLedgerDay(year: 2025, month: 11, day: 20),
+                                         to: FolyncLedgerDay(year: 2027, month: 11, day: 20), limit: 200)
+
+        let nothing = await harness.coordinator.savedDividends(query)
+        XCTAssertNil(nothing, "nothing saved, nothing shown")
+        XCTAssertTrue(harness.ledgerRequests.isEmpty, "reading what is saved asks nothing")
+
+        _ = await harness.coordinator.routeDividends(query)
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+        let kept = await harness.coordinator.savedDividends(query)
+        XCTAssertEqual(kept?.events.isEmpty, false, "the page the fetch policy keeps")
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+
+        // Past the reuse window, a coordinator that has never asked reads the copy on
+        // disk, and never reads the credential (which could raise a Keychain prompt).
+        let credentialReads = LockedBox(0)
+        let cold = FolyncSupplementalCoordinator(
+            settingsStore: harness.settingsStore,
+            cache: FolyncSupplementalCache(directory: harness.cacheDirectory),
+            session: Self.stubSession(),
+            providerPolicy: Self.testProviderPolicy,
+            tokenProvider: {
+                credentialReads.value += 1
+                throw URLError(.userAuthenticationRequired)
+            }
+        )
+        let fromDisk = await cold.savedDividends(query)
+        XCTAssertEqual(fromDisk?.events.map { $0.eventId }, kept?.events.map { $0.eventId })
+        XCTAssertEqual(credentialReads.value, 0)
+        XCTAssertEqual(harness.ledgerRequests.count, 1, "still the one request")
+
+        let otherQuery = await cold.savedDividends(FolyncDividendsQuery(status: .received))
+        XCTAssertNil(otherQuery, "a copy answers only the query it was saved for")
+
+        var settings = harness.settingsStore.load()
+        settings.supplemental = FolyncSupplementalSettings(
+            historicalLineCharts: false, candlestickCharts: false, benchmarkMarketData: false, exchangeRates: false,
+            allowLegacyFallback: false, dividends: false, tradeAnalysis: true, transactions: true
+        )
+        harness.settingsStore.save(settings)
+        let switchedOff = await cold.savedDividends(query)
+        XCTAssertNil(switchedOff, "dividends switched off show nothing, saved or not")
+        XCTAssertEqual(harness.ledgerRequests.count, 1)
+    }
+
     func testLedgerSavedCopyKeepsNullFiguresWhenFolyncDoesNotAnswer() async throws {
         let harness = try makeLedgerHarness()
         harness.respond { _ in (200, Self.ledgerJSON(.dividends), "W/\"one\"") }
