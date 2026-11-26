@@ -71,64 +71,60 @@ struct StockbarSettingsView: View {
     private var content: some View {
         switch selectedTab {
         case .general:
-            settingsForm { generalPane }
+            settingsPage { generalPane }
         case .menuBar:
-            settingsForm { menuBarPane }
+            settingsPage { menuBarPane }
         case .appearance:
-            settingsForm { appearancePane }
+            settingsPage { appearancePane }
         case .dataSources:
             DataSourcesSettingsView(dataModel: dataModel)
         case .refresh:
-            settingsForm { refreshPane }
+            settingsPage { refreshPane }
                 .onAppear(perform: syncRefreshState)
         case .advanced:
-            settingsForm { advancedPane }
+            settingsPage { advancedPane }
         }
     }
 
-    /// How far inside its own edges macOS draws a grouped form's groups with
-    /// no content margins: a minimum margin it keeps plus the groups' own
-    /// inset (measured on macOS 27). It also caps the groups at about 702
-    /// points and centres them, so `settingsContentWidth` stays under that.
-    private static let groupedFormGroupInset: CGFloat = 37.5
-
-    /// The grouped-form tabs. Their groups start at the page header's left
-    /// edge and stop at the same width as Connections' cards, so the form is
-    /// widened past the page padding by the difference.
-    private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        Form {
-            content()
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .contentMargins(.horizontal, 0, for: .automatic)
-        .frame(maxWidth: StockbarLayout.settingsContentWidth + 2 * Self.groupedFormGroupInset, alignment: .topLeading)
-        .padding(.horizontal, StockbarLayout.pagePadding - Self.groupedFormGroupInset)
+    /// A tab built from settings sections. Its cards run the full width of
+    /// the page, like Connections' and every other page's, and its toggles
+    /// are switches, as they were in the grouped form these tabs used to be.
+    private func settingsPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        StockbarSettingsPage(content: content)
+            .toggleStyle(StockbarSettingsSwitchStyle())
     }
 
     @ViewBuilder
     private var generalPane: some View {
-        Section("Portfolio") {
-            Picker("Preferred Currency", selection: $dataModel.preferredCurrency) {
-                ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
-                    Text(currency).tag(currency)
+        StockbarSettingsSection("Portfolio") {
+            StockbarSettingsRow("Preferred Currency") {
+                Picker("Preferred Currency", selection: $dataModel.preferredCurrency) {
+                    ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
+                        Text(currency).tag(currency)
+                    }
                 }
             }
-            Picker(selection: $dataModel.portfolioGainBasis) {
-                ForEach(PortfolioGainBasis.allCases) { basis in
-                    Text(basis.title).tag(basis)
+            StockbarSettingsRow(
+                "Measure P&L Against",
+                detail: "Net deposits are the money you paid in less what you took out, as Folync reports them. Where they are not available, P&L is measured against the cost of the shares you hold."
+            ) {
+                Picker("Measure P&L Against", selection: $dataModel.portfolioGainBasis) {
+                    ForEach(PortfolioGainBasis.allCases) { basis in
+                        Text(basis.title).tag(basis)
+                    }
                 }
-            } label: {
-                Text("Measure P&L Against")
-                Text("Net deposits are the money you paid in less what you took out, as Folync reports them. Where they are not available, P&L is measured against the cost of the shares you hold.")
             }
-            Toggle(isOn: $dataModel.showColorCoding) {
-                Text("Color Coding")
-                Text("Green for gains and red for losses in the menu bar. Unchanged values stay neutral.")
+            StockbarSettingsRow(
+                "Color Coding",
+                detail: "Green for gains and red for losses in the menu bar. Unchanged values stay neutral."
+            ) {
+                Toggle("Color Coding", isOn: $dataModel.showColorCoding)
             }
-            Toggle(isOn: $dataModel.showMarketIndicators) {
-                Text("Market Indicators")
-                Text("Show pre-market, after-hours and closed-market indicators.")
+            StockbarSettingsRow(
+                "Market Indicators",
+                detail: "Show pre-market, after-hours and closed-market indicators."
+            ) {
+                Toggle("Market Indicators", isOn: $dataModel.showMarketIndicators)
             }
         }
 
@@ -139,104 +135,131 @@ struct StockbarSettingsView: View {
 
     @ViewBuilder
     private var menuBarPane: some View {
-        Section {
-            LabeledContent("Preview") {
+        StockbarSettingsSection(
+            "Stock Items",
+            footer: "Each visible holding gets its own menu bar item. Choose which holdings appear from the Menu Bar column in Holdings."
+        ) {
+            StockbarSettingsRow("Preview") {
                 MenuBarPreview(text: dataModel.menuBarDisplaySettings.samplePreview())
             }
-            Picker("Display Mode", selection: $dataModel.menuBarDisplaySettings.displayMode) {
-                ForEach(MenuBarDisplaySettings.DisplayMode.allCases, id: \.self) { mode in
-                    Text(mode.description).tag(mode)
+            StockbarSettingsRow("Display Mode") {
+                Picker("Display Mode", selection: $dataModel.menuBarDisplaySettings.displayMode) {
+                    ForEach(MenuBarDisplaySettings.DisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.description).tag(mode)
+                    }
                 }
             }
 
             if dataModel.menuBarDisplaySettings.displayMode.usesConfigurableChangeFormat {
-                Picker("Change Format", selection: $dataModel.menuBarDisplaySettings.changeFormat) {
-                    ForEach(MenuBarDisplaySettings.ChangeFormat.allCases, id: \.self) { format in
-                        Text(format.description).tag(format)
+                StockbarSettingsRow("Change Format") {
+                    Picker("Change Format", selection: $dataModel.menuBarDisplaySettings.changeFormat) {
+                        ForEach(MenuBarDisplaySettings.ChangeFormat.allCases, id: \.self) { format in
+                            Text(format.description).tag(format)
+                        }
                     }
                 }
             }
 
             if dataModel.menuBarDisplaySettings.displayMode == .custom {
-                TextField(
-                    "Custom Template",
-                    text: Binding(
-                        get: { dataModel.menuBarDisplaySettings.customTemplate ?? "" },
-                        set: { dataModel.menuBarDisplaySettings.customTemplate = $0.isEmpty ? nil : $0 }
-                    ),
-                    prompt: Text("{symbol} {price} {arrow}{changePct}")
-                )
-                templateValidation
+                StockbarSettingsRow("Custom Template", stretchesControl: true) {
+                    TextField(
+                        "Custom Template",
+                        text: Binding(
+                            get: { dataModel.menuBarDisplaySettings.customTemplate ?? "" },
+                            set: { dataModel.menuBarDisplaySettings.customTemplate = $0.isEmpty ? nil : $0 }
+                        ),
+                        prompt: Text("{symbol} {price} {arrow}{changePct}")
+                    )
+                    .textFieldStyle(.roundedBorder)
+                } detail: {
+                    templateValidation
+                }
             }
 
-            Picker("Arrow Indicators", selection: $dataModel.menuBarDisplaySettings.arrowStyle) {
-                ForEach(MenuBarDisplaySettings.ArrowStyle.allCases, id: \.self) { style in
-                    Text(style.description).tag(style)
+            StockbarSettingsRow("Arrow Indicators") {
+                Picker("Arrow Indicators", selection: $dataModel.menuBarDisplaySettings.arrowStyle) {
+                    ForEach(MenuBarDisplaySettings.ArrowStyle.allCases, id: \.self) { style in
+                        Text(style.description).tag(style)
+                    }
                 }
             }
 
             if dataModel.menuBarDisplaySettings.arrowStyle != .none {
-                Toggle("Show arrow before symbol", isOn: $dataModel.menuBarDisplaySettings.showArrowBeforeSymbol)
+                StockbarSettingsRow("Show arrow before symbol") {
+                    Toggle("Show arrow before symbol", isOn: $dataModel.menuBarDisplaySettings.showArrowBeforeSymbol)
+                }
             }
 
-            Picker("Decimal Places", selection: $dataModel.menuBarDisplaySettings.decimalPlaces) {
-                ForEach(0...4, id: \.self) { Text("\($0)").tag($0) }
+            StockbarSettingsRow("Decimal Places") {
+                Picker("Decimal Places", selection: $dataModel.menuBarDisplaySettings.decimalPlaces) {
+                    ForEach(0...4, id: \.self) { Text("\($0)").tag($0) }
+                }
             }
 
-            Toggle("Show currency symbols", isOn: $dataModel.menuBarDisplaySettings.showCurrency)
-        } header: {
-            Text("Stock Items")
-        } footer: {
-            Text("Each visible holding gets its own menu bar item. Choose which holdings appear from the Menu Bar column in Holdings.")
+            StockbarSettingsRow("Show currency symbols") {
+                Toggle("Show currency symbols", isOn: $dataModel.menuBarDisplaySettings.showCurrency)
+            }
         }
 
-        Section("Menu Bar Visibility") {
-            Toggle(
-                "Show stocks in the menu bar",
-                isOn: Binding(
-                    get: { !dataModel.hideAllMenuBarItems },
-                    set: { newValue in
-                        dataModel.hideAllMenuBarItems = !newValue
-                        NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
-                    }
+        StockbarSettingsSection("Menu Bar Visibility") {
+            StockbarSettingsRow("Show stocks in the menu bar") {
+                Toggle(
+                    "Show stocks in the menu bar",
+                    isOn: Binding(
+                        get: { !dataModel.hideAllMenuBarItems },
+                        set: { newValue in
+                            dataModel.hideAllMenuBarItems = !newValue
+                            NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
+                        }
+                    )
                 )
-            )
-            Toggle(isOn: $dataModel.requireExternalDisplayForMenuBarStocks) {
-                Text("Only with an external display")
+            }
+            StockbarSettingsRow("Only with an external display") {
+                Toggle("Only with an external display", isOn: $dataModel.requireExternalDisplayForMenuBarStocks)
+                    .disabled(dataModel.hideAllMenuBarItems)
+            } detail: {
                 Text(menuBarVisibilityStatusText)
                     .foregroundStyle(!dataModel.hideAllMenuBarItems
                                      && dataModel.requireExternalDisplayForMenuBarStocks
                                      && !dataModel.isExternalDisplayConnected ? .orange : .secondary)
             }
-            .disabled(dataModel.hideAllMenuBarItems)
         }
 
-        Section("Portfolio Menu Bar") {
-            LabeledContent("Preview") {
+        StockbarSettingsSection("Portfolio Menu Bar") {
+            StockbarSettingsRow("Preview") {
                 MenuBarPreview(text: dataModel.portfolioMenuBarDisplaySettings.samplePreview())
             }
-            Toggle("Show portfolio total in the menu bar", isOn: $dataModel.portfolioMenuBarDisplaySettings.isEnabled)
-            Picker("Currency", selection: $dataModel.portfolioMenuBarDisplaySettings.currencyCode) {
-                ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
-                    Text(currency).tag(currency)
+            StockbarSettingsRow("Show portfolio total in the menu bar") {
+                Toggle("Show portfolio total in the menu bar", isOn: $dataModel.portfolioMenuBarDisplaySettings.isEnabled)
+            }
+            StockbarSettingsRow("Currency") {
+                Picker("Currency", selection: $dataModel.portfolioMenuBarDisplaySettings.currencyCode) {
+                    ForEach(DataModel.supportedCurrencies, id: \.self) { currency in
+                        Text(currency).tag(currency)
+                    }
                 }
             }
-            Picker("Day Gain", selection: $dataModel.portfolioMenuBarDisplaySettings.dayGainFormat) {
-                ForEach(PortfolioMenuBarDisplaySettings.DayGainFormat.allCases, id: \.self) { format in
-                    Text(format.description).tag(format)
+            StockbarSettingsRow("Day Gain") {
+                Picker("Day Gain", selection: $dataModel.portfolioMenuBarDisplaySettings.dayGainFormat) {
+                    ForEach(PortfolioMenuBarDisplaySettings.DayGainFormat.allCases, id: \.self) { format in
+                        Text(format.description).tag(format)
+                    }
                 }
             }
-            Picker("Decimal Places", selection: $dataModel.portfolioMenuBarDisplaySettings.decimalPlaces) {
-                ForEach(0...4, id: \.self) { Text("\($0)").tag($0) }
+            StockbarSettingsRow("Decimal Places") {
+                Picker("Decimal Places", selection: $dataModel.portfolioMenuBarDisplaySettings.decimalPlaces) {
+                    ForEach(0...4, id: \.self) { Text("\($0)").tag($0) }
+                }
             }
         }
 
-        Section {
-            Toggle("Compare with a benchmark", isOn: $benchmarkEnabled)
-        } header: {
-            Text("Stock Popover")
-        } footer: {
-            Text("Draws the S&P 500 (US listings) or FTSE 100 (London listings) behind a stock's price chart.")
+        StockbarSettingsSection(
+            "Stock Popover",
+            footer: "Draws the S&P 500 (US listings) or FTSE 100 (London listings) behind a stock's price chart."
+        ) {
+            StockbarSettingsRow("Compare with a benchmark") {
+                Toggle("Compare with a benchmark", isOn: $benchmarkEnabled)
+            }
         }
     }
 
@@ -244,85 +267,89 @@ struct StockbarSettingsView: View {
 
     @ViewBuilder
     private var appearancePane: some View {
-        Section {
-            Picker("Theme", selection: $appearanceMode) {
-                Text("System").tag("system")
-                Text("Light").tag("light")
-                Text("Dark").tag("dark")
+        StockbarSettingsSection("Appearance", footer: "Applies to the Stockbar window and menu bar popovers.") {
+            StockbarSettingsRow("Theme") {
+                Picker("Theme", selection: $appearanceMode) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
-        } header: {
-            Text("Appearance")
-        } footer: {
-            Text("Applies to the Stockbar window and menu bar popovers.")
         }
     }
 
     @ViewBuilder
     private var refreshPane: some View {
-        Section {
-            Picker("Main Refresh Interval", selection: $refreshInterval) {
-                ForEach(refreshIntervalOptions, id: \.1) { option in
-                    Text(option.0).tag(option.1)
+        StockbarSettingsSection(
+            "Schedule",
+            footer: (dataModel.isFolyncPortfolioActive
+                ? "Folync holdings update every minute; these intervals apply to watchlist symbols and stored chart history. "
+                : "")
+                + "A price fetched within about 90% of the refresh interval is reused. Symbols that keep failing are retried after 1, 2, 5 and 10 minutes, then paused for an hour."
+        ) {
+            StockbarSettingsRow("Main Refresh Interval") {
+                Picker("Main Refresh Interval", selection: $refreshInterval) {
+                    ForEach(refreshIntervalOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
                 }
-            }
-            .onChange(of: refreshInterval) { _, newValue in
-                dataModel.refreshInterval = newValue
-                dataModel.saveTradingInfo()
-                NotificationCenter.default.post(name: .refreshIntervalChanged, object: newValue)
+                .onChange(of: refreshInterval) { _, newValue in
+                    dataModel.refreshInterval = newValue
+                    dataModel.saveTradingInfo()
+                    NotificationCenter.default.post(name: .refreshIntervalChanged, object: newValue)
+                }
             }
 
-            Picker("Chart Data Collection", selection: $snapshotInterval) {
-                ForEach(snapshotIntervalOptions, id: \.1) { option in
-                    Text(option.0).tag(option.1)
+            StockbarSettingsRow("Chart Data Collection") {
+                Picker("Chart Data Collection", selection: $snapshotInterval) {
+                    ForEach(snapshotIntervalOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .onChange(of: snapshotInterval) { _, newValue in
+                    HistoricalDataManager.shared.setSnapshotInterval(newValue)
                 }
             }
-            .onChange(of: snapshotInterval) { _, newValue in
-                HistoricalDataManager.shared.setSnapshotInterval(newValue)
-            }
-        } header: {
-            Text("Schedule")
-        } footer: {
-            Text(
-                (dataModel.isFolyncPortfolioActive
-                    ? "Folync holdings update every minute; these intervals apply to watchlist symbols and stored chart history. "
-                    : "")
-                + "A price fetched within about 90% of the refresh interval is reused. Symbols that keep failing are retried after 1, 2, 5 and 10 minutes, then paused for an hour."
-            )
         }
 
-        Section("Now") {
-            HStack(spacing: 12) {
-                Button {
-                    refreshNow()
-                } label: {
-                    Label("Refresh Now", systemImage: "arrow.clockwise")
+        StockbarSettingsSection("Now") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Button {
+                        refreshNow()
+                    } label: {
+                        Label("Refresh Now", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(isRefreshingNow)
+                    Button {
+                        saveChartSnapshot()
+                    } label: {
+                        Label("Save Chart Snapshot", systemImage: "chart.xyaxis.line")
+                    }
+                    .disabled(isSavingSnapshot)
+                    if isRefreshingNow || isSavingSnapshot {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel(isRefreshingNow ? "Refreshing prices" : "Saving snapshot")
+                    }
                 }
-                .disabled(isRefreshingNow)
-                Button {
-                    saveChartSnapshot()
-                } label: {
-                    Label("Save Chart Snapshot", systemImage: "chart.xyaxis.line")
+                if let nowStatus {
+                    Text(nowStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(isSavingSnapshot)
-                if isRefreshingNow || isSavingSnapshot {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel(isRefreshingNow ? "Refreshing prices" : "Saving snapshot")
-                }
-            }
-            if let nowStatus {
-                Text(nowStatus)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
 
     @ViewBuilder
     private var advancedPane: some View {
-        Section {
-            LabeledContent("Last Backup") {
+        StockbarSettingsSection(
+            "Backups",
+            footer: "Stockbar backs up your holdings once a day. Keychain credentials are not included."
+        ) {
+            StockbarSettingsRow("Last Backup") {
                 if let lastBackup = lastBackupDate {
                     Label(lastBackup.formatted(date: .abbreviated, time: .shortened), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
@@ -330,16 +357,18 @@ struct StockbarSettingsView: View {
                     Text("None yet").foregroundStyle(.secondary)
                 }
             }
-            Picker("Keep Backups For", selection: $retentionDays) {
-                Text("7 days").tag(7)
-                Text("14 days").tag(14)
-                Text("30 days").tag(30)
-                Text("90 days").tag(90)
+            StockbarSettingsRow("Keep Backups For") {
+                Picker("Keep Backups For", selection: $retentionDays) {
+                    Text("7 days").tag(7)
+                    Text("14 days").tag(14)
+                    Text("30 days").tag(30)
+                    Text("90 days").tag(90)
+                }
+                .onChange(of: retentionDays) { _, newValue in
+                    BackupService.shared.retentionDays = newValue
+                }
             }
-            .onChange(of: retentionDays) { _, newValue in
-                BackupService.shared.retentionDays = newValue
-            }
-            HStack(spacing: 12) {
+            StockbarWrappingRow(spacing: 12) {
                 Button {
                     performManualBackup()
                 } label: {
@@ -357,58 +386,51 @@ struct StockbarSettingsView: View {
                     Label("View Backups", systemImage: "folder")
                 }
             }
-        } header: {
-            Text("Backups")
-        } footer: {
-            Text("Stockbar backs up your holdings once a day. Keychain credentials are not included.")
         }
 
         SettingsTransferSection(dataModel: dataModel)
 
         pythonSection
 
-        Section("Memory") {
-            Toggle(isOn: $quitPythonHelperWhenIdle) {
-                Text("Quit Python Helper When Idle")
-                Text("Prices are fetched by a Python helper that holds 70 MB or more. Turned on, it quits about 90 seconds after its last request, and each refresh starts it again: about a third of a second of processor time. Turned off, it stays running for 15 minutes after its last request. While markets are open, refreshing every minute keeps it running either way.")
+        StockbarSettingsSection("Memory") {
+            StockbarSettingsRow(
+                "Quit Python Helper When Idle",
+                detail: "Prices are fetched by a Python helper that holds 70 MB or more. Turned on, it quits about 90 seconds after its last request, and each refresh starts it again: about a third of a second of processor time. Turned off, it stays running for 15 minutes after its last request. While markets are open, refreshing every minute keeps it running either way."
+            ) {
+                Toggle("Quit Python Helper When Idle", isOn: $quitPythonHelperWhenIdle)
+                    .onChange(of: quitPythonHelperWhenIdle) {
+                        Task { await PythonWorkerPool.shared.idleTimeoutChanged() }
+                    }
             }
-            .onChange(of: quitPythonHelperWhenIdle) {
-                Task { await PythonWorkerPool.shared.idleTimeoutChanged() }
-            }
-            Toggle(isOn: $rollsDigits) {
-                Text("Roll Digits When Figures Change")
-                Text("Figures in the main window and the popovers can roll to a new value. macOS keeps the digits it draws for this in memory: 6 to 10 MB when measured after the main window's figures had rolled in. Turned off, figures change without rolling. Memory already used may not be given back until Stockbar is restarted.")
+            StockbarSettingsRow(
+                "Roll Digits When Figures Change",
+                detail: "Figures in the main window and the popovers can roll to a new value. macOS keeps the digits it draws for this in memory: 6 to 10 MB when measured after the main window's figures had rolled in. Turned off, figures change without rolling. Memory already used may not be given back until Stockbar is restarted."
+            ) {
+                Toggle("Roll Digits When Figures Change", isOn: $rollsDigits)
             }
         }
 
-        Section("Diagnostics") {
-            LabeledContent {
+        StockbarSettingsSection("Diagnostics") {
+            StockbarSettingsRow("Logs", detail: "View, refresh and clear Stockbar's log. Credentials are redacted.") {
                 Button("Open Diagnostics") { onOpenSection(.diagnostics) }
-            } label: {
-                Text("Logs")
-                Text("View, refresh and clear Stockbar's log. Credentials are redacted.")
             }
-            LabeledContent {
+            StockbarSettingsRow("Data health", detail: "Price, exchange-rate and portfolio-source freshness.") {
                 Button("Open Data Health") { onOpenSection(.dataHealth) }
-            } label: {
-                Text("Data health")
-                Text("Price, exchange-rate and portfolio-source freshness.")
             }
         }
     }
 
-    @ViewBuilder
     private var pythonSection: some View {
-        Section {
-            LabeledContent {
+        StockbarSettingsSection(
+            "Python",
+            footer: "Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv or Python 3.10 or later if installed; otherwise downloads uv for Stockbar's own use, so nothing needs installing first. Needs an internet connection and usually takes under a minute."
+        ) {
+            StockbarSettingsRow("Interpreter", detail: pythonInterpreterDescription) {
                 Text(pythonSetup.interpreterVersion ?? (pythonSetup.isCheckingVersion ? "Checking…" : "Not available"))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-            } label: {
-                Text("Interpreter")
-                Text(pythonInterpreterDescription)
             }
-            LabeledContent {
+            StockbarSettingsRow("Stockbar's Python environment") {
                 if pythonSetup.isRunning {
                     ProgressView().controlSize(.small)
                 } else {
@@ -416,14 +438,9 @@ struct StockbarSettingsView: View {
                         Task { await pythonSetup.setUp() }
                     }
                 }
-            } label: {
-                Text("Stockbar's Python environment")
+            } detail: {
                 pythonSetupStatus
             }
-        } header: {
-            Text("Python")
-        } footer: {
-            Text("Installs a current Python and Stockbar's pinned packages in Application Support. Uses uv or Python 3.10 or later if installed; otherwise downloads uv for Stockbar's own use, so nothing needs installing first. Needs an internet connection and usually takes under a minute.")
         }
         .task { await pythonSetup.refreshInterpreterInfo() }
     }
@@ -456,8 +473,11 @@ struct StockbarSettingsView: View {
 
     @ViewBuilder
     private var exchangeRatesSection: some View {
-        Section {
-            LabeledContent("Last Updated") {
+        StockbarSettingsSection(
+            "Exchange Rates",
+            footer: "Rates refresh at most every five minutes. A failed update keeps the previous time."
+        ) {
+            StockbarSettingsRow("Last Updated") {
                 HStack(spacing: 8) {
                     if dataModel.currencyConverter.lastRefreshSuccess {
                         Text(dataModel.currencyConverter.getTimeSinceRefresh())
@@ -480,15 +500,11 @@ struct StockbarSettingsView: View {
             }
             ForEach(exchangeRateCurrencies, id: \.self) { currency in
                 if let rate = dataModel.currencyConverter.exchangeRates[currency] {
-                    LabeledContent("1 USD in \(currency)") {
+                    StockbarSettingsRow("1 USD in \(currency)") {
                         Text(String(format: "%.4f", rate)).monospacedDigit()
                     }
                 }
             }
-        } header: {
-            Text("Exchange Rates")
-        } footer: {
-            Text("Rates refresh at most every five minutes. A failed update keeps the previous time.")
         }
     }
 
@@ -647,10 +663,11 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 }
 
 /// Menu bar text rendered the way it appears in the menu bar.
-/// Shown inside `LabeledContent("Preview")`, which already gives it its
-/// accessibility label. Do not add another: with both, SwiftUI resolved the
-/// row's label and this text's label through each other until the app
-/// crashed whenever VoiceOver or another accessibility client read the page.
+/// Shown in the "Preview" row, whose title is read just before it. Do not
+/// give it an accessibility label: inside a grouped form's `LabeledContent`,
+/// SwiftUI resolved the row's label and this text's label through each other
+/// until the app crashed whenever VoiceOver or another accessibility client
+/// read the page.
 private struct MenuBarPreview: View {
     let text: String
 

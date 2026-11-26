@@ -104,10 +104,6 @@ enum StockbarLayout {
     /// Inset panels, notices and fields inside a page.
     static let insetRadius: CGFloat = 9
     static let sectionSpacing: CGFloat = 18
-    /// The widest Settings' content gets, on every tab. Wide enough for
-    /// Folync's buttons in one row (at the minimum window size they wrap),
-    /// and under the width macOS caps a grouped form's groups at.
-    static let settingsContentWidth: CGFloat = 700
 }
 
 /// Lays its children out in a row that wraps onto further lines when the
@@ -824,6 +820,195 @@ struct StockbarSectionTitle: View {
         }
         .font(.headline)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// MARK: - Settings
+
+/// One Settings tab's page: it scrolls as a whole under the tab bar, and its
+/// cards run the full width of the page, inside the padding every page uses.
+struct StockbarSettingsPage<Content: View>: View {
+    /// Space between one section's card and the next.
+    static var sectionSpacing: CGFloat { 20 }
+
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Self.sectionSpacing) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, StockbarLayout.pagePadding)
+            .padding(.vertical, 12)
+        }
+    }
+}
+
+/// One section of a Settings tab, drawn as a Glass card: the section's title
+/// (a heading for VoiceOver), an optional line under it and an optional
+/// control at its right, the content, then an optional footer.
+///
+/// With `separatesRows`, each row of the content is divided from the next by
+/// a hairline, as macOS's grouped rows are; a row left out by a condition
+/// leaves no divider behind. Without it the content is laid out as given, for
+/// cards that arrange their own content, such as Connections'.
+struct StockbarSettingsSection<Content: View, Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    let footer: String?
+    let separatesRows: Bool
+    private let content: Content
+    private let accessory: Accessory
+
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        footer: String? = nil,
+        separatesRows: Bool = true,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.footer = footer
+        self.separatesRows = separatesRows
+        self.content = content()
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 12)
+                accessory
+            }
+
+            if separatesRows {
+                Group(subviews: content) { rows in
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { row in
+                            if row.id != rows.first?.id {
+                                Divider()
+                            }
+                            row.padding(.vertical, 7)
+                        }
+                    }
+                }
+            } else {
+                content
+            }
+
+            if let footer {
+                Text(footer)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .stockbarCard()
+    }
+}
+
+extension StockbarSettingsSection where Accessory == EmptyView {
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        footer: String? = nil,
+        separatesRows: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(title, subtitle: subtitle, footer: footer, separatesRows: separatesRows,
+                  content: content, accessory: { EmptyView() })
+    }
+}
+
+/// One row of a Settings section: its title, with any explanation under it
+/// in secondary text, on the left; its control on the right.
+///
+/// The control keeps its natural width at the row's right edge; a text field
+/// takes `stretchesControl` and fills the rest of the row instead. The
+/// control's own label is hidden from sight but kept, so a `Toggle` or
+/// `Picker` given the row's title stays named for VoiceOver, as it is in a
+/// grouped form. Nothing here adds an accessibility label of its own.
+struct StockbarSettingsRow<Detail: View, Control: View>: View {
+    let title: String
+    let stretchesControl: Bool
+    private let detail: Detail
+    private let control: Control
+
+    init(
+        _ title: String,
+        stretchesControl: Bool = false,
+        @ViewBuilder control: () -> Control,
+        @ViewBuilder detail: () -> Detail
+    ) {
+        self.title = title
+        self.stretchesControl = stretchesControl
+        self.control = control()
+        self.detail = detail()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                detail
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: stretchesControl ? nil : .infinity, alignment: .leading)
+            .layoutPriority(stretchesControl ? 1 : 0)
+
+            if stretchesControl {
+                control
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                control
+                    .labelsHidden()
+                    .fixedSize()
+            }
+        }
+    }
+}
+
+extension StockbarSettingsRow where Detail == Text? {
+    init(
+        _ title: String,
+        detail: String? = nil,
+        stretchesControl: Bool = false,
+        @ViewBuilder control: () -> Control
+    ) {
+        self.init(title, stretchesControl: stretchesControl, control: control) {
+            detail.map { Text($0) }
+        }
+    }
+}
+
+/// The switch Settings' toggles take outside a grouped form, at the size a
+/// grouped form draws them. Apply it to a page, not to Connections, whose
+/// cards use checkboxes.
+struct StockbarSettingsSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .controlSize(.small)
     }
 }
 

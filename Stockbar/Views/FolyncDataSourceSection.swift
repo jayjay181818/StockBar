@@ -24,19 +24,11 @@ struct FolyncDataSourceSection: View {
     private let accessibilityAnnouncer = FolyncStatusAccessibilityAnnouncer.live
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Folync Portfolio Source")
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-                    Text("Read-only authoritative holdings, valuation, cash, P/L, and freshness.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                statusPill
-            }
-
+        StockbarSettingsSection(
+            "Folync Portfolio Source",
+            subtitle: "Read-only authoritative holdings, valuation, cash, P/L, and freshness.",
+            separatesRows: false
+        ) {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("HTTPS URL:")
@@ -221,8 +213,9 @@ struct FolyncDataSourceSection: View {
                         .toggleStyle(.checkbox)
                 }
             }
+        } accessory: {
+            statusPill
         }
-        .stockbarCard()
         .onAppear(perform: loadStoredSettings)
         .onAppear { overlays = dataModel.folyncSessionDependencies.overlayStore.load() }
         .onChange(of: selectedScope) { _, _ in preview = nil }
