@@ -336,6 +336,11 @@ final class SettingsTransferService: Sendable {
             guard kind.accepts(value) else {
                 throw SettingsTransferError.unsupportedContents("a setting has an unexpected type.")
             }
+            if key == EarningsFiguresSettings.key, case .stringDictionary(let choices) = value {
+                // Known choices and offered ISO codes only; anything else is dropped.
+                kept[key] = .stringDictionary(EarningsFiguresSettings.validated(choices))
+                continue
+            }
             guard let range = SettingsTransferKeys.numberRanges[key] else {
                 kept[key] = value
                 continue

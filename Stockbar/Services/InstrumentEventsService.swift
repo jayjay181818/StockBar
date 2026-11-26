@@ -170,10 +170,10 @@ struct InstrumentEarningsHistory: Sendable, Equatable, Codable {
     let symbol: String
     /// The earnings dates of the twelve months up to `fetchedAt`, oldest
     /// first. Empty when Yahoo's earnings page lists none.
+    /// The figures are in the company's reporting currency, which Yahoo does
+    /// not name, so no currency is kept with them. A copy saved before this
+    /// still carries an `epsCurrency` key; decoding ignores it.
     let earnings: [InstrumentPastEarnings]
-    /// The currency of the EPS figures (the quote currency). Nil when the
-    /// figures were left out because it could not be told, or none were given.
-    let epsCurrency: String?
     /// When the script asked Yahoo.
     let fetchedAt: Date
 }

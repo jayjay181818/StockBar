@@ -23,6 +23,9 @@ struct StockbarCalendarView: View {
     let dataModel: DataModel
     @State private var model: StockbarCalendarModel
     @State private var hoveredRow: String?
+    /// Each holding's choice for its past EPS figures (Settings → Advanced).
+    /// Read in `body`, so a change shows at once; it asks for nothing.
+    private let figuresSettings = EarningsFiguresSettings.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, router: any StockbarIncomeRouting = FolyncSupplementalCoordinator.shared,
@@ -43,9 +46,10 @@ struct StockbarCalendarView: View {
     private func rows(_ inputs: StockbarCalendarInputs) -> CalendarRows {
         let target = dataModel.preferredCurrency
         let converter = dataModel.currencyConverter
-        return model.rows(inputs, currency: target) { amount, from in
+        let rows = model.rows(inputs, currency: target) { amount, from in
             converter.convertWithLoadedRates(amount: amount, from: from, to: target)
         }
+        return CalendarFigures.applying(figuresSettings.choices, to: rows)
     }
 
     var body: some View {

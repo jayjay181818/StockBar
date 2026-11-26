@@ -70,13 +70,12 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
         /// Past earnings for the Calendar's Past view. Nil answers "no data",
         /// as Yahoo does for a fund. Optional, so an older fixture still reads.
         let pastEarnings: [PastEarnings]?
-        /// The currency of the past earnings' EPS figures; nil when the helper
-        /// would have left the figures out (pence or no currency).
-        let epsCurrency: String?
+        // A fixture written for pull request 167 may carry `epsCurrency`; it
+        // is read past and ignored, as the helper no longer names one.
 
         init(symbol: String, instrumentType: String?, currency: String?, dividends: [Dividend]?,
              exDividendInDays: Int?, payInDays: Int?, earningsInDays: Int?, earningsEndInDays: Int? = nil,
-             pastEarnings: [PastEarnings]? = nil, epsCurrency: String? = nil) {
+             pastEarnings: [PastEarnings]? = nil) {
             self.symbol = symbol
             self.instrumentType = instrumentType
             self.currency = currency
@@ -86,7 +85,6 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
             self.earningsInDays = earningsInDays
             self.earningsEndInDays = earningsEndInDays
             self.pastEarnings = pastEarnings
-            self.epsCurrency = epsCurrency
         }
     }
 
@@ -256,7 +254,6 @@ struct StockbarAcceptanceEventsFixture: Codable, Equatable, Sendable {
             let history: [String: Any] = [
                 "symbol": symbol,
                 "earnings": earnings,
-                "epsCurrency": holding.epsCurrency ?? NSNull(),
                 "fetchedAt": now.timeIntervalSince1970
             ]
             return ["symbol": symbol, "success": true, "earningsHistory": history]

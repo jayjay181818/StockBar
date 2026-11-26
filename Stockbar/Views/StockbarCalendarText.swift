@@ -49,7 +49,10 @@ enum CalendarText {
     /// What follows the title: ", pays 11 Dec, £58.40", ", about £96.20",
     /// ", expected between 27 Jan and 3 Feb", ", EPS 1.52 against 1.48 expected".
     /// Empty when nothing follows.
-    static func detail(_ row: CalendarRow, locale: Locale = .current) -> String {
+    ///
+    /// `spoken` writes a currency the owner chose for the figures by its name,
+    /// for VoiceOver: "EPS 0.27 euros", where the eye reads "EPS €0.27".
+    static func detail(_ row: CalendarRow, locale: Locale = .current, spoken: Bool = false) -> String {
         var parts: [String] = []
         switch row.kind {
         case .exDividend:
@@ -62,7 +65,7 @@ enum CalendarText {
                 parts.append("expected between \(IncomeText.dayMonth(row.day, locale: locale)) "
                              + "and \(IncomeText.dayMonth(end, locale: locale))")
             }
-            if let figures = row.earningsFigures { parts += earningsFigureParts(figures, locale: locale) }
+            if let figures = row.earningsFigures { parts += earningsFigureParts(figures, locale: locale, spoken: spoken) }
         }
         if row.amountIsPartial, row.amount != nil, row.kind == .exDividend || row.amountIsEstimate { parts.append("partial") }
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
@@ -72,13 +75,28 @@ enum CalendarText {
     /// "EPS 1.52 against 1.48 expected" with both, "EPS 1.52" with the
     /// reported one only, nothing without it; then "surprise 2.70%" when
     /// Yahoo gives the surprise.
-    static func earningsFigureParts(_ figures: CalendarEarningsFigures, locale: Locale = .current) -> [String] {
+    ///
+    /// The holding's choice in Settings (`figures.shownAs`) writes the EPS
+    /// figures in a currency ("EPS €0.27 against €0.28 expected"), or leaves
+    /// them out and keeps the surprise, which is a percentage in no currency.
+    static func earningsFigureParts(_ figures: CalendarEarningsFigures, locale: Locale = .current,
+                                    spoken: Bool = false) -> [String] {
         var parts: [String] = []
-        if let reported = figures.reportedEPS {
+        let currency: String?
+        switch figures.shownAs {
+        case .asGiven: currency = nil
+        case .currency(let code): currency = code
+        case .hidden: currency = nil
+        }
+        func figure(_ value: Double) -> String {
+            guard let currency else { return epsFigure(value, locale: locale) }
+            return epsFigure(value, currency: currency, locale: locale, spoken: spoken)
+        }
+        if figures.shownAs != .hidden, let reported = figures.reportedEPS {
             if let estimated = figures.estimatedEPS {
-                parts.append("EPS \(epsFigure(reported, locale: locale)) against \(epsFigure(estimated, locale: locale)) expected")
+                parts.append("EPS \(figure(reported)) against \(figure(estimated)) expected")
             } else {
-                parts.append("EPS \(epsFigure(reported, locale: locale))")
+                parts.append("EPS \(figure(reported))")
             }
         }
         if let surprise = figures.surprisePercent {
@@ -91,6 +109,17 @@ enum CalendarText {
     /// nothing Yahoo gives is rounded away.
     static func epsFigure(_ value: Double, locale: Locale = .current) -> String {
         value.formatted(.number.precision(.fractionLength(2...4)).grouping(.never).locale(locale))
+    }
+
+    /// A figure in a currency the owner chose, with the same decimals: the
+    /// currency's symbol as the locale writes it where that is clear
+    /// ("€0.27"; "US$1.52" outside the United States), and its code where the
+    /// locale has no symbol of its own ("CHF 0.27"). Spoken, the currency's
+    /// name instead: "0.27 euros".
+    static func epsFigure(_ value: Double, currency: String, locale: Locale = .current, spoken: Bool = false) -> String {
+        let style = FloatingPointFormatStyle<Double>.Currency(code: currency, locale: locale)
+            .precision(.fractionLength(2...4)).grouping(.never)
+        return value.formatted(spoken ? style.presentation(.fullName) : style)
     }
 
     /// The amount column: a Folync payment's amount, or nil.
@@ -220,7 +249,8 @@ enum CalendarText {
     /// The row's words in lower case, with its amount: "dividend, £38.20".
     private static func phrase(_ row: CalendarRow, locale: Locale) -> String {
         // "–" is for the eye; VoiceOver hears "amount not known" instead.
-        var words = title(row).lowercased() + detail(row, locale: locale).replacingOccurrences(of: ", \(unknownFigure)", with: "")
+        var words = title(row).lowercased()
+            + detail(row, locale: locale, spoken: true).replacingOccurrences(of: ", \(unknownFigure)", with: "")
         if row.isDividend, row.amount == nil {
             words += ", amount not known"
         } else if let column = amountColumn(row) {

@@ -544,7 +544,9 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         "STOCKBAR_ACCEPTANCE_CURRENCY": "gbp",
         "STOCKBAR_ACCEPTANCE_WINDOW": "min",
         "STOCKBAR_ACCEPTANCE_POPOVER": "portfolio",
-        "STOCKBAR_ACCEPTANCE_CALENDAR": "Past"
+        "STOCKBAR_ACCEPTANCE_CALENDAR": "Past",
+        "STOCKBAR_ACCEPTANCE_SETTINGS_TAB": "advanced",
+        "STOCKBAR_ACCEPTANCE_EARNINGS_FIGURES": "FAKEUS=eur, FAKEGR=hide"
     ]
 
     private let explicitRun = StockbarAcceptanceRuntime(
@@ -562,6 +564,20 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         XCTAssertTrue(options.opensAtMinimumSize)
         XCTAssertTrue(options.opensPortfolioPopover)
         XCTAssertEqual(options.calendarMode, CalendarMode.past.rawValue)
+        XCTAssertEqual(options.settingsTab, SettingsTab.advanced.rawValue)
+        XCTAssertEqual(options.earningsFigures, ["FAKEUS": "EUR", "FAKEGR": "hide"])
+    }
+
+    func testTheEarningsFiguresPresetTakesMadeUpSymbolsAndKnownChoicesOnly() {
+        typealias Options = StockbarAcceptanceLaunchOptions
+        XCTAssertEqual(Options.earningsFigures(from: "FAKEUS=CHF,FAKELN.L=hide"), ["FAKEUS": "CHF", "FAKELN.L": "hide"])
+        XCTAssertEqual(Options.earningsFigures(from: "REAL=EUR,FAKEUS=EUR"), ["FAKEUS": "EUR"], "a real symbol is dropped")
+        XCTAssertEqual(Options.earningsFigures(from: "FAKEUS=GBX,FAKEGR=EUR"), ["FAKEGR": "EUR"], "pence is not a choice")
+        XCTAssertEqual(Options.earningsFigures(from: "fakeus=EUR,FAKE=EUR,FAKEGR=HIDE,FAKEX==EUR"), nil,
+                       "lower-case symbols, the bare prefix, unknown words and stray signs are dropped")
+        XCTAssertNil(Options.earningsFigures(from: "FAKEUS"))
+        XCTAssertNil(Options.earningsFigures(from: ","))
+        XCTAssertNil(Options.earningsFigures(from: "FAKEUS=asGiven"), "As given is never stored")
     }
 
     func testANormalRunIgnoresTheOptions() throws {
@@ -592,7 +608,9 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             ("STOCKBAR_ACCEPTANCE_CURRENCY", "XYZ"),
             ("STOCKBAR_ACCEPTANCE_WINDOW", "max"),
             ("STOCKBAR_ACCEPTANCE_POPOVER", "symbol"),
-            ("STOCKBAR_ACCEPTANCE_CALENDAR", "sideways")
+            ("STOCKBAR_ACCEPTANCE_CALENDAR", "sideways"),
+            ("STOCKBAR_ACCEPTANCE_SETTINGS_TAB", "secret"),
+            ("STOCKBAR_ACCEPTANCE_EARNINGS_FIGURES", "REAL=EUR")
         ]
         let expected = StockbarAcceptanceLaunchOptions.resolve(environment: allOptions, runtime: explicitRun)
         for (key, value) in unknown {
@@ -605,6 +623,8 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
             case StockbarAcceptanceLaunchOptions.currencyKey: withoutIt.currency = nil
             case StockbarAcceptanceLaunchOptions.popoverKey: withoutIt.opensPortfolioPopover = false
             case StockbarAcceptanceLaunchOptions.calendarKey: withoutIt.calendarMode = nil
+            case StockbarAcceptanceLaunchOptions.settingsTabKey: withoutIt.settingsTab = nil
+            case StockbarAcceptanceLaunchOptions.earningsFiguresKey: withoutIt.earningsFigures = nil
             default: withoutIt.opensAtMinimumSize = false
             }
             XCTAssertEqual(StockbarAcceptanceLaunchOptions.resolve(environment: environment, runtime: explicitRun),
@@ -623,11 +643,21 @@ final class StockbarAcceptanceLaunchOptionsTests: XCTestCase {
         defaults.set("USD", forKey: "preferredCurrency")
 
         StockbarAcceptanceLaunchOptions(appearance: .dark, section: "holdings").apply(to: defaults)
+        XCTAssertNil(defaults.object(forKey: "settings.selectedTab"))
+        XCTAssertNil(defaults.object(forKey: EarningsFiguresSettings.key))
 
         XCTAssertEqual(defaults.string(forKey: "appearanceMode"), "dark")
         XCTAssertEqual(defaults.string(forKey: "mainWindow.selectedSection"), "holdings")
         XCTAssertEqual(defaults.string(forKey: "preferredCurrency"), "USD", "an option not given changes nothing")
         XCTAssertEqual(StockbarMainNavigationState(defaults: defaults).selectedSection, .holdings)
+
+        var options = StockbarAcceptanceLaunchOptions()
+        options.settingsTab = SettingsTab.advanced.rawValue
+        options.earningsFigures = ["FAKEUS": "EUR", "FAKEGR": "hide"]
+        options.apply(to: defaults)
+        XCTAssertEqual(defaults.string(forKey: "settings.selectedTab"), "advanced")
+        XCTAssertEqual(EarningsFiguresSettings(defaults: defaults).choices,
+                       ["FAKEUS": .currency("EUR"), "FAKEGR": .hidden])
     }
 }
 
