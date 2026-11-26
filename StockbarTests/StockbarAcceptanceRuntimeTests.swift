@@ -1023,6 +1023,7 @@ final class StockbarAcceptanceHoldingsFixtureTests: XCTestCase {
             ("real.json", validJSON.replacingOccurrences(of: "FAKEUS", with: "AAPL"), StockbarAcceptanceHoldingsFixtureError.notMadeUp("AAPL")),
             ("lower.json", validJSON.replacingOccurrences(of: "FAKEUS", with: "fakeus"), .notMadeUp("fakeus")),
             ("zero.json", validJSON.replacingOccurrences(of: "\"units\": 40", with: "\"units\": 0"), .badFigure("FAKEUS")),
+            ("tiny.json", validJSON.replacingOccurrences(of: "\"units\": 40", with: "\"units\": 0.0000001"), .badFigure("FAKEUS")),
             ("cost.json", validJSON.replacingOccurrences(of: "52.5", with: "-1"), .badFigure("FAKEUS"))
         ] {
             XCTAssertThrowsError(try StockbarAcceptanceHoldingsFixture.read(at: try write(bad, name: name)), name) {

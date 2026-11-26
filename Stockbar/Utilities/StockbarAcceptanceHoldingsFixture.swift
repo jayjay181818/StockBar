@@ -104,7 +104,8 @@ struct StockbarAcceptanceHoldingsFixture: Codable, Equatable, Sendable {
         }
         for holding in fixture.holdings {
             guard isMadeUp(holding.symbol) else { throw StockbarAcceptanceHoldingsFixtureError.notMadeUp(holding.symbol) }
-            guard holding.units.isFinite, holding.units > 0,
+            // Units are stored with six decimals, so anything smaller would be saved as 0.
+            guard holding.units.isFinite, holding.units >= 0.000_001,
                   holding.averageCost.map({ $0.isFinite && $0 > 0 }) ?? true else {
                 throw StockbarAcceptanceHoldingsFixtureError.badFigure(holding.symbol)
             }

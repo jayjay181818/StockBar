@@ -95,7 +95,9 @@ EARNINGS_COLUMNS = {
     "estimatedEPS": ("EPS Estimate",),
     "surprisePercent": ("Surprise(%)", "Surprise (%)"),
 }
-PENCE_CURRENCIES = ("GBp", "GBX")
+# Minor-unit quote currencies: pence, and the other hundredths Yahoo quotes
+# in (Israeli agorot, South African cents). EPS figures are left out for these.
+PENCE_CURRENCIES = ("GBp", "GBX", "ILA", "ZAc", "ZAC")
 
 FAILURE_PATTERNS = (
     ("RATE_LIMIT", re.compile(r"(?i)\b429\b|too many requests|rate.?limit")),
@@ -378,6 +380,9 @@ def forget_cached_pages():
         clear = getattr(cache_get, "cache_clear", None)
         if callable(clear):
             clear()
+        else:
+            print("yfinance's page cache has no cache_clear; a later run may reuse an earlier page",
+                  file=sys.stderr)
     except Exception as error:
         print(f"Could not clear yfinance's page cache: {error}", file=sys.stderr)
 

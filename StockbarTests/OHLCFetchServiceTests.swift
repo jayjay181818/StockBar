@@ -935,12 +935,19 @@ final class InstrumentEventsServiceTests: XCTestCase {
         ])
         let service = makeService(runner: runner)
 
+        // A history copy is fresh until the end of the local day it was fetched on.
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = .current
+        let midnight = try XCTUnwrap(local.nextDate(after: start, matching: DateComponents(hour: 0, minute: 0),
+                                                    matchingPolicy: .nextTime))
+        let untilMidnight = midnight.timeIntervalSince(start)
+
         _ = await service.events(for: ["ALPHA"])
         let first = await service.earningsHistory(for: ["ALPHA"])
-        advance(23 * hour)
+        advance(untilMidnight - 60)
         let insideTheDay = await service.earningsHistory(for: ["ALPHA"])
         let insideCount = await runner.callCount()
-        XCTAssertEqual(insideCount, 2, "a copy younger than a day is used, and the events copy never answers for it")
+        XCTAssertEqual(insideCount, 2, "a copy from earlier today is used, and the events copy never answers for it")
         XCTAssertEqual(insideTheDay, first)
         XCTAssertNil(insideTheDay[0].failure)
 
@@ -954,10 +961,10 @@ final class InstrumentEventsServiceTests: XCTestCase {
         let savedEvents = await relaunched.savedEvents(for: ["ALPHA"])
         XCTAssertEqual(savedEvents["ALPHA"]?.exDividendDate, InstrumentEventDay("2026-11-28"))
 
-        advance(2 * hour)
+        advance(120)
         let afterTheDay = await service.earningsHistory(for: ["ALPHA"])
         let afterCount = await runner.callCount()
-        XCTAssertEqual(afterCount, 3, "after a day it is asked for again")
+        XCTAssertEqual(afterCount, 3, "on the next day it is asked for again, though less than a day has passed")
         XCTAssertEqual(afterTheDay[0].history?.earnings.last?.reportedEPS, 1.60)
     }
 

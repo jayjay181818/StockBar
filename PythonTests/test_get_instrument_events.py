@@ -657,7 +657,7 @@ class EarningsHistoryTests(InstrumentEventsTestCase):
         self.assertNotIn(("ALPHA", "calendar", None), fake.log)
 
     def test_pence_quotes_keep_the_dates_and_drop_the_eps_figures(self):
-        for currency in ("GBp", "GBX"):
+        for currency in ("GBp", "GBX", "ILA", "ZAc"):
             with self.subTest(currency=currency):
                 envelopes, _ = self.run_history(
                     {"BETA.L": {"metadata": {"instrumentType": "EQUITY", "currency": currency}, "earnings": US_EARNINGS}}, ["BETA.L"])

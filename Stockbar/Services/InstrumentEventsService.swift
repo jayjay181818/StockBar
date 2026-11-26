@@ -809,7 +809,14 @@ actor InstrumentEventsService {
     private func isFresh<Payload>(_ symbol: String, in copies: Copies<Payload>) -> Bool {
         guard let entry = savedEntry(symbol, in: copies) else { return false }
         let age = now().timeIntervalSince(entry.receivedAt)
-        return age >= 0 && age < Self.freshnessInterval
+        guard age >= 0 && age < Self.freshnessInterval else { return false }
+        // Past earnings gain their reported figures the evening a company
+        // reports, so a history copy is fresh only on the day it was fetched:
+        // still at most one run per symbol a day.
+        if copies.kind == .earningsHistory {
+            return InstrumentEventDay.on(entry.receivedAt) == InstrumentEventDay.on(now())
+        }
+        return true
     }
 
     private func isKnownUnanswered<Payload>(_ symbol: String, in copies: Copies<Payload>) -> Bool {
