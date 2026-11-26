@@ -330,11 +330,13 @@ enum CalendarFigures {
             if let converted = payment.amount { return (converted, estimate.currency) }
             return (payment.ownAmount, payment.ownAmount == nil ? estimate.currency : payment.ownCurrency)
         }
-        for payment in estimate.lastYear where payment.date < today {
+        for payment in estimate.lastYear {
             let (value, currency) = amount(payment)
-            rows.past.append(CalendarRow(id: "\(payment.id)#ex", kind: .exDividend, day: payment.date,
-                                         symbol: payment.holding, payDay: nil, endDay: nil, amount: value,
-                                         currency: currency, amountIsEstimate: true, amountIsPartial: false, pill: nil))
+            let row = CalendarRow(id: "\(payment.id)#ex", kind: .exDividend, day: payment.date,
+                                  symbol: payment.holding, payDay: nil, endDay: nil, amount: value,
+                                  currency: currency, amountIsEstimate: true, amountIsPartial: false, pill: nil)
+            // One Yahoo lists for today is still today's event: Upcoming, not Past.
+            if payment.date < today { rows.past.append(row) } else { rows.upcoming.append(row) }
         }
         for payment in estimate.nextYear where payment.date >= today {
             let (value, currency) = amount(payment)

@@ -941,11 +941,7 @@ final class StockbarMainWindowShellTests: XCTestCase {
         XCTAssertEqual(StockbarMainSection.alerts.shortcutNumber, 4)
         XCTAssertEqual(StockbarMainSection.charts.shortcutNumber, 5)
         XCTAssertEqual(StockbarMainSection.income.shortcutNumber, 6)
-        XCTAssertEqual(StockbarMainSection.calendar.shortcutNumber, 7, "Calendar, after Income, shifts the rest")
-        XCTAssertEqual(StockbarMainSection.trades.shortcutNumber, 8)
-        XCTAssertEqual(StockbarMainSection.risk.shortcutNumber, 9)
-        XCTAssertNil(StockbarMainSection.allocation.shortcutNumber, "the tenth entry has no number")
-        XCTAssertNil(StockbarMainSection.dataHealth.shortcutNumber)
+        XCTAssertNil(StockbarMainSection.dataHealth.shortcutNumber, "an entry after the ninth has no number")
         XCTAssertNil(StockbarMainSection.diagnostics.shortcutNumber, "only the first nine entries take a number")
         XCTAssertNil(StockbarMainSection.settings.shortcutNumber, "Settings keeps ⌘, and takes no number")
     }

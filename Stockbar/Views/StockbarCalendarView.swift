@@ -379,7 +379,6 @@ struct StockbarCalendarGrid: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityElement(children: .ignore)
             .accessibilityLabel(CalendarText.daySentence(day))
             .accessibilityHint("Marks this day's events in the list")
         }

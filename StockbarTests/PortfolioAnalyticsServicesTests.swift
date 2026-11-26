@@ -2005,6 +2005,11 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(CalendarText.title(rows.upcoming[5]) + CalendarText.detail(rows.upcoming[5]), "Dividend, about £96.20")
         XCTAssertNil(CalendarText.amountColumn(rows.upcoming[5]))
         XCTAssertEqual(CalendarText.amountColumn(rows.upcoming[3]), "£58.40", "a declared amount has its own column")
+        let partialEstimate = CalendarFigures.folyncRows(
+            events: [F.event("p", "PART", pay: "2026-12-04", gbp: 9.10, quality: .partial, certainty: ("estimated", "published"))],
+            currency: "GBP", today: F.today).upcoming[0]
+        XCTAssertEqual(CalendarText.title(partialEstimate) + CalendarText.detail(partialEstimate), "Dividend, about £9.10, partial",
+                       "partial is said wherever the amount is written")
 
         let hsba = rows.upcoming[1]
         XCTAssertEqual(CalendarText.title(hsba), "Dividend")
@@ -2050,6 +2055,16 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(CalendarText.accessibilitySentence(estimated, today: F.today, locale: F.britishEnglish),
                        "Tue 2 Mar, BETA, ex-dividend, about £1.60, estimated.")
         XCTAssertEqual(CalendarText.title(rows.past[0]) + CalendarText.detail(rows.past[0]), "Ex-dividend, about £2.60")
+
+        // A payment Yahoo lists for today is today's event, in Upcoming with no pill.
+        let todays = LocalIncomeFigures.estimate(
+            holdings: [LocalIncomeHolding(symbol: "GAMMA", units: 10)],
+            answers: ["GAMMA": try events("GAMMA", dividends: [(F.today.string, 0.30)])],
+            currency: "GBP", today: F.today, convert: convert)
+        let todayRows = CalendarFigures.localRows(estimate: todays)
+        XCTAssertEqual(summary(todayRows.upcoming), ["2026-11-20 GAMMA exDividend -", "2027-11-20 GAMMA exDividend Estimated"])
+        XCTAssertTrue(todayRows.past.isEmpty)
+        XCTAssertEqual(CalendarFigures.nextUp(todayRows.upcoming, today: F.today).count, 1, "and in Next up")
     }
 
     func testEarningsRowsSingleRangeAndPast() throws {

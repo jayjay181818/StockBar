@@ -63,7 +63,7 @@ enum CalendarText {
                              + "and \(IncomeText.dayMonth(end, locale: locale))")
             }
         }
-        if row.amountIsPartial, row.kind == .exDividend { parts.append("partial") }
+        if row.amountIsPartial, row.amount != nil, row.kind == .exDividend || row.amountIsEstimate { parts.append("partial") }
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
     }
 
