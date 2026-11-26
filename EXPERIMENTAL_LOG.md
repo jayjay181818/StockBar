@@ -6244,8 +6244,10 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
 
   This entry also records the timed comparison owed by pull requests 152
   to 157, and the merge of 157.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-25, squash commit `0c77a54`. The merge published
+  experimental build 382.3.26 as the prerelease `experimental-382.3.26`.
+  Checked after it: the prerelease is listed. The published archive was
+  not downloaded or opened.
 - Benchmark: this pull request's own comparison is owed, on the rule of
   2026-11-20. The benchmark's launches never open Income and make no Yahoo
   request.
@@ -6375,6 +6377,33 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - The worker's accessibility reads three times returned its copy's own
     menu bar, against the rule.
 - Verdict: retained, with its benchmark owed, on the rule of 2026-11-20.
+
+### 160: A footer test that accepts either wording of the minutes
+
+- What: the promotion of `experimental` into `testing`
+  ([pull request 159](https://github.com/jayjay181818/StockBar/pull/159))
+  ran CI on this work for the first time since pull request 133. On Xcode
+  27, one test failed:
+  `StockbarMainWindowShellTests.testTheFooterSaysWhereThePortfolioComesFromAndHowFreshItIs`.
+  It expected the sidebar footer to say "Updated 3 min…" for an update
+  three minutes old. The system's relative date formatter on CI's macOS
+  says "Updated 3m ago" instead. Both are the system's own wording of the
+  same thing, and the app passes on whatever the system gives, so the
+  fault is in the test. It now checks that the text starts "Updated 3" and
+  ends "ago". Nothing in the app changes.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. Only a test changes.
+- Testing, on macOS 27.2.1 and Xcode 27.2: the test's class,
+  `StockbarMainWindowShellTests`, 15 tests with 0 failures. `docs-check`
+  passes. The rest of the suite is unchanged from pull request 158's 1075
+  tests with 0 failures. CI runs on the promotion pull request once it is
+  brought up to this commit.
+- Review: by its author. No independent review, for a one-line change to
+  a test.
+- Known issues: other tests may hold system wording in the same way. CI
+  found only this one.
+- Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
 

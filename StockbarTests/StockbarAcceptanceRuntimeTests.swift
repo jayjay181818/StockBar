@@ -926,7 +926,10 @@ final class StockbarMainWindowShellTests: XCTestCase {
 
         let older = footer(footerInputs(folync: false, lastUpdate: now.addingTimeInterval(-180)), now: now)
         XCTAssertEqual(older.title, "Local portfolio")
-        XCTAssertTrue(older.detail.hasPrefix("Updated 3 min"), older.detail)
+        // The system words the minutes ("3 min ago" on one macOS, "3m ago" on
+        // another); what matters is the number and that it is not "just now".
+        XCTAssertTrue(older.detail.hasPrefix("Updated 3"), older.detail)
+        XCTAssertTrue(older.detail.hasSuffix("ago"), older.detail)
         XCTAssertFalse(older.isWarning)
 
         XCTAssertEqual(footer(footerInputs(), now: now).detail, "Not updated yet")
