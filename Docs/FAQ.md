@@ -98,7 +98,7 @@ Calendar's **Past** view shows each earnings date with Yahoo's reported and expe
 
 ### What does Stockbar send to Yahoo for a Folync portfolio?
 
-Ticker symbols only, never amounts, units or account details. Calendar asks Yahoo for the holdings' earnings dates when you open it or click its refresh button, and for past earnings only while **Past** is shown. The Income page and Next up ask Yahoo nothing for a Folync portfolio. Chart history, candles and benchmarks also come from Yahoo when their Folync switch is off (Settings → Connections → Folync → **What Stockbar reads from Folync**), again by ticker symbol only.
+Ticker symbols only, never amounts, units or account details. Calendar asks Yahoo for the holdings' earnings dates when you open it or click its refresh button, and for past earnings only while **Past** is shown. The Income page and Next up ask Yahoo nothing for a Folync portfolio. When the chart history, candles or benchmarks switch under Settings → Connections → Folync → **What Stockbar reads from Folync** is off, that data comes from the market-data providers instead, again by ticker symbol only.
 
 ### Why are Activity and Trades dimmed?
 

@@ -104,7 +104,7 @@ In the redesign's test builds, the faint highlight along the top of each card in
 - A holding with no payments shows **None**. Watchlist rows are left out.
 - Amounts are converted only with exchange rates already loaded. A holding with no rate keeps its own currency, is left out of the totals, and the page says so.
 - Yahoo is asked when you open the page and when you click its refresh button, never on its own. Its answers are kept for a day.
-- The sidebar entry is dimmed only when live market data is off.
+- The sidebar entry is dimmed when live market data is off, and while Folync is switched on but its portfolio is not showing yet. Calendar's entry is dimmed exactly when Income's is.
 
 ## Calendar and Next up
 
