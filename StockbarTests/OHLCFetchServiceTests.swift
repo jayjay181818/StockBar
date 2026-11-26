@@ -879,6 +879,279 @@ final class InstrumentEventsServiceTests: XCTestCase {
         XCTAssertEqual(names, ["events-BETA.L.json"])
     }
 
+    // MARK: Earnings history (invented figures)
+
+    private static func history(_ symbol: String, reported: String = "1.52", estimated: String = "1.48",
+                                currency: String? = "USD") -> String {
+        let currencyJSON = currency.map { "\"\($0)\"" } ?? "null"
+        return """
+        {"symbol": "\(symbol)", "success": true, "earningsHistory": {"symbol": "\(symbol)",
+         "earnings": [{"date": "2026-07-22", "reportedEPS": null, "estimatedEPS": null, "surprisePercent": null},
+                      {"date": "2026-10-30", "reportedEPS": \(reported), "estimatedEPS": \(estimated),
+                       "surprisePercent": 2.7}],
+         "epsCurrency": \(currencyJSON), "fetchedAt": 1795000000.5}}
+        """
+    }
+
+    func testEarningsHistoryIsItsOwnRunWithItsFlagAndDecodesEveryField() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.history("ALPHA"), Self.history("BETA.L", reported: "null", estimated: "null", currency: nil)),
+        ])
+        let service = makeService(runner: runner)
+
+        let results = await service.earningsHistory(for: ["alpha", "BETA.L", "ALPHA", "-BAD"])
+
+        let calls = await runner.calls()
+        XCTAssertEqual(calls.count, 1, "every symbol in one run")
+        let arguments = try XCTUnwrap(calls.first)
+        XCTAssertEqual(arguments.first, scriptPath)
+        XCTAssertTrue(arguments.contains("--json"))
+        XCTAssertTrue(arguments.contains(InstrumentEventsService.earningsHistoryFlag))
+        XCTAssertEqual(Array(arguments.suffix(2)), ["ALPHA", "BETA.L"])
+        XCTAssertEqual(results.map(\.symbol), ["ALPHA", "BETA.L", "-BAD"])
+        XCTAssertEqual(results[2].outcome, .failed(.invalidSymbol))
+
+        let alpha = try XCTUnwrap(results[0].history)
+        XCTAssertEqual(alpha.epsCurrency, "USD")
+        XCTAssertEqual(alpha.fetchedAt, Date(timeIntervalSince1970: 1_795_000_000.5))
+        XCTAssertEqual(alpha.earnings, [
+            InstrumentPastEarnings(date: try XCTUnwrap(InstrumentEventDay("2026-07-22")), reportedEPS: nil,
+                                   estimatedEPS: nil, surprisePercent: nil),
+            InstrumentPastEarnings(date: try XCTUnwrap(InstrumentEventDay("2026-10-30")), reportedEPS: 1.52,
+                                   estimatedEPS: 1.48, surprisePercent: 2.7),
+        ])
+        XCTAssertNil(results[1].history?.epsCurrency)
+        XCTAssertNil(results[1].history?.earnings.last?.reportedEPS)
+        let runs = (await service.eventsRuns, await service.earningsHistoryRuns)
+        XCTAssertEqual(runs.0, 0, "asking for past earnings never asks for events")
+        XCTAssertEqual(runs.1, 1)
+    }
+
+    func testEarningsHistoryKeepsItsOwnDayLongCopiesBesideTheEvents() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA")),
+            Self.answer(Self.history("ALPHA")),
+            Self.answer(Self.history("ALPHA", reported: "1.60")),
+        ])
+        let service = makeService(runner: runner)
+
+        _ = await service.events(for: ["ALPHA"])
+        let first = await service.earningsHistory(for: ["ALPHA"])
+        advance(23 * hour)
+        let insideTheDay = await service.earningsHistory(for: ["ALPHA"])
+        let insideCount = await runner.callCount()
+        XCTAssertEqual(insideCount, 2, "a copy younger than a day is used, and the events copy never answers for it")
+        XCTAssertEqual(insideTheDay, first)
+        XCTAssertNil(insideTheDay[0].failure)
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        XCTAssertEqual(names, ["earnings-history-ALPHA.json", "events-ALPHA.json"])
+
+        // Another service over the same folder reads both copies from disk.
+        let relaunched = makeService(runner: InstrumentEventsRunnerStub(responses: [.timeout]))
+        let fromDisk = await relaunched.earningsHistory(for: ["ALPHA"])
+        XCTAssertEqual(fromDisk[0].history, first[0].history)
+        let savedEvents = await relaunched.savedEvents(for: ["ALPHA"])
+        XCTAssertEqual(savedEvents["ALPHA"]?.exDividendDate, InstrumentEventDay("2026-11-28"))
+
+        advance(2 * hour)
+        let afterTheDay = await service.earningsHistory(for: ["ALPHA"])
+        let afterCount = await runner.callCount()
+        XCTAssertEqual(afterCount, 3, "after a day it is asked for again")
+        XCTAssertEqual(afterTheDay[0].history?.earnings.last?.reportedEPS, 1.60)
+    }
+
+    func testEarningsHistoryStaleCopyAndNoDataForADay() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.history("ALPHA"), Self.failure("FUND", code: "NO_DATA")),
+            Self.answer(Self.failure("ALPHA", code: "NETWORK_ERROR")),
+        ])
+        let service = makeService(runner: runner)
+
+        let first = await service.earningsHistory(for: ["ALPHA", "FUND"])
+        XCTAssertEqual(first[1].outcome, .failed(.noData), "no history is no data")
+        let again = await service.earningsHistory(for: ["FUND"])
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 1, "a symbol with no history is not asked for again that day")
+        XCTAssertEqual(again[0].outcome, .failed(.noData))
+        // ...and a symbol with no past earnings does not stop its events being asked for.
+        let eventsRuns = await service.eventsRuns
+        XCTAssertEqual(eventsRuns, 0)
+
+        advance(2 * day)
+        let failed = await service.earningsHistory(for: ["ALPHA"])
+        XCTAssertEqual(failed[0].outcome, .history(first[0].history!, .stale(.network)))
+        XCTAssertTrue(failed[0].isStale)
+    }
+
+    func testARateLimitOnEitherKindPausesBoth() async {
+        let pauseEnds = start.addingTimeInterval(hour)
+        do {
+            let runner = InstrumentEventsRunnerStub(responses: [
+                Self.answer(Self.failure("ALPHA", code: "RATE_LIMIT")),
+                Self.answer(Self.success("ALPHA")),
+            ])
+            let service = makeService(runner: runner)
+            let limited = await service.earningsHistory(for: ["ALPHA"])
+            let events = await service.events(for: ["ALPHA"], forceRefresh: true)
+            let count = await runner.callCount()
+            XCTAssertEqual(limited[0].outcome, .failed(.rateLimited(retryAfter: pauseEnds)))
+            XCTAssertEqual(events[0].outcome, .failed(.rateLimited(retryAfter: pauseEnds)),
+                           "a rate limit on past earnings pauses the events")
+            XCTAssertEqual(count, 1)
+        }
+        do {
+            let runner = InstrumentEventsRunnerStub(responses: [
+                .output(#"{"error": true, "error_code": "RATE_LIMIT", "message": "invented"}"#),
+                Self.answer(Self.history("ALPHA")),
+            ])
+            let service = makeService(runner: runner)
+            _ = await service.events(for: ["ALPHA"])
+            let history = await service.earningsHistory(for: ["ALPHA"], forceRefresh: true)
+            let count = await runner.callCount()
+            XCTAssertEqual(history[0].outcome, .failed(.rateLimited(retryAfter: pauseEnds)),
+                           "a rate limit on the events pauses past earnings")
+            XCTAssertEqual(count, 1)
+            advance(hour + 60)
+            let resumed = await service.earningsHistory(for: ["ALPHA"])
+            XCTAssertNotNil(resumed[0].history)
+        }
+    }
+
+    func testEarningsHistoryIsRefusedAsTheEventsAre() async {
+        let runner = InstrumentEventsRunnerStub(responses: [Self.answer(Self.history("ALPHA"))])
+        let refused = makeService(runner: runner, policy: StockbarProviderAccessPolicy(liveRequestsAllowed: false))
+        let results = await refused.earningsHistory(for: ["ALPHA"], forceRefresh: true)
+        XCTAssertEqual(results[0].outcome, .failed(.providerDisabled))
+        XCTAssertTrue(InstrumentEventsAnswers.allRefused(results))
+
+        // The app's own policy under XCTest isolation refuses too.
+        let isolated = makeService(runner: runner, policy: .current)
+        let isolatedResults = await isolated.earningsHistory(for: ["ALPHA"])
+        XCTAssertEqual(isolatedResults[0].outcome, .failed(.providerDisabled))
+
+        // An acceptance run without the fixture: live providers off, no fixture.
+        let clock = self.clock!
+        let noFixture = InstrumentEventsService(
+            scriptPath: scriptPath, processRunner: runner,
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+            directory: directory, now: { clock.withLock { $0 } }, fixture: nil
+        )
+        let noFixtureResults = await noFixture.earningsHistory(for: ["ALPHA"])
+        XCTAssertEqual(noFixtureResults[0].outcome, .failed(.providerDisabled))
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 0, "the helper never ran")
+    }
+
+    func testRunsOfTheTwoKindsNeverOverlapAndAreNotMistakenForEachOther() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA")),
+            Self.answer(Self.history("ALPHA")),
+        ])
+        await runner.hold()
+        let service = makeService(runner: runner)
+
+        let events = Task { await service.events(for: ["ALPHA"]) }
+        await runner.waitForCalls(1)
+        let history = Task { await service.earningsHistory(for: ["ALPHA"]) }
+        await waitUntil { await service.sharedRunWaits == 1 }
+        let whileHeld = await runner.callCount()
+        XCTAssertEqual(whileHeld, 1, "the second kind waits for the first run to end")
+        await runner.release()
+
+        let eventsResults = await events.value
+        let historyResults = await history.value
+        let calls = await runner.calls()
+        XCTAssertEqual(calls.count, 2, "the history caller ran its own run, not the events one")
+        XCTAssertFalse(calls[0].contains(InstrumentEventsService.earningsHistoryFlag))
+        XCTAssertTrue(calls[1].contains(InstrumentEventsService.earningsHistoryFlag))
+        XCTAssertNotNil(eventsResults[0].events)
+        XCTAssertEqual(historyResults[0].history?.earnings.count, 2)
+    }
+
+    func testAnEventsAnswerIsNotReadAsHistoryOrTheOtherWayRound() async {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.success("ALPHA")),
+            Self.answer(Self.history("ALPHA")),
+        ])
+        let service = makeService(runner: runner)
+        let history = await service.earningsHistory(for: ["ALPHA"])
+        let events = await service.events(for: ["ALPHA"])
+        XCTAssertEqual(history[0].outcome, .failed(.scriptFailed("Unreadable answer for ALPHA")))
+        XCTAssertEqual(events[0].outcome, .failed(.scriptFailed("Unreadable answer for ALPHA")))
+    }
+
+    func testOldEarningsHistoryCopiesAreRemovedAndBrokenOnesToo() async throws {
+        let runner = InstrumentEventsRunnerStub(responses: [
+            Self.answer(Self.history("ALPHA")),
+            Self.answer(Self.history("BETA.L")),
+        ])
+        let service = makeService(runner: runner)
+        _ = await service.earningsHistory(for: ["ALPHA"])
+        advance(2 * day)
+        _ = await service.earningsHistory(for: ["BETA.L"])
+        try Data("not json".utf8).write(to: directory.appendingPathComponent("earnings-history-BROKEN.json"))
+        try Data("kept".utf8).write(to: directory.appendingPathComponent("notes.json"))
+
+        advance(29 * day)
+        let relaunched = makeService(runner: InstrumentEventsRunnerStub(responses: [.timeout]))
+        _ = await relaunched.earningsHistory(for: [])
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        XCTAssertEqual(names, ["earnings-history-BETA.L.json", "notes.json"])
+    }
+
+    func testTheAcceptanceFixtureAnswersPastEarnings() async throws {
+        let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [
+          {"symbol": "FAKEUS", "epsCurrency": "USD", "pastEarnings": [
+            {"daysFromToday": -27, "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7},
+            {"daysFromToday": -118, "reportedEPS": 1.54},
+            {"daysFromToday": -400, "reportedEPS": 9.99}]},
+          {"symbol": "FAKELN.L", "pastEarnings": [{"daysFromToday": -60}]},
+          {"symbol": "FAKEFD.L"}]}
+        """.utf8))
+        let runner = InstrumentEventsRunnerStub(responses: [.output("[]")])
+        let clock = self.clock!
+        let service = InstrumentEventsService(
+            scriptPath: nil, processRunner: runner,
+            providerPolicy: StockbarProviderAccessPolicy(liveRequestsAllowed: false),
+            directory: directory, now: { clock.withLock { $0 } }, fixture: fixture
+        )
+        let results = await service.earningsHistory(for: ["FAKEUS", "FAKELN.L", "FAKEFD.L"])
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 0, "the helper never runs, and Yahoo is never asked")
+        func offset(_ days: Int) throws -> InstrumentEventDay {
+            try XCTUnwrap(InstrumentEventDay.on(start.addingTimeInterval(Double(days) * day)))
+        }
+        let us = try XCTUnwrap(results[0].history)
+        XCTAssertEqual(us.epsCurrency, "USD")
+        XCTAssertEqual(us.earnings, [
+            InstrumentPastEarnings(date: try offset(-118), reportedEPS: 1.54, estimatedEPS: nil, surprisePercent: nil),
+            InstrumentPastEarnings(date: try offset(-27), reportedEPS: 1.52, estimatedEPS: 1.48, surprisePercent: 2.7),
+        ], "oldest first, and nothing older than a year")
+        XCTAssertEqual(results[1].history?.earnings.map(\.reportedEPS), [nil])
+        XCTAssertNil(results[1].history?.epsCurrency)
+        XCTAssertEqual(results[2].outcome, .failed(.noData), "a holding without past earnings has no data")
+        // The events answer for the same fixture is unchanged.
+        let events = await service.events(for: ["FAKEUS"])
+        XCTAssertNotNil(events[0].events)
+    }
+
+    func testAnOlderFixtureWithoutPastEarningsStillReads() throws {
+        let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [{"symbol": "FAKEUS", "earningsInDays": 9}]}
+        """.utf8))
+        XCTAssertNil(fixture.holdings[0].pastEarnings)
+        XCTAssertNil(fixture.holdings[0].epsCurrency)
+        // It round-trips, as the bootstrap's copy does.
+        let copy = try StockbarAcceptanceEventsFixture.decode(JSONEncoder().encode(fixture))
+        XCTAssertEqual(copy, fixture)
+        XCTAssertThrowsError(try StockbarAcceptanceEventsFixture.decode(Data("""
+        {"version": 1, "holdings": [{"symbol": "REAL", "pastEarnings": []}]}
+        """.utf8)))
+    }
+
     private func waitUntil(_ condition: @escaping @Sendable () async -> Bool) async {
         for _ in 0..<2_000 {
             if await condition() { return }
