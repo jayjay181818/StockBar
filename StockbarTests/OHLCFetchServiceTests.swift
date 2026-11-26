@@ -881,21 +881,24 @@ final class InstrumentEventsServiceTests: XCTestCase {
 
     // MARK: Earnings history (invented figures)
 
+    /// The helper's answer; `legacyCurrency` adds the `epsCurrency` field an
+    /// answer from before pull request C2c carried.
     private static func history(_ symbol: String, reported: String = "1.52", estimated: String = "1.48",
-                                currency: String? = "USD") -> String {
-        let currencyJSON = currency.map { "\"\($0)\"" } ?? "null"
+                                legacyCurrency: String? = nil) -> String {
+        let legacy = legacyCurrency.map { "\"epsCurrency\": \"\($0)\", " } ?? ""
         return """
         {"symbol": "\(symbol)", "success": true, "earningsHistory": {"symbol": "\(symbol)",
          "earnings": [{"date": "2026-07-22", "reportedEPS": null, "estimatedEPS": null, "surprisePercent": null},
                       {"date": "2026-10-30", "reportedEPS": \(reported), "estimatedEPS": \(estimated),
                        "surprisePercent": 2.7}],
-         "epsCurrency": \(currencyJSON), "fetchedAt": 1795000000.5}}
+         \(legacy)"fetchedAt": 1795000000.5}}
         """
     }
 
     func testEarningsHistoryIsItsOwnRunWithItsFlagAndDecodesEveryField() async throws {
         let runner = InstrumentEventsRunnerStub(responses: [
-            Self.answer(Self.history("ALPHA"), Self.history("BETA.L", reported: "null", estimated: "null", currency: nil)),
+            Self.answer(Self.history("ALPHA"), Self.history("BETA.L", reported: "null", estimated: "null",
+                                                             legacyCurrency: "USD")),
         ])
         let service = makeService(runner: runner)
 
@@ -912,7 +915,6 @@ final class InstrumentEventsServiceTests: XCTestCase {
         XCTAssertEqual(results[2].outcome, .failed(.invalidSymbol))
 
         let alpha = try XCTUnwrap(results[0].history)
-        XCTAssertEqual(alpha.epsCurrency, "USD")
         XCTAssertEqual(alpha.fetchedAt, Date(timeIntervalSince1970: 1_795_000_000.5))
         XCTAssertEqual(alpha.earnings, [
             InstrumentPastEarnings(date: try XCTUnwrap(InstrumentEventDay("2026-07-22")), reportedEPS: nil,
@@ -920,7 +922,7 @@ final class InstrumentEventsServiceTests: XCTestCase {
             InstrumentPastEarnings(date: try XCTUnwrap(InstrumentEventDay("2026-10-30")), reportedEPS: 1.52,
                                    estimatedEPS: 1.48, surprisePercent: 2.7),
         ])
-        XCTAssertNil(results[1].history?.epsCurrency)
+        XCTAssertNotNil(results[1].history, "an answer still carrying epsCurrency reads")
         XCTAssertNil(results[1].history?.earnings.last?.reportedEPS)
         let runs = (await service.eventsRuns, await service.earningsHistoryRuns)
         XCTAssertEqual(runs.0, 0, "asking for past earnings never asks for events")
@@ -966,6 +968,26 @@ final class InstrumentEventsServiceTests: XCTestCase {
         let afterCount = await runner.callCount()
         XCTAssertEqual(afterCount, 3, "on the next day it is asked for again, though less than a day has passed")
         XCTAssertEqual(afterTheDay[0].history?.earnings.last?.reportedEPS, 1.60)
+    }
+
+    func testASavedHistoryCopyWrittenWithEPSCurrencyStillReads() async throws {
+        // A copy saved by pull request 167's build, on disk under its own name.
+        let saved = """
+        {"version": 1, "receivedAt": \(start.timeIntervalSince1970), "events": {"symbol": "ALPHA",
+         "earnings": [{"date": "2026-10-30", "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7}],
+         "epsCurrency": "USD", "fetchedAt": \(start.timeIntervalSince1970)}}
+        """
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(saved.utf8).write(to: directory.appendingPathComponent("earnings-history-ALPHA.json"))
+        let runner = InstrumentEventsRunnerStub(responses: [.timeout])
+        let service = makeService(runner: runner)
+
+        let results = await service.earningsHistory(for: ["ALPHA"])
+
+        let count = await runner.callCount()
+        XCTAssertEqual(count, 0, "the copy from today answers")
+        XCTAssertEqual(results[0].history?.earnings.first?.reportedEPS, 1.52)
+        XCTAssertNil(results[0].failure)
     }
 
     func testEarningsHistoryStaleCopyAndNoDataForADay() async {
@@ -1113,6 +1135,7 @@ final class InstrumentEventsServiceTests: XCTestCase {
         let fixture = try StockbarAcceptanceEventsFixture.decode(Data("""
         {"version": 1, "holdings": [
           {"symbol": "FAKEUS", "epsCurrency": "USD", "pastEarnings": [
+            {"daysFromToday": -9, "reportedEPS": -0.27, "estimatedEPS": -0.28, "surprisePercent": -4.98},
             {"daysFromToday": -27, "reportedEPS": 1.52, "estimatedEPS": 1.48, "surprisePercent": 2.7},
             {"daysFromToday": -118, "reportedEPS": 1.54},
             {"daysFromToday": -400, "reportedEPS": 9.99}]},
@@ -1133,13 +1156,12 @@ final class InstrumentEventsServiceTests: XCTestCase {
             try XCTUnwrap(InstrumentEventDay.on(start.addingTimeInterval(Double(days) * day)))
         }
         let us = try XCTUnwrap(results[0].history)
-        XCTAssertEqual(us.epsCurrency, "USD")
         XCTAssertEqual(us.earnings, [
             InstrumentPastEarnings(date: try offset(-118), reportedEPS: 1.54, estimatedEPS: nil, surprisePercent: nil),
             InstrumentPastEarnings(date: try offset(-27), reportedEPS: 1.52, estimatedEPS: 1.48, surprisePercent: 2.7),
-        ], "oldest first, and nothing older than a year")
+            InstrumentPastEarnings(date: try offset(-9), reportedEPS: -0.27, estimatedEPS: -0.28, surprisePercent: -4.98),
+        ], "oldest first, nothing older than a year, and a fixture's old epsCurrency read past")
         XCTAssertEqual(results[1].history?.earnings.map(\.reportedEPS), [nil])
-        XCTAssertNil(results[1].history?.epsCurrency)
         XCTAssertEqual(results[2].outcome, .failed(.noData), "a holding without past earnings has no data")
         // The events answer for the same fixture is unchanged.
         let events = await service.events(for: ["FAKEUS"])
@@ -1176,7 +1198,6 @@ final class InstrumentEventsServiceTests: XCTestCase {
         {"version": 1, "holdings": [{"symbol": "FAKEUS", "earningsInDays": 9}]}
         """.utf8))
         XCTAssertNil(fixture.holdings[0].pastEarnings)
-        XCTAssertNil(fixture.holdings[0].epsCurrency)
         // It round-trips, as the bootstrap's copy does.
         let copy = try StockbarAcceptanceEventsFixture.decode(JSONEncoder().encode(fixture))
         XCTAssertEqual(copy, fixture)

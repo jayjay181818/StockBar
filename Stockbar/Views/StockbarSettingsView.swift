@@ -412,6 +412,8 @@ struct StockbarSettingsView: View {
             }
         }
 
+        EarningsFiguresSettingsSection(dataModel: dataModel)
+
         StockbarSettingsSection("Diagnostics") {
             StockbarSettingsRow("Logs", detail: "View, refresh and clear Stockbar's log. Credentials are redacted.") {
                 Button("Open Diagnostics") { onOpenSection(.diagnostics) }
@@ -659,7 +661,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: "Light, dark or match the system."
         case .dataSources: "Brokers, Folync and market-data providers."
         case .refresh: "How often prices and chart history update."
-        case .advanced: "Backups, export, memory and troubleshooting."
+        case .advanced: "Backups, export, memory, earnings figures and troubleshooting."
         }
     }
 }

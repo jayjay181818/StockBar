@@ -538,6 +538,28 @@ final class SettingsTransferTests: XCTestCase {
         XCTAssertTrue(already.defaults.bool(forKey: "trading212.deleteMissingLinkedHoldings"))
     }
 
+    func testEarningsFiguresChoicesTravelAndOnlyKnownChoicesAreImported() async throws {
+        XCTAssertEqual(SettingsTransferKeys.settingsKeys[EarningsFiguresSettings.key], .stringDictionary)
+        let source = try makeSide("source")
+        source.defaults.set(["ALPHA": "EUR", "BETA.L": "hide", "GAMMA": "GBX", "DELTA": "eur", "omega": "USD",
+                             "EPSILON": "hidden", "BAD SYM": "EUR", "ZETA": "CHF"],
+                            forKey: EarningsFiguresSettings.key)
+        let file = root.appendingPathComponent("earnings-figures.stockbarexport")
+        _ = try await source.service.export(.settingsAndKeys, password: password, to: file)
+
+        let target = try makeSide("target")
+        target.defaults.set(["OLD": "JPY"], forKey: EarningsFiguresSettings.key)
+        let prepared = try await target.service.prepareImport(from: file, password: password)
+        try await target.service.apply(prepared) { true }
+
+        XCTAssertEqual(target.defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String],
+                       ["ALPHA": "EUR", "BETA.L": "hide", "ZETA": "CHF"],
+                       "pence, lower-case codes and symbols, unknown words and bad symbols are dropped, not guessed")
+        let imported = (target.defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String]) ?? [:]
+        let choices = EarningsFiguresSettings.validated(imported).compactMapValues(EarningsFiguresChoice.init(storedValue:))
+        XCTAssertEqual(choices, ["ALPHA": .currency("EUR"), "BETA.L": .hidden, "ZETA": .currency("CHF")])
+    }
+
     func testLeftoverStagedDatabaseCopiesAreRemovedAtLaunch() throws {
         let side = try makeSide("staging")
         let leftover = side.service.dependencies.stagingRoot

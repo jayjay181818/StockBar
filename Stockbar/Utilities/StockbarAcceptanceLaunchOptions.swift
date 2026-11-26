@@ -29,6 +29,12 @@ import Foundation
 /// - `STOCKBAR_ACCEPTANCE_HOLDINGS`: the path of a fixture of made-up local
 ///   holdings (`StockbarAcceptanceHoldingsFixture`), checked and copied the
 ///   same way. A fresh copy starts on the local portfolio with them, Folync off.
+/// - `STOCKBAR_ACCEPTANCE_SETTINGS_TAB`: the raw value of a `SettingsTab`, the
+///   tab Settings opens on, so Advanced can be looked at without a click.
+/// - `STOCKBAR_ACCEPTANCE_EARNINGS_FIGURES`: choices for past EPS figures, as
+///   `SYMBOL=CHOICE` pairs separated by commas (`FAKEUS=EUR,FAKEGR=hide`).
+///   Each symbol must be a made-up one starting with `FAKE`; each choice is
+///   `hide` or a currency the Advanced card offers. Other pairs are dropped.
 struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     enum Appearance: String, Codable, Sendable {
         case light
@@ -44,6 +50,8 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     static let eventsKey = "STOCKBAR_ACCEPTANCE_EVENTS"
     static let alertsKey = "STOCKBAR_ACCEPTANCE_ALERTS"
     static let holdingsKey = "STOCKBAR_ACCEPTANCE_HOLDINGS"
+    static let settingsTabKey = "STOCKBAR_ACCEPTANCE_SETTINGS_TAB"
+    static let earningsFiguresKey = "STOCKBAR_ACCEPTANCE_EARNINGS_FIGURES"
     /// How long after launch the portfolio popover opens, so the first
     /// figures and the graph have arrived.
     static let popoverDelay: TimeInterval = 6
@@ -62,6 +70,10 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     var usesAlertsFixture = false
     /// A fresh copy starts on the local portfolio with the run's copy of the holdings fixture.
     var usesHoldingsFixture = false
+    /// The raw value of a `SettingsTab`: the tab Settings opens on.
+    var settingsTab: String?
+    /// Past EPS figure choices by made-up symbol, as `EarningsFiguresSettings` stores them.
+    var earningsFigures: [String: String]?
 
     static let none = Self()
 
@@ -93,7 +105,25 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
         options.usesInstrumentEventsFixture = value(eventsKey) != nil
         options.usesAlertsFixture = value(alertsKey) != nil
         options.usesHoldingsFixture = value(holdingsKey) != nil
+        options.settingsTab = value(settingsTabKey).flatMap(SettingsTab.init(rawValue:))?.rawValue
+        options.earningsFigures = value(earningsFiguresKey).flatMap(Self.earningsFigures(from:))
         return options
+    }
+
+    /// `FAKEUS=EUR,FAKEGR=hide` read into stored choices: made-up symbols
+    /// only, and only choices the Advanced card can show. Nil when none is left.
+    static func earningsFigures(from text: String) -> [String: String]? {
+        var choices: [String: String] = [:]
+        for pair in text.split(separator: ",") {
+            let parts = pair.split(separator: "=", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, StockbarAcceptanceEventsFixture.isMadeUp(parts[0]) else { continue }
+            let value = parts[1] == EarningsFiguresChoice.hiddenValue ? parts[1] : parts[1].uppercased()
+            guard let stored = EarningsFiguresChoice(storedValue: value)?.storedValue else { continue }
+            choices[parts[0]] = stored
+        }
+        let kept = EarningsFiguresSettings.validated(choices)
+        return kept.isEmpty ? nil : kept
     }
 
     /// Writes the options into the acceptance copy's own defaults, where the
@@ -108,6 +138,12 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
         }
         if let section {
             defaults.set(section, forKey: "mainWindow.selectedSection")
+        }
+        if let settingsTab {
+            defaults.set(settingsTab, forKey: "settings.selectedTab")
+        }
+        if let earningsFigures {
+            defaults.set(earningsFigures, forKey: EarningsFiguresSettings.key)
         }
     }
 }

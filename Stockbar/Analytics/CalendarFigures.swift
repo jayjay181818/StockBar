@@ -89,6 +89,12 @@ struct CalendarEarningsFigures: Equatable, Sendable {
     let estimatedEPS: Double?
     /// Yahoo's surprise, in percent.
     let surprisePercent: Double?
+    /// The upper-cased symbol Yahoo was asked about: the key of the holding's
+    /// choice in Settings → Advanced → Earnings figures.
+    var askedSymbol = ""
+    /// How the figures are shown. Set for display only
+    /// (`CalendarFigures.applying(_:to:)`), never from an answer.
+    var shownAs: EarningsFiguresChoice = .asGiven
 }
 
 /// One dated event: a line of the list and an entry in the grid.
@@ -426,7 +432,7 @@ enum CalendarFigures {
                 let reported = day(report.date)
                 guard reported < today, reported >= pastStart, days.insert(reported).inserted else { continue }
                 let figures = CalendarEarningsFigures(reportedEPS: report.reportedEPS, estimatedEPS: report.estimatedEPS,
-                                                      surprisePercent: report.surprisePercent)
+                                                      surprisePercent: report.surprisePercent, askedSymbol: asked)
                 rows.append(CalendarRow(id: "\(asked)#reported#\(reported.string)", kind: .earnings, day: reported,
                                         symbol: holding.symbol, payDay: nil, endDay: nil, amount: nil, currency: "",
                                         amountIsEstimate: false, amountIsPartial: false, pill: nil,
@@ -446,6 +452,28 @@ enum CalendarFigures {
             if holding.yahooSymbol == nil { withoutSymbol += 1 } else { withoutDate += 1 }
         }
         return CalendarEarningsCoverage(withoutSymbol: withoutSymbol, withoutDate: withoutDate)
+    }
+
+    /// The rows with each past report's figures shown as its holding's
+    /// choice says (Settings → Advanced → Earnings figures). Display only: the
+    /// answers and saved copies the rows were built from are not touched, and
+    /// a holding with no choice reads as given.
+    static func applying(_ choices: [String: EarningsFiguresChoice], to rows: CalendarRows) -> CalendarRows {
+        guard !choices.isEmpty else { return rows }
+        func apply(_ row: CalendarRow) -> CalendarRow {
+            guard var figures = row.earningsFigures else { return row }
+            figures.shownAs = choices[figures.askedSymbol] ?? .asGiven
+            var row = row
+            row.earningsFigures = figures
+            return row
+        }
+        return CalendarRows(upcoming: rows.upcoming.map(apply), past: rows.past.map(apply))
+    }
+
+    /// The symbols the Advanced card lists: each one Calendar asks Yahoo
+    /// earnings for (a Folync holding's quote symbol), upper-cased, once, sorted.
+    static func earningsFigureSymbols(_ holdings: [CalendarHolding]) -> [String] {
+        Set(holdings.compactMap { $0.yahooSymbol?.uppercased() }).sorted()
     }
 
     /// Dividend rows and earnings rows together: upcoming earnings join

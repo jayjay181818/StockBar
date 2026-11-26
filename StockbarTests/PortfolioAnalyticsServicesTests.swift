@@ -2239,10 +2239,10 @@ final class StockbarCalendarTests: XCTestCase {
     // MARK: Past earnings (invented figures)
 
     /// Invented past earnings, read the way the service reads the helper's.
-    private func history(_ symbol: String, currency: String? = "USD",
+    private func history(_ symbol: String,
                          _ reports: [(String, Double?, Double?, Double?)]) throws -> InstrumentEarningsHistory {
         let object: [String: Any] = [
-            "symbol": symbol, "epsCurrency": currency ?? NSNull(), "fetchedAt": fetchedAt.timeIntervalSince1970,
+            "symbol": symbol, "fetchedAt": fetchedAt.timeIntervalSince1970,
             "earnings": reports.map { report -> [String: Any] in
                 ["date": report.0, "reportedEPS": report.1 ?? NSNull(), "estimatedEPS": report.2 ?? NSNull(),
                  "surprisePercent": report.3 ?? NSNull()]
@@ -2261,7 +2261,7 @@ final class StockbarCalendarTests: XCTestCase {
             try history("ALPHA", [("2026-10-30", 1.52, 1.48, 2.7), ("2026-07-22", 1.54, nil, nil),
                                   ("2026-04-28", nil, nil, nil), ("2026-11-20", 1.6, 1.5, nil),
                                   ("2025-11-19", 1.0, 1.0, nil)]),
-            try history("BETA", currency: nil, [("2026-08-03", nil, nil, -3.25)])
+            try history("BETA", [("2026-08-03", nil, nil, -3.25)])
         ]
     }
 
@@ -2327,6 +2327,185 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(combined.past.filter { !$0.isDividend }.count, 4)
         XCTAssertEqual(combined.past, combined.past.sorted(by: CalendarRow.newestFirst), "one list, newest first")
         XCTAssertTrue(combined.past.contains(where: \.isDividend))
+    }
+
+    // MARK: Earnings figures: each holding's choice (invented figures)
+
+    func testEarningsFiguresChoicesAreStoredOnlyAwayFromAsGivenAndReadBack() throws {
+        let suite = "EarningsFiguresSettingsTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let settings = EarningsFiguresSettings(defaults: defaults)
+        XCTAssertEqual(settings.choice(for: "ALPHA"), .asGiven, "the default is As given")
+        XCTAssertNil(defaults.object(forKey: EarningsFiguresSettings.key), "nothing stored for the default")
+
+        settings.set(.currency("EUR"), for: "alpha")
+        settings.set(.hidden, for: "BETA.L")
+        XCTAssertEqual(defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String],
+                       ["ALPHA": "EUR", "BETA.L": "hide"], "keyed by the upper-cased symbol")
+        XCTAssertEqual(settings.choice(for: "Alpha"), .currency("EUR"))
+
+        settings.set(.currency("XQZ"), for: "ALPHA")
+        settings.set(.currency("GBX"), for: "ALPHA")
+        XCTAssertEqual(settings.choice(for: "ALPHA"), .currency("EUR"), "only an offered currency is kept")
+        settings.set(.hidden, for: "BAD SYM")
+        XCTAssertNil(settings.choices["BAD SYM"])
+
+        // Another instance over the same defaults reads the same choices back.
+        XCTAssertEqual(EarningsFiguresSettings(defaults: defaults).choices, ["ALPHA": .currency("EUR"), "BETA.L": .hidden])
+
+        settings.set(.asGiven, for: "ALPHA")
+        XCTAssertEqual(defaults.dictionary(forKey: EarningsFiguresSettings.key) as? [String: String], ["BETA.L": "hide"])
+        settings.set(.asGiven, for: "BETA.L")
+        XCTAssertNil(defaults.object(forKey: EarningsFiguresSettings.key), "As given everywhere stores nothing")
+
+        // Stored entries that are not choices the card offers read as given.
+        defaults.set(["ALPHA": "eur", "BETA.L": "GBX", "gamma": "USD", "DELTA": "hidden", "OMEGA": "CHF", "BAD SYM": "EUR"],
+                     forKey: EarningsFiguresSettings.key)
+        XCTAssertEqual(EarningsFiguresSettings(defaults: defaults).choices, ["OMEGA": .currency("CHF")])
+
+        // The pop-up offers the app's currencies first, then the other ISO codes.
+        let offered = EarningsFiguresSettings.supportedFirst
+        XCTAssertEqual(Array(offered.prefix(DataModel.supportedCurrencies.count)), DataModel.supportedCurrencies)
+        let rest = Array(offered.dropFirst(DataModel.supportedCurrencies.count))
+        XCTAssertEqual(rest, rest.sorted())
+        XCTAssertTrue(rest.contains("CNY") && rest.contains("CHF") && rest.contains("ZAR"))
+        XCTAssertFalse(offered.contains("GBX") || offered.contains("GBp"), "the figures are never in pence")
+        XCTAssertEqual(Set(offered).count, offered.count)
+        XCTAssertEqual(EarningsFiguresSettings.menuTitle("EUR", locale: F.britishEnglish), "EUR – Euro")
+    }
+
+    func testAChoiceForAHoldingThatGoesStaysAndComesBackWithIt() throws {
+        let suite = "EarningsFiguresSettingsTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = EarningsFiguresSettings(defaults: defaults)
+        settings.set(.currency("EUR"), for: "ALPHA")
+        let histories = Dictionary(uniqueKeysWithValues: try localHistories().map { ($0.symbol, $0) })
+
+        let without = localInputs.holdings.filter { $0.symbol != "ALPHA" }
+        XCTAssertEqual(CalendarFigures.earningsFigureSymbols(without), ["BETA"], "the card lists only today's holdings")
+        XCTAssertEqual(settings.choice(for: "ALPHA"), .currency("EUR"), "the choice stays stored")
+
+        let back = CalendarFigures.applying(settings.choices, to: CalendarRows(upcoming: [], past:
+            CalendarFigures.pastEarningsRows(holdings: localInputs.holdings, histories: histories, today: F.today)))
+        let alpha = try XCTUnwrap(back.past.first { $0.symbol == "ALPHA" })
+        XCTAssertEqual(CalendarText.detail(alpha, locale: F.britishEnglish),
+                       ", EPS €1.52 against €1.48 expected, surprise 2.70%", "and applies again when it returns")
+    }
+
+    func testEachFiguresChoiceRowTextAndVoiceOverNegativeFiguresIncluded() throws {
+        let holdings = [CalendarHolding(symbol: "AIR", yahooSymbol: "FAKEAIR.L"),
+                        CalendarHolding(symbol: "BANK", yahooSymbol: "FAKEBANK.L"),
+                        CalendarHolding(symbol: "PLAIN", yahooSymbol: "FAKEPLAIN"),
+                        CalendarHolding(symbol: "QUIET", yahooSymbol: "FAKEQUIET")]
+        let histories = Dictionary(uniqueKeysWithValues: [
+            try history("FAKEAIR.L", [("2026-10-28", -0.27, -0.28, -4.98)]),
+            try history("FAKEBANK.L", [("2026-10-27", 0.44, 0.42, 3.72)]),
+            try history("FAKEPLAIN", [("2026-10-26", -1.5, 0.0525, -2.7)]),
+            try history("FAKEQUIET", [("2026-10-25", 0.31, nil, nil)])
+        ].map { ($0.symbol, $0) })
+        let rows = CalendarRows(upcoming: [], past:
+            CalendarFigures.pastEarningsRows(holdings: holdings, histories: histories, today: F.today))
+        let choices: [String: EarningsFiguresChoice] = ["FAKEAIR.L": .currency("EUR"), "FAKEBANK.L": .hidden,
+                                                        "FAKEQUIET": .hidden, "AIR": .currency("USD")]
+        let shown = CalendarFigures.applying(choices, to: rows).past
+        let english = F.britishEnglish
+        XCTAssertEqual(shown.map { $0.symbol + ": " + CalendarText.title($0) + CalendarText.detail($0, locale: english) }, [
+            "AIR: Earnings, EPS -€0.27 against -€0.28 expected, surprise -4.98%",
+            "BANK: Earnings, surprise 3.72%",
+            "PLAIN: Earnings, EPS -1.50 against 0.0525 expected, surprise -2.70%",
+            "QUIET: Earnings"
+        ], "keyed by the symbol Yahoo is asked about, never the one shown")
+        XCTAssertEqual(shown.map { CalendarText.accessibilitySentence($0, today: F.today, locale: english) }, [
+            "Wed 28 Oct, AIR, earnings, EPS -0.27 euros against -0.28 euros expected, surprise -4.98%.",
+            "Tue 27 Oct, BANK, earnings, surprise 3.72%.",
+            "Mon 26 Oct, PLAIN, earnings, EPS -1.50 against 0.0525 expected, surprise -2.70%.",
+            "Sun 25 Oct, QUIET, earnings."
+        ], "VoiceOver says the same, with the currency spoken")
+        let grid = CalendarFigures.grid(month: IncomeMonth(year: 2026, month: 10), rows: shown, today: F.today)
+        let days = grid.joined().filter { !$0.rows.isEmpty && $0.isInMonth }
+        XCTAssertEqual(days.map { CalendarText.daySentence($0, locale: english) }, [
+            "Sunday 25 October: QUIET earnings",
+            "Monday 26 October: PLAIN earnings, EPS -1.50 against 0.0525 expected, surprise -2.70%",
+            "Tuesday 27 October: BANK earnings, surprise 3.72%",
+            "Wednesday 28 October: AIR earnings, EPS -0.27 euros against -0.28 euros expected, surprise -4.98%"
+        ], "the grid's day hides and names the currency as the row does")
+
+        // Symbol where the locale has a clear one, the code where it has none.
+        XCTAssertEqual(CalendarText.epsFigure(1.52, currency: "USD", locale: english), "US$1.52")
+        XCTAssertEqual(CalendarText.epsFigure(1.52, currency: "USD", locale: Locale(identifier: "en_US")), "$1.52")
+        XCTAssertEqual(CalendarText.epsFigure(1.52, currency: "CAD", locale: Locale(identifier: "en_US")), "CA$1.52")
+        XCTAssertEqual(CalendarText.epsFigure(0.0525, currency: "CHF", locale: english), "CHF\u{00A0}0.0525",
+                       "a non-breaking space, so the code stays with its figure")
+        XCTAssertEqual(CalendarText.epsFigure(1.5, currency: "JPY", locale: english), "JP¥1.50", "two decimals as given")
+        XCTAssertEqual(CalendarText.epsFigure(1.52, currency: "CNY", locale: english, spoken: true), "1.52 Chinese yuan")
+        XCTAssertEqual(CalendarText.epsFigure(1.52, currency: "EUR", locale: Locale(identifier: "de_DE")), "1,52\u{00A0}€")
+    }
+
+    func testTheFiguresChoiceIsDisplayOnlyAndAsksNothing() async throws {
+        let suite = "EarningsFiguresSettingsTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = EarningsFiguresSettings(defaults: defaults)
+        let provider = EventsProviderStandIn()
+        await provider.answer(try localAnswers().map(result))
+        let histories = try localHistories()
+        await provider.answerHistory(histories.map(historyResult))
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, historyProvider: provider,
+                                          isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+        model.mode = .past
+        model.activate(localInputs)
+        await settle { model.local.phase == .loaded && !model.isLoadingHistory }
+        let before = model.rows(localInputs, currency: "GBP", convert: convert)
+        let calls = (await provider.calls, await provider.historyCalls)
+        let saved = model.historyAnswers
+
+        settings.set(.currency("EUR"), for: "ALPHA")
+        settings.set(.hidden, for: "BETA")
+        let shown = CalendarFigures.applying(settings.choices, to: before)
+        await drain()
+
+        let after = (await provider.calls, await provider.historyCalls)
+        XCTAssertEqual(after.0, calls.0, "no events request")
+        XCTAssertEqual(after.1, calls.1, "no past-earnings request")
+        XCTAssertEqual(model.rows(localInputs, currency: "GBP", convert: convert), before,
+                       "the model's rows, built from the answers, are unchanged")
+        XCTAssertEqual(model.historyAnswers, saved, "the answers held are unchanged")
+        XCTAssertEqual(Array(saved.values).sorted { $0.symbol < $1.symbol }, histories, "as the helper gave them")
+        XCTAssertNotEqual(shown, before)
+        XCTAssertEqual(shown.past.map(\.id), before.past.map(\.id), "the same rows, only written differently")
+        XCTAssertEqual(shown.past.filter(\.isDividend), before.past.filter(\.isDividend), "dividends are not touched")
+        XCTAssertEqual(CalendarFigures.applying([:], to: before), before)
+    }
+
+    func testTheCardsRowsFollowThePortfoliosSymbols() throws {
+        let local = [LocalIncomeHolding(symbol: "BETA.L", units: 3), LocalIncomeHolding(symbol: "alpha", units: 1),
+                     LocalIncomeHolding(symbol: "BAD SYM", units: 1), LocalIncomeHolding(symbol: "ALPHA", units: 2)]
+        XCTAssertEqual(CalendarFigures.earningsFigureSymbols(CalendarFigures.holdings(local: local, folyncHoldings: nil)),
+                       ["ALPHA", "BETA.L"], "upper-cased, once each, sorted, and none without a symbol Yahoo is asked")
+        let json = """
+        [{"portfolioId":"pf","assetId":"a1","ticker":"ULVR","displayTicker":"ULVR","quoteSymbol":"ulvr.l","name":"U",
+          "currency":"GBP","shares":10,"averageCost":40,"costValue":400,
+          "valuation":{"value":420,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":null}},
+         {"portfolioId":"pf","assetId":"a2","ticker":"NOQ","name":"N","currency":"GBP","shares":1,"averageCost":1,
+          "costValue":1,"valuation":{"value":1,"currency":"GBP","quality":"complete","reasonCodes":[],"asOfDate":null}}]
+        """
+        let folync = try JSONDecoder().decode([FolyncHolding].self, from: Data(json.utf8))
+        let held = [LocalIncomeHolding(symbol: "ULVR", units: 10), LocalIncomeHolding(symbol: "NOQ", units: 1)]
+        XCTAssertEqual(CalendarFigures.earningsFigureSymbols(CalendarFigures.holdings(local: held, folyncHoldings: folync)),
+                       ["ULVR.L"], "a Folync holding is listed by its quote symbol, the one Calendar asks about")
+        XCTAssertEqual(CalendarFigures.earningsFigureSymbols([]), [])
+        XCTAssertEqual(EarningsFiguresSettingsSection.emptyLine(holdings: []),
+                       "No holdings yet. Each holding you add is listed here.")
+        XCTAssertEqual(EarningsFiguresSettingsSection.emptyLine(holdings: [CalendarHolding(symbol: "NOQ", yahooSymbol: nil)]),
+                       "None of your holdings has a symbol Calendar can ask Yahoo about, so none has earnings figures to show.",
+                       "a Folync portfolio whose holdings have no quote symbol is not a portfolio with no holdings")
+        XCTAssertNil(EarningsFiguresSettingsSection.emptyLine(holdings: CalendarFigures.holdings(local: held,
+                                                                                                folyncHoldings: folync)))
+        XCTAssertEqual(EarningsFiguresSettingsSection.pickerLabel("ULVR.L"), "ULVR.L earnings figures",
+                       "VoiceOver hears the symbol once, from the row, then what the pop-up sets")
     }
 
     func testPastEarningsAreAskedForOnlyWhilePastIsShown() async throws {
