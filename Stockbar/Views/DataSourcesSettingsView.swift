@@ -48,26 +48,12 @@ struct DataSourcesSettingsView: View {
                         .accessibilityAddTraits(.isHeader)
 
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                        apiKeyRow(
-                            service: "fmp",
-                            name: "Financial Modeling Prep",
-                            key: $fmpApiKey,
-                            isShown: $showFmpKey,
-                            status: fmpStatus,
-                            hasStoredKey: hasStoredFmpKey
-                        ) {
+                        apiKeyRow(service: "fmp", key: $fmpApiKey, isShown: $showFmpKey) {
                             Text("Used for US stocks fallback. Free plan allows US historical data.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        apiKeyRow(
-                            service: "twelvedata",
-                            name: "Twelve Data",
-                            key: $twelveDataApiKey,
-                            isShown: $showTwelveDataKey,
-                            status: twelveDataStatus,
-                            hasStoredKey: hasStoredTwelveDataKey
-                        ) {
+                        apiKeyRow(service: "twelvedata", key: $twelveDataApiKey, isShown: $showTwelveDataKey) {
                             HStack(spacing: 6) {
                                 Text("Used for LSE/International fallback.")
                                     .font(.caption)
@@ -171,13 +157,13 @@ struct DataSourcesSettingsView: View {
     @ViewBuilder
     private func apiKeyRow<Help: View>(
         service: String,
-        name: String,
         key: Binding<String>,
         isShown: Binding<Bool>,
-        status: VerificationStatus,
-        hasStoredKey: Bool,
         @ViewBuilder help: () -> Help
     ) -> some View {
+        let name = sourceName(for: service)
+        let status = service == "fmp" ? fmpStatus : twelveDataStatus
+        let hasStoredKey = service == "fmp" ? hasStoredFmpKey : hasStoredTwelveDataKey
         GridRow(alignment: .firstTextBaseline) {
             Text("\(name):")
                 // Grows with larger text instead of truncating.
@@ -197,16 +183,18 @@ struct DataSourcesSettingsView: View {
             .gridColumnAlignment(.leading)
             statusIndicator(for: status)
             HStack(spacing: 6) {
-                Button(action: { isShown.wrappedValue.toggle() }) {
+                Button {
+                    isShown.wrappedValue.toggle()
+                } label: {
                     Image(systemName: isShown.wrappedValue ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.borderless)
                 .help(isShown.wrappedValue ? "Hide API Key" : "Show API Key")
                 .accessibilityLabel(isShown.wrappedValue ? "Hide \(name) API key" : "Show \(name) API key")
 
-                Button(action: {
+                Button {
                     saveAndTestKey(service: service, key: key.wrappedValue)
-                }) {
+                } label: {
                     if status == .verifying {
                         ProgressView()
                             .scaleEffect(0.5)
