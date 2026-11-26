@@ -7,8 +7,12 @@ the ex-dividend date, the dividend pay date, the earnings date (or range), and
 the dividends of the last twelve months. Nothing is estimated: a field Yahoo
 does not give is null, and a date already past is returned as it is.
 
+With --earnings-history it asks instead for each symbol's earnings dates of the
+last twelve months, each with the reported EPS, the estimated EPS and the
+surprise where Yahoo gives them, exactly as given.
+
 Usage:
-    python3 get_instrument_events.py [--json] [--deadline-seconds N] SYMBOL [SYMBOL ...]
+    python3 get_instrument_events.py [--json] [--earnings-history] [--deadline-seconds N] SYMBOL [SYMBOL ...]
 
 Output (stdout, one JSON array, one entry per symbol in the order asked):
     {"symbol": "ALPHA", "success": true, "events": {
@@ -19,6 +23,15 @@ Output (stdout, one JSON array, one entry per symbol in the order asked):
         "dividendCurrency": "USD" | null, "fetchedAt": <epoch seconds>}}
     {"symbol": "BETA.L", "success": false,
      "error": {"error_code": "RATE_LIMIT", "message": "..."}}
+
+With --earnings-history a success is instead:
+    {"symbol": "ALPHA", "success": true, "earningsHistory": {
+        "symbol": "ALPHA",
+        "earnings": [{"date": "YYYY-MM-DD", "reportedEPS": 1.52 | null,
+                      "estimatedEPS": 1.48 | null, "surprisePercent": 2.7 | null}, ...],
+        "epsCurrency": "USD" | null (figures dropped), "fetchedAt": <epoch seconds>}}
+A symbol Yahoo has no earnings page for is NO_DATA; one whose page lists no
+date in the twelve months is a success with an empty list.
 
 A usage problem or a missing yfinance is one JSON error object instead:
     {"error": true, "error_code": "...", "message": "...", "timestamp": ...}
@@ -70,6 +83,17 @@ SYMBOL_DEADLINE_SECONDS = 20.0
 # Daily bars over two years; the twelve-month cut is made here, by date, so the
 # boundary does not depend on how Yahoo trims a range.
 DIVIDEND_HISTORY_PERIOD = "2y"
+# Rows asked of Yahoo's earnings page. yfinance asks the page for 25 rows for
+# any limit up to 25 (upcoming estimates first, then the most recent reports),
+# which covers well over a year of quarterly reports.
+EARNINGS_HISTORY_LIMIT = 12
+# yfinance's names for the earnings page's columns (base.py, the scrape).
+EARNINGS_COLUMNS = {
+    "reportedEPS": ("Reported EPS",),
+    "estimatedEPS": ("EPS Estimate",),
+    "surprisePercent": ("Surprise(%)", "Surprise (%)"),
+}
+PENCE_CURRENCIES = ("GBp", "GBX")
 
 FAILURE_PATTERNS = (
     ("RATE_LIMIT", re.compile(r"(?i)\b429\b|too many requests|rate.?limit")),
@@ -261,6 +285,101 @@ def metadata_value(metadata, key):
     return None
 
 
+def earnings_rows(frame):
+    """[(date-like, {field: value})] from what get_earnings_dates() returned, or None.
+
+    yfinance gives a DataFrame indexed by the earnings date (a zoned Timestamp)
+    with `EPS Estimate`, `Reported EPS` and `Surprise(%)` columns, Yahoo's `-`
+    already read as NaN; or None when Yahoo has no earnings page for the symbol.
+    """
+    if frame is None:
+        return None
+    try:
+        if getattr(frame, "empty", False):
+            return []
+        columns = list(getattr(frame, "columns", []))
+        values = {}
+        for field, names in EARNINGS_COLUMNS.items():
+            name = next((name for name in names if name in columns), None)
+            values[field] = list(frame[name].tolist()) if name is not None else None
+        index = list(frame.index)
+    except Exception:
+        return None
+    rows = []
+    for position, when in enumerate(index):
+        figures = {}
+        for field, column in values.items():
+            figures[field] = column[position] if column is not None and position < len(column) else None
+        rows.append((when, figures))
+    return rows
+
+
+def recent_earnings(symbol, rows, today, currency_for_figures):
+    """Earnings dated within the twelve months up to `today`, oldest first.
+
+    Returns (list, currency or None). Figures are kept exactly as Yahoo gives
+    them. `currency_for_figures` is called only when some row has an EPS
+    figure, and gives the quote currency or None. The earnings page names no
+    currency, so the figures are taken to be in the quote currency, and are
+    dropped (the dates kept) when that currency is not known or is pence:
+    whether Yahoo gives a pence-quoted share's EPS in pence or pounds cannot
+    be told, and it is not guessed.
+    """
+    earliest = one_year_before(today)
+    by_day = {}
+    for when, figures in rows:
+        day = iso_date(when)
+        if day is None:
+            continue
+        date_value = datetime.date.fromisoformat(day)
+        if date_value < earliest or date_value > today:
+            continue
+        entry = {
+            "date": day,
+            "reportedEPS": finite_float(figures.get("reportedEPS")),
+            "estimatedEPS": finite_float(figures.get("estimatedEPS")),
+            "surprisePercent": finite_float(figures.get("surprisePercent")),
+        }
+        known = sum(value is not None for key, value in entry.items() if key != "date")
+        # One row per day; when Yahoo lists a day twice, the row with more figures.
+        previous = by_day.get(day)
+        if previous is None or known > previous[0]:
+            by_day[day] = (known, entry)
+    kept = [entry for _, entry in sorted(by_day.values(), key=lambda item: item[1]["date"])]
+    if not any(entry["reportedEPS"] is not None or entry["estimatedEPS"] is not None for entry in kept):
+        return kept, None
+
+    currency = currency_for_figures()
+    if isinstance(currency, str):
+        currency = currency.strip() or None
+    if currency is None or currency in PENCE_CURRENCIES:
+        reason = "no currency" if currency is None else f"quoted in {currency}"
+        print(f"{symbol}: EPS figures left out ({reason}); dates kept", file=sys.stderr)
+        for entry in kept:
+            entry["reportedEPS"] = None
+            entry["estimatedEPS"] = None
+        return kept, None
+    return kept, str(currency).upper()
+
+
+def forget_cached_pages():
+    """Clears yfinance's in-memory cache of fetched pages.
+
+    yfinance keeps the earnings page it fetched (YfData.cache_get is an
+    lru_cache) for as long as the interpreter lives. Stockbar's worker runs
+    this script many times in one interpreter, so without this a later run,
+    a forced refresh included, would be answered from an earlier one.
+    """
+    try:
+        import importlib
+        cache_get = getattr(getattr(importlib.import_module("yfinance.data"), "YfData", None), "cache_get", None)
+        clear = getattr(cache_get, "cache_clear", None)
+        if callable(clear):
+            clear()
+    except Exception as error:
+        print(f"Could not clear yfinance's page cache: {error}", file=sys.stderr)
+
+
 class _FailureCapture(logging.Handler):
     """Records yfinance's logged errors for one thread.
 
@@ -283,17 +402,16 @@ class _FailureCapture(logging.Handler):
             pass
 
 
-def fetch_events(symbol, today, now_seconds):
-    """One symbol's events, or raises. Provider-wide failures that yfinance
-    only logged are raised as RuntimeError so the caller reports them."""
+@contextlib.contextmanager
+def raising_logged_failures(symbol):
+    """Runs the block with yfinance's logged errors recorded, then raises a
+    provider-wide failure that yfinance only logged as RuntimeError, so the
+    caller reports it instead of an empty answer."""
     logger = logging.getLogger("yfinance")
     capture = _FailureCapture(threading.get_ident())
     logger.addHandler(capture)
     try:
-        ticker = yf.Ticker(symbol)
-        dividends = ticker.get_dividends(period=DIVIDEND_HISTORY_PERIOD)
-        metadata = ticker.history_metadata
-        calendar = ticker.calendar
+        yield
     finally:
         logger.removeHandler(capture)
 
@@ -304,6 +422,16 @@ def fetch_events(symbol, today, now_seconds):
         # "SSL" is not mistaken for a connection failure.
         if classify_failure(message.replace(symbol, "")) is not None:
             raise RuntimeError(message)
+
+
+def fetch_events(symbol, today, now_seconds):
+    """One symbol's events, or raises. Provider-wide failures that yfinance
+    only logged are raised as RuntimeError so the caller reports them."""
+    with raising_logged_failures(symbol):
+        ticker = yf.Ticker(symbol)
+        dividends = ticker.get_dividends(period=DIVIDEND_HISTORY_PERIOD)
+        metadata = ticker.history_metadata
+        calendar = ticker.calendar
 
     instrument_type = metadata_value(metadata, "instrumentType")
     reported_currency = metadata_value(metadata, "currency")
@@ -331,6 +459,35 @@ def fetch_events(symbol, today, now_seconds):
     return events
 
 
+def fetch_earnings_history(symbol, today, now_seconds):
+    """One symbol's earnings of the last twelve months, None for no data, or raises.
+
+    One request for Yahoo's earnings page (`Ticker.get_earnings_dates`); a
+    second, for the chart's quote currency, only when the page gives an EPS
+    figure in the twelve months.
+    """
+    with raising_logged_failures(symbol):
+        ticker = yf.Ticker(symbol)
+        frame = ticker.get_earnings_dates(limit=EARNINGS_HISTORY_LIMIT)
+        rows = earnings_rows(frame)
+        if rows is None:
+            # yfinance found no earnings table (it logs "No earnings dates
+            # found"): a fund, or a symbol Yahoo has no earnings page for.
+            return None
+
+        def quote_currency():
+            return metadata_value(ticker.history_metadata, "currency")
+
+        earnings, currency = recent_earnings(symbol, rows, today, quote_currency)
+
+    return {
+        "symbol": symbol,
+        "earnings": earnings,
+        "epsCurrency": currency,
+        "fetchedAt": now_seconds,
+    }
+
+
 def failure_envelope(symbol, code, detail=None):
     message = FAILURE_MESSAGES[code].format(symbol=symbol)
     if detail:
@@ -338,13 +495,21 @@ def failure_envelope(symbol, code, detail=None):
     return {"symbol": symbol, "success": False, "error": {"error_code": code, "message": message}}
 
 
-def fetch_with_deadline(symbol, today, now_seconds, deadline_seconds):
+MODES = {
+    # mode: (fetch function, the success envelope's key)
+    "events": (lambda *args: fetch_events(*args), "events"),
+    "earningsHistory": (lambda *args: fetch_earnings_history(*args), "earningsHistory"),
+}
+
+
+def fetch_with_deadline(symbol, today, now_seconds, deadline_seconds, mode="events"):
     """Envelope for one symbol, giving up waiting after `deadline_seconds`."""
+    fetch, key = MODES[mode]
     outcome = {}
 
     def work():
         try:
-            outcome["events"] = fetch_events(symbol, today, now_seconds)
+            outcome["events"] = fetch(symbol, today, now_seconds)
         except Exception as error:
             outcome["error"] = error
 
@@ -362,7 +527,7 @@ def fetch_with_deadline(symbol, today, now_seconds, deadline_seconds):
     events = outcome.get("events")
     if events is None:
         return failure_envelope(symbol, "NO_DATA")
-    return {"symbol": symbol, "success": True, "events": events}
+    return {"symbol": symbol, "success": True, key: events}
 
 
 @contextlib.contextmanager
@@ -391,17 +556,22 @@ def utc_process_clock():
         time.tzset()
 
 
-def fetch_all(symbols, now=None, time_budget_seconds=None, sleep=time.sleep, clock=time.monotonic):
+def fetch_all(symbols, now=None, time_budget_seconds=None, sleep=time.sleep, clock=time.monotonic, mode="events"):
     """Envelopes for every symbol, in order, each symbol fetched once.
 
-    After a rate-limit answer the remaining symbols are not asked for: they are
-    reported as rate limited too, so the app backs off.
+    `mode` is "events" or "earningsHistory". After a rate-limit answer the
+    remaining symbols are not asked for: they are reported as rate limited
+    too, so the app backs off.
     """
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r}")
     with utc_process_clock():
-        return _fetch_all(symbols, now, time_budget_seconds, sleep, clock)
+        if mode == "earningsHistory":
+            forget_cached_pages()
+        return _fetch_all(symbols, now, time_budget_seconds, sleep, clock, mode)
 
 
-def _fetch_all(symbols, now, time_budget_seconds, sleep, clock):
+def _fetch_all(symbols, now, time_budget_seconds, sleep, clock, mode):
     now = now or datetime.datetime.now(datetime.timezone.utc)
     today = now.date()
     now_seconds = now.timestamp()
@@ -422,7 +592,7 @@ def _fetch_all(symbols, now, time_budget_seconds, sleep, clock):
             sleep(REQUEST_SPACING_SECONDS)
         fetched_any = True
         deadline = SYMBOL_DEADLINE_SECONDS if remaining is None else min(SYMBOL_DEADLINE_SECONDS, remaining)
-        envelope = fetch_with_deadline(symbol, today, now_seconds, deadline)
+        envelope = fetch_with_deadline(symbol, today, now_seconds, deadline, mode)
         by_symbol[symbol] = envelope
         if not envelope["success"] and envelope["error"]["error_code"] == "RATE_LIMIT":
             rate_limited = True
@@ -441,6 +611,8 @@ def output_error(error_code, message):
 def main():
     parser = argparse.ArgumentParser(description="Instrument type, dividend and earnings dates from Yahoo")
     parser.add_argument("--json", action="store_true", help="Accepted for symmetry with get_stock_data.py; output is always JSON")
+    parser.add_argument("--earnings-history", action="store_true",
+                        help="Earnings dates of the last twelve months, with EPS where Yahoo gives it")
     parser.add_argument("--deadline-seconds", type=float, default=None,
                         help="Time budget for the batch; symbols not reached in time report TIMEOUT")
     parser.add_argument("symbols", nargs="*", help="Symbols to look up")
@@ -448,7 +620,8 @@ def main():
 
     symbols = [symbol.strip().upper() for symbol in args.symbols if symbol.strip()]
     if not symbols:
-        print("Usage: get_instrument_events.py [--json] [--deadline-seconds N] SYMBOL [SYMBOL ...]", file=sys.stderr)
+        print("Usage: get_instrument_events.py [--json] [--earnings-history] [--deadline-seconds N] SYMBOL [SYMBOL ...]",
+              file=sys.stderr)
         output_error("INVALID_REQUEST", "No ticker symbol provided")
         sys.exit(1)
 
@@ -456,7 +629,8 @@ def main():
         output_error("PROVIDER_UNAVAILABLE", "yfinance is not installed")
         sys.exit(1)
 
-    print_json(fetch_all(symbols, time_budget_seconds=args.deadline_seconds))
+    mode = "earningsHistory" if args.earnings_history else "events"
+    print_json(fetch_all(symbols, time_budget_seconds=args.deadline_seconds, mode=mode))
 
 
 if __name__ == "__main__":
