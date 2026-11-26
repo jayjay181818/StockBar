@@ -4802,6 +4802,22 @@ extension FolyncPortfolioSourceTests {
         XCTAssertTrue(FolyncRouteSettingsStatus.canChange(isOn: true, capability: Self.usable))
     }
 
+    /// Settings → Connections gives Folync's schedule in one line.
+    func testScheduleLineGivesLastAndNextCheckInOneLine() {
+        let locale = Locale(identifier: "en_GB")
+        let utc = TimeZone(identifier: "UTC")!
+        let last = Date(timeIntervalSince1970: 1_795_707_720)  // 2026-11-26 15:42:00 UTC
+        let next = last.addingTimeInterval(65)
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: last, next: next, locale: locale, timeZone: utc),
+                       "Last checked 15:42, next 15:43")
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: last, next: nil, locale: locale, timeZone: utc),
+                       "Last checked 15:42")
+        XCTAssertEqual(FolyncScheduleText.line(lastChecked: nil, next: next, locale: locale, timeZone: utc),
+                       "Next check 15:43")
+        XCTAssertNil(FolyncScheduleText.line(lastChecked: nil, next: nil, locale: locale, timeZone: utc),
+                     "nothing known, no line")
+    }
+
     func testSavedSupplementalSettingsKeepTheirKeysAndValues() throws {
         let settings = FolyncSupplementalSettings(
             historicalLineCharts: true, candlestickCharts: false, benchmarkMarketData: true, exchangeRates: false,

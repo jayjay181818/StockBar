@@ -86,14 +86,19 @@ struct StockbarSettingsView: View {
         }
     }
 
+    /// The grouped-form tabs. Their groups start at the page header's left
+    /// edge and stop at the same width as Connections' cards.
+    private static let groupedFormGroupInset: CGFloat = 18
+
     private func settingsForm<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         Form {
             content()
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        .padding(.horizontal, StockbarLayout.pagePadding - 20)
-        .frame(maxWidth: 820, alignment: .topLeading)
+        // A grouped form draws its groups this far inside its margins.
+        .contentMargins(.horizontal, StockbarLayout.pagePadding - Self.groupedFormGroupInset, for: .scrollContent)
+        .frame(maxWidth: StockbarLayout.settingsContentWidth + 2 * StockbarLayout.pagePadding, alignment: .topLeading)
     }
 
     @ViewBuilder

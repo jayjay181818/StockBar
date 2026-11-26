@@ -41,147 +41,59 @@ struct DataSourcesSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // MARK: - API Keys Section
+                // MARK: - Market-data keys
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("API Keys")
+                    Text("Market-data keys")
                         .font(.headline)
-                    
-                    // FMP Key
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Financial Modeling Prep:")
-                                // Grows with larger text instead of truncating.
-                                .frame(minWidth: 160, alignment: .leading)
-                                .fixedSize()
-                            
-                            Group {
-                                if showFmpKey {
-                                    TextField("Enter API Key", text: $fmpApiKey)
-                                } else {
-                                    SecureField("Enter API Key", text: $fmpApiKey)
-                                }
-                            }
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .accessibilityLabel("Financial Modeling Prep API key")
-                            
-                            Button(action: { showFmpKey.toggle() }) {
-                                Image(systemName: showFmpKey ? "eye.slash" : "eye")
-                            }
-                            .buttonStyle(.borderless)
-                            .help(showFmpKey ? "Hide API Key" : "Show API Key")
-                            .accessibilityLabel(showFmpKey ? "Hide Financial Modeling Prep API key" : "Show Financial Modeling Prep API key")
-                            
-                            // Status Indicator and Button
-                            HStack(spacing: 4) {
-                                statusIndicator(for: fmpStatus)
-                                
-                                Button(action: {
-                                    saveAndTestKey(service: "fmp", key: fmpApiKey)
-                                }) {
-                                    if fmpStatus == .verifying {
-                                        ProgressView()
-                                            .scaleEffect(0.5)
-                                            .frame(width: 40)
-                                    } else {
-                                        Text("Save & Test")
-                                    }
-                                }
-                                .disabled(fmpApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fmpStatus == .verifying)
+                        .accessibilityAddTraits(.isHeader)
 
-                                if hasStoredFmpKey {
-                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "fmp" }
-                                        .disabled(fmpStatus == .verifying)
-                                        .help("Remove the stored Financial Modeling Prep API key")
-                                        .accessibilityLabel("Remove Financial Modeling Prep API key")
-                                }
-                            }
-                        }
-                        Text("Used for US stocks fallback. Free plan allows US historical data.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 164)
-                    }
-                    
-                    // Twelve Data Key
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Twelve Data:")
-                                // Grows with larger text instead of truncating.
-                                .frame(minWidth: 160, alignment: .leading)
-                                .fixedSize()
-                            
-                            Group {
-                                if showTwelveDataKey {
-                                    TextField("Enter API Key", text: $twelveDataApiKey)
-                                } else {
-                                    SecureField("Enter API Key", text: $twelveDataApiKey)
-                                }
-                            }
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .accessibilityLabel("Twelve Data API key")
-                            
-                            Button(action: { showTwelveDataKey.toggle() }) {
-                                Image(systemName: showTwelveDataKey ? "eye.slash" : "eye")
-                            }
-                            .buttonStyle(.borderless)
-                            .help(showTwelveDataKey ? "Hide API Key" : "Show API Key")
-                            .accessibilityLabel(showTwelveDataKey ? "Hide Twelve Data API key" : "Show Twelve Data API key")
-                            
-                            // Status Indicator and Button
-                            HStack(spacing: 4) {
-                                statusIndicator(for: twelveDataStatus)
-                                
-                                Button(action: {
-                                    saveAndTestKey(service: "twelvedata", key: twelveDataApiKey)
-                                }) {
-                                    if twelveDataStatus == .verifying {
-                                        ProgressView()
-                                            .scaleEffect(0.5)
-                                            .frame(width: 40)
-                                    } else {
-                                        Text("Save & Test")
-                                    }
-                                }
-                                .disabled(twelveDataApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || twelveDataStatus == .verifying)
-
-                                if hasStoredTwelveDataKey {
-                                    Button("Remove", role: .destructive) { pendingKeyRemoval = "twelvedata" }
-                                        .disabled(twelveDataStatus == .verifying)
-                                        .help("Remove the stored Twelve Data API key")
-                                        .accessibilityLabel("Remove Twelve Data API key")
-                                }
-                            }
-                        }
-                        HStack {
-                            Text("Used for LSE/International fallback.")
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                        apiKeyRow(
+                            service: "fmp",
+                            name: "Financial Modeling Prep",
+                            key: $fmpApiKey,
+                            isShown: $showFmpKey,
+                            status: fmpStatus,
+                            hasStoredKey: hasStoredFmpKey
+                        ) {
+                            Text("Used for US stocks fallback. Free plan allows US historical data.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Link("Get Free Key", destination: URL(string: "https://twelvedata.com/")!)
-                                .font(.caption)
                         }
-                        .padding(.leading, 164)
+                        apiKeyRow(
+                            service: "twelvedata",
+                            name: "Twelve Data",
+                            key: $twelveDataApiKey,
+                            isShown: $showTwelveDataKey,
+                            status: twelveDataStatus,
+                            hasStoredKey: hasStoredTwelveDataKey
+                        ) {
+                            HStack(spacing: 6) {
+                                Text("Used for LSE/International fallback.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Link("Get Free Key", destination: URL(string: "https://twelvedata.com/")!)
+                                    .font(.caption)
+                            }
+                        }
                     }
                 }
                 .stockbarCard()
 
                 FolyncDataSourceSection(dataModel: dataModel)
 
-                Trading212DataSourceSection(dataModel: dataModel)
-                    .disabled(dataModel.isFolyncPortfolioActive)
-                    .overlay(alignment: .topTrailing) {
-                        if dataModel.isFolyncPortfolioActive {
-                            Text("Inactive while Folync is authoritative")
-                                .font(.caption)
-                                .padding(6)
-                                .stockbarSurface(.pill, in: Capsule())
-                        }
-                    }
+                Trading212DataSourceSection(
+                    dataModel: dataModel,
+                    inactiveNote: dataModel.isFolyncPortfolioActive ? "Inactive while Folync is authoritative" : nil
+                )
+                .disabled(dataModel.isFolyncPortfolioActive)
                 
                 // MARK: - Priority Section
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Fetch Priority")
+                        Text("Fetch order")
                             .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
                         Spacer()
                         Button(isEditingPriority ? "Done" : "Edit Order") {
                             isEditingPriority.toggle()
@@ -231,9 +143,10 @@ struct DataSourcesSettingsView: View {
                 
                 Spacer()
             }
+            // The same left edge and width as the grouped-form tabs.
+            .frame(maxWidth: StockbarLayout.settingsContentWidth, alignment: .leading)
             .padding(.horizontal, StockbarLayout.pagePadding)
             .padding(.vertical, 12)
-            .frame(maxWidth: 900, alignment: .leading)
         }
         .onAppear {
             loadSettings()
@@ -250,6 +163,67 @@ struct DataSourcesSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Stockbar stops using this source until you enter a key again.")
+        }
+    }
+
+    /// One provider's row: its name, the key field with the help line under
+    /// it, the last test's result, then show/hide, Save & Test and Remove.
+    @ViewBuilder
+    private func apiKeyRow<Help: View>(
+        service: String,
+        name: String,
+        key: Binding<String>,
+        isShown: Binding<Bool>,
+        status: VerificationStatus,
+        hasStoredKey: Bool,
+        @ViewBuilder help: () -> Help
+    ) -> some View {
+        GridRow(alignment: .firstTextBaseline) {
+            Text("\(name):")
+                // Grows with larger text instead of truncating.
+                .fixedSize()
+            VStack(alignment: .leading, spacing: 4) {
+                Group {
+                    if isShown.wrappedValue {
+                        TextField("Enter API Key", text: key)
+                    } else {
+                        SecureField("Enter API Key", text: key)
+                    }
+                }
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .accessibilityLabel("\(name) API key")
+                help()
+            }
+            .gridColumnAlignment(.leading)
+            statusIndicator(for: status)
+            HStack(spacing: 6) {
+                Button(action: { isShown.wrappedValue.toggle() }) {
+                    Image(systemName: isShown.wrappedValue ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.borderless)
+                .help(isShown.wrappedValue ? "Hide API Key" : "Show API Key")
+                .accessibilityLabel(isShown.wrappedValue ? "Hide \(name) API key" : "Show \(name) API key")
+
+                Button(action: {
+                    saveAndTestKey(service: service, key: key.wrappedValue)
+                }) {
+                    if status == .verifying {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 40)
+                    } else {
+                        Text("Save & Test")
+                    }
+                }
+                .disabled(key.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || status == .verifying)
+
+                if hasStoredKey {
+                    Button("Remove", role: .destructive) { pendingKeyRemoval = service }
+                        .disabled(status == .verifying)
+                        .help("Remove the stored \(name) API key")
+                        .accessibilityLabel("Remove \(name) API key")
+                }
+            }
         }
     }
 
@@ -329,11 +303,27 @@ struct DataSourcesSettingsView: View {
         }
         .frame(width: 16, height: 16)
         .help(Self.statusDescription(status))
+        .modifier(StatusWords(text: Self.statusDescription(status)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("API key status")
         .accessibilityValue(Self.statusDescription(status))
     }
     
+    /// The status's words beside its symbol, read as one element.
+    private struct StatusWords: ViewModifier {
+        let text: String
+
+        func body(content: Content) -> some View {
+            HStack(spacing: 5) {
+                content
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+        }
+    }
+
     static func statusDescription(_ status: VerificationStatus) -> String {
         switch status {
         case .none: return "Not verified"

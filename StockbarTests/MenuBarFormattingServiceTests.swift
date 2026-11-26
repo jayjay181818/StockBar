@@ -1047,6 +1047,18 @@ final class BackupPreviewFormatTests: XCTestCase {
     }
 }
 
+/// Diagnostics draws ordinary log lines as text, not in the accent colour.
+@MainActor
+final class DiagnosticsLogLineColorTests: XCTestCase {
+    func testOnlyErrorsAndWarningsAreColoured() {
+        XCTAssertEqual(DebugLogView.color(forLogLine: "2026-11-26 [INFO] loaded"), .primary)
+        XCTAssertEqual(DebugLogView.color(forLogLine: "2026-11-26 [DEBUG] polled"), .secondary)
+        XCTAssertEqual(DebugLogView.color(forLogLine: "plain line"), .primary)
+        XCTAssertEqual(DebugLogView.color(forLogLine: "2026-11-26 [WARNING] slow"), .orange)
+        XCTAssertEqual(DebugLogView.color(forLogLine: "2026-11-26 [ERROR] failed"), .red)
+    }
+}
+
 @MainActor
 final class HoldingsAndStatusViewHelperTests: XCTestCase {
     func testMoveSkipsHiddenRowsAndStopsAtTheEdges() {

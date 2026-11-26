@@ -2449,6 +2449,26 @@ final class PriceAlertConditionTests: XCTestCase {
         XCTAssertEqual(alert.lastTriggered, triggered)
         XCTAssertFalse(alert.conditionMet(currentPrice: 151, previousPrice: 149), "Paused alerts never fire")
     }
+
+    /// Each row's sentence and its "Triggered … ago".
+    func testAlertRowSentenceAndTriggeredText() {
+        let above = PriceAlert(symbol: "FAKEUP", condition: .above, threshold: 150)
+        XCTAssertEqual(PriceAlertRowText.sentence(for: above, currency: "USD"), "Price rises above $150.00")
+        let below = PriceAlert(symbol: "FAKEDN", condition: .below, threshold: 25)
+        XCTAssertEqual(PriceAlertRowText.sentence(for: below, currency: "GBP"), "Price falls below £25.00")
+        let move = PriceAlert(symbol: "FAKEPC", condition: .percentChange, threshold: 3)
+        XCTAssertEqual(PriceAlertRowText.sentence(for: move, currency: "GBP"), "Price moves from previous close by 3.0%")
+        let gone = PriceAlert(symbol: "FAKEOLD", condition: .above, threshold: 42.5)
+        XCTAssertEqual(PriceAlertRowText.sentence(for: gone, currency: ""), "Price rises above 42.50",
+                       "a symbol no longer held has no known currency")
+
+        let locale = Locale(identifier: "en_GB")
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        XCTAssertEqual(PriceAlertRowText.triggered(now.addingTimeInterval(-3 * 86_400), notificationsDenied: false,
+                                                   now: now, locale: locale), "Triggered 3 days ago")
+        XCTAssertEqual(PriceAlertRowText.triggered(now.addingTimeInterval(-2 * 3_600), notificationsDenied: true,
+                                                   now: now, locale: locale), "Condition met 2 hours ago")
+    }
 }
 
 @MainActor

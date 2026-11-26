@@ -3,6 +3,9 @@ import SwiftUI
 @MainActor
 struct Trading212DataSourceSection: View {
     let dataModel: DataModel
+    /// Why the card is inactive, shown as a pill at its top right; nil while
+    /// Trading 212 can be used.
+    var inactiveNote: String?
 
     @State private var settings = Trading212StoredSettings.defaults
     @State private var apiKey = ""
@@ -75,7 +78,16 @@ struct Trading212DataSourceSection: View {
             HStack {
                 Text("Broker / Portfolio Provider")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
+                if let inactiveNote {
+                    Text(inactiveNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .stockbarPill()
+                }
                 Toggle("Enable Trading 212", isOn: binding(\.isEnabled))
                     .toggleStyle(.switch)
             }
