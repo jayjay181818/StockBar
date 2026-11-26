@@ -453,7 +453,9 @@ tidies the Diagnostics log. It was merged as `9a2c046` (build 382.31.3).
 Pull request 163 gives the Sortino ratio a reading again, at the owner's
 request (merged as `be6ff84`, build 382.31.4). Pull request 164 adds the
 Calendar and "Next up". What remains of the redesign before a stable
-release: Reminders and the release documents.
+release: Reminders and the release documents. Pull request 164 was merged
+as `06689ee` (build 382.31.5); pull request 165 lets Activity's kind
+switches combine, with Interest on its own.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6584,8 +6586,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
     is absent.
   - `STOCKBAR_ACCEPTANCE_CALENDAR=upcoming|past`, acceptance-only, gated like
     the others. The events fixture gains an earnings range.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `06689ee` (build 382.31.5).
 - Benchmark: owed, under the rule for the redesign. The popover and the
   Overview gain a small list; the comparison for pull requests 158 to 162 is
   waiting for a quiet Mac and will be followed by one for this.
@@ -6609,6 +6610,37 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   as on Income; "Next up" reads only the first page of a saved dividends
   answer. One of the worker's accessibility queries returned the system
   Apple menu, with one Recent Items entry; it was neither saved nor repeated.
+- Verdict: retained.
+
+### 165: Activity: kind switches that combine
+
+- What: the owner asked, after using the Activity page on a real
+  portfolio, to hide the daily interest rows, or show only them, or show
+  trades and dividends together. The single **All**/**Trades**/
+  **Dividends**/**Cash** switch becomes **All** plus four switches that
+  combine: **Trades**, **Dividends**, **Interest** (new, taken out of Cash)
+  and **Cash** (deposits, withdrawals, transfers, fees, tax and notes).
+  Under All every switch is lit; a click hides or shows one kind;
+  Option-click, or **Show Only** in a switch's menu, shows one kind alone;
+  hiding the last kind gives All again, never an empty page. The choice is
+  remembered (`activity.kinds` in defaults). The route already takes a set
+  of actions, so any combination is still one request, and a full set is
+  sent as All, with no action filter. Also: the user guide now lists the
+  "Not set" key state added in pull request 162, and record 164's merge
+  line.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. A control on a page that is not drawn at launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1109 XCTest tests with 0
+  failures; `checks` and `docs-check` pass. New tests cover how the
+  switches combine, the queries they send, the saved choice and the empty
+  message for each kind; two temporary breakages (a full set not treated as
+  All, and the choice not saved) were each caught and removed. Seen in the
+  acceptance copy in dark at the default size under All; a click could not
+  be sent to the copy (the screen was locked), so the other states were not
+  seen on screen.
+- Review: by its author.
+- Known issues: none known.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6899,6 +6931,7 @@ launch.
 | Pull request 162, Settings and Alerts as mocked | Claude Opus 5.5 (session lead) for the specification, review, one fix and the record; one Opus 5.5 worker | Worth it. The worker could not click (the screen was locked) and built an uncommitted aid to reach each tab, which it disclosed; up to ten of its copies ran at once, and each launch left an acceptance-only Keychain item |
 | Pull request 163, the Sortino reading | Claude Opus 5.5 (session lead) | Done directly: a few lines of text and their tests |
 | Pull request 164, Calendar and "Next up" | Claude Opus 5.5 (session lead) for the specification, review, four fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker could not type in its copy (the screen was locked), so the local portfolio's Calendar with holdings was never seen; one accessibility query returned the system menu |
+| Pull request 165, Activity's kind switches | Claude Opus 5.5 (session lead) | Done directly, at the owner's request after using the page |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
