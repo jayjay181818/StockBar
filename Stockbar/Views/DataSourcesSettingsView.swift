@@ -39,100 +39,79 @@ struct DataSourcesSettingsView: View {
     private let configManager = ConfigurationManager.shared
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // MARK: - Market-data keys
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Market-data keys")
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                        apiKeyRow(service: "fmp", key: $fmpApiKey, isShown: $showFmpKey) {
-                            Text("Used for US stocks fallback. Free plan allows US historical data.")
+        StockbarSettingsPage {
+            StockbarSettingsSection("Market-data keys", separatesRows: false) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                    apiKeyRow(service: "fmp", key: $fmpApiKey, isShown: $showFmpKey) {
+                        Text("Used for US stocks fallback. Free plan allows US historical data.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    apiKeyRow(service: "twelvedata", key: $twelveDataApiKey, isShown: $showTwelveDataKey) {
+                        HStack(spacing: 6) {
+                            Text("Used for LSE/International fallback.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-                        apiKeyRow(service: "twelvedata", key: $twelveDataApiKey, isShown: $showTwelveDataKey) {
-                            HStack(spacing: 6) {
-                                Text("Used for LSE/International fallback.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Link("Get Free Key", destination: URL(string: "https://twelvedata.com/")!)
-                                    .font(.caption)
-                            }
+                            Link("Get Free Key", destination: URL(string: "https://twelvedata.com/")!)
+                                .font(.caption)
                         }
                     }
                 }
-                .stockbarCard()
-
-                FolyncDataSourceSection(dataModel: dataModel)
-
-                Trading212DataSourceSection(
-                    dataModel: dataModel,
-                    inactiveNote: dataModel.isFolyncPortfolioActive ? "Inactive while Folync is authoritative" : nil
-                )
-                .disabled(dataModel.isFolyncPortfolioActive)
-                
-                // MARK: - Priority Section
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Fetch order")
-                            .font(.headline)
-                            .accessibilityAddTraits(.isHeader)
-                        Spacer()
-                        Button(isEditingPriority ? "Done" : "Edit Order") {
-                            isEditingPriority.toggle()
-                        }
-                    }
-                    
-                    Text(isEditingPriority
-                         ? "Drag to reorder. Stockbar tries each source in this order until one answers."
-                         : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if isEditingPriority {
-                        List {
-                            ForEach(dataSourcePriority, id: \.self) { source in
-                                HStack {
-                                    Image(systemName: "line.3.horizontal")
-                                        .foregroundColor(.secondary)
-                                        .accessibilityHidden(true)
-                                    sourceLabel(for: source)
-                                    Spacer()
-                                }
-                                .padding(.vertical, 4)
-                            }
-                            .onMove(perform: movePriority)
-                        }
-                        .frame(height: 200)
-                        .listStyle(PlainListStyle())
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(dataSourcePriority.enumerated()), id: \.element) { index, source in
-                                HStack {
-                                    Text("\(index + 1).")
-                                        .font(.headline)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 24)
-                                    sourceLabel(for: source)
-                                }
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .stockbarSurface(.inset, cornerRadius: 6)
-                            }
-                        }
-                    }
-                }
-                .stockbarCard()
-                
-                Spacer()
             }
-            // The same left edge and width as the grouped-form tabs.
-            .frame(maxWidth: StockbarLayout.settingsContentWidth, alignment: .leading)
-            .padding(.horizontal, StockbarLayout.pagePadding)
-            .padding(.vertical, 12)
+
+            FolyncDataSourceSection(dataModel: dataModel)
+
+            Trading212DataSourceSection(
+                dataModel: dataModel,
+                inactiveNote: dataModel.isFolyncPortfolioActive ? "Inactive while Folync is authoritative" : nil
+            )
+            .disabled(dataModel.isFolyncPortfolioActive)
+
+            // MARK: - Priority Section
+            StockbarSettingsSection("Fetch order", separatesRows: false) {
+                Text(isEditingPriority
+                     ? "Drag to reorder. Stockbar tries each source in this order until one answers."
+                     : "Stockbar tries each source in this order until one answers. Choose Edit Order to change it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if isEditingPriority {
+                    List {
+                        ForEach(dataSourcePriority, id: \.self) { source in
+                            HStack {
+                                Image(systemName: "line.3.horizontal")
+                                    .foregroundColor(.secondary)
+                                    .accessibilityHidden(true)
+                                sourceLabel(for: source)
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .onMove(perform: movePriority)
+                    }
+                    .frame(height: 200)
+                    .listStyle(PlainListStyle())
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(dataSourcePriority.enumerated()), id: \.element) { index, source in
+                            HStack {
+                                Text("\(index + 1).")
+                                    .font(.headline)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 24)
+                                sourceLabel(for: source)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .stockbarSurface(.inset, cornerRadius: 6)
+                        }
+                    }
+                }
+            } accessory: {
+                Button(isEditingPriority ? "Done" : "Edit Order") {
+                    isEditingPriority.toggle()
+                }
+            }
         }
         .onAppear {
             loadSettings()

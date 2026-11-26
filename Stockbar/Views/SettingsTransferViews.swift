@@ -9,25 +9,21 @@ struct SettingsTransferSection: View {
     @State private var model = SettingsTransferModel()
 
     var body: some View {
-        Section {
-            LabeledContent {
+        StockbarSettingsSection(
+            "Export & Import",
+            footer: "Exports contain your API keys and, with Everything, your portfolio. They're encrypted with a password you choose: keep the file and the password safe."
+        ) {
+            StockbarSettingsRow("Export", detail: model.everythingSizeDescription) {
                 Button("Export…") { model.beginExport() }
                     .disabled(model.isBusy)
-            } label: {
-                Text("Export")
-                Text(model.everythingSizeDescription)
             }
-            LabeledContent {
+            StockbarSettingsRow(
+                "Import",
+                detail: "Replaces your settings, and your portfolio if the file includes it. Stockbar relaunches afterwards."
+            ) {
                 Button("Import…") { model.beginImport() }
                     .disabled(model.isBusy)
-            } label: {
-                Text("Import")
-                Text("Replaces your settings, and your portfolio if the file includes it. Stockbar relaunches afterwards.")
             }
-        } header: {
-            Text("Export & Import")
-        } footer: {
-            Text("Exports contain your API keys and, with Everything, your portfolio. They're encrypted with a password you choose: keep the file and the password safe.")
         }
         .task { await model.refreshEstimate() }
         .sheet(item: $model.sheet) { sheet in

@@ -7,8 +7,13 @@ struct UpdateSettingsSection: View {
     @Bindable private var updates = AppUpdateService.shared
 
     var body: some View {
-        Section {
-            LabeledContent("Version") {
+        StockbarSettingsSection(
+            "Updates",
+            footer: updates.availability == .available
+                ? "Updates are downloaded from GitHub and checked against Stockbar's signing key before they are installed. After an update, macOS asks once for access to your saved credentials in the Keychain. A change of channel takes effect once that channel has a build newer than this one."
+                : nil
+        ) {
+            StockbarSettingsRow("Version") {
                 Text(updates.versionDescription)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -16,32 +21,22 @@ struct UpdateSettingsSection: View {
             if let explanation = updates.availability.explanation {
                 Text(explanation)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Picker(selection: $updates.channel) {
-                    ForEach(UpdateChannel.allCases) { channel in
-                        Text(channel.title).tag(channel)
+                StockbarSettingsRow("Update Channel", detail: updates.channel.detail) {
+                    Picker("Update Channel", selection: $updates.channel) {
+                        ForEach(UpdateChannel.allCases) { channel in
+                            Text(channel.title).tag(channel)
+                        }
                     }
-                } label: {
-                    Text("Update Channel")
-                    Text(updates.channel.detail)
                 }
-                Toggle(isOn: $updates.automaticallyChecks) {
-                    Text("Check Automatically")
-                    Text("Looks for a new version about once a day.")
+                StockbarSettingsRow("Check Automatically", detail: "Looks for a new version about once a day.") {
+                    Toggle("Check Automatically", isOn: $updates.automaticallyChecks)
                 }
-                LabeledContent {
+                StockbarSettingsRow("Check for Updates", detail: lastCheckedDescription) {
                     Button("Check Now") { updates.checkForUpdates() }
                         .disabled(!updates.canCheckForUpdates)
-                } label: {
-                    Text("Check for Updates")
-                    Text(lastCheckedDescription)
                 }
-            }
-        } header: {
-            Text("Updates")
-        } footer: {
-            if updates.availability == .available {
-                Text("Updates are downloaded from GitHub and checked against Stockbar's signing key before they are installed. After an update, macOS asks once for access to your saved credentials in the Keychain. A change of channel takes effect once that channel has a build newer than this one.")
             }
         }
     }

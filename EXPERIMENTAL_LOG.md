@@ -455,7 +455,9 @@ request (merged as `be6ff84`, build 382.31.4). Pull request 164 adds the
 Calendar and "Next up". What remains of the redesign before a stable
 release: Reminders and the release documents. Pull request 164 was merged
 as `06689ee` (build 382.31.5); pull request 165 lets Activity's kind
-switches combine, with Interest on its own.
+switches combine, with Interest on its own (merged as `6539947`). Pull
+request 166 rebuilds every Settings tab as Glass cards at the page's full
+width.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6628,8 +6630,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   sent as All, with no action filter. Also: the user guide now lists the
   "Not set" key state added in pull request 162, and record 164's merge
   line.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `6539947`.
 - Benchmark: none needed. A control on a page that is not drawn at launch.
 - Testing, on macOS 27.2.1 and Xcode 27.2: 1109 XCTest tests with 0
   failures; `checks` and `docs-check` pass. New tests cover how the
@@ -6641,6 +6642,49 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   seen on screen.
 - Review: by its author.
 - Known issues: none known.
+- Verdict: retained.
+
+### 166: Settings: every tab as Glass cards, at the page's full width
+
+- What: the owner chose for Settings to run the full width of the page,
+  like every other page. The five tabs that were macOS grouped forms
+  (General, Menu Bar, Appearance, Refresh, Advanced) could not: macOS caps
+  a grouped form's groups at about 702 points and ignores row backgrounds.
+  They are rebuilt as Glass cards, as Connections already was, from one
+  shared set of views in `StockbarDesign.swift`: `StockbarSettingsPage`,
+  `StockbarSettingsSection` (a card with a heading, optional footer and
+  hairlines between rows), `StockbarSettingsRow` (title and explanation on
+  the left, the control at its natural width on the right) and
+  `StockbarSettingsSwitchStyle`. Connections uses the same section view.
+  The 700-point cap from pull request 162 is gone; Folync's buttons now fit
+  on one row even at the minimum size. Every control, binding, label,
+  order and hook is unchanged; the worker diffed the lists from the old and
+  new source. Pickers draw as bordered pop-ups, macOS's standard outside a
+  form. VoiceOver now reads each picker and switch by its own name, which
+  the grouped form did not, and card titles are headings.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, under the rule for the redesign (more cards on a page
+  that is not drawn at launch).
+- Testing, on macOS 27.2.1 and Xcode 27.2, on the branch rebased onto
+  pull request 165: 1115 XCTest tests with 0 failures; `checks`,
+  `docs-check` and `build-release` pass. The worker's run on its own base
+  also passed the Python tests and the 95 Scripts tests; six new layout tests (no width cap, cards filling
+  their width, controls at natural width on the right, the text field
+  stretching, explanations under their titles, tab names and order) and
+  seven temporary breakages, each caught and removed. 60 captures, before
+  and after, every tab in dark and light at the default and minimum size,
+  are in `build/design/shots/D6/`.
+- Review: by the session lead against the captures and the worker's
+  before/after list of controls.
+- Known issues: some states were not seen in the new layout: the update
+  rows (updates are off in the acceptance copy), a real last-backup date,
+  the Python helper's set-up states, an exchange-rate failure, the
+  external-display warning, the refresh status line and Edit Order. The
+  worker could not scroll by wheel and pressed the copy's scroll-bar page
+  buttons instead, and set two menu-bar pickers and typed in the template
+  field inside its copy; one of its accessibility reads was not filtered
+  and included the copy's own menu names.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6932,6 +6976,7 @@ launch.
 | Pull request 163, the Sortino reading | Claude Opus 5.5 (session lead) | Done directly: a few lines of text and their tests |
 | Pull request 164, Calendar and "Next up" | Claude Opus 5.5 (session lead) for the specification, review, four fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker could not type in its copy (the screen was locked), so the local portfolio's Calendar with holdings was never seen; one accessibility query returned the system menu |
 | Pull request 165, Activity's kind switches | Claude Opus 5.5 (session lead) | Done directly, at the owner's request after using the page |
+| Pull request 166, Settings as cards | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: forty minutes, with a before/after list of every control. It pressed scroll-bar buttons and set two pickers in its own copy, which it disclosed |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained
