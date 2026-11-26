@@ -457,7 +457,9 @@ release: Reminders and the release documents. Pull request 164 was merged
 as `06689ee` (build 382.31.5); pull request 165 lets Activity's kind
 switches combine, with Interest on its own (merged as `6539947`). Pull
 request 166 rebuilds every Settings tab as Glass cards at the page's full
-width.
+width (merged as `c443f38`, build 382.31.7). Pull request 167 adds past
+earnings to the Calendar's Past view, checked once against Yahoo's live
+data with the owner's leave.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6662,8 +6664,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   new source. Pickers draw as bordered pop-ups, macOS's standard outside a
   form. VoiceOver now reads each picker and switch by its own name, which
   the grouped form did not, and card titles are headings.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `c443f38` (build 382.31.7).
 - Benchmark: owed, under the rule for the redesign (more cards on a page
   that is not drawn at launch).
 - Testing, on macOS 27.2.1 and Xcode 27.2, on the branch rebased onto
@@ -6685,6 +6686,67 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   buttons instead, and set two menu-bar pickers and typed in the template
   field inside its copy; one of its accessibility reads was not filtered
   and included the copy's own menu names.
+- Verdict: retained.
+
+### 167: Calendar: past earnings in the Past view
+
+- What: the owner chose for the Calendar's Past view to show past earnings
+  as well as dividends. `get_instrument_events.py` gains an
+  `--earnings-history` mode: each symbol's earnings dates of the last
+  twelve months from Yahoo's earnings page (yfinance
+  `Ticker.get_earnings_dates`), with the reported and estimated EPS and the
+  surprise exactly as given. The events service gains a second kind of
+  call, `earningsHistory(for:forceRefresh:)`, made only while Past is
+  chosen, with its own day-long copies and the shared refusals and hour's
+  pause. Past rows read "Earnings, EPS 1.52 against 1.48 expected",
+  "Earnings, EPS 1.52" or "Earnings", with ", surprise 2.70%" when Yahoo
+  gives one; the Earnings filter is back under Past. A new acceptance
+  option, `STOCKBAR_ACCEPTANCE_HOLDINGS`, starts a fresh copy on a local
+  portfolio with made-up holdings, so the local Calendar could be seen.
+  Also: record 166's merge line.
+- The live check: with the owner's leave, the helper was run once from a
+  throwaway environment installed from the lock file, for two US shares,
+  two London shares, a London ETF and an ADR, then once more for one share
+  to see a forced refresh fetch again: 16 requests, no rate limit, yfinance's
+  caches in a scratch folder. It found:
+  - the surprise is a percentage, as shown;
+  - Yahoo stamps every earnings time in New York time, so a London report
+    stamped the evening before came out a day early (HSBC's May report).
+    Each date is now taken in the exchange's own zone, from the chart's
+    `exchangeTimezoneName`; replayed offline, only that date moved;
+  - a London share's EPS figures are in the company's reporting currency
+    (HSBC's in dollars), not pence, and the page does not name it. They
+    stay left out for pence-quoted shares, with the dates and the surprise
+    kept;
+  - twelve rows reach back about three years for a quarterly reporter,
+    more than the twelve months needed; one London share's page had no
+    report since 2017, so it shows none; the ETF has no earnings page
+    ("no data");
+  - a forced refresh asked the page again rather than answering from
+    yfinance's cache.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: owed, under the rule for the redesign, with 158 to 166; none of
+  it runs at launch or on a quote refresh.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1134 XCTest tests with 0
+  failures; `python-tests` ran 129 tests (54 for this helper, with the
+  pandas tests run in the throwaway environment too) and the Scripts tests
+  95; `checks`, `docs-check` and `build-release` pass. Nine temporary
+  breakages in the worker's run and five in the lead's date fix were each
+  caught and removed. Captures of the local Past view in dark and light at
+  the default and minimum size, the Earnings filter and Upcoming are in
+  `build/design/shots/C2b/`.
+- Review: GLM 5.4 (max) found nothing serious; the lead fixed four small
+  points (saved history now fresh only on the day it was fetched, so a new
+  report shows the next morning; agorot and South African cents treated as
+  pence; a missing cache clear logged; the holdings seed refusing amounts
+  too small to store). A chart that does not answer fails the symbol rather
+  than saving a copy without figures for a day; the spec had said to keep
+  the dates, and the worker's way was kept so it can retry.
+- Known issues: the loading, paused and failure states were seen in tests
+  only; the footer was read through the accessibility tree, not captured.
+  Yahoo's times are approximate: one ADR report stamped the evening before
+  in New York keeps that date.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6977,6 +7039,7 @@ launch.
 | Pull request 164, Calendar and "Next up" | Claude Opus 5.5 (session lead) for the specification, review, four fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker could not type in its copy (the screen was locked), so the local portfolio's Calendar with holdings was never seen; one accessibility query returned the system menu |
 | Pull request 165, Activity's kind switches | Claude Opus 5.5 (session lead) | Done directly, at the owner's request after using the page |
 | Pull request 166, Settings as cards | Claude Opus 5.5 (session lead) for the specification, review and the record; one Opus 5.5 worker | Worth it: forty minutes, with a before/after list of every control. It pressed scroll-bar buttons and set two pickers in its own copy, which it disclosed |
+| Pull request 167, past earnings | Claude Opus 5.5 (session lead) for the specification, review, the live check, two rounds of fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. The worker built it in an hour without calling Yahoo and wrote out the live check; the one supervised run then found the London date fault that no fake could have shown |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

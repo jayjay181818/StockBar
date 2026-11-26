@@ -174,6 +174,9 @@ enum StockbarAcceptancePreflight {
         // `STOCKBAR_ACCEPTANCE_ALERTS`: the made-up price alerts, the same way.
         try StockbarAcceptanceAlertsFixture.installCopy(environment: environment, runtime: runtime,
                                                         fileManager: fileManager)
+        // `STOCKBAR_ACCEPTANCE_HOLDINGS`: the made-up local holdings, the same way.
+        try StockbarAcceptanceHoldingsFixture.installCopy(environment: environment, runtime: runtime,
+                                                          fileManager: fileManager)
 
         let report = StockbarAcceptanceBootstrapReport(
             runID: runID,

@@ -26,9 +26,10 @@ struct StockbarCalendarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, router: any StockbarIncomeRouting = FolyncSupplementalCoordinator.shared,
-         provider: any InstrumentEventsProviding = InstrumentEventsService.shared) {
+         provider: any InstrumentEventsProviding = InstrumentEventsService.shared,
+         historyProvider: any InstrumentEarningsHistoryProviding = InstrumentEventsService.shared) {
         self.dataModel = dataModel
-        let model = StockbarCalendarModel(router: router, provider: provider,
+        let model = StockbarCalendarModel(router: router, provider: provider, historyProvider: historyProvider,
                                           isAllowed: { InstrumentEventsService.canAnswer })
         // An acceptance copy can open on Past (`STOCKBAR_ACCEPTANCE_CALENDAR`); nil otherwise.
         if let mode = StockbarAcceptanceLaunchOptions.current.calendarMode.flatMap(CalendarMode.init(rawValue:)) {
@@ -215,7 +216,8 @@ struct StockbarCalendarView: View {
             StockbarNotice(message: CalendarText.estimateNotice, systemImage: "info.circle.fill", tint: .secondary)
         }
         let results = model.yahooResults
-        if let until = InstrumentEventsAnswers.rateLimitedUntil(results) {
+        // In Past, a rate limit met by either kind of call is one notice.
+        if let until = InstrumentEventsAnswers.rateLimitedUntil(model.yahooAnswerStates) {
             StockbarNotice(message: LocalIncomeText.rateLimitNotice(until: until))
         }
         let stale = InstrumentEventsAnswers.staleCopies(results)
@@ -224,6 +226,17 @@ struct StockbarCalendarView: View {
         }
         if let message = LocalIncomeText.failedNotice(count: InstrumentEventsAnswers.failedWithoutCopy(results)) {
             StockbarNotice(message: message)
+        }
+        if model.mode == .past {
+            let history = Array(model.historyResults.values)
+            let staleHistory = InstrumentEventsAnswers.staleCopies(history)
+            if let message = CalendarText.pastEarningsStaleNotice(count: staleHistory.count, oldest: staleHistory.oldest) {
+                StockbarNotice(message: message)
+            }
+            if let message = CalendarText.pastEarningsFailedNotice(
+                count: InstrumentEventsAnswers.failedWithoutCopy(history)) {
+                StockbarNotice(message: message)
+            }
         }
     }
 
@@ -309,7 +322,10 @@ struct StockbarCalendarView: View {
         let source: CalendarDividendSource = model.source == .folync ? .folync : .yahooEstimate
         let coverage = CalendarFigures.earningsCoverage(holdings: inputs.holdings, answers: model.earningsAnswers,
                                                         today: today)
+        let pastCoverage = CalendarFigures.pastEarningsCoverage(holdings: inputs.holdings,
+                                                                histories: model.historyAnswers, today: today)
         let earningsAsked = !(model.source == .folync && (model.earningsNotAllowed || !inputs.isFolyncPortfolio))
+        let historyAsked = !model.historyNotAllowed && !(model.source == .folync && !inputs.isFolyncPortfolio)
         return HStack(alignment: .top, spacing: 16) {
             HStack(spacing: 14) {
                 legend(.exDividend, "Ex-dividend")
@@ -326,8 +342,9 @@ struct StockbarCalendarView: View {
                    let line = CalendarText.earningsCoverageLine(coverage) {
                     Text(line)
                 }
-                if model.mode == .past {
-                    Text(CalendarText.pastEarningsNote)
+                if model.mode == .past, historyAsked, !model.isLoadingHistory,
+                   let line = CalendarText.pastEarningsCoverageLine(pastCoverage) {
+                    Text(line)
                 }
             }
             .multilineTextAlignment(.trailing)

@@ -26,6 +26,9 @@ import Foundation
 /// - `STOCKBAR_ACCEPTANCE_ALERTS`: the path of a fixture of made-up price
 ///   alerts (`StockbarAcceptanceAlertsFixture`), checked and copied the same
 ///   way. The Alerts page shows them; they are never stored and never fire.
+/// - `STOCKBAR_ACCEPTANCE_HOLDINGS`: the path of a fixture of made-up local
+///   holdings (`StockbarAcceptanceHoldingsFixture`), checked and copied the
+///   same way. A fresh copy starts on the local portfolio with them, Folync off.
 struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     enum Appearance: String, Codable, Sendable {
         case light
@@ -40,6 +43,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     static let calendarKey = "STOCKBAR_ACCEPTANCE_CALENDAR"
     static let eventsKey = "STOCKBAR_ACCEPTANCE_EVENTS"
     static let alertsKey = "STOCKBAR_ACCEPTANCE_ALERTS"
+    static let holdingsKey = "STOCKBAR_ACCEPTANCE_HOLDINGS"
     /// How long after launch the portfolio popover opens, so the first
     /// figures and the graph have arrived.
     static let popoverDelay: TimeInterval = 6
@@ -56,6 +60,8 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
     var usesInstrumentEventsFixture = false
     /// The Alerts page shows the run's copy of the alerts fixture, for looking only.
     var usesAlertsFixture = false
+    /// A fresh copy starts on the local portfolio with the run's copy of the holdings fixture.
+    var usesHoldingsFixture = false
 
     static let none = Self()
 
@@ -86,6 +92,7 @@ struct StockbarAcceptanceLaunchOptions: Codable, Equatable, Sendable {
         options.calendarMode = value(calendarKey).flatMap { CalendarMode(rawValue: $0.lowercased()) }?.rawValue
         options.usesInstrumentEventsFixture = value(eventsKey) != nil
         options.usesAlertsFixture = value(alertsKey) != nil
+        options.usesHoldingsFixture = value(holdingsKey) != nil
         return options
     }
 

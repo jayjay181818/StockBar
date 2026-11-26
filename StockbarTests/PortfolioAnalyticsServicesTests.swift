@@ -1360,13 +1360,16 @@ final class StockbarIncomePageTests: XCTestCase {
 /// Stands in for `InstrumentEventsService`: records every call and answers
 /// with the results given, or "no data". With `holds` on, each call waits
 /// until `release()`.
-private actor EventsProviderStandIn: InstrumentEventsProviding {
+private actor EventsProviderStandIn: InstrumentEventsProviding, InstrumentEarningsHistoryProviding {
     struct Call: Equatable {
         let symbols: [String]
         let forceRefresh: Bool
     }
 
     private(set) var calls: [Call] = []
+    /// Past-earnings calls, recorded apart from the events calls.
+    private(set) var historyCalls: [Call] = []
+    private var historyAnswers: [[InstrumentEarningsHistoryResult]] = []
     private var answers: [[InstrumentEventsResult]] = []
     private var holds = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -1384,6 +1387,17 @@ private actor EventsProviderStandIn: InstrumentEventsProviding {
         let answer = answers.isEmpty
             ? symbols.map { InstrumentEventsResult(symbol: $0, source: .yahoo, outcome: .failed(.noData)) }
             : answers.removeFirst()
+        if holds { await withCheckedContinuation { waiting.append($0) } }
+        return answer
+    }
+
+    func answerHistory(_ results: [InstrumentEarningsHistoryResult]...) { historyAnswers += results }
+
+    func earningsHistory(for symbols: [String], forceRefresh: Bool) async -> [InstrumentEarningsHistoryResult] {
+        historyCalls.append(Call(symbols: symbols, forceRefresh: forceRefresh))
+        let answer = historyAnswers.isEmpty
+            ? symbols.map { InstrumentEarningsHistoryResult(symbol: $0, source: .yahoo, outcome: .failed(.noData)) }
+            : historyAnswers.removeFirst()
         if holds { await withCheckedContinuation { waiting.append($0) } }
         return answer
     }
@@ -2155,7 +2169,7 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(past.last, IncomeMonth(year: 2026, month: 11))
 
         let provider = EventsProviderStandIn()
-        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, isAllowed: { true },
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, historyProvider: provider, isAllowed: { true },
                                           now: { F.now }, timeZone: F.utc)
         model.activate(localInputs)
         XCTAssertEqual(model.month, upcoming.first)
@@ -2188,25 +2202,276 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .all).map(\.id), ["d", "e"])
         XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .dividends).map(\.id), ["d"])
         XCTAssertEqual(CalendarFigures.rows(rows, mode: .upcoming, filter: .earnings).map(\.id), ["e"])
-        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .all).map(\.id), ["o"])
-        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .dividends).map(\.id), ["o"])
-        XCTAssertEqual(CalendarFigures.rows(rows, mode: .past, filter: .earnings).map(\.id), [])
+        let reported = CalendarRow(id: "r", kind: .earnings, day: F.today.adding(months: -2), symbol: "R", payDay: nil,
+                                   endDay: nil, amount: nil, currency: "", amountIsEstimate: false, amountIsPartial: false,
+                                   pill: nil, earningsFigures: CalendarEarningsFigures(reportedEPS: 1.52, estimatedEPS: nil,
+                                                                                       surprisePercent: nil))
+        let withPast = CalendarRows(upcoming: rows.upcoming, past: [old, reported])
+        XCTAssertEqual(CalendarFigures.rows(withPast, mode: .past, filter: .all).map(\.id), ["o", "r"])
+        XCTAssertEqual(CalendarFigures.rows(withPast, mode: .past, filter: .dividends).map(\.id), ["o"])
+        XCTAssertEqual(CalendarFigures.rows(withPast, mode: .past, filter: .earnings).map(\.id), ["r"],
+                       "the Earnings filter shows past earnings under Past")
+        XCTAssertEqual(CalendarFigures.rows(withPast, mode: .upcoming, filter: .earnings).map(\.id), ["e"],
+                       "past earnings never appear in Upcoming")
         XCTAssertEqual(CalendarFigures.filters(for: .upcoming), [.all, .dividends, .earnings])
-        XCTAssertEqual(CalendarFigures.filters(for: .past), [.all, .dividends], "Past has no Earnings filter")
+        XCTAssertEqual(CalendarFigures.filters(for: .past), [.all, .dividends, .earnings], "Past has the Earnings filter")
         XCTAssertEqual(CalendarText.emptyLine(mode: .upcoming, filter: .earnings), "No earnings dates in the next 12 months.")
-        XCTAssertEqual(CalendarText.emptyLine(mode: .past, filter: .all), "No dividends in the last 12 months.")
+        XCTAssertEqual(CalendarText.emptyLine(mode: .past, filter: .all), "No dividends or earnings dates in the last 12 months.")
+        XCTAssertEqual(CalendarText.emptyLine(mode: .past, filter: .dividends), "No dividends in the last 12 months.")
+        XCTAssertEqual(CalendarText.emptyLine(mode: .past, filter: .earnings), "No earnings dates in the last 12 months.")
 
         let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: EventsProviderStandIn(),
+                                          historyProvider: EventsProviderStandIn(),
                                           isAllowed: { true }, now: { F.now }, timeZone: F.utc)
         model.filter = .earnings
         model.mode = .past
-        XCTAssertEqual(model.filter, .all, "switching to Past leaves the Earnings filter")
+        XCTAssertEqual(model.filter, .earnings, "the Earnings filter stays when Past is chosen")
         model.filter = .dividends
         model.mode = .upcoming
         XCTAssertEqual(model.filter, .dividends)
-        XCTAssertEqual(model.gridRows(rows).map(\.id), ["d", "o"], "Upcoming's grid also shows this month's past rows")
+        model.filter = .all
+        XCTAssertEqual(model.gridRows(withPast).map(\.id), ["d", "e", "o"],
+                       "Upcoming's grid also shows this month's past dividends, never past earnings")
         model.mode = .past
-        XCTAssertEqual(model.gridRows(rows).map(\.id), ["o"])
+        XCTAssertEqual(model.gridRows(withPast).map(\.id), ["o", "r"])
+    }
+
+    // MARK: Past earnings (invented figures)
+
+    /// Invented past earnings, read the way the service reads the helper's.
+    private func history(_ symbol: String, currency: String? = "USD",
+                         _ reports: [(String, Double?, Double?, Double?)]) throws -> InstrumentEarningsHistory {
+        let object: [String: Any] = [
+            "symbol": symbol, "epsCurrency": currency ?? NSNull(), "fetchedAt": fetchedAt.timeIntervalSince1970,
+            "earnings": reports.map { report -> [String: Any] in
+                ["date": report.0, "reportedEPS": report.1 ?? NSNull(), "estimatedEPS": report.2 ?? NSNull(),
+                 "surprisePercent": report.3 ?? NSNull()]
+            }
+        ]
+        return try InstrumentEventsService.decoder.decode(InstrumentEarningsHistory.self,
+                                                          from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func historyResult(_ history: InstrumentEarningsHistory) -> InstrumentEarningsHistoryResult {
+        InstrumentEarningsHistoryResult(symbol: history.symbol, source: .yahoo, outcome: .history(history, .current))
+    }
+
+    private func localHistories() throws -> [InstrumentEarningsHistory] {
+        [
+            try history("ALPHA", [("2026-10-30", 1.52, 1.48, 2.7), ("2026-07-22", 1.54, nil, nil),
+                                  ("2026-04-28", nil, nil, nil), ("2026-11-20", 1.6, 1.5, nil),
+                                  ("2025-11-19", 1.0, 1.0, nil)]),
+            try history("BETA", currency: nil, [("2026-08-03", nil, nil, -3.25)])
+        ]
+    }
+
+    func testPastEarningsRowsTheirWordsAndWhatVoiceOverReads() throws {
+        let holdings = localInputs.holdings + [CalendarHolding(symbol: "NOSYM", yahooSymbol: nil),
+                                               CalendarHolding(symbol: "GAMMA", yahooSymbol: "GAMMA")]
+        let histories = Dictionary(uniqueKeysWithValues: try localHistories().map { ($0.symbol, $0) })
+        let rows = CalendarFigures.pastEarningsRows(holdings: holdings, histories: histories, today: F.today)
+
+        XCTAssertEqual(summary(rows), ["2026-10-30 ALPHA earnings -", "2026-08-03 BETA earnings -",
+                                       "2026-07-22 ALPHA earnings -", "2026-04-28 ALPHA earnings -"],
+                       "before today and within twelve months, newest first, no pill")
+        XCTAssertEqual(rows.map(\.id), ["ALPHA#reported#2026-10-30", "BETA#reported#2026-08-03",
+                                        "ALPHA#reported#2026-07-22", "ALPHA#reported#2026-04-28"])
+        XCTAssertTrue(rows.allSatisfy { !$0.isDividend && !$0.isEstimated && $0.amount == nil })
+
+        let english = Locale(identifier: "en_GB")
+        XCTAssertEqual(rows.map { CalendarText.title($0) + CalendarText.detail($0, locale: english) }, [
+            "Earnings, EPS 1.52 against 1.48 expected, surprise 2.70%",
+            "Earnings, surprise -3.25%",
+            "Earnings, EPS 1.54",
+            "Earnings"
+        ])
+        XCTAssertEqual(rows.map { CalendarText.accessibilitySentence($0, today: F.today, locale: english) }, [
+            "Fri 30 Oct, ALPHA, earnings, EPS 1.52 against 1.48 expected, surprise 2.70%.",
+            "Mon 3 Aug, BETA, earnings, surprise -3.25%.",
+            "Wed 22 Jul, ALPHA, earnings, EPS 1.54.",
+            "Tue 28 Apr 2026, ALPHA, earnings.", // more than six months back: with its year
+        ])
+        XCTAssertNil(CalendarText.amountColumn(rows[0]), "no amount column and no colour word")
+
+        // An estimate without a reported figure says nothing of the estimate.
+        let estimateOnly = CalendarEarningsFigures(reportedEPS: nil, estimatedEPS: 1.48, surprisePercent: nil)
+        XCTAssertEqual(CalendarText.earningsFigureParts(estimateOnly, locale: english), [])
+        // Figures as given: two decimals at least, up to four, never rounded to two.
+        XCTAssertEqual(CalendarText.epsFigure(2.7, locale: english), "2.70")
+        XCTAssertEqual(CalendarText.epsFigure(-0.0525, locale: english), "-0.0525")
+        XCTAssertEqual(CalendarText.epsFigure(1234.5, locale: english), "1234.50")
+        XCTAssertEqual(CalendarText.epsFigure(1.52, locale: Locale(identifier: "de_DE")), "1,52")
+
+        // The grid's day reads the same words.
+        let grid = CalendarFigures.grid(month: IncomeMonth(year: 2026, month: 10), rows: rows, today: F.today)
+        let thirtieth = try XCTUnwrap(grid.joined().first { $0.day.string == "2026-10-30" })
+        XCTAssertEqual(CalendarText.daySentence(thirtieth, locale: english),
+                       "Friday 30 October: ALPHA earnings, EPS 1.52 against 1.48 expected, surprise 2.70%")
+
+        // Coverage: NOSYM has no symbol, GAMMA no answer.
+        let coverage = CalendarFigures.pastEarningsCoverage(holdings: holdings, histories: histories, today: F.today)
+        XCTAssertEqual(coverage, CalendarEarningsCoverage(withoutSymbol: 1, withoutDate: 1))
+        XCTAssertEqual(CalendarText.pastEarningsCoverageLine(coverage), "2 holdings have no earnings dates in the last 12 months.")
+        XCTAssertEqual(CalendarText.pastEarningsCoverageLine(CalendarEarningsCoverage(withoutSymbol: 0, withoutDate: 1)),
+                       "1 holding has no earnings dates in the last 12 months.")
+        XCTAssertNil(CalendarText.pastEarningsCoverageLine(CalendarEarningsCoverage(withoutSymbol: 0, withoutDate: 0)))
+        XCTAssertEqual(CalendarText.sourceLine(.yahooEstimate), "Estimated from Yahoo's record · Earnings from Yahoo")
+    }
+
+    func testPastEarningsJoinPastAndNeverUpcoming() throws {
+        let histories = Dictionary(uniqueKeysWithValues: try localHistories().map { ($0.symbol, $0) })
+        let past = CalendarFigures.pastEarningsRows(holdings: localInputs.holdings, histories: histories, today: F.today)
+        let combined = CalendarFigures.combined(dividends: CalendarFigures.localRows(estimate: try localEstimate()),
+                                                earnings: [], pastEarnings: past)
+        XCTAssertFalse(combined.upcoming.contains { $0.id.contains("#reported#") })
+        XCTAssertEqual(combined.past.filter { !$0.isDividend }.count, 4)
+        XCTAssertEqual(combined.past, combined.past.sorted(by: CalendarRow.newestFirst), "one list, newest first")
+        XCTAssertTrue(combined.past.contains(where: \.isDividend))
+    }
+
+    func testPastEarningsAreAskedForOnlyWhilePastIsShown() async throws {
+        let provider = EventsProviderStandIn()
+        await provider.answer(try localAnswers().map(result), try localAnswers().map(result))
+        await provider.answerHistory(try localHistories().map(historyResult), try localHistories().map(historyResult),
+                                     try localHistories().map(historyResult), try localHistories().map(historyResult))
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, historyProvider: provider,
+                                          isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+
+        model.activate(localInputs)
+        await settle { model.local.phase == .loaded }
+        model.filter = .earnings
+        model.showNextMonth()
+        model.refresh(localInputs)
+        await settle { await provider.calls.count == 2 }
+        await drain()
+        var history = await provider.historyCalls
+        XCTAssertTrue(history.isEmpty, "Upcoming, its filters, months and refresh never ask for past earnings")
+        XCTAssertFalse(model.rows(localInputs, currency: "GBP", convert: convert).past.contains { !$0.isDividend })
+
+        model.mode = .past
+        await settle { !model.isLoadingHistory }
+        history = await provider.historyCalls
+        XCTAssertEqual(history, [.init(symbols: ["ALPHA", "BETA"], forceRefresh: false)], "one call for every symbol")
+        let rows = model.rows(localInputs, currency: "GBP", convert: convert)
+        XCTAssertEqual(model.shown(rows).map(\.id).filter { $0.contains("#reported#") }.count, 4,
+                       "the Earnings filter, kept, shows past earnings")
+        XCTAssertEqual(rows.upcoming.filter { $0.kind == .earnings }.map(\.day.string), ["2027-01-28"])
+
+        model.refresh(localInputs)
+        await settle { await provider.historyCalls.count == 2 }
+        history = await provider.historyCalls
+        XCTAssertEqual(history.last, .init(symbols: ["ALPHA", "BETA"], forceRefresh: true), "Past's refresh forces it")
+        await settle { !model.isLoadingHistory && !model.local.isLoading }
+
+        // The same holdings ask nothing more; a holding that arrives is asked about.
+        model.inputsChanged(from: localInputs, to: localInputs)
+        await drain()
+        let unchanged = await provider.historyCalls.count
+        XCTAssertEqual(unchanged, 2)
+        let more = StockbarCalendarInputs(
+            isFolyncEnabled: false, isFolyncPortfolio: false,
+            holdings: localInputs.holdings + [CalendarHolding(symbol: "GAMMA", yahooSymbol: "GAMMA")],
+            localHoldings: localInputs.localHoldings + [LocalIncomeHolding(symbol: "GAMMA", units: 1)])
+        model.inputsChanged(from: localInputs, to: more)
+        await settle { await provider.historyCalls.count == 3 }
+        history = await provider.historyCalls
+        XCTAssertEqual(history.last, .init(symbols: ["ALPHA", "BETA", "GAMMA"], forceRefresh: false))
+        await settle { !model.isLoadingHistory }
+
+        // Back to Upcoming and its refresh: nothing more.
+        model.mode = .upcoming
+        model.refresh(more)
+        await drain()
+        let afterUpcoming = await provider.historyCalls.count
+        XCTAssertEqual(afterUpcoming, 3)
+
+        model.deactivate()
+        model.mode = .past
+        model.refresh(more)
+        await drain()
+        let afterLeaving = await provider.historyCalls.count
+        XCTAssertEqual(afterLeaving, 3, "a page no longer selected asks nothing")
+
+        // A page that opens on Past asks once, with the symbols Folync gives.
+        let folyncProvider = EventsProviderStandIn()
+        let router = IncomeRouterStandIn()
+        await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage))
+        let opensOnPast = StockbarCalendarModel(router: router, provider: folyncProvider, historyProvider: folyncProvider,
+                                                isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+        opensOnPast.mode = .past
+        let beforeActive = await folyncProvider.historyCalls
+        XCTAssertTrue(beforeActive.isEmpty, "nothing before the page is selected")
+        opensOnPast.activate(folyncInputs)
+        await settle { await folyncProvider.historyCalls.count == 1 }
+        let folyncHistory = await folyncProvider.historyCalls
+        XCTAssertEqual(folyncHistory, [.init(symbols: ["ULVR.L"], forceRefresh: false)],
+                       "FolyncHolding.quoteSymbol, as for upcoming earnings")
+    }
+
+    func testPastEarningsLoadingPausedAndFailingStillShowTheDividends() async throws {
+        let provider = EventsProviderStandIn()
+        let until = F.now.addingTimeInterval(3_600)
+        await provider.answer(try localAnswers().map(result))
+        await provider.answerHistory([
+            InstrumentEarningsHistoryResult(symbol: "ALPHA", source: .yahoo, outcome: .failed(.rateLimited(retryAfter: until))),
+            InstrumentEarningsHistoryResult(symbol: "BETA", source: .yahoo, outcome: .failed(.network))
+        ])
+        let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: provider, historyProvider: provider,
+                                          isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+        model.activate(localInputs)
+        await settle { model.local.phase == .loaded }
+        await provider.hold(true)
+        model.mode = .past
+        await settle { await provider.waitingCount == 1 }
+        XCTAssertTrue(model.isLoading, "the refresh control spins while past earnings are asked for")
+        XCTAssertEqual(model.rows(localInputs, currency: "GBP", convert: convert).past.count, 5,
+                       "the past dividends show while past earnings load")
+        await provider.release()
+        await provider.hold(false)
+        await settle { !model.isLoadingHistory }
+        XCTAssertFalse(model.isLoading)
+
+        XCTAssertEqual(InstrumentEventsAnswers.rateLimitedUntil(model.yahooAnswerStates), until)
+        XCTAssertEqual(InstrumentEventsAnswers.failedWithoutCopy(Array(model.historyResults.values)), 1)
+        XCTAssertEqual(model.rows(localInputs, currency: "GBP", convert: convert).past.count, 5)
+        model.mode = .upcoming
+        XCTAssertNil(InstrumentEventsAnswers.rateLimitedUntil(model.yahooAnswerStates),
+                     "Upcoming does not report Past's call")
+
+        XCTAssertEqual(CalendarText.pastEarningsFailedNotice(count: 1),
+                       "Couldn't reach Yahoo for 1 holding's past earnings, and nothing is saved for it yet.")
+        XCTAssertEqual(CalendarText.pastEarningsFailedNotice(count: 2),
+                       "Couldn't reach Yahoo for 2 holdings' past earnings, and nothing is saved for them yet.")
+        XCTAssertNil(CalendarText.pastEarningsFailedNotice(count: 0))
+        XCTAssertEqual(CalendarText.pastEarningsStaleNotice(count: 2, oldest: nil),
+                       "Couldn't get new past earnings from Yahoo for 2 holdings. Showing the copy saved earlier.")
+        XCTAssertNil(CalendarText.pastEarningsStaleNotice(count: 0, oldest: nil))
+
+        // Yahoo off: no call, and the page says nothing is asked.
+        let off = EventsProviderStandIn()
+        let refused = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: off, historyProvider: off,
+                                            isAllowed: { false }, now: { F.now }, timeZone: F.utc)
+        refused.mode = .past
+        refused.activate(localInputs)
+        await drain()
+        let offCalls = await off.historyCalls
+        XCTAssertTrue(offCalls.isEmpty)
+        XCTAssertTrue(refused.historyNotAllowed)
+
+        // Every answer "live data off": treated as not allowed, nothing shown.
+        let disabled = EventsProviderStandIn()
+        await disabled.answer(try localAnswers().map(result))
+        await disabled.answerHistory(["ALPHA", "BETA"].map {
+            InstrumentEarningsHistoryResult(symbol: $0, source: .yahoo, outcome: .failed(.providerDisabled))
+        })
+        let allRefused = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: disabled, historyProvider: disabled,
+                                               isAllowed: { true }, now: { F.now }, timeZone: F.utc)
+        allRefused.mode = .past
+        allRefused.activate(localInputs)
+        await settle { await disabled.historyCalls.count == 1 }
+        await settle { !allRefused.isLoadingHistory }
+        XCTAssertTrue(allRefused.historyNotAllowed)
+        XCTAssertTrue(allRefused.historyResults.isEmpty)
     }
 
     // MARK: The grid
@@ -2342,7 +2607,8 @@ final class StockbarCalendarTests: XCTestCase {
 
     func testCalendarAndIncomeShareOneDividendsRequest() async throws {
         let router = PolicyRouterStandIn(response: F.response(folyncEvents))
-        let calendar = StockbarCalendarModel(router: router, provider: EventsProviderStandIn(), isAllowed: { true },
+        let calendar = StockbarCalendarModel(router: router, provider: EventsProviderStandIn(),
+                                             historyProvider: EventsProviderStandIn(), isAllowed: { true },
                                              now: { F.now }, timeZone: F.utc)
         calendar.activate(folyncInputs)
         await settle { calendar.folync.phase == .loaded }
@@ -2366,7 +2632,7 @@ final class StockbarCalendarTests: XCTestCase {
                             .folync(F.response(folyncEvents), status: .current, paging: .firstPage))
         await provider.answer([result(try events("ULVR.L", earnings: "2026-11-25"))],
                               [result(try events("ULVR.L", earnings: "2026-11-25"))])
-        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+        let model = StockbarCalendarModel(router: router, provider: provider, historyProvider: provider, isAllowed: { true },
                                           now: { F.now }, timeZone: F.utc)
         await drain()
         var routed = await router.calls
@@ -2434,7 +2700,7 @@ final class StockbarCalendarTests: XCTestCase {
         let router = IncomeRouterStandIn()
         let provider = EventsProviderStandIn()
         await provider.answer(try localAnswers().map(result), try localAnswers().map(result))
-        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+        let model = StockbarCalendarModel(router: router, provider: provider, historyProvider: provider, isAllowed: { true },
                                           now: { F.now }, timeZone: F.utc)
         model.activate(localInputs)
         await settle { model.local.phase == .loaded }
@@ -2457,7 +2723,7 @@ final class StockbarCalendarTests: XCTestCase {
         let router = IncomeRouterStandIn()
         let provider = EventsProviderStandIn()
         await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage))
-        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { false },
+        let model = StockbarCalendarModel(router: router, provider: provider, historyProvider: provider, isAllowed: { false },
                                           now: { F.now }, timeZone: F.utc)
         model.activate(folyncInputs)
         await settle { model.folync.phase == .loaded }
@@ -2478,7 +2744,7 @@ final class StockbarCalendarTests: XCTestCase {
         await router.answer(.folync(F.response(folyncEvents), status: .current, paging: .firstPage))
         await provider.answer([InstrumentEventsResult(symbol: "ULVR.L", source: .yahoo,
                                                       outcome: .failed(.rateLimited(retryAfter: until)))])
-        let model = StockbarCalendarModel(router: router, provider: provider, isAllowed: { true },
+        let model = StockbarCalendarModel(router: router, provider: provider, historyProvider: provider, isAllowed: { true },
                                           now: { F.now }, timeZone: F.utc)
         model.activate(folyncInputs)
         await settle { model.folync.phase == .loaded && !model.isLoadingEarnings }
@@ -2533,6 +2799,7 @@ final class StockbarCalendarTests: XCTestCase {
         for (zone, instant, today) in [("Asia/Tokyo", evening, "2026-11-21"), ("America/Los_Angeles", early, "2026-11-19")] {
             let timeZone = try XCTUnwrap(TimeZone(identifier: zone))
             let model = StockbarCalendarModel(router: IncomeRouterStandIn(), provider: EventsProviderStandIn(),
+                                          historyProvider: EventsProviderStandIn(),
                                               isAllowed: { true }, now: { instant }, timeZone: timeZone)
             model.activate(localInputs)
             XCTAssertEqual(model.today.string, today, zone)

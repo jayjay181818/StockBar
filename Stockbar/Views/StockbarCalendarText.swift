@@ -9,7 +9,6 @@ enum CalendarText {
     static let folyncSource = "Dividends from Folync"
     static let estimateSource = "Estimated from Yahoo's record"
     static let earningsSource = "Earnings from Yahoo"
-    static let pastEarningsNote = "Past lists dividends only."
 
     /// The notice near the top for a local or Trading 212 portfolio.
     static let estimateNotice = "Dividend dates and amounts for this portfolio are Stockbar's estimate from Yahoo's "
@@ -48,7 +47,8 @@ enum CalendarText {
     }
 
     /// What follows the title: ", pays 11 Dec, £58.40", ", about £96.20",
-    /// ", expected between 27 Jan and 3 Feb". Empty when nothing follows.
+    /// ", expected between 27 Jan and 3 Feb", ", EPS 1.52 against 1.48 expected".
+    /// Empty when nothing follows.
     static func detail(_ row: CalendarRow, locale: Locale = .current) -> String {
         var parts: [String] = []
         switch row.kind {
@@ -62,9 +62,35 @@ enum CalendarText {
                 parts.append("expected between \(IncomeText.dayMonth(row.day, locale: locale)) "
                              + "and \(IncomeText.dayMonth(end, locale: locale))")
             }
+            if let figures = row.earningsFigures { parts += earningsFigureParts(figures, locale: locale) }
         }
         if row.amountIsPartial, row.amount != nil, row.kind == .exDividend || row.amountIsEstimate { parts.append("partial") }
         return parts.isEmpty ? "" : ", " + parts.joined(separator: ", ")
+    }
+
+    /// A past report's figures as Yahoo gives them, with no judgement:
+    /// "EPS 1.52 against 1.48 expected" with both, "EPS 1.52" with the
+    /// reported one only, nothing without it; then "surprise 2.70%" when
+    /// Yahoo gives the surprise.
+    static func earningsFigureParts(_ figures: CalendarEarningsFigures, locale: Locale = .current) -> [String] {
+        var parts: [String] = []
+        if let reported = figures.reportedEPS {
+            if let estimated = figures.estimatedEPS {
+                parts.append("EPS \(epsFigure(reported, locale: locale)) against \(epsFigure(estimated, locale: locale)) expected")
+            } else {
+                parts.append("EPS \(epsFigure(reported, locale: locale))")
+            }
+        }
+        if let surprise = figures.surprisePercent {
+            parts.append("surprise \(epsFigure(surprise, locale: locale))%")
+        }
+        return parts
+    }
+
+    /// A figure as Yahoo gives it: at least two decimals, and up to four, so
+    /// nothing Yahoo gives is rounded away.
+    static func epsFigure(_ value: Double, locale: Locale = .current) -> String {
+        value.formatted(.number.precision(.fractionLength(2...4)).grouping(.never).locale(locale))
     }
 
     /// The amount column: a Folync payment's amount, or nil.
@@ -102,7 +128,9 @@ enum CalendarText {
         case (.upcoming, .earnings): "No earnings dates in the next 12 months."
         case (.upcoming, .dividends): "No dividend dates in the next 12 months."
         case (.upcoming, .all): "No dividend or earnings dates in the next 12 months."
-        case (.past, _): "No dividends in the last 12 months."
+        case (.past, .earnings): "No earnings dates in the last 12 months."
+        case (.past, .dividends): "No dividends in the last 12 months."
+        case (.past, .all): "No dividends or earnings dates in the last 12 months."
         }
     }
 
@@ -132,6 +160,34 @@ enum CalendarText {
         case 1: "1 holding has no earnings dates."
         default: "\(coverage.total) holdings have no earnings dates."
         }
+    }
+
+    /// Past: "2 holdings have no earnings dates in the last 12 months."
+    static func pastEarningsCoverageLine(_ coverage: CalendarEarningsCoverage) -> String? {
+        switch coverage.total {
+        case 0: nil
+        case 1: "1 holding has no earnings dates in the last 12 months."
+        default: "\(coverage.total) holdings have no earnings dates in the last 12 months."
+        }
+    }
+
+    /// Past: some holdings' past earnings are shown from an older saved copy.
+    static func pastEarningsStaleNotice(count: Int, oldest: Date?, now: Date = Date(), locale: Locale = .current,
+                                        timeZone: TimeZone = .current) -> String? {
+        guard count > 0 else { return nil }
+        let holdings = count == 1 ? "1 holding" : "\(count) holdings"
+        let lead = "Couldn't get new past earnings from Yahoo for \(holdings)."
+        guard let oldest else { return "\(lead) Showing the copy saved earlier." }
+        let time = StockbarOverviewView.savedTime(oldest, now: now, locale: locale, timeZone: timeZone)
+        return "\(lead) Showing the copy saved \(time)."
+    }
+
+    /// Past: Yahoo did not answer for some holdings' past earnings and nothing is saved.
+    static func pastEarningsFailedNotice(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "Couldn't reach Yahoo for 1 holding's past earnings, and nothing is saved for it yet."
+            : "Couldn't reach Yahoo for \(count) holdings' past earnings, and nothing is saved for them yet."
     }
 
     /// Why a Folync portfolio shows no earnings: Yahoo cannot be asked.
