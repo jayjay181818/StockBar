@@ -2497,7 +2497,13 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(CalendarFigures.earningsFigureSymbols(CalendarFigures.holdings(local: held, folyncHoldings: folync)),
                        ["ULVR.L"], "a Folync holding is listed by its quote symbol, the one Calendar asks about")
         XCTAssertEqual(CalendarFigures.earningsFigureSymbols([]), [])
-        XCTAssertEqual(EarningsFiguresSettingsSection.noHoldings, "No holdings yet. Each holding you add is listed here.")
+        XCTAssertEqual(EarningsFiguresSettingsSection.emptyLine(holdings: []),
+                       "No holdings yet. Each holding you add is listed here.")
+        XCTAssertEqual(EarningsFiguresSettingsSection.emptyLine(holdings: [CalendarHolding(symbol: "NOQ", yahooSymbol: nil)]),
+                       "None of your holdings has a symbol Calendar can ask Yahoo about, so none has earnings figures to show.",
+                       "a Folync portfolio whose holdings have no quote symbol is not a portfolio with no holdings")
+        XCTAssertNil(EarningsFiguresSettingsSection.emptyLine(holdings: CalendarFigures.holdings(local: held,
+                                                                                                folyncHoldings: folync)))
         XCTAssertEqual(EarningsFiguresSettingsSection.pickerLabel("ULVR.L"), "ULVR.L earnings figures",
                        "VoiceOver hears the symbol once, from the row, then what the pop-up sets")
     }
