@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.31.7)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.7</link>
+      <pubDate>Thu, 26 Nov 2026 16:06:16 +0000</pubDate>
+      <sparkle:version>382.31.7</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>experimental</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Experimental build 382.31.7 of Stockbar 3.8.2. Changes since experimental-382.31.6:
+
+- Settings: every tab as Glass cards, at the page's full width (#166)</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.31.7/Stockbar-382.31.7.zip" length="8600749" type="application/octet-stream" sparkle:edSignature="7rIgMF9H+4SKyf6beAUxXYqIjWxYKYQ+HT70Th7HCOZZD6aG9xZ1YU1B1c5lJ46V5b/+PDo1ZPqrFwQQsrsJAQ=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.31.6)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.31.6</link>
       <pubDate>Thu, 26 Nov 2026 15:33:44 +0000</pubDate>
@@ -123,21 +136,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 - Trading 212: value a cash-only account, and only the account in use (#156)</description>
       <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.24/Stockbar-382.3.24.zip" length="8207029" type="application/octet-stream" sparkle:edSignature="8q8UWHPODAvzhVHaf+Z9bPBRghOPjAeliMwBf3n3q0GnuYg6t6wyMaeTsciqX5KEcezoD57zaFJDHlLd2zR0Bw=="></enclosure>
     </item>
-    <item>
-      <title>3.8.2 (382.3.23)</title>
-      <link>https://github.com/jayjay181818/StockBar/releases/tag/experimental-382.3.23</link>
-      <pubDate>Wed, 25 Nov 2026 13:14:25 +0000</pubDate>
-      <sparkle:version>382.3.23</sparkle:version>
-      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
-      <sparkle:channel>experimental</sparkle:channel>
-      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="markdown">Experimental build 382.3.23 of Stockbar 3.8.2. Changes since experimental-382.3.22:
-
-- Allocation's Cash row: one source for holdings, total and cash (#155)</description>
-      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/experimental-382.3.23/Stockbar-382.3.23.zip" length="8192773" type="application/octet-stream" sparkle:edSignature="6+M9ekxHlnNVSc90jLRM0Hsk6lDGUXjN/segzBar1b/TAf96R40uAQXmif9NbP5qJQjlaucIb35uzgmldJb5CA=="></enclosure>
-    </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: E0NUbAVD3ZAYblJsMv49MQKAHc6HujvRjMjGfxTogiyaq7Rr9y4B7sfAKYxZmUdGA5S4ulSdnZHSSy+aA6oKCA==
-length: 10272
+edSignature: Y+too5uIQoOVgN60kWZu52B8b87BJSYDh47btQkyl3dXnnRx7tUuGXlDUqzjn/xA9n7GcQclEvFeGXvo44JWDA==
+length: 10270
 -->
