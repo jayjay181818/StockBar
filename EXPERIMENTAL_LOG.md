@@ -449,8 +449,10 @@ pull request 160. Pull request 161 brought `testing` back, merged as `8fb23f8`.
 Pull request 162 gives the six Settings tabs one left edge and one width,
 arranges Connections as in the mock-up, checks Alerts with made-up alerts
 (an acceptance-only fixture that never stores, checks or notifies) and
-tidies the Diagnostics log. What remains of the redesign before a stable
-release: the Calendar, Reminders and the release documents.
+tidies the Diagnostics log. It was merged as `9a2c046` (build 382.31.3).
+Pull request 163 gives the Sortino ratio a reading again, at the owner's
+request. What remains of the redesign before a stable release: the
+Calendar, Reminders and the release documents.
 
 ## Review of the refresh path, 2026-11-13
 
@@ -6505,8 +6507,7 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   - Diagnostics: ordinary log lines were drawn in the accent blue; they are
     now the primary text colour, and debug lines secondary. The log card
     has the standard padding. Backups had no fault.
-- Merged: not yet. The date and squash commit are filled in by the next
-  pull request.
+- Merged: 2026-11-26 as `9a2c046` (build 382.31.3).
 - Benchmark: owed, under the rule for the redesign. No surface, shadow or
   gradient is added, and Settings, Alerts and Diagnostics are not drawn at
   launch, so the single-launch drawing-memory check was not run.
@@ -6528,7 +6529,33 @@ Newest last. "Before" is the `experimental` commit the branch was based on,
   its captured builds to pick tabs and, for the local-portfolio captures,
   switched Folync off itself rather than through the copy's sheet. A few
   "before" captures at the minimum size are missing. A stored key's
-  "Verification failed" row was not seen.
+  "Verification failed" row was not seen. The acceptance-only Keychain
+  items left by this and earlier workers' copies, 261 in all, were removed
+  on 2026-11-26 with the owner's leave; the app's own item was not touched.
+- Verdict: retained.
+
+### 163: Risk: a reading for the Sortino ratio
+
+- What: the Sortino ratio's tile on the Risk page gets a reading, as the
+  Sharpe ratio's has, for example "Good, counting only the falls". Before
+  the redesign the page coloured both ratios in the same bands; the
+  redesign kept Sharpe's reading and dropped Sortino's colour, and the
+  owner asked for the word back. The reading uses the Sharpe ratio's
+  thresholds, unchanged (`RiskAnalyticsText.sortinoReading`). With no
+  falling days the tile still says "No falling days". Also the merge line
+  of pull request 162.
+- Merged: not yet. The date and squash commit are filled in by the next
+  pull request.
+- Benchmark: none needed. One line of text on a page that is not drawn at
+  launch.
+- Testing, on macOS 27.2.1 and Xcode 27.2: 1086 XCTest tests with 0
+  failures; `checks` and `docs-check` pass. The Risk page's tests now
+  expect the reading under Sortino for the three series kept from before
+  the redesign, and check the thresholds, the missing ratio and an
+  infinite one. No Python or release-build change, so those checks were
+  not rerun.
+- Review: by its author.
+- Known issues: none known.
 - Verdict: retained.
 
 ## Rust evaluation, 2026-11-12
@@ -6817,6 +6844,7 @@ launch.
 | Pull request 158, the local Income estimate, and the comparison for 152 to 157 | Claude Opus 5.5 (session lead) for the specification, the comparison, two fixes and the record; one Opus 5.5 worker; GLM 5.4 (max) as reviewer | Worth it. GLM found no bug and two small faults in the figures, which the lead fixed directly rather than through another worker. Running the comparison when the Mac was quiet that evening, at the owner's request, gave both runs in under two hours. |
 | The third promotion to `testing` and pull requests 160 and 161 | Claude Opus 5.5 (session lead) | Done directly: a one-line test fix that CI found, the promotion, the checks on the published build and this record. The bring-back into `experimental` came a day late |
 | Pull request 162, Settings and Alerts as mocked | Claude Opus 5.5 (session lead) for the specification, review, one fix and the record; one Opus 5.5 worker | Worth it. The worker could not click (the screen was locked) and built an uncommitted aid to reach each tab, which it disclosed; up to ten of its copies ran at once, and each launch left an acceptance-only Keychain item |
+| Pull request 163, the Sortino reading | Claude Opus 5.5 (session lead) | Done directly: a few lines of text and their tests |
 
 Haiku has not been used, and Sonnet only to drive the screen, for pull
 requests 97, 86, 98 and 102: nothing else so far has been parallel or self-contained

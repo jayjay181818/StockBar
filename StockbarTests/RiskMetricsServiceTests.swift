@@ -778,21 +778,21 @@ final class RiskPageTests: XCTestCase {
         XCTAssertEqual(whole, Shown(
             var95: "£721.47", var99: "£990.51", sharpe: "-2.553", sortino: "-3.247", worstFall: "-11.31%",
             volatility: "13.96%", downside: "10.81%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "55 days, peak to low",
+            sortinoDetail: "Poor, counting only the falls", worstFallDetail: "55 days, peak to low",
             tradingDays: 59, falls: ["-11.31% 55 days, peak to low"]))
 
         let lastPart = try await shown(Self.lastPart(base, days: 25))
         XCTAssertEqual(lastPart, Shown(
             var95: "£652.94", var99: "£721.47", sharpe: "-2.944", sortino: "-3.699", worstFall: "-5.09%",
             volatility: "14.04%", downside: "11.01%", sharpeDetail: "Poor, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "9 days, peak to low",
+            sortinoDetail: "Poor, counting only the falls", worstFallDetail: "9 days, peak to low",
             tradingDays: 24, falls: ["-5.09% 9 days, peak to low", "-5.01% 12 days, peak to low"]))
 
         let longer = try await shown(Self.invented(120, seed: 99))
         XCTAssertEqual(longer, Shown(
             var95: "£804.04", var99: "£1,058.39", sharpe: "0.241", sortino: "0.343", worstFall: "-16.05%",
             volatility: "14.63%", downside: "10.11%", sharpeDetail: "Below average, return for the risk taken", volatilityDetail: "Low, over a year",
-            sortinoDetail: "Counts only the falls", worstFallDetail: "42 days, peak to low",
+            sortinoDetail: "Below average, counting only the falls", worstFallDetail: "42 days, peak to low",
             tradingDays: 119, falls: ["-16.05% 42 days, peak to low"]))
 
         let rising = try await shown(Self.rising)
@@ -831,6 +831,13 @@ final class RiskPageTests: XCTestCase {
                        ["Exceptional", "Very good", "Good", "Adequate", "Below average", "Poor", "Poor"])
         XCTAssertEqual(RiskText.volatilityDetail(0.12), "Low, over a year")
         XCTAssertEqual(RiskText.sharpeDetail(1.08), "Good, return for the risk taken")
+        // The page banded the Sortino ratio on the same thresholds as Sharpe's before the redesign.
+        XCTAssertEqual([3.01, 3.0, 2.0, 1.0, 0.5, 0.0, -1].map { RiskText.sortinoReading($0) },
+                       ["Exceptional", "Very good", "Good", "Adequate", "Below average", "Poor", "Poor"])
+        XCTAssertEqual(RiskText.sortinoDetail(2.4), "Very good, counting only the falls")
+        XCTAssertEqual(RiskText.sortinoDetail(nil), "No falling days")
+        XCTAssertNil(RiskText.sortinoReading(.infinity))
+        XCTAssertEqual(RiskText.sortinoDetail(.infinity), "Counts only the falls")
     }
 
     func testBadDaySentences() {
