@@ -23,6 +23,7 @@ struct StockbarCalendarView: View {
     let dataModel: DataModel
     @State private var model: StockbarCalendarModel
     @State private var hoveredRow: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(dataModel: DataModel, router: any StockbarIncomeRouting = FolyncSupplementalCoordinator.shared,
          provider: any InstrumentEventsProviding = InstrumentEventsService.shared) {
@@ -175,11 +176,25 @@ struct StockbarCalendarView: View {
             StockbarCalendarGrid(weeks: weeks, month: model.month, selectedDay: model.selectedDay) { day in
                 model.selectedDay = day.day
                 if let first = day.rows.first(where: { row in shown.contains { $0.id == row.id } }) {
-                    withAnimation { proxy.scrollTo(first.id, anchor: .center) }
+                    scroll(proxy, to: first.id)
+                } else if model.mode == .upcoming,
+                          let first = day.rows.first(where: { row in rows.past.contains { $0.id == row.id } }) {
+                    // Upcoming's grid also shows this month's past payments;
+                    // their rows are in Past's list, so go there.
+                    model.mode = .past
+                    DispatchQueue.main.async { scroll(proxy, to: first.id) }
                 }
             }
             list(shown, today: today)
             footer(shown, inputs: inputs, today: today)
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to id: String) {
+        if reduceMotion {
+            proxy.scrollTo(id, anchor: .center)
+        } else {
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
         }
     }
 
@@ -307,7 +322,8 @@ struct StockbarCalendarView: View {
                     Text(CalendarText.estimatedDatesNote)
                 }
                 Text(CalendarText.sourceLine(source))
-                if model.mode == .upcoming, earningsAsked, let line = CalendarText.earningsCoverageLine(coverage) {
+                if model.mode == .upcoming, earningsAsked, !model.isLoadingEarnings,
+                   let line = CalendarText.earningsCoverageLine(coverage) {
                     Text(line)
                 }
                 if model.mode == .past {

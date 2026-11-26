@@ -2406,13 +2406,28 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(routed.last?.forceRefresh, true)
         XCTAssertEqual(asked.last, .init(symbols: ["ULVR.L"], forceRefresh: true))
 
+        // The same holdings again ask nothing; a holding that arrives is asked about.
+        model.inputsChanged(from: folyncInputs, to: folyncInputs)
+        await drain()
+        asked = await provider.calls
+        XCTAssertEqual(asked.count, 2)
+        let more = StockbarCalendarInputs(
+            isFolyncEnabled: true, isFolyncPortfolio: true,
+            holdings: folyncInputs.holdings + [CalendarHolding(symbol: "SHEL", yahooSymbol: "SHEL.L")],
+            localHoldings: folyncInputs.localHoldings)
+        model.inputsChanged(from: folyncInputs, to: more)
+        await settle { await provider.calls.count == 3 }
+        asked = await provider.calls
+        XCTAssertEqual(asked.last, .init(symbols: ["ULVR.L", "SHEL.L"], forceRefresh: false))
+        await settle { !model.isLoadingEarnings }
+
         model.deactivate()
         model.refresh(folyncInputs)
         await drain()
         routed = await router.calls
         asked = await provider.calls
         XCTAssertEqual(routed.count, 2, "a page no longer selected asks nothing")
-        XCTAssertEqual(asked.count, 2)
+        XCTAssertEqual(asked.count, 3)
     }
 
     func testALocalPortfolioAsksYahooOnceForBothDividendsAndEarnings() async throws {

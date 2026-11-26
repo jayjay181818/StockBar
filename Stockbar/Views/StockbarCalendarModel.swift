@@ -146,6 +146,11 @@ final class StockbarCalendarModel {
                 cancelEarnings()
                 earningsResults = [:]
             }
+        case .folync where new.isFolyncPortfolio
+            && Set(old.holdings.compactMap(\.yahooSymbol)) != Set(new.holdings.compactMap(\.yahooSymbol)):
+            // A holding came or went: ask for the earnings again. The service's
+            // day-long copies mean only new symbols reach Yahoo.
+            loadEarnings(new.holdings, forceRefresh: false)
         case .local where old.localHoldings.isEmpty:
             local.holdingsAppeared(new.localHoldings)
         default:
