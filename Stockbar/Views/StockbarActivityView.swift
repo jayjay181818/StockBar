@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The Activity page: every transaction Folync holds for the portfolio, by
@@ -12,8 +13,7 @@ struct StockbarActivityView: View {
             StockbarPageHeader(StockbarMainSection.activity.title, subtitle: "Every transaction, read-only") {
                 if viewModel.phase != .needsFolync {
                     HStack(spacing: 10) {
-                        StockbarSegmentedControl("Kind", selection: $viewModel.kind,
-                                                 options: StockbarActivityKind.allCases) { $0.title }
+                        StockbarActivityKindSwitches(kinds: $viewModel.kinds)
                         refreshButton
                     }
                 }
@@ -111,7 +111,7 @@ struct StockbarActivityView: View {
         }
         if viewModel.transactions.isEmpty {
             emptyState("No transactions", systemImage: "list.bullet",
-                       message: StockbarActivityText.noRows(kind: viewModel.kind, holding: viewModel.query.instrument))
+                       message: StockbarActivityText.noRows(kinds: viewModel.kinds, holding: viewModel.query.instrument))
         } else {
             list
         }
@@ -276,14 +276,80 @@ enum StockbarActivityText {
         count == 1 ? "Showing 1 transaction" : "Showing \(count) transactions"
     }
 
-    static func noRows(kind: StockbarActivityKind, holding: FolyncTransactionsQuery.Instrument?) -> String {
-        let subject = switch kind {
-        case .all: "transactions"
-        case .trades: "trades"
-        case .dividends: "dividends"
-        case .cash: "cash transactions"
+    static func noRows(kinds: StockbarActivityKinds, holding: FolyncTransactionsQuery.Instrument?) -> String {
+        let subject = if kinds.chosen.count == 1, let kind = kinds.chosen.first {
+            switch kind {
+            case .trades: "trades"
+            case .dividends: "dividends"
+            case .interest: "interest payments"
+            case .cash: "cash transactions"
+            }
+        } else if kinds.isAll {
+            "transactions"
+        } else {
+            "transactions of these kinds"
         }
         if case .ticker(let ticker) = holding { return "Folync has no \(subject) for \(ticker)." }
         return "Folync has no \(subject) for this portfolio."
+    }
+}
+
+/// The kind switches above the list: All, then one switch per kind. The
+/// switches combine; All shows every kind and lights every switch. A click
+/// shows or hides one kind; Option-click, or "Show Only" in its menu, shows
+/// that kind alone.
+struct StockbarActivityKindSwitches: View {
+    @Binding var kinds: StockbarActivityKinds
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment(title: "All", isOn: kinds.isAll, help: "Show every kind of transaction") {
+                set(.all)
+            }
+            ForEach(StockbarActivityKind.allCases, id: \.self) { kind in
+                segment(title: kind.title, isOn: kinds.isShown(kind),
+                        help: "Show or hide \(kind.title.lowercased()). Option-click to show only \(kind.title.lowercased()).") {
+                    set(NSEvent.modifierFlags.contains(.option) ? .only(kind) : kinds.toggling(kind))
+                }
+                .contextMenu {
+                    Button("Show Only \(kind.title)") { set(.only(kind)) }
+                    Button("Show All") { set(.all) }
+                }
+                .accessibilityAction(named: "Show only \(kind.title.lowercased())") { set(.only(kind)) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Kinds")
+        .padding(2)
+        .stockbarSurface(.track, in: Capsule())
+    }
+
+    private func segment(title: String, isOn: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: isOn ? .semibold : .medium))
+                .foregroundStyle(isOn ? .primary : .secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .background {
+                    if isOn {
+                        Color.clear.stockbarSurface(.selectedSegment, in: Capsule())
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+
+    private func set(_ new: StockbarActivityKinds) {
+        guard new != kinds else { return }
+        withAnimation(StockbarMotion.animation(StockbarMotion.quick, reduceMotion: reduceMotion)) {
+            kinds = new
+        }
     }
 }
