@@ -1999,6 +1999,13 @@ final class StockbarCalendarTests: XCTestCase {
         XCTAssertEqual(CalendarText.accessibilitySentence(ulvrEx, today: F.today, locale: F.britishEnglish),
                        "Tomorrow, ULVR, ex-dividend, pays 11 Dec, £58.40, declared.")
 
+        let vusaEx = rows.upcoming[4]
+        XCTAssertEqual(CalendarText.detail(vusaEx, locale: F.britishEnglish), ", pays 8 Jan, about £96.20",
+                       "Folync's estimated amount is written about")
+        XCTAssertEqual(CalendarText.title(rows.upcoming[5]) + CalendarText.detail(rows.upcoming[5]), "Dividend, about £96.20")
+        XCTAssertNil(CalendarText.amountColumn(rows.upcoming[5]))
+        XCTAssertEqual(CalendarText.amountColumn(rows.upcoming[3]), "£58.40", "a declared amount has its own column")
+
         let hsba = rows.upcoming[1]
         XCTAssertEqual(CalendarText.title(hsba), "Dividend")
         XCTAssertEqual(CalendarText.detail(hsba), "")

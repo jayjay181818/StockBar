@@ -277,6 +277,8 @@ enum CalendarFigures {
     ///   day. Rows from today on are upcoming. A payment Folync has not marked
     ///   received whose pay day has passed goes to Past, with its pill.
     /// - A received event gives a payment row in Past with no pill.
+    /// - An amount Folync marks estimated (`discovery.amountCertainty`) is
+    ///   written "about"; the pill still comes from the date alone.
     /// - Past holds payments only, from twelve months back.
     static func folyncRows(events: [FolyncDividendEvent], currency: String, today: FolyncLedgerDay) -> CalendarRows {
         let pastStart = today.adding(months: -12)
@@ -289,10 +291,12 @@ enum CalendarFigures {
             let symbol = IncomeFigures.holding(of: event)
             let received = IncomeFigures.isReceived(event)
             let pill: CalendarPill? = received ? nil : pill(for: event.discovery)
+            // Folync's own estimate of the amount is written "about", as Folync marks it.
+            let aboutAmount = !received && event.discovery?.amountCertainty.knownValue == .estimated
             func row(_ kind: CalendarEventKind, on day: FolyncLedgerDay, payDay: FolyncLedgerDay? = nil) -> CalendarRow {
                 CalendarRow(id: "\(event.eventId)#\(kind == .exDividend ? "ex" : "pay")", kind: kind, day: day,
                             symbol: symbol, payDay: payDay, endDay: nil, amount: amount, currency: currency,
-                            amountIsEstimate: false, amountIsPartial: partial, pill: pill)
+                            amountIsEstimate: aboutAmount && amount != nil, amountIsPartial: partial, pill: pill)
             }
             if !received, pay >= today {
                 if pay.incomeMonth <= upcomingEnd { rows.upcoming.append(row(.payment, on: pay)) }
