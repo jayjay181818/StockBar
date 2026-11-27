@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 enum FolyncSupplementalRoute: String, CaseIterable, Codable, Hashable, Sendable {
     case historicalLineCharts
@@ -585,12 +586,18 @@ protocol FolyncSupplementalFXRouting: Sendable {
 }
 
 enum FolyncSupplementalDateParser {
-    static func instant(_ value: String) -> Date? {
+    // Every portfolio series and market bar is validated before display.
+    // Construct the formatters once and confine them to the lock.
+    private static let instants = Mutex({
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
+        return (fractional: fractional, whole: ISO8601DateFormatter())
+    }())
 
-        return ISO8601DateFormatter().date(from: value)
+    static func instant(_ value: String) -> Date? {
+        instants.withLock { parsers in
+            parsers.fractional.date(from: value) ?? parsers.whole.date(from: value)
+        }
     }
 
     static func day(_ value: String) -> Date? {
@@ -823,6 +830,10 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
 
     func capabilitiesForCurrentSettings(refresh: Bool = false) async -> FolyncCapabilities? {
         guard let configuration = await currentConfiguration() else { return nil }
+        return await capabilities(for: configuration, refresh: refresh)
+    }
+
+    private func capabilities(for configuration: Configuration, refresh: Bool = false) async -> FolyncCapabilities? {
         if !refresh, let capabilities = memoryCapabilities[configuration.endpoint] { return capabilities }
         do {
             return try await fetchCapabilities(baseURL: configuration.baseURL, token: configuration.token)
@@ -929,7 +940,8 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     func routePortfolioHistory(
         range: String,
         from: Date? = nil,
-        to: Date? = nil
+        to: Date? = nil,
+        confirmedSince: Date? = nil
     ) async -> FolyncRoutedPortfolioResult {
         // Portfolio valuations are part of the authoritative portfolio source.
         // The optional line-history capability describes individual market prices.
@@ -946,6 +958,15 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             range: cacheRange,
             as: FolyncPortfolioHistory.self
         )
+        let confirmationKey = portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange)
+        // Picker navigation may reuse a response confirmed this polling cycle.
+        // A refresh, failed validation or switch of source must go through the route.
+        if let confirmedSince, !(await backoff.isBackingOff()),
+           let confirmed = portfolioHistoryConfirmedAt[confirmationKey],
+           confirmed >= confirmedSince, !portfolioHistoryFailing.contains(confirmationKey),
+           let cached, isUsablePortfolioHistory(cached.payload) {
+            return .folync(cached.payload, status: sourceStatus(quality: cached.payload.quality, stale: false))
+        }
         do {
             let response = try await request(
                 baseURL: configuration.baseURL,
@@ -954,7 +975,6 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
                 query: query,
                 etag: cached?.etag
             )
-            let confirmationKey = portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange)
             if response.statusCode == 304, let cached, isUsablePortfolioHistory(cached.payload) {
                 portfolioHistoryConfirmedAt[confirmationKey] = Date()
                 await notePortfolioHistoryRecovered(key: confirmationKey, range: range)
@@ -983,8 +1003,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
             let usableCache = cached.flatMap { isUsablePortfolioHistory($0.payload) ? $0.payload : nil }
             if category != "cancelled" {
                 await notePortfolioHistoryFailed(
-                    key: portfolioHistoryKey(endpoint: configuration.endpoint, scopeID: identity, range: cacheRange),
-                    range: range, category: category, showingSaved: usableCache != nil
+                    key: confirmationKey, range: range, category: category, showingSaved: usableCache != nil
                 )
             }
             if let usableCache {
@@ -1192,6 +1211,8 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
 
     func clearInMemoryState() async {
         memoryCapabilities.removeAll()
+        portfolioHistoryConfirmedAt.removeAll()
+        portfolioHistoryFailing.removeAll()
         await ledgerPolicy.removeAll()
         await backoff.clear()
     }
@@ -1538,7 +1559,7 @@ actor FolyncSupplementalCoordinator: FolyncSupplementalOHLCProviding, FolyncSupp
     private func routingContext(route: FolyncSupplementalRoute, symbol: String) async -> RoutingContext? {
         guard let configuration = await currentConfiguration(),
               configuration.settings.isSupplementalRouteActive(route) else { return nil }
-        guard let capabilities = await capabilitiesForCurrentSettings() else {
+        guard let capabilities = await capabilities(for: configuration) else {
             // Older v2 servers have no capabilities route. Keep the requested identity
             // so a last-valid Folync cache can still be considered, but disable network
             // history requests and apply the user's fallback policy if no cache exists.

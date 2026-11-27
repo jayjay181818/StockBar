@@ -333,6 +333,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     private var valuationSource: PortfolioValuationSource
     private var cancellables = Set<AnyCancellable>()
     private var historyTask: Task<Void, Never>?
+    private var requiresFreshHistory = false
     private let reloadCoalescer = ChartReloadCoalescer()
     private var isActive = false
     private(set) var loadGeneration = 0
@@ -410,6 +411,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     func deactivate() {
         isActive = false
         reloadCoalescer.cancel()
+        requiresFreshHistory = false
         historyTask?.cancel()
         isLoading = false
     }
@@ -435,7 +437,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     func setTimeRange(_ range: MenuChartTimeRange) {
         guard range != selectedTimeRange else { return }
         selectedTimeRange = range
-        loadChartData()
+        scheduleChartLoad()
     }
 
     var showsDayReference: Bool {
@@ -445,6 +447,12 @@ final class PortfolioMenuChartViewModel: ObservableObject {
 
     func loadChartData() {
         guard isActive else { return }
+        requiresFreshHistory = true
+        scheduleChartLoad()
+    }
+
+    private func scheduleChartLoad() {
+        guard isActive else { return }
         if !isLoading { isLoading = true }
         historyTask?.cancel()
         reloadCoalescer.schedule { [weak self] in self?.performChartLoad() }
@@ -452,6 +460,8 @@ final class PortfolioMenuChartViewModel: ObservableObject {
 
     private func performChartLoad() {
         guard isActive else { return }
+        let confirmedSince = requiresFreshHistory ? nil : Date().addingTimeInterval(-FolyncRefreshSchedule.interval)
+        requiresFreshHistory = false
         loadGeneration &+= 1
         isLoading = true
         let context = LoadContext(range: selectedTimeRange, currency: preferredCurrency, source: valuationSource)
@@ -489,7 +499,9 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                         if range == .day { coverageLabel = "Past 24 hours · " + coverageLabel }
                     }
                     guard !Task.isCancelled else { return }
-                    let result = await folyncCoordinator.routePortfolioHistory(range: range.chartTimeRange.folyncRange)
+                    let result = await folyncCoordinator.routePortfolioHistory(
+                        range: range.chartTimeRange.folyncRange, confirmedSince: confirmedSince
+                    )
                     guard !Task.isCancelled, revision == historicalDataManager.folyncSupplementalConfigurationRevision else { return }
                     switch result {
                     case .folync(let history, let status):

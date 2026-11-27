@@ -90,6 +90,101 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         XCTAssertEqual(stub.requests.count, 4, "Each presentation/range/refresh action should issue one request")
     }
 
+    @MainActor
+    func testPortfolioPickerReusesConfirmedRangesAndExplicitRefreshStillRequestsHistory() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        env.settingsStore.save(FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all", pollingIntervalSeconds: 60
+        ))
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            let range = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "range" }?.value ?? ""
+            return Self.httpResponse(request, status: 200, body: Self.portfolioHistoryJSON(netContribution: [1, 2], range: range))
+        }
+        let model = PortfolioMenuChartViewModel(
+            currentValue: 100, currentTrades: [], preferredCurrency: "GBP", valuationSource: .folyncProvided,
+            folyncCoordinator: env.supplementalCoordinator, folyncSettingsStore: env.settingsStore
+        )
+        defer { model.deactivate() }
+        func settle(_ action: () -> Void) async {
+            let loaded = expectation(description: "Selected period finished")
+            let subscription = model.$isLoading.dropFirst().filter { !$0 }.first().sink { _ in loaded.fulfill() }
+            action()
+            await fulfillment(of: [loaded], timeout: 5)
+            subscription.cancel()
+        }
+        await settle {
+            model.activate()
+            model.setTimeRange(.week)
+        }
+        await settle { model.setTimeRange(.month) }
+        XCTAssertEqual(stub.requests.count, 2)
+        await settle {
+            model.setTimeRange(.day)
+            model.setTimeRange(.week)
+        }
+        XCTAssertEqual(model.loadedRange, .week)
+        XCTAssertEqual(model.chartData.count, 2)
+        XCTAssertEqual(stub.requests.count, 2, "A quick return needs no second request")
+        await settle {
+            model.setTimeRange(.month)
+            model.loadChartData()
+        }
+        XCTAssertEqual(model.loadedRange, .month)
+        XCTAssertEqual(stub.requests.count, 3, "An explicit refresh wins over a coalesced period switch")
+        model.deactivate()
+        model.setTimeRange(.day)
+        XCTAssertEqual(stub.requests.count, 3)
+    }
+
+    func testPortfolioPickerConfirmationExpiresAndIsScopedToSuccessfulReads() async throws {
+        let env = try makeIsolatedSessionEnvironment()
+        defer { env.cleanup() }
+        var settings = FolyncStoredSettings(
+            isEnabled: true, baseURL: "https://folync.test", scopeID: "all", pollingIntervalSeconds: 60
+        )
+        env.settingsStore.save(settings)
+        let stub = FolyncHTTPStub()
+        FolyncURLProtocolStub.stub = stub
+        stub.handler = { request in
+            if stub.isOffline { throw URLError(.notConnectedToInternet) }
+            return Self.httpResponse(request, status: 200, body: Self.portfolioHistoryJSON(netContribution: [1, 2]))
+        }
+        let coordinator = env.supplementalCoordinator
+        let cutoff = Date()
+        _ = await coordinator.routePortfolioHistory(range: "3m")
+        stub.isOffline = true
+        guard case .folync(_, .current) = await coordinator.routePortfolioHistory(range: "3m", confirmedSince: cutoff) else {
+            return XCTFail("The confirmed range should be available within the polling interval")
+        }
+        XCTAssertEqual(stub.requests.count, 1)
+        guard case .folync(_, .stale) = await coordinator.routePortfolioHistory(range: "3m", confirmedSince: .distantFuture) else {
+            return XCTFail("An expired confirmation must revalidate")
+        }
+        guard case .folync(_, .stale) = await coordinator.routePortfolioHistory(range: "3m", confirmedSince: cutoff) else {
+            return XCTFail("A failed check must not promote the saved copy back to current")
+        }
+        XCTAssertEqual(stub.requests.count, 3)
+        stub.isOffline = false
+        _ = await coordinator.routePortfolioHistory(range: "3m")
+        stub.isOffline = true
+        settings.scopeID = "other"
+        env.settingsStore.save(settings)
+        guard case .unreachable = await coordinator.routePortfolioHistory(range: "3m", confirmedSince: cutoff) else {
+            return XCTFail("A different portfolio cannot reuse the confirmation")
+        }
+        settings.scopeID = "all"
+        settings.baseURL = "https://other.test"
+        env.settingsStore.save(settings)
+        guard case .unreachable = await coordinator.routePortfolioHistory(range: "3m", confirmedSince: cutoff) else {
+            return XCTFail("A different server cannot reuse the confirmation")
+        }
+        XCTAssertEqual(stub.requests.count, 6)
+    }
+
     /// Opening the popover draws the history saved from Folync's last answer
     /// at once, then replaces it with what the request returns.
     @MainActor
@@ -2070,7 +2165,8 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         quality: String = "complete",
         reasonCodes: [String] = [],
         currency: String = "GBP",
-        scopeID: String = "all"
+        scopeID: String = "all",
+        range: String = "3m"
     ) -> String {
         func series(_ values: [Double], dates: [String]) -> String {
             "[" + zip(dates, values).map { "{\"date\":\"\($0)\",\"value\":\($1)}" }.joined(separator: ",") + "]"
@@ -2081,7 +2177,7 @@ final class FolyncPortfolioSourceTests: XCTestCase {
         return """
         {"schemaVersion":2,"sourceRevision":"history-test",
          "scope":{"id":"\(scopeID)","name":"All portfolios","kind":"aggregate","currency":"\(currency)"},
-         "range":"3m","interval":"1d","generatedAt":"2026-07-12T12:00:00Z","currency":"\(currency)",
+         "range":"\(range)","interval":"1d","generatedAt":"2026-07-12T12:00:00Z","currency":"\(currency)",
          "quality":"\(quality)","reasonCodes":\(reasons),
          "coverage":{"requestedFrom":"2026-04-12","requestedTo":"2026-07-12",
          "availableFrom":"2026-07-10","availableTo":"2026-07-11","pointCount":2,"complete":false},

@@ -1932,6 +1932,26 @@ class PortfolioCalculationTests: XCTestCase {
     }
 
     @MainActor
+    func testQueuedLegacyPriceReadKeepsItsBudgetAndCallerCancellation() async {
+        let queue = HistoricalPriceFetchQueue(maximumConcurrentRequests: 1)
+        let started = expectation(description: "First provider read holds the slot")
+        let first = SchedulerOperationStub(started: started)
+        queue.enqueue { _ = await first.run() }
+        await fulfillment(of: [started], timeout: 1)
+
+        let waiting = expectation(description: "Second read joins the queue")
+        let second = Task {
+            waiting.fulfill()
+            return await queue.perform { Task.isCancelled ? .cancelled : .success }
+        }
+        await fulfillment(of: [waiting], timeout: 1)
+        second.cancel()
+        first.finish(.success)
+        let outcome = await second.value
+        XCTAssertEqual(outcome, .cancelled)
+    }
+
+    @MainActor
     func testHistoricalPriceFetchSchedulerForceBypassesEmptyRetryWithoutDuplicatingInFlightRequest() async {
         var currentTime = Date(timeIntervalSince1970: 400_000)
         let scheduler = HistoricalPriceFetchScheduler(
