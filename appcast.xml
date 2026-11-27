@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.48)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.48</link>
+      <pubDate>Fri, 27 Nov 2026 15:06:34 +0000</pubDate>
+      <sparkle:version>382.48</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.48 of Stockbar 3.8.2. Changes since testing-382.46:
+
+- Speed up portfolio period switching and Folync movers</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.48/Stockbar-382.48.zip" length="8747713" type="application/octet-stream" sparkle:edSignature="9PS4/9r31nLOl2Ze5KIOpqMmZUW9/FC1P5pcOf4KA5V1M7AtxB2t7pnVK7zvCtPvlanPFvVH5+x2QOy+hVksAw=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.46)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.46</link>
       <pubDate>Fri, 27 Nov 2026 13:26:47 +0000</pubDate>
@@ -268,6 +281,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ImYVIS22k4tI+09tIqfLABBjwaX4XgX3//r/SK1j1Ybi0rCeHcZuLcF/B5gEum5qsbDjMOyrB4eBgkdvZBw8BQ==
-length: 22985
+edSignature: D/5dRLerkf1rgsvUMYBeycjfWeXf4QPTqXGnc9OIYel3w7sxc3dCQ7YR3uv70IbqJotdeZF/SLjD7cOPSXf3BA==
+length: 23905
 -->
