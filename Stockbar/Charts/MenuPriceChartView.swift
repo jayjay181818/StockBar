@@ -452,7 +452,7 @@ struct MenuPriceChartView: View {
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                    InstrumentLogo(symbol: symbol, size: 20)
+                    InstrumentLogo(symbol: symbol, size: 28)
                 }
                 Text(metrics.exchangeName)
                     .font(.caption)

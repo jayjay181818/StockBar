@@ -586,7 +586,7 @@ private struct StockbarHoldingsView: View {
             TableColumn("Instrument", value: \.trade.trade.name) { row in
                 let trade = row.trade
                 HStack(spacing: 6) {
-                    InstrumentLogo(symbol: trade.trade.name, size: 24)
+                    InstrumentLogo(symbol: trade.trade.name, size: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(trade.trade.name).fontWeight(.semibold)
@@ -603,8 +603,8 @@ private struct StockbarHoldingsView: View {
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
                 // The row reads as one sentence; the figures' own cells stay quiet.
                 .modifier(HoldingsRowSentence { rowSentence(row, mode: $0) })
             }.width(min: 90, ideal: 120)

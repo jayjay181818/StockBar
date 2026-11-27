@@ -31,6 +31,7 @@ actor InstrumentLogoStore {
         self.session = session ?? URLSession(configuration: configuration)
         self.policy = policy
         cache.countLimit = 256
+        cache.totalCostLimit = 4 * 1024 * 1024
     }
 
     static func url(for symbol: String) -> URL? {
@@ -47,7 +48,8 @@ actor InstrumentLogoStore {
         let task = Task { [session] in await Self.fetch(url, session: session) }
         pending[url] = task
         let result = await task.value
-        cache.setObject(Entry(result), forKey: url as NSURL)
+        let bytes = result.map { $0.bytesPerRow * $0.height } ?? 0
+        cache.setObject(Entry(result), forKey: url as NSURL, cost: bytes)
         pending[url] = nil
         return result
     }
@@ -65,11 +67,43 @@ actor InstrumentLogoStore {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   CGImageSourceGetType(source) as String? == UTType.png.identifier else { return nil }
             let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                           kCGImageSourceThumbnailMaxPixelSize: 64,
+                                           kCGImageSourceThumbnailMaxPixelSize: 128,
                                            kCGImageSourceShouldCacheImmediately: true]
-            return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+            guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            return trimmingTransparentMargins(of: thumbnail)
         } catch {
             return nil
         }
+    }
+
+    /// Crop only fully transparent margins. White artwork and antialiased edges count as ink.
+    private static func trimmingTransparentMargins(of image: CGImage) -> CGImage? {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return image
+        default:
+            break
+        }
+        let width = image.width, height = image.height
+        let format = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let bitmap = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                     bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: format),
+              let data = bitmap.data else { return image }
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        bitmap.draw(image, in: bounds)
+        let rgba = data.assumingMemoryBound(to: UInt8.self)
+        var left = width, right = -1, top = height, bottom = -1
+        for y in 0..<height {
+            let row = rgba.advanced(by: y * bitmap.bytesPerRow)
+            for x in 0..<width where row[x * 4 + 3] != 0 {
+                left = min(left, x)
+                right = max(right, x)
+                top = min(top, y)
+                bottom = y
+            }
+        }
+        guard right >= left else { return nil }
+        let ink = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
+        return ink == bounds ? image : image.cropping(to: ink)
     }
 }
