@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.46)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.46</link>
+      <pubDate>Fri, 27 Nov 2026 13:26:47 +0000</pubDate>
+      <sparkle:version>382.46</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.46 of Stockbar 3.8.2. Changes since testing-382.44:
+
+- Show larger company logos with transparent backgrounds</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.46/Stockbar-382.46.zip" length="8738837" type="application/octet-stream" sparkle:edSignature="W1H5EvXjtVpZ9V30qfRLQiXept8RqPftqwTatWUpscrAuliUdqOgAnMx6HARkwWnVji6RDctMCkvaFbQGPh6Bg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.44)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.44</link>
       <pubDate>Fri, 27 Nov 2026 11:30:47 +0000</pubDate>
@@ -255,6 +268,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 2MLevD47fZwlEDtNDqY4698xwobo4LHYDiw+L5i0NV5zSWX8N++ms/OYZS/3+fN2nZch22BOQ0QU1ipMJKNpAQ==
-length: 22064
+edSignature: ImYVIS22k4tI+09tIqfLABBjwaX4XgX3//r/SK1j1Ybi0rCeHcZuLcF/B5gEum5qsbDjMOyrB4eBgkdvZBw8BQ==
+length: 22985
 -->
