@@ -404,3 +404,50 @@ private final class InvocationCounter: @unchecked Sendable {
         return count
     }
 }
+
+final class InstrumentLogoTests: XCTestCase {
+    func testSymbolURLKeepsTheListingAndRefusesPaths() {
+        XCTAssertEqual(InstrumentLogoStore.url(for: " fake.l ")?.absoluteString,
+                       "https://images.financialmodelingprep.com/symbol/FAKE.L.png")
+        XCTAssertNil(InstrumentLogoStore.url(for: "../FAKE"))
+        XCTAssertNil(InstrumentLogoStore.url(for: "A?key=1"))
+    }
+
+    func testDecodesAndSharesImagesAndHandlesMissingOrInvalidArtwork() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogoResponseStub.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let service = InstrumentLogoStore(session: session, policy: .init(liveRequestsAllowed: true))
+        async let first = service.image(for: "FAKE.L")
+        async let second = service.image(for: "fake.l")
+        let (left, right) = await (first, second)
+        let image = try XCTUnwrap(left)
+        XCTAssertTrue(image === right)
+        let cached = await service.image(for: "FAKE.L")
+        XCTAssertTrue(image === cached)
+        let missing = await service.image(for: "MISSING")
+        let invalid = await service.image(for: "INVALID")
+        XCTAssertNil(missing)
+        XCTAssertNil(invalid)
+        let disabled = InstrumentLogoStore(session: session, policy: .init(liveRequestsAllowed: false))
+        let denied = await disabled.image(for: "FAKE.L")
+        XCTAssertNil(denied)
+    }
+}
+
+private final class LogoResponseStub: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url, let http = HTTPURLResponse(
+            url: url, statusCode: url.lastPathComponent == "MISSING.png" ? 404 : 200,
+            httpVersion: nil, headerFields: ["Content-Type": "image/png"]
+        ) else { return }
+        let pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: url.lastPathComponent == "FAKE.L.png" ? Data(base64Encoded: pixel) ?? Data() : Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}

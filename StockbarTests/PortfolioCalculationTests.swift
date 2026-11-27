@@ -3138,10 +3138,15 @@ final class PortfolioMenuPopoverTests: XCTestCase {
         XCTAssertEqual(PortfolioMenuMovers.barFraction(mover("A", 0.001), scale: 3), 0, "a move that shows as 0.00% has no bar")
     }
 
-    func testTheListScrollsPastTwelveRowsAndShowsFewerOnAShortScreen() {
+    func testTheListUsesTheAvailableScreenHeight() {
         XCTAssertEqual([1, 12, 13, 40].map { PortfolioMenuMovers.shownRows(count: $0) }, [1, 12, 12, 12])
         XCTAssertEqual([1, 12, 13, 40].map { PortfolioMenuMovers.scrolls(count: $0) }, [false, false, true, true])
         XCTAssertEqual(PortfolioMenuMovers.listHeight(count: 40), 12 * PortfolioMenuMovers.rowHeight)
+
+        let tall = PortfolioMenuMovers.rowHeight * 18
+        XCTAssertEqual(PortfolioMenuMovers.shownRows(count: 13, availableHeight: tall), 13)
+        XCTAssertFalse(PortfolioMenuMovers.scrolls(count: 13, availableHeight: tall))
+        XCTAssertEqual(PortfolioMenuMovers.shownRows(count: 40, availableHeight: tall), 18)
 
         // Room for five rows: the list shows five and scrolls.
         let fiveRows = PortfolioMenuMovers.rowHeight * 5 + 3
@@ -3165,19 +3170,60 @@ final class PortfolioMenuPopoverTests: XCTestCase {
         }
         let one = height(1), twelve = height(12), thirteen = height(13), forty = height(40)
         XCTAssertEqual(twelve - one, 11 * PortfolioMenuMovers.rowHeight, accuracy: 1)
-        XCTAssertEqual(thirteen, twelve, accuracy: 1, "from the thirteenth holding the list scrolls instead of growing")
+        XCTAssertEqual(thirteen, twelve, accuracy: 1, "without a screen a conservative fallback applies")
+        XCTAssertEqual(height(13, room: 400) - twelve, PortfolioMenuMovers.rowHeight, accuracy: 1)
         XCTAssertEqual(forty, twelve, accuracy: 1)
         XCTAssertEqual(twelve - height(40, room: PortfolioMenuMovers.rowHeight * 4), 8 * PortfolioMenuMovers.rowHeight, accuracy: 1,
                        "on a short screen the list gives up rows, not the popover's height limit")
         XCTAssertLessThan(height(0), one, "with no holdings one quiet line replaces the rows")
     }
 
-    func testTheHeadingSaysTodaysMoversAtEveryRange() {
-        let every: [MenuChartTimeRange] = [.day, .week, .month, .threeMonths, .year, .all]
-        XCTAssertEqual(every.map(PortfolioMenuMovers.heading(for:)),
-                       Array(repeating: "Today's movers", count: every.count))
-        // The popover offers the three menu ranges; the longer ones are the Overview's.
-        XCTAssertEqual(MenuChartTimeRange.menuRanges.map(PortfolioMenuFigures.rangeTitle), ["Today", "1 week", "1 month"])
+    func testTheHeadingAndSpokenMoveFollowThePeriod() {
+        XCTAssertEqual(MenuChartTimeRange.menuRanges.map(PortfolioMenuMovers.heading(for:)),
+                       ["Today's movers", "Weekly movers", "Monthly movers"])
+        XCTAssertEqual(PortfolioMenuMovers.accessibilityText(mover("ABC", -2), range: .month), "ABC, down 2.00 percent over 1 month")
+    }
+
+    func testHoldingMovesUseRealPricesFromTheChosenPeriod() {
+        let now = Date()
+        func point(_ daysAgo: Double, _ price: Double) -> PriceSnapshot {
+            PriceSnapshot(timestamp: now.addingTimeInterval(-daysAgo * 86_400), price: price, previousClose: 0, symbol: "FAKE")
+        }
+        let prices = [point(30, 50), point(7, 125), point(0, 100)]
+        func change(_ prices: [PriceSnapshot], _ range: MenuChartTimeRange) -> Double? {
+            PortfolioMoverHistory.percentChange(prices, range: range, now: now, repairLegacyScale: false)
+        }
+        XCTAssertEqual(change(prices, .week), -20)
+        XCTAssertEqual(change(prices, .month), 100)
+        XCTAssertNil(change([point(1, 100), point(0, 105)], .week))
+        XCTAssertNil(change([point(30, 100), point(10, 105)], .month))
+        XCTAssertNil(change([point(7, .nan), point(0, 100)], .week))
+        XCTAssertEqual(change([point(6, 100), point(1, 100)], .week), 0)
+    }
+
+    func testWeeklyMoversAcceptFiveSessionsEndingOnFridayMorning() throws {
+        let monday = try Date("2026-11-23T15:30:00Z", strategy: .iso8601)
+        let friday = try Date("2026-11-27T10:30:00Z", strategy: .iso8601)
+        let prices = [PriceSnapshot(timestamp: monday, price: 100, previousClose: 100, symbol: "FAKE"),
+                      PriceSnapshot(timestamp: friday, price: 103, previousClose: 100, symbol: "FAKE")]
+        XCTAssertEqual(PortfolioMoverHistory.percentChange(prices, range: .week, now: friday, repairLegacyScale: false), 3)
+    }
+
+    func testPartialPortfolioChangeShowsTheDatesActuallyObserved() throws {
+        let now = Date()
+        let first = now.addingTimeInterval(-3 * 86_400)
+        let points = [MenuChartDataPoint(date: first, price: 120, symbol: "Portfolio"),
+                      MenuChartDataPoint(date: now, price: 150, symbol: "Portfolio")]
+        let span = try XCTUnwrap(PortfolioMenuChartDataBuilder.observedSpan(for: points, range: .week, now: now))
+        XCTAssertEqual(span, first..<now)
+        let summary = DisplayPortfolioSummary(totalValue: 150, totalGain: 50, totalGainPct: 50,
+                                              dayGain: 1, dayGainPct: 1, totalCost: 100, ownedPositionCount: 1, currency: "GBP")
+        let figures = PortfolioMenuFigures(summary: summary, change: PortfolioMenuChartDataBuilder.rangeChange(for: points),
+                                           range: .week, basis: .holdingsCost, observedSpan: span)
+        XCTAssertEqual(figures.changeAmount, "▲ £30.00")
+        XCTAssertTrue(figures.changeWord.contains("partial"))
+        XCTAssertNil(PortfolioMenuChartDataBuilder.observedSpan(for: points, range: .day, now: now))
+        XCTAssertNil(PortfolioMenuChartDataBuilder.observedSpan(for: [points[0]], range: .week, now: now))
     }
 
     func testADownDayReadsAsLossesInOrderAndAFallInTheHeadline() {

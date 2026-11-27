@@ -585,20 +585,23 @@ private struct StockbarHoldingsView: View {
             // sizes the columns share the extra room. The name line truncates.
             TableColumn("Instrument", value: \.trade.trade.name) { row in
                 let trade = row.trade
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(trade.trade.name).fontWeight(.semibold)
-                        if trade.trade.isWatchlistOnly {
-                            Text("Watchlist")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .stockbarPill()
+                HStack(spacing: 6) {
+                    InstrumentLogo(symbol: trade.trade.name, size: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(trade.trade.name).fontWeight(.semibold)
+                            if trade.trade.isWatchlistOnly {
+                                Text("Watchlist")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .stockbarPill()
+                            }
                         }
-                    }
-                    let name = trade.displayLabel ?? trade.realTimeInfo.shortName
-                    if !name.isEmpty && name != trade.trade.name {
-                        Text(name)
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        let name = trade.displayLabel ?? trade.realTimeInfo.shortName
+                        if !name.isEmpty && name != trade.trade.name {
+                            Text(name)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                 }
                 .padding(.vertical, 4)

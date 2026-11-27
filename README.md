@@ -28,7 +28,7 @@ Holdings, gains, dividends, earnings dates, charts, alerts and analytics in a na
 
 |  |  |
 |---|---|
-| 📈 **Menu bar first** | Portfolio total and per-stock items in the menu bar, each with a chart popover. The portfolio popover shows today's movers and what is next up. |
+| 📈 **Menu bar first** | Portfolio total and per-stock items in the menu bar, each with a chart popover. The portfolio popover shows movers for the selected period and upcoming events. |
 | 🗂️ **One window for everything** | Overview, Holdings, Activity, Alerts, Charts, Income, Calendar, Trades, Risk, Allocation, Data Health, Backups, Diagnostics and Settings in one see-through window with a floating sidebar. |
 | 💷 **Income and dates** | Dividends expected and received, and a calendar of dividend and earnings dates. |
 | 🏦 **Bring your own source** | Manual holdings and watchlists, read-only Trading 212 broker sync, or a self-hosted Folync portfolio, which Stockbar only reads. |
@@ -102,7 +102,7 @@ Stockbar looks for a new version about once a day and offers it with its release
 - **Activity** and **Trades** (Folync only): every transaction Folync holds, by month, and every position opened, with how it did.
 
 ### 📊 Menu bar
-- The portfolio item shows total value and today's change, with a popover chart (Today, 1 week, 1 month), today's movers and Next up. With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
+- The portfolio item shows total value and today's change, with a popover chart (Today, 1 week, 1 month), movers for that period and Next up. With Folync, the popover's total P&L is measured against net deposits by default, or against cost basis (Settings → General → Measure P&L Against).
 - Per-stock items have their own display modes or a custom template (`{symbol} {price} {arrow}{changePct}`), plus a popover with an optional S&P 500 or FTSE 100 benchmark line.
 - Stock items can be limited to times when an external display is connected.
 

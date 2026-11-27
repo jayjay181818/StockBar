@@ -163,6 +163,7 @@ enum SettingsTransferKeys {
         "menu.benchmarkComparisonEnabled": .bool,
         // Appearance and charts
         "appearanceMode": .string,
+        InstrumentLogoStore.enabledKey: .bool,
         "candlestickChartSettings": .data,
         // Refresh and history
         "refreshInterval": .number,

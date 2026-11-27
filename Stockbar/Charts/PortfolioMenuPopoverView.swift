@@ -79,16 +79,18 @@ enum PortfolioMenuDayReferenceResolver {
     }
 }
 
-/// One holding's move today in the popover's list.
+/// One holding's move over the selected period.
 struct PortfolioMenuMover: Identifiable, Equatable {
     let id: String
     let symbol: String
-    /// Today's change in percent (1.5 means 1.5%); nil when unknown.
+    let priceSymbol: String
+    /// Price change in percent (1.5 means 1.5%); nil when unknown.
     let percent: Double?
 
-    init(id: String, symbol: String, percent: Double?) {
+    init(id: String, symbol: String, priceSymbol: String? = nil, percent: Double?) {
         self.id = id
         self.symbol = symbol
+        self.priceSymbol = priceSymbol ?? symbol
         self.percent = percent.flatMap { $0.isFinite ? $0 : nil }
     }
 
@@ -102,40 +104,41 @@ struct PortfolioMenuMover: Identifiable, Equatable {
     }
 }
 
-/// Every holding's move today, for the popover. The list is always today's,
-/// whatever range the switch shows: Folync gives a holding's change only for
-/// the day and in total.
 enum PortfolioMenuMovers {
-    static let heading = "Today's movers"
-    /// Rows shown at once before the list scrolls.
-    static let visibleRows = 12
     static let rowHeight: CGFloat = 22
-    /// The list never shrinks below this many rows to fit a short screen.
     static let minimumRows = 3
+    // Used only if AppKit cannot identify the screen the status item is on.
+    static let fallbackRows = 12
 
-    /// The heading at any range: the list does not follow the range switch.
-    static func heading(for range: MenuChartTimeRange) -> String { heading }
+    static func heading(for range: MenuChartTimeRange) -> String {
+        switch range {
+        case .day: "Today's movers"
+        case .week: "Weekly movers"
+        case .month: "Monthly movers"
+        default: "Movers · " + range.description
+        }
+    }
 
     /// Held positions only: no watch-list symbols, benchmarks or empty
-    /// positions. A holding listed twice is shown once. `dayPercent` is the
-    /// app's own figure for a position's day.
-    static func movers(from trades: [RealTimeTrade], dayPercent: (RealTimeTrade) -> Double) -> [PortfolioMenuMover] {
+    /// positions. A holding listed twice is shown once.
+    static func movers(from trades: [RealTimeTrade], change: (RealTimeTrade) -> Double?) -> [PortfolioMenuMover] {
         var seen = Set<String>()
-        let held = trades.compactMap { trade -> (id: String, label: String, percent: Double)? in
+        let held = trades.compactMap { trade -> PortfolioMenuMover? in
             guard !trade.trade.isWatchlistOnly,
                   !SymbolMetadata.isBenchmarkSymbol(trade.trade.name),
                   trade.trade.position.unitSize > 0 else { return nil }
             let id = trade.sourceIdentity ?? trade.trade.name
             guard seen.insert(id).inserted else { return nil }
-            return (id, trade.displayLabel ?? trade.trade.name, dayPercent(trade))
+            return PortfolioMenuMover(id: id, symbol: trade.displayLabel ?? trade.trade.name,
+                                      priceSymbol: trade.trade.name, percent: change(trade))
         }
         // A row has room for a ticker, not for "NVDA · Demo portfolio", which
         // is how a Folync aggregate labels a holding. Show the ticker alone,
         // unless two holdings would then read the same.
-        let sharing = Dictionary(grouping: held, by: { ticker(of: $0.label) }).mapValues(\.count)
+        let sharing = Dictionary(grouping: held, by: { ticker(of: $0.symbol) }).mapValues(\.count)
         let movers = held.map { item -> PortfolioMenuMover in
-            let short = ticker(of: item.label)
-            return PortfolioMenuMover(id: item.id, symbol: sharing[short] == 1 ? short : item.label, percent: item.percent)
+            let short = ticker(of: item.symbol)
+            return PortfolioMenuMover(id: item.id, symbol: sharing[short] == 1 ? short : item.symbol, priceSymbol: item.priceSymbol, percent: item.percent)
         }
         return ordered(movers)
     }
@@ -169,7 +172,7 @@ enum PortfolioMenuMovers {
     }
 
     static func scaleText(_ scale: Double) -> String {
-        "± \(Int(scale))%"
+        "± " + scale.formatted(.number.grouping(.never).precision(.fractionLength(0))) + "%"
     }
 
     /// The share of the half-track a bar fills, 0 to 1; 0 draws no bar.
@@ -188,22 +191,17 @@ enum PortfolioMenuMovers {
     }
 
     /// One sentence for VoiceOver: "NVDA, up 2.69 percent today".
-    static func accessibilityText(_ mover: PortfolioMenuMover) -> String {
+    static func accessibilityText(_ mover: PortfolioMenuMover, range: MenuChartTimeRange = .day) -> String {
+        let period = range == .day ? "today" : "over " + range.description.lowercased()
         guard let percent = mover.displayedPercent else { return "\(mover.symbol), change unknown" }
-        if percent == 0 { return "\(mover.symbol), no change today" }
-        return String(format: "%@, %@ %.2f percent today", mover.symbol, percent > 0 ? "up" : "down", abs(percent))
+        if percent == 0 { return "\(mover.symbol), no change \(period)" }
+        return String(format: "%@, %@ %.2f percent %@", mover.symbol, percent > 0 ? "up" : "down", abs(percent), period)
     }
 
-    /// Rows that show at once: all of them up to `visibleRows`, fewer when the
-    /// screen leaves less room, never fewer than `minimumRows` unless there
-    /// are fewer holdings. `availableHeight` is the room for the list.
     static func shownRows(count: Int, availableHeight: CGFloat? = nil) -> Int {
-        var rows = min(count, visibleRows)
-        if let availableHeight, availableHeight.isFinite {
-            let fitting = Int((availableHeight / rowHeight).rounded(.down))
-            rows = min(rows, max(fitting, min(count, minimumRows)))
-        }
-        return max(rows, 0)
+        guard let availableHeight, availableHeight.isFinite else { return min(count, fallbackRows) }
+        let rows = min(CGFloat(count), max(CGFloat(minimumRows), availableHeight / rowHeight))
+        return max(0, Int(rows))
     }
 
     /// True when the list holds more rows than it shows, so it scrolls.
@@ -280,6 +278,16 @@ enum PortfolioMenuChartDataBuilder {
             && last.date >= now.addingTimeInterval(-duration * 0.2)
     }
 
+    /// An incomplete history can still show a change between two dated observations.
+    static func observedSpan(for points: [MenuChartDataPoint], range: MenuChartTimeRange, now: Date = Date()) -> Range<Date>? {
+        guard range == .week || range == .month, let first = points.first, let last = points.last,
+              first.date < last.date, first.price.isFinite, first.price > 0, last.price.isFinite, last.price >= 0,
+              // Provider daily bars can start at midnight on the first day of the period.
+              first.date >= Calendar.current.startOfDay(for: range.chartTimeRange.startDate(from: now)),
+              last.date <= now else { return nil }
+        return first.date..<last.date
+    }
+
     static func rangeChange(for points: [MenuChartDataPoint]) -> PortfolioMenuRangeChange? {
         guard let first = points.first,
               let last = points.last,
@@ -304,6 +312,9 @@ final class PortfolioMenuChartViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var coverageLabel = ""
     @Published var hasRangeCoverage = false
+    @Published private(set) var moverRevision = 0
+    /// Partial Folync valuations can describe the interval actually observed.
+    private(set) var observedSpan: Range<Date>?
     /// True when Folync did not answer and nothing was saved for this period,
     /// so the views can say so instead of asking for more stored history.
     @Published private(set) var folyncUnreachable = false
@@ -357,6 +368,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
         preferredCurrency: String,
         valuationSource: PortfolioValuationSource,
         initialRange: MenuChartTimeRange = .day,
+        tracksMovers: Bool = false,
         folyncCoordinator: FolyncSupplementalCoordinator = .shared,
         folyncSettingsStore: FolyncSettingsStore = .shared
     ) {
@@ -371,6 +383,17 @@ final class PortfolioMenuChartViewModel: ObservableObject {
         ObservationPublisher.changes { [historicalDataManager] in
             _ = historicalDataManager.priceSnapshots
             _ = historicalDataManager.priceDataRevision
+        }
+            .sink { [weak self] _ in
+                guard let self, isActive else { return }
+                if selectedTimeRange == .day && valuationSource != .folyncProvided {
+                    loadChartData()
+                } else if tracksMovers && selectedTimeRange != .day {
+                    moverRevision &+= 1
+                }
+            }
+            .store(in: &cancellables)
+        ObservationPublisher.changes { [historicalDataManager] in
             _ = historicalDataManager.historicalPortfolioSnapshots
             _ = historicalDataManager.folyncSupplementalConfigurationRevision
         }
@@ -432,6 +455,7 @@ final class PortfolioMenuChartViewModel: ObservableObject {
         loadGeneration &+= 1
         isLoading = true
         let context = LoadContext(range: selectedTimeRange, currency: preferredCurrency, source: valuationSource)
+        observedSpan = nil
         if context != shownContext {
             chartData = []
             hasRangeCoverage = false
@@ -479,6 +503,9 @@ final class PortfolioMenuChartViewModel: ObservableObject {
                         folyncUnreachable = false
                         folyncStale = status == .stale
                         hasRangeCoverage = history.coverage.complete == true && history.quality == .complete && status == .current && points.count > 1
+                        if !hasRangeCoverage, status == .current || status == .partial, history.quality != .unavailable {
+                            observedSpan = PortfolioMenuChartDataBuilder.observedSpan(for: points, range: range)
+                        }
                         coverageLabel = "\(status.label) · \(history.coverage.pointCount) observations · \(history.interval)"
                         if !hasRangeCoverage { coverageLabel += " · partial history" }
                         // Folync's 1d series is rolling history; Today's P&L still uses its daily reference.
@@ -552,6 +579,7 @@ struct PortfolioMenuPopoverView: View {
     /// Everything but the movers' list, as last laid out; the list gets what
     /// the screen leaves of `maximumHeight` after it.
     @State private var chromeHeight: CGFloat = 470
+    @State private var periodMoves = PortfolioMoverHistory()
     /// "Next up", from saved data only: opening the popover asks nothing.
     @State private var nextUp = StockbarNextUpModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -573,7 +601,8 @@ struct PortfolioMenuPopoverView: View {
                 currentValue: summary.totalValue,
                 currentTrades: dataModel.realTimeTrades,
                 preferredCurrency: summary.currency,
-                valuationSource: summary.valuationSource
+                valuationSource: summary.valuationSource,
+                tracksMovers: true
             )
         )
     }
@@ -591,7 +620,7 @@ struct PortfolioMenuPopoverView: View {
         PortfolioMenuPerformanceResolver.resolve(
             summary: summary,
             range: viewModel.selectedTimeRange,
-            chartChange: viewModel.hasRangeCoverage ? PortfolioMenuChartDataBuilder.rangeChange(for: viewModel.chartData) : nil
+            chartChange: viewModel.loadedRange == viewModel.selectedTimeRange && (viewModel.hasRangeCoverage || viewModel.observedSpan != nil) ? PortfolioMenuChartDataBuilder.rangeChange(for: viewModel.chartData) : nil
         )
     }
 
@@ -613,14 +642,22 @@ struct PortfolioMenuPopoverView: View {
 
     var body: some View {
         let _ = summaryCache.beginPass()
-        let movers = PortfolioMenuMovers.movers(from: dataModel.realTimeTrades) {
-            dataModel.calculatePositionProfitLoss(for: $0).dayPercent
+        let range = viewModel.selectedTimeRange
+        let history = dataModel.historicalDataManager
+        let configuration = history.folyncSupplementalConfigurationRevision
+        let movers = PortfolioMenuMovers.movers(from: dataModel.realTimeTrades) { trade in
+            if range == .day { return dataModel.calculatePositionProfitLoss(for: trade).dayPercent }
+            return periodMoves.percent(for: trade.trade.name, range: range, configuration: configuration)
         }
+        let request = range == .day ? nil : PortfolioMoverHistory.Request(
+            symbols: Set(movers.map(\.priceSymbol)), range: range, configuration: configuration,
+            priceRevision: viewModel.moverRevision
+        )
         let listRoom = maximumHeight.map { $0 - chromeHeight }
         VStack(alignment: .leading, spacing: 12) {
             PortfolioMenuHeadline(
                 figures: PortfolioMenuFigures(summary: summary, change: displayedChange, range: viewModel.selectedTimeRange,
-                                              basis: dataModel.portfolioGainBasis),
+                                              basis: dataModel.portfolioGainBasis, observedSpan: viewModel.observedSpan),
                 hoveredValue: hoveredPoint?.price,
                 hoveredDate: hoveredPoint.map { MenuPopoverFormatter.date($0.date, range: viewModel.selectedTimeRange) }
             )
@@ -639,7 +676,7 @@ struct PortfolioMenuPopoverView: View {
                 title: PortfolioMenuFigures.rangeTitle
             )
 
-            PortfolioMenuMoversList(movers: movers, availableHeight: listRoom)
+            PortfolioMenuMoversList(movers: movers, range: range, availableHeight: listRoom)
 
             PortfolioMenuSummaryStrip(
                 figures: PortfolioMenuFigures(summary: summary, change: displayedChange, range: viewModel.selectedTimeRange,
@@ -672,6 +709,10 @@ struct PortfolioMenuPopoverView: View {
         }
         // A readout left from before a reload would describe a point no longer drawn.
         .onChange(of: viewModel.chartData) { _, _ in hoveredPoint = nil }
+        .task(id: request) {
+            guard let request, !Task.isCancelled else { return }
+            periodMoves = PortfolioMoverHistory.load(request, history: history)
+        }
         .onAppear {
             viewModel.activate()
             refreshChartModel()
@@ -770,7 +811,7 @@ struct PortfolioMenuFigures: Equatable {
     let basis: String
 
     init(summary: DisplayPortfolioSummary, change: PortfolioMenuRangeChange?, range: MenuChartTimeRange,
-         basis gainBasis: PortfolioGainBasis) {
+         basis gainBasis: PortfolioGainBasis, observedSpan: Range<Date>? = nil) {
         currency = summary.currency
         let count = summary.ownedPositionCount
         header = "\(summary.currency), \(count == 1 ? "1 position" : "\(count) positions")"
@@ -789,13 +830,17 @@ struct PortfolioMenuFigures: Equatable {
         }
         // The popover offers only `MenuChartTimeRange.menuRanges`; the longer
         // ranges are the Overview's and are worded here for completeness.
-        changeWord = switch range {
-        case .day: "today"
-        case .week: "past week"
-        case .month: "past month"
-        case .threeMonths: "past 3 months"
-        case .year: "past year"
-        case .all: "all time"
+        if let observedSpan, change != nil {
+            changeWord = observedSpan.formatted(.interval.day().month(.abbreviated)) + " · partial"
+        } else {
+            changeWord = switch range {
+            case .day: "today"
+            case .week: "past week"
+            case .month: "past month"
+            case .threeMonths: "past 3 months"
+            case .year: "past year"
+            case .all: "all time"
+            }
         }
         let totalReturn = summary.totalReturn(measuredAgainst: gainBasis)
         self.totalReturn = MenuPopoverFormatter.currencyExact(totalReturn.gain, currency: summary.currency, includeSign: true)
@@ -919,9 +964,10 @@ struct PortfolioMenuHeadline: View {
     }
 }
 
-/// "Today's movers": one row per holding, with a bar from the centre line.
+/// One row per holding, with a bar from the centre line.
 struct PortfolioMenuMoversList: View {
     let movers: [PortfolioMenuMover]
+    var range: MenuChartTimeRange = .day
     /// Room left for the list on the screen; nil when unbounded.
     var availableHeight: CGFloat?
     @Environment(\.stockbarPopoverText) private var textStyle
@@ -930,7 +976,7 @@ struct PortfolioMenuMoversList: View {
         let scale = PortfolioMenuMovers.scale(for: movers)
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(PortfolioMenuMovers.heading)
+                Text(PortfolioMenuMovers.heading(for: range))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(textStyle.secondary)
                     .accessibilityAddTraits(.isHeader)
@@ -939,7 +985,7 @@ struct PortfolioMenuMoversList: View {
                     Text(PortfolioMenuMovers.scaleText(scale))
                         .font(.system(size: 12))
                         .foregroundStyle(textStyle.tertiary)
-                        .accessibilityLabel("Bars to plus or minus \(Int(scale)) percent")
+                        .accessibilityLabel("Bar scale: \(PortfolioMenuMovers.scaleText(scale))")
                 }
             }
             if movers.isEmpty {
@@ -949,7 +995,7 @@ struct PortfolioMenuMoversList: View {
             } else {
                 let rows = LazyVStack(spacing: 0) {
                     ForEach(movers) { mover in
-                        PortfolioMenuMoverRow(mover: mover, scale: scale)
+                        PortfolioMenuMoverRow(mover: mover, scale: scale, range: range)
                             .frame(height: PortfolioMenuMovers.rowHeight)
                     }
                 }
@@ -969,6 +1015,7 @@ struct PortfolioMenuMoversList: View {
 struct PortfolioMenuMoverRow: View {
     let mover: PortfolioMenuMover
     let scale: Double
+    let range: MenuChartTimeRange
 
     var body: some View {
         let tint = StockbarPalette.signedOnPopover(mover.displayedPercent, neutral: .secondary)
@@ -987,7 +1034,7 @@ struct PortfolioMenuMoverRow: View {
                 .frame(width: 80, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(PortfolioMenuMovers.accessibilityText(mover))
+        .accessibilityLabel(PortfolioMenuMovers.accessibilityText(mover, range: range))
     }
 
     private func bar(tint: Color) -> some View {

@@ -5,6 +5,7 @@ enum StockbarProvider: String, CaseIterable, Sendable {
     /// run *inside* `get_stock_data.py`, so they are gated transitively by this
     /// case rather than having cases of their own.
     case python
+    case instrumentLogos
     case directFX
     case trading212
     case folync

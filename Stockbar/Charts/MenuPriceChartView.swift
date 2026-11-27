@@ -447,10 +447,13 @@ struct MenuPriceChartView: View {
     private var headerView: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(symbol)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                HStack(spacing: 5) {
+                    Text(symbol)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    InstrumentLogo(symbol: symbol, size: 20)
+                }
                 Text(metrics.exchangeName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
