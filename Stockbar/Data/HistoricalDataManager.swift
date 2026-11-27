@@ -150,7 +150,9 @@ class HistoricalDataManager {
     /// Currency of the live portfolio samples (the menu-bar currency), which
     /// can differ from the main currency the stored snapshots use.
     @ObservationIgnored private var livePortfolioSampleCurrency: String?
-    private let priceHistoryScheduler = HistoricalPriceFetchScheduler()
+    // Allow small groups of Folync HTTP reads while bounding legacy subprocess work separately.
+    private let priceHistoryScheduler = HistoricalPriceFetchScheduler(maximumConcurrentRequests: 5)
+    private let legacyPriceQueue = HistoricalPriceFetchQueue(maximumConcurrentRequests: 2)
     @ObservationIgnored var folyncPortfolioHistoryContexts: [String: String] = [:]
     @ObservationIgnored var folyncPortfolioHistoryFetchRequestTimes: [String: Date] = [:]
     @ObservationIgnored var folyncPriceOverlays: [String: [PriceSnapshot]] = [:]
@@ -857,6 +859,20 @@ class HistoricalDataManager {
             }
         }
         
+        // Both direct legacy reads and Folync fallbacks share the subprocess budget.
+        return await legacyPriceQueue.perform {
+            await fetchLegacyPriceHistory(
+                for: symbol, from: startDate, to: endDate, configurationRevision: folyncConfigurationRevision
+            )
+        }
+    }
+
+    private func fetchLegacyPriceHistory(
+        for symbol: String, from startDate: Date, to endDate: Date, configurationRevision: Int?
+    ) async -> HistoricalPriceFetchOutcome {
+        guard !Task.isCancelled,
+              configurationRevision == nil || configurationRevision == folyncSupplementalConfigurationRevision
+        else { return .cancelled }
         // Use NetworkService to fetch historical data
         guard let networkService = getNetworkService() else {
             await logger.error("❌ Cannot fetch historical data: NetworkService not available")
@@ -866,7 +882,7 @@ class HistoricalDataManager {
         do {
             let historicalData = try await networkService.fetchHistoricalData(for: symbol, from: startDate, to: endDate)
             guard !Task.isCancelled,
-                  folyncConfigurationRevision == nil || folyncConfigurationRevision == self.folyncSupplementalConfigurationRevision
+                  configurationRevision == nil || configurationRevision == folyncSupplementalConfigurationRevision
             else { return .cancelled }
             
             await logger.info("📥 Received \(historicalData.count) historical data points for \(symbol)")

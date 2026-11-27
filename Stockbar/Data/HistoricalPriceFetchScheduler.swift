@@ -10,24 +10,17 @@ enum HistoricalPriceFetchOutcome {
 /// Shares the history request budget across symbols without blocking a thread.
 @MainActor
 final class HistoricalPriceFetchScheduler {
-    private struct PendingRequest {
-        let key: String
-        let operation: @MainActor () async -> HistoricalPriceFetchOutcome
-    }
-
-    private let maximumConcurrentRequests: Int
+    private let queue: HistoricalPriceFetchQueue
     private let cooldown: TimeInterval
     private let now: () -> Date
     private var gate = HistoricalFetchRequestGate()
-    private var pending: [PendingRequest] = []
-    private var activeCount = 0
 
     init(
         maximumConcurrentRequests: Int = 2,
         cooldown: TimeInterval = 600,
         now: @escaping () -> Date = Date.init
     ) {
-        self.maximumConcurrentRequests = max(1, maximumConcurrentRequests)
+        self.queue = HistoricalPriceFetchQueue(maximumConcurrentRequests: maximumConcurrentRequests)
         self.cooldown = cooldown
         self.now = now
     }
@@ -39,21 +32,56 @@ final class HistoricalPriceFetchScheduler {
         operation: @escaping @MainActor () async -> HistoricalPriceFetchOutcome
     ) -> Bool {
         guard gate.reserve(key: key, now: now(), cooldown: cooldown, force: force) else { return false }
-        pending.append(PendingRequest(key: key, operation: operation))
-        startPendingRequests()
+        queue.enqueue { [self] in
+            let outcome = await operation()
+            gate.complete(key: key, outcome: outcome, now: now(), cooldown: cooldown)
+        }
         return true
     }
+}
 
-    private func startPendingRequests() {
-        while activeCount < maximumConcurrentRequests, !pending.isEmpty {
-            let request = pending.removeFirst()
-            activeCount += 1
+/// FIFO concurrency budget shared by all requests that use a given provider.
+@MainActor
+final class HistoricalPriceFetchQueue {
+    private let maximumConcurrentRequests: Int
+    private var pending: [@MainActor () -> Void] = []
+    private var activeCount = 0
+
+    init(maximumConcurrentRequests: Int) {
+        self.maximumConcurrentRequests = max(1, maximumConcurrentRequests)
+    }
+
+    func enqueue(_ operation: @escaping @MainActor () async -> Void) {
+        reserve {
             Task {
-                let outcome = await request.operation()
-                gate.complete(key: request.key, outcome: outcome, now: now(), cooldown: cooldown)
-                activeCount -= 1
-                startPendingRequests()
+                await operation()
+                self.release()
             }
+        }
+    }
+
+    func perform(_ operation: () async -> HistoricalPriceFetchOutcome) async -> HistoricalPriceFetchOutcome {
+        await withCheckedContinuation { continuation in
+            reserve { continuation.resume() }
+        }
+        defer { release() }
+        return await operation()
+    }
+
+    private func reserve(_ start: @escaping @MainActor () -> Void) {
+        if activeCount < maximumConcurrentRequests {
+            activeCount += 1
+            start()
+        } else {
+            pending.append(start)
+        }
+    }
+
+    private func release() {
+        if pending.isEmpty {
+            activeCount -= 1
+        } else {
+            pending.removeFirst()()
         }
     }
 }
