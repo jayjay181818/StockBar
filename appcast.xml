@@ -7,6 +7,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Stockbar updates.</description>
     <language>en</language>
     <item>
+      <title>3.8.2 (382.44)</title>
+      <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.44</link>
+      <pubDate>Fri, 27 Nov 2026 11:30:47 +0000</pubDate>
+      <sparkle:version>382.44</sparkle:version>
+      <sparkle:shortVersionString>3.8.2</sparkle:shortVersionString>
+      <sparkle:channel>testing</sparkle:channel>
+      <sparkle:minimumSystemVersion>15.4.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">Testing build 382.44 of Stockbar 3.8.2. Changes since testing-382.42:
+
+- Show movers for the selected period and add optional company logos</description>
+      <enclosure url="https://github.com/jayjay181818/StockBar/releases/download/testing-382.44/Stockbar-382.44.zip" length="8738907" type="application/octet-stream" sparkle:edSignature="5E/vLF0R+yD/ivsuz/QhZhpTo6LA9O+0MvOwVG0PhgHiaI6BoqAbdGDnubkkiWv5p1yDCuqOENT6byz93X32Dg=="></enclosure>
+    </item>
+    <item>
       <title>3.8.2 (382.42)</title>
       <link>https://github.com/jayjay181818/StockBar/releases/tag/testing-382.42</link>
       <pubDate>Thu, 26 Nov 2026 21:19:13 +0000</pubDate>
@@ -242,6 +255,6 @@ These figures come from the project's benchmark on one Mac, with a made-up portf
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 72xW00tHyPtDn37yuSRqXyXINEoFCjxwlXUoj0VDh4Nbt8Hd/x/onKt1MCzP236PPMsE2l4N5T0LL8q1R5pACA==
-length: 21131
+edSignature: 2MLevD47fZwlEDtNDqY4698xwobo4LHYDiw+L5i0NV5zSWX8N++ms/OYZS/3+fN2nZch22BOQ0QU1ipMJKNpAQ==
+length: 22064
 -->
