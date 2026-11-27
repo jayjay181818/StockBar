@@ -49,10 +49,11 @@ In the redesign's test builds, the faint highlight along the top of each card in
 
 ## The portfolio popover
 
-- From the top: the total, its change over the chosen period, the chart, the range switch (**Today**, **1 week**, **1 month**), **Today's movers**, and total return beside what it is measured against.
+- From the top: the total, its change over the chosen period, the chart, the range switch (**Today**, **1 week**, **1 month**), the movers for that period, and total return beside what it is measured against.
 - On **Today**, a dotted line on the chart marks yesterday's close.
-- **Today's movers** lists every holding with its move today as a bar, biggest gain first. It shows today's moves whatever period the chart shows, and "–" for a holding whose change is not known.
-- Past about a dozen holdings the list scrolls, so the popover always fits on the screen.
+- The movers list follows **Today**, **1 week** and **1 month**. Week and month show the price change for each holding with sufficient history. The largest gain comes first, and unknown changes show “–”.
+- The list shows as many holdings as fit below the menu bar. It scrolls when more holdings remain.
+- For partial Folync portfolio history, the headline labels the change with the dates of the available values.
 - **Next up** lists up to three dividend or earnings dates in the next 14 days. See [Calendar and Next up](#calendar-and-next-up).
 
 ## Overview
@@ -123,6 +124,8 @@ In the redesign's test builds, the faint highlight along the top of each card in
 **Next up** in the portfolio popover and on the Overview lists up to three dividend or earnings dates in the next 14 days, soonest first. It reads only what Stockbar already saved for Income and Calendar, so opening the popover or the Overview asks nothing. It is absent until one of those pages has loaded, and when nothing falls in the next 14 days.
 
 ## Holdings
+
+- **Settings → Appearance → Show company logos** displays available company logos on the left of the Instrument column and beside the ticker in the stock popover. This option sends visible symbols to Financial Modeling Prep and starts switched off.
 
 - A new **Weight** column shows each holding's share of the portfolio. With Folync it is Folync's own figure. Otherwise it is the holding's value as a share of the **Net value**. A watchlist symbol, or a holding whose value is not known, shows "–".
 - One **Amounts / Percent** switch sets both **Today** and **Total gain**, and Stockbar remembers it. The column that was headed Total P&L is now **Total gain**.

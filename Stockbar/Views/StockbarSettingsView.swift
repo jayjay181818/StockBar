@@ -5,6 +5,7 @@ struct StockbarSettingsView: View {
     @Bindable var dataModel: DataModel
     private let onOpenSection: (StockbarMainSection) -> Void
 
+    @AppStorage(InstrumentLogoStore.enabledKey, store: StockbarRuntimeStorage.userDefaults) private var showInstrumentLogos = false
     @AppStorage("appearanceMode", store: StockbarRuntimeStorage.userDefaults) private var appearanceMode: String = "system"
     @AppStorage("settings.selectedTab", store: StockbarRuntimeStorage.userDefaults) private var selectedTab: SettingsTab = .general
     @AppStorage(PythonWorkerPool.quitWhenIdleKey, store: StockbarRuntimeStorage.userDefaults) private var quitPythonHelperWhenIdle = PythonWorkerPool.quitWhenIdleDefault
@@ -277,6 +278,9 @@ struct StockbarSettingsView: View {
                     Text("Dark").tag("dark")
                 }
                 .pickerStyle(.segmented)
+            }
+            StockbarSettingsRow("Show company logos", detail: "Looks up visible ticker symbols with Financial Modeling Prep in Holdings and stock popovers.") {
+                Toggle("Show company logos", isOn: $showInstrumentLogos)
             }
         }
     }
