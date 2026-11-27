@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Stockbar
 
@@ -423,6 +424,14 @@ final class InstrumentLogoTests: XCTestCase {
         async let second = service.image(for: "fake.l")
         let (left, right) = await (first, second)
         let image = try XCTUnwrap(left)
+        // Only a white pixel at (2,1) and a translucent blue pixel at (5,3) have ink.
+        // Their cropped positions also check that the vertical coordinates are the right way up.
+        XCTAssertEqual(image.width, 4)
+        XCTAssertEqual(image.height, 3)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 0, y: 0)).alphaComponent, 1, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 3, y: 2)).alphaComponent, 0.25, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 1, y: 1)).alphaComponent, 0)
         XCTAssertTrue(image === right)
         let cached = await service.image(for: "FAKE.L")
         XCTAssertTrue(image === cached)
@@ -444,9 +453,9 @@ private final class LogoResponseStub: URLProtocol {
             url: url, statusCode: url.lastPathComponent == "MISSING.png" ? 404 : 200,
             httpVersion: nil, headerFields: ["Content-Type": "image/png"]
         ) else { return }
-        let pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        let paddedLogo = "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAKCAYAAACALL/6AAAAGUlEQVR4nGNgIBf8BwKyNZNjnwM9bRt+AABEKAU8kvRRggAAAABJRU5ErkJggg=="
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: url.lastPathComponent == "FAKE.L.png" ? Data(base64Encoded: pixel) ?? Data() : Data())
+        client?.urlProtocol(self, didLoad: url.lastPathComponent == "FAKE.L.png" ? Data(base64Encoded: paddedLogo) ?? Data() : Data())
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

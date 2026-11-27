@@ -26,8 +26,6 @@ private struct InstrumentLogoTile: View {
                 Image(decorative: image, scale: 2)
                     .resizable()
                     .scaledToFit()
-                    .padding(2)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 4)) // Keep brand artwork readable in dark mode.
             } else {
                 Image(systemName: "building.2")
                     .font(.caption)
